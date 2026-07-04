@@ -145,13 +145,27 @@ impl GitStore {
     /// partial run leaves the old representations intact, because pruning
     /// happens only after the new pack is durably `fsync`ed.
     ///
-    /// **Single-writer**, like `git gc`: this assumes no other process is
-    /// consolidating the same repository or appending base hints concurrently.
-    /// Two concurrent consolidations would race the sidecar pack-list
-    /// read-modify-write and could leak a superseded pack (never lose data —
-    /// pruning is still gated on the pack each run actually wrote). Ordinary
-    /// readers and ref writers are unaffected and need no coordination.
+    /// Consolidations are **serialised** through a dedicated lock file
+    /// (`<common-dir>/acetone-gc.lock`, the same `gix::lock` mechanism the ref
+    /// writer uses) so two runs cannot race the sidecar pack-list
+    /// read-modify-write; a second concurrent run backs off and then fails with
+    /// [`StoreError::Backend`] rather than corrupting the tracking file. The
+    /// lock is deliberately *not* the ref-write lock, so a long consolidation
+    /// does not block commits; a commit racing a running consolidation is
+    /// harmless — its new objects simply aren't in this run's pack (they stay
+    /// loose and are never pruned, since pruning is gated on this run's pack)
+    /// and are picked up by the next consolidation. Ordinary readers need no
+    /// coordination.
     pub fn consolidate(&self, options: ConsolidateOptions) -> Result<ConsolidateStats, StoreError> {
+        // Serialise consolidations (and their sidecar updates) on this
+        // repository; released when this call returns.
+        let _gc_guard = gix::lock::Marker::acquire_to_hold_resource(
+            self.repo().common_dir().join("acetone-gc"),
+            gix::lock::acquire::Fail::AfterDurationWithBackoff(std::time::Duration::from_secs(5)),
+            None,
+        )
+        .map_err(|e| StoreError::backend("locking for consolidation", e))?;
+
         let reachable = self.reachable_objects()?;
         let present: HashSet<ObjectId> = reachable.iter().map(|(oid, _)| *oid).collect();
         let hints = self.load_hints(&present)?;

@@ -112,3 +112,10 @@ bases**, which is acetone's own `gc` and lives in `acetone-store`.
   commit path and choosing the gc cadence (Phase 5, when scheduled-import
   cadence makes retention matter). This bead ships the library machinery and
   its tests, not a CLI command.
+- **Deferred scaling (bead acetone-627), correctness-neutral:** the base-hint
+  sidecar grows O(all rewrites) and `load_hints` reads it whole; and the pack
+  and its index are assembled in memory rather than streamed to disk. Both
+  bound a very large whole-history consolidation by RAM but change nothing
+  about representation-only correctness. Compaction of the sidecar (dropping
+  hints whose endpoints are unreachable) and an incremental pack/index writer
+  are tracked there.
