@@ -1,7 +1,8 @@
 # Phase reports
 
-One report per roadmap phase, written by the implementing agent at the phase
-boundary and reviewed by Greg before the phase's exit-criteria bead is closed.
+One report per roadmap phase, written by the agent that completes the phase's
+last working bead, and reviewed by Greg before he closes the bead that gates
+the next phase.
 
 Each `phase-N.md` covers: what shipped (beads and PRs), gate evidence against
 the exit criteria in `docs/acetone-03-roadmap.md`, ADRs taken during the phase,

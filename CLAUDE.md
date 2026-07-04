@@ -108,22 +108,29 @@ Test-driven throughout: property tests for storage invariants land before or wit
 
 ## Autonomous Working Protocol
 
-Greg reviews **only at phase boundaries**. Between boundaries, agents work autonomously under these rules — this repository explicitly opts into the beads **Team-maintainer** profile (agents may close beads, run quality gates, commit, push, and merge as part of the workflow below).
+Greg reviews **only at phase boundaries**. Between boundaries, agents work autonomously under these rules. This repository grants agents the rights of the beads **Team-maintainer** profile (close beads, run quality gates, commit, push) and additionally the right to **merge PRs**, subject to the merge gate below. The beads-managed block above stays at its minimal/pointer profile; this section is the "active instructions say otherwise" that it defers to.
 
-Per bead:
+Per unit of work (one bead, or a small coherent group claimed together — the group then counts as one unit):
 
-1. **Claim**: `bd ready` → `bd update <id> --claim`. Work one bead at a time per agent.
+1. **Claim**: `bd ready` → `bd update <id> --claim`. One unit of work in flight per agent.
 2. **Spec first**: before coding, record the approach in the bead (`bd update <id> --design`): interfaces, key types, test plan, and how the work protects the Load-Bearing Invariants. Non-trivial design choices get an ADR (see below).
 3. **TDD**: tests precede or accompany implementation; invariant-touching code carries property tests. No `unsafe` without justification and a test.
 4. **Branch & PR** per the branch discipline. CI (build, test, clippy `-D warnings`, fmt, audit) must be green.
-5. **Independent review — mandatory merge gate**: every PR is reviewed by a **fresh subagent with no implementation context**, prompted to review adversarially for correctness, security, spec conformance (docs/acetone-02-spec.md) and invariant protection. Each finding is either fixed or explicitly rebutted in a PR comment before merge. Docs-only changes may take a lighter single-pass review.
-6. **Merge & close**: squash-merge once CI and review are clean; delete the branch; close the bead with a one-paragraph summary of what shipped and any deviations from the spec'd design.
+5. **Independent review — mandatory merge gate**: every PR is reviewed by a **fresh subagent with no implementation context**, prompted to review adversarially for correctness, security, spec conformance (docs/acetone-02-spec.md) and invariant protection. The gate is **reviewer sign-off, not implementer self-certification**: each finding is fixed or rebutted, the responses go back to a reviewer (the same one, or a fresh one given the full finding/response trail), and the PR merges only when the reviewer accepts. Non-trivial fix commits are re-reviewed. **On unresolved disagreement the PR does not merge**: file a `decision` bead, leave the PR open, flag it in the phase report for Greg.
+6. **Merge & close**: squash-merge once CI is green and the reviewer has signed off; delete the branch; close the bead with a one-paragraph summary of what shipped and any deviations from the spec'd design.
+
+Review depth by change class:
+
+- **Code**: full adversarial review as above, always.
+- **Governing documents** (CLAUDE.md, `docs/acetone-01/02/03-*.md`): full adversarial review — never the lighter path — plus an ADR, listed prominently in the next phase report. Agents must never weaken the review gate or expand their own merge rights; such changes are proposed in the phase report and made only after Greg agrees.
+- **Other docs** (notes, reports, ADR text): lighter single-pass review, still by a fresh subagent, checking factual accuracy and consistency with the design record.
 
 Additional gates:
 
-- **Milestone security review**: at each phase's end, run a dedicated security-focused review (fresh subagent) over the whole phase diff — input handling, path/ref injection, panics on untrusted data, dependency risk — before writing the phase report.
+- **Milestone security review**: at each phase's end, run a dedicated security-focused review (fresh subagent) over the whole phase diff — input handling, path/ref injection, panics on untrusted data, dependency risk — before writing the phase report. Findings are triaged like PR findings: fixed, or filed as beads; unresolved blocker-class findings are listed as open risks and the report must then say the gate is **not** ready to close.
 - **Decisions**: any choice Greg would plausibly care about (dependency adoption, format details, API shape, spec deviations) is recorded as `docs/adr/NNNN-<slug>.md` (context → decision → consequences, a page at most) and linked from a `decision`-type bead. Decisions are **made, not deferred** — ADRs are the agenda for phase-boundary discussion, not permission requests.
-- **Phase boundary**: agents never close a phase's exit-criteria bead. Instead, write `docs/reports/phase-N.md` — what shipped, gate evidence against the roadmap's exit criteria, ADRs taken, review findings summary, open risks — and stop. Greg reviews, discusses, and closes the gate bead; the next phase's beads unblock from there.
+- **Roadmap decision gates**: gates coinciding with a phase boundary (A — git-as-chunk-store; C — TCK bar) are Greg's call, evidenced in the phase report and settled when he closes the gate bead. Gates falling mid-phase (B — parser adoption; D — format freeze) are decided by ADR so work proceeds, and flagged prominently in that phase's report for retrospective review.
+- **Phase boundary**: agents never close the bead that gates the next phase (the exit-criteria bead; for Phase 0, the Gate A decision bead). The agent completing the phase's last working bead writes `docs/reports/phase-N.md` — what shipped, gate evidence against the roadmap's exit criteria, ADRs taken, review findings summary, open risks — and stops. Greg reviews, discusses, and closes the gate bead; the next phase's beads unblock from there.
 - **Dependencies**: adding a crate requires a sentence of justification in the PR (maintenance health, licence, why not std/existing deps). `cargo audit`/`cargo deny` run in CI.
 
 ## Branch & Merge Discipline
