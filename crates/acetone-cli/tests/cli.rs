@@ -335,9 +335,19 @@ fn log_sanitises_hostile_commit_messages() {
             "-m",
             hostile_message,
         ])
+        // commit-tree needs a committer identity; CI runners have no
+        // global git config, so supply one explicitly.
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@acetone.invalid")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@acetone.invalid")
         .output()
         .expect("git commit-tree");
-    assert!(forged.status.success());
+    assert!(
+        forged.status.success(),
+        "git commit-tree failed: {}",
+        String::from_utf8_lossy(&forged.stderr)
+    );
     let forged_id = String::from_utf8(forged.stdout)
         .expect("hex")
         .trim()
