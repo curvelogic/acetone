@@ -125,6 +125,12 @@ Review depth by change class:
 - **Governing documents** (CLAUDE.md, `docs/acetone-01/02/03-*.md`, and executable configuration that runs on Greg's machine: `.beads/hooks/`, `.codex/`, `.claude/settings.json` — added at the Phase 0 boundary with Greg's approval): full adversarial review — never the lighter path — plus an ADR, listed prominently in the next phase report. Agents must never weaken the review gate or expand their own merge rights; such changes are proposed in the phase report and made only after Greg agrees.
 - **Other docs** (notes, reports, ADR text): lighter single-pass review, still by a fresh subagent, checking factual accuracy and consistency with the design record.
 
+Subagent model tiers (ADR-0009, Greg-approved 2026-07-04): match the model tier of a dispatched subagent to the cost of an undetected error, not to the task's prestige. Tiers are relative to the strongest model the **session** has access to (never to a deliberately restricted per-dispatch set) — model names change; the tiers are the policy.
+
+- **Strongest available tier**: adversarial PR reviews and milestone security reviews. The review gate is never downgraded to save tokens. Gate D (format freeze) is the recorded trigger to *revisit* this tier choice — a Greg-gated decision at that boundary, not permission to downgrade.
+- **Mid tier**: design/planning subagents and lighter-path doc reviews — escalating to the strongest tier when the work touches Load-Bearing Invariants or on-disk format.
+- **Smallest tier**: exploration/search fan-outs and mechanical batch work, where output is cheap to verify by use.
+
 Additional gates:
 
 - **Milestone security review**: at each phase's end, run a dedicated security-focused review (fresh subagent) over the whole phase diff — input handling, path/ref injection, panics on untrusted data, dependency risk — before writing the phase report. Findings are triaged like PR findings: fixed, or filed as beads; unresolved blocker-class findings are listed as open risks and the report must then say the gate is **not** ready to close.
