@@ -106,7 +106,8 @@ fn range_scans_match_btreemap_semantics() {
     let lo = keys[321].clone();
     let hi = keys[1234].clone();
 
-    let cases: Vec<(Bound<Vec<u8>>, Bound<Vec<u8>>)> = vec![
+    type BoundPair = (Bound<Vec<u8>>, Bound<Vec<u8>>);
+    let cases: Vec<BoundPair> = vec![
         (Bound::Included(lo.clone()), Bound::Excluded(hi.clone())),
         (Bound::Included(lo.clone()), Bound::Included(hi.clone())),
         (Bound::Excluded(lo.clone()), Bound::Included(hi.clone())),
