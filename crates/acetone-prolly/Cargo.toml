@@ -10,3 +10,14 @@ repository.workspace = true
 
 [dependencies]
 acetone-store.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# proptest: the normative history-independence / merge-determinism suites.
+proptest.workspace = true
+# tempfile: temporary git repositories for GitStore integration tests.
+tempfile.workspace = true
+# gix (dev-only): git-blob hashing for the in-memory test ChunkStore, so
+# cross-store determinism against GitStore is testable. Already a
+# workspace dependency of acetone-store; adds nothing new to the tree.
+gix.workspace = true
