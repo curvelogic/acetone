@@ -367,8 +367,10 @@ fn shared_subtree_diamond_is_caught_and_terminates() {
         .put(&leaf(&[(b"a", b"1"), (b"m", b"1")]))
         .expect("put");
     let x = store.put(&inner(1, &[(b"m", leaf_x)])).expect("put"); // X.last = "m"
-    // Root references X twice: once truthfully ("m"), once with a false
-    // boundary claim ("z"). The second reference hits the cached path.
+    // Root references X twice, one reference with a false boundary claim
+    // ("z" where X ends at "m"). Whichever ordering the frontier pops them
+    // in, the false claim is caught by the last-key check and the walk
+    // terminates rather than looping on the repeated hash.
     let root_hash = store.put(&inner(2, &[(b"m", x), (b"z", x)])).expect("put");
     let root = Root::new(root_hash, 3, ChunkParams::default()).expect("root");
 

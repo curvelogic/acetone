@@ -1,9 +1,11 @@
 //! `fsck`: verify a repository's chunk reachability and manifest
-//! integrity (spec §7, ADR-0011).
+//! integrity (spec §7, ADR-0012).
 //!
 //! [`check`] walks every version a repository can reach — each workspace
 //! manifest under `refs/acetone/workspaces/*`, and every commit reachable
-//! from `refs/heads/*` — and confirms, for each:
+//! from `refs/heads/*` and `refs/tags/*` (a lightweight tag is walked like a
+//! branch; an annotated tag is reported as an advisory, its tag-object
+//! peeling deferred) — and confirms, for each:
 //!
 //! 1. **Manifest integrity**: the manifest bytes exist and decode under
 //!    the strict decoder; its map roots have valid heights.
@@ -16,7 +18,7 @@
 //!    describe the same edge set. This invariant (spec §3.3) is maintained
 //!    by construction by the Phase 1 write path but not yet *enforced*
 //!    against hand-built or foreign repositories, so a violation is a
-//!    warning, not a hard failure (ADR-0011).
+//!    warning, not a hard failure (ADR-0012).
 //!
 //! The result is structured data, not a boolean: a healthy repository
 //! yields an empty [`FsckReport`], and every finding names the ref/commit,
@@ -36,7 +38,7 @@ use std::fmt;
 
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_prolly::{ChunkFaultKind, verify_reachable};
-use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore};
+use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore, StoreError};
 
 use crate::error::GraphError;
 use crate::repo::{BRANCH_REF_PREFIX, Repository, Snapshot, WORKSPACE_REF_PREFIX};
@@ -51,7 +53,7 @@ pub enum Severity {
     Advisory,
 }
 
-/// What kind of problem a [`Finding`] records (ADR-0011).
+/// What kind of problem a [`Finding`] records (ADR-0012).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FindingKind {
     /// A manifest blob is missing, the wrong object kind, or does not
@@ -70,12 +72,17 @@ pub enum FindingKind {
     MapRoot,
     /// Advisory: the forward and reverse edge maps disagree.
     EdgeAsymmetry,
+    /// Advisory: a reachable version was found but deliberately not verified
+    /// in this phase (e.g. an annotated tag, whose tag-object peeling is
+    /// deferred — see ADR-0012). The sin fsck must avoid is silence, so the
+    /// version is named rather than skipped.
+    Unverified,
 }
 
 impl FindingKind {
     fn severity(&self) -> Severity {
         match self {
-            FindingKind::EdgeAsymmetry => Severity::Advisory,
+            FindingKind::EdgeAsymmetry | FindingKind::Unverified => Severity::Advisory,
             _ => Severity::Error,
         }
     }
@@ -218,28 +225,61 @@ impl FsckReport {
     }
 }
 
+/// Full ref name of the tag namespace (git-native, transferable — spec §3.5).
+const TAG_REF_PREFIX: &str = "refs/tags/";
+
+/// Cross-version memoisation, so verifying deep history stays close to
+/// O(distinct chunks) rather than O(history × tree): a map root or whole
+/// manifest verified clean once is not re-walked when a later version
+/// reuses it.
+#[derive(Default)]
+struct Verified {
+    /// Map roots confirmed to reach only intact chunks, keyed by
+    /// **`(chunk hash, height)`**. The hash alone is not enough: what
+    /// `verify_reachable` checks depends on the height too (it sets the
+    /// root's expected level to `height - 1`), and the height lives in the
+    /// manifest, not in the content-addressed chunk — so a manifest that
+    /// pairs a known-good root hash with a *wrong* height must still be
+    /// verified, and rejected, rather than skipped. (Chunk parameters are
+    /// fixed per repository and do not affect the structural walk, so they
+    /// are not part of the key.)
+    roots: BTreeSet<(Hash, u32)>,
+    /// Manifest blob hashes already fully checked. Sound to key on the blob
+    /// hash alone: the manifest bytes fix every `(root hash, height)` pair
+    /// it names. A shared *damaged* manifest is therefore attributed only to
+    /// the first origin that reaches it — an under-attribution of the same
+    /// fault across origins, never a missed fault.
+    manifests: BTreeSet<Hash>,
+}
+
 /// Verify a repository's chunk reachability and manifest integrity.
 ///
 /// Checks every workspace manifest (`refs/acetone/workspaces/*`) and every
-/// commit reachable from `refs/heads/*`. See the module docs for the
-/// finding taxonomy and totality guarantees. A clean repository returns an
-/// [`FsckReport`] with no findings.
+/// commit reachable from `refs/heads/*` and `refs/tags/*`. See the module
+/// docs for the finding taxonomy and totality guarantees. A clean
+/// repository returns an [`FsckReport`] with no findings.
 pub fn check(repo: &Repository) -> Result<FsckReport, GraphError> {
     let store = repo.store();
     let mut report = FsckReport::default();
-    check_workspaces(store, &mut report)?;
-    check_commits(store, &mut report)?;
+    let mut verified = Verified::default();
+    check_workspaces(store, &mut verified, &mut report)?;
+    check_commit_tips(store, BRANCH_REF_PREFIX, false, &mut verified, &mut report)?;
+    check_commit_tips(store, TAG_REF_PREFIX, true, &mut verified, &mut report)?;
     Ok(report)
 }
 
 /// Verify every workspace manifest. Workspace refs point straight at a
 /// manifest blob (ADR-0010), so this reads the blob and checks the
 /// manifest directly.
-fn check_workspaces(store: &GitStore, report: &mut FsckReport) -> Result<(), GraphError> {
+fn check_workspaces(
+    store: &GitStore,
+    verified: &mut Verified,
+    report: &mut FsckReport,
+) -> Result<(), GraphError> {
     for (reference, hash) in store.list_refs(WORKSPACE_REF_PREFIX)? {
         let origin = Origin::Workspace { reference };
         match store.get(&hash) {
-            Ok(Some(bytes)) => check_manifest(store, &origin, &bytes, report),
+            Ok(Some(bytes)) => check_manifest(store, &origin, hash, &bytes, verified, report),
             Ok(None) => report.push(
                 FindingKind::Manifest,
                 &origin,
@@ -257,13 +297,24 @@ fn check_workspaces(store: &GitStore, report: &mut FsckReport) -> Result<(), Gra
     Ok(())
 }
 
-/// Verify every commit reachable from a branch. Follows all parents,
-/// deduplicating commits so shared history is checked once.
-fn check_commits(store: &GitStore, report: &mut FsckReport) -> Result<(), GraphError> {
+/// Verify every commit reachable from the refs under `prefix`, following all
+/// parents and deduplicating commits so shared history is checked once.
+///
+/// When `is_tag` is set, a ref pointing at a git tag *object* rather than a
+/// commit (an annotated tag) is reported as an [`FindingKind::Unverified`]
+/// advisory instead of an error: peeling tag objects is deferred
+/// (acetone-8t3), but the version is named, not silently skipped.
+fn check_commit_tips(
+    store: &GitStore,
+    prefix: &str,
+    is_tag: bool,
+    verified: &mut Verified,
+    report: &mut FsckReport,
+) -> Result<(), GraphError> {
     let mut seen = BTreeSet::new();
-    for (reference, tip) in store.list_refs(BRANCH_REF_PREFIX)? {
-        let mut stack = vec![tip];
-        while let Some(id) = stack.pop() {
+    for (reference, tip) in store.list_refs(prefix)? {
+        let mut stack = vec![(tip, true)];
+        while let Some((id, is_tip)) = stack.pop() {
             if !seen.insert(id) {
                 continue;
             }
@@ -273,8 +324,15 @@ fn check_commits(store: &GitStore, report: &mut FsckReport) -> Result<(), GraphE
             };
             match store.read_commit(&id) {
                 Ok(Some(commit)) => {
-                    check_manifest(store, &origin, &commit.manifest, report);
-                    stack.extend(commit.parents);
+                    check_manifest(
+                        store,
+                        &origin,
+                        commit.id,
+                        &commit.manifest,
+                        verified,
+                        report,
+                    );
+                    stack.extend(commit.parents.into_iter().map(|p| (p, false)));
                 }
                 Ok(None) => report.push(
                     FindingKind::Commit,
@@ -282,6 +340,22 @@ fn check_commits(store: &GitStore, report: &mut FsckReport) -> Result<(), GraphE
                     None,
                     format!("commit {id} is referenced by history but absent from the store"),
                 ),
+                // An annotated tag's tip is a tag object, not a commit; that
+                // is a coverage boundary, not damage (advisory). Anything
+                // else that is not a readable commit is an error.
+                Err(StoreError::WrongObjectKind { actual, .. })
+                    if is_tag && is_tip && actual == "tag" =>
+                {
+                    report.push(
+                        FindingKind::Unverified,
+                        &origin,
+                        None,
+                        format!(
+                            "{reference} is an annotated tag; peeling tag objects to their \
+                             commit is deferred (acetone-8t3), so it was not verified"
+                        ),
+                    )
+                }
                 Err(err) => report.push(
                     FindingKind::Commit,
                     &origin,
@@ -294,8 +368,19 @@ fn check_commits(store: &GitStore, report: &mut FsckReport) -> Result<(), GraphE
     Ok(())
 }
 
-/// Decode one manifest and verify every map it references.
-fn check_manifest(store: &GitStore, origin: &Origin, bytes: &[u8], report: &mut FsckReport) {
+/// Decode one manifest (identified by its blob `hash`) and verify every map
+/// it references. A manifest already fully checked in this run is skipped.
+fn check_manifest(
+    store: &GitStore,
+    origin: &Origin,
+    hash: Hash,
+    bytes: &[u8],
+    verified: &mut Verified,
+    report: &mut FsckReport,
+) {
+    if !verified.manifests.insert(hash) {
+        return;
+    }
     let manifest = match Manifest::decode(bytes) {
         Ok(manifest) => manifest,
         Err(err) => {
@@ -315,6 +400,7 @@ fn check_manifest(store: &GitStore, origin: &Origin, bytes: &[u8], report: &mut 
         MapId::Nodes,
         &manifest.nodes,
         &manifest,
+        verified,
         report,
     );
     verify_map(
@@ -323,22 +409,25 @@ fn check_manifest(store: &GitStore, origin: &Origin, bytes: &[u8], report: &mut 
         MapId::Schema,
         &manifest.schema,
         &manifest,
+        verified,
         report,
     );
-    verify_map(
+    let fwd_ok = verify_map(
         store,
         origin,
         MapId::EdgesFwd,
         &manifest.edges_fwd,
         &manifest,
+        verified,
         report,
     );
-    verify_map(
+    let rev_ok = verify_map(
         store,
         origin,
         MapId::EdgesRev,
         &manifest.edges_rev,
         &manifest,
+        verified,
         report,
     );
     for (name, root) in &manifest.indexes {
@@ -348,6 +437,7 @@ fn check_manifest(store: &GitStore, origin: &Origin, bytes: &[u8], report: &mut 
             MapId::Index(name.clone()),
             root,
             &manifest,
+            verified,
             report,
         );
     }
@@ -358,22 +448,37 @@ fn check_manifest(store: &GitStore, origin: &Origin, bytes: &[u8], report: &mut 
             MapId::Conflicts,
             conflicts,
             &manifest,
+            verified,
             report,
         );
     }
 
-    check_edge_symmetry(store, origin, &manifest, report);
+    // Only run the edge-symmetry advisory when both edge maps are
+    // structurally sound — otherwise verify_map has already reported the
+    // real (error-severity) corruption, and a "could not check symmetry"
+    // advisory would just be noise.
+    if fwd_ok && rev_ok {
+        check_edge_symmetry(store, origin, &manifest, report);
+    }
 }
 
-/// Verify chunk reachability for one map root.
+/// Verify chunk reachability for one map root, returning `true` if it was
+/// clean. A `(root hash, height)` confirmed clean earlier in this run is
+/// trusted without re-walking — see [`Verified::roots`] for why the height
+/// is part of the key.
 fn verify_map(
     store: &GitStore,
     origin: &Origin,
     map: MapId,
     map_root: &MapRoot,
     manifest: &Manifest,
+    verified: &mut Verified,
     report: &mut FsckReport,
-) {
+) -> bool {
+    let root_key = (map_root.hash, map_root.height);
+    if verified.roots.contains(&root_key) {
+        return true;
+    }
     let root = match map_root.to_root(manifest.chunk_params) {
         Ok(root) => root,
         Err(err) => {
@@ -383,10 +488,15 @@ fn verify_map(
                 Some(map),
                 format!("map root does not reconstruct: {err}"),
             );
-            return;
+            return false;
         }
     };
-    for fault in verify_reachable(store, &root) {
+    let faults = verify_reachable(store, &root);
+    if faults.is_empty() {
+        verified.roots.insert(root_key);
+        return true;
+    }
+    for fault in faults {
         let kind = match fault.kind {
             ChunkFaultKind::Missing => FindingKind::MissingChunk,
             ChunkFaultKind::Corrupt => FindingKind::CorruptChunk,
@@ -400,6 +510,7 @@ fn verify_map(
             detail: fault.reason,
         });
     }
+    false
 }
 
 /// Advisory check: the forward and reverse edge maps must describe the same
@@ -410,7 +521,7 @@ fn verify_map(
 /// [`verify_map`] has already confirmed both edge maps are structurally
 /// sound *prolly trees*, but a structurally valid chunk can still hold a
 /// byte string that is not a valid edge key or record. Full semantic
-/// validation of map contents is a later-phase concern (ADR-0011), so when
+/// validation of map contents is a later-phase concern (ADR-0012), so when
 /// an edge entry fails to decode this surfaces it as a clearly-labelled
 /// advisory — "could not check symmetry" — rather than silently passing
 /// the repository as clean.
@@ -452,17 +563,39 @@ fn check_edge_symmetry(
         }
     };
 
+    // Canonical identity of each edge, from either map. A key that decoded
+    // but will not re-encode is a contradiction in the model layer; surface
+    // it as an advisory rather than dropping it, which would understate the
+    // edge set and could hide a real asymmetry.
+    let mut reencode_failures = 0usize;
     let mut forward_ids = BTreeSet::new();
     for (key, _) in &forward {
-        if let Ok(id) = key.encode_fwd() {
-            forward_ids.insert(id);
+        match key.encode_fwd() {
+            Ok(id) => {
+                forward_ids.insert(id);
+            }
+            Err(_) => reencode_failures += 1,
         }
     }
     let mut reverse_ids = BTreeSet::new();
     for key in &reverse {
-        if let Ok(id) = key.encode_fwd() {
-            reverse_ids.insert(id);
+        match key.encode_fwd() {
+            Ok(id) => {
+                reverse_ids.insert(id);
+            }
+            Err(_) => reencode_failures += 1,
         }
+    }
+    if reencode_failures > 0 {
+        report.push(
+            FindingKind::EdgeAsymmetry,
+            origin,
+            None,
+            format!(
+                "{reencode_failures} edge key(s) decoded but did not re-encode, so the \
+                 symmetry comparison is incomplete"
+            ),
+        );
     }
 
     let missing_reverse = forward_ids.difference(&reverse_ids).count();

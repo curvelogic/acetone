@@ -1,4 +1,4 @@
-# ADR-0011: fsck finding taxonomy and severity model
+# ADR-0012: fsck finding taxonomy and severity model
 
 *Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-04 · Bead: acetone-63m.7 · PR: pending*
 
@@ -66,17 +66,25 @@ false when one fires.
   later-phase concern; a decode failure encountered while computing the
   symmetry advisory is surfaced as an advisory rather than silently passed,
   so the repository does not read as clean.
+- `Unverified` (advisory) — a reachable version was found but deliberately
+  not verified in this phase (an annotated tag, whose tag-object peeling is
+  deferred). It is named, not silently skipped: the sin a verifier must
+  avoid is silence, not incompleteness.
 
 Every chunk-level finding **names the offending chunk** (`chunk:
 Option<Hash>`), including `CorruptChunk` — the walk that produces them
 (`acetone_prolly::verify_reachable`) attaches the hash to every fault,
 not only the missing ones.
 
-**MISSING/CORRUPT is decided structurally, not heuristically.** The
-prolly layer already returns `MissingChunk` for absence and `Corrupt`
-for present-but-malformed on every read; fsck maps those outcomes
-directly rather than re-deriving them, so the classification is exactly
-as trustworthy as the tree reader itself.
+**MISSING/CORRUPT is decided structurally, not heuristically.**
+`verify_reachable` is a dedicated integrity walk: it reads each chunk and
+classifies the outcome as `Missing` (the store reports absence) or
+`Corrupt` (present but not a valid node at its position, or the store
+could not return it). It applies the same structural checks the read
+paths apply in `read_node` — level tag, parent boundary claim, inherited
+lower bound — so the classification is exactly as trustworthy as the tree
+reader, and a wrong-but-well-formed chunk is `Corrupt`, never a wrong
+answer.
 
 ## Consequences
 
@@ -87,9 +95,13 @@ as trustworthy as the tree reader itself.
 - **Totality is the contract.** `verify_reachable` is a non-aborting,
   non-panicking walk: it reads every chunk (leaves included, unlike the
   anchoring walk `collect_reachable_chunks`, which only needs their
-  addresses) and classifies every read outcome. Hostile chunks,
-  manifests and ref targets produce findings, never panics or wrong
-  "clean" answers.
+  addresses) and classifies every read outcome. It terminates and does
+  bounded work on any input — a visited set plus strictly decreasing levels
+  bound the descent, and each read is size-capped by the store. Hostile
+  chunks, manifests and ref targets are designed to produce findings, never
+  panics or a wrong "clean" — the adversarial corpus and the review of this
+  change are what hold that line (the review found and fixed a real
+  wrong-"clean" in an earlier revision).
 - **Under-reporting beneath a corrupt parent is accepted.** A missing or
   corrupt *internal* node hides the addresses of its descendants, so
   faults strictly beneath a reported fault are not enumerated. The
@@ -112,16 +124,25 @@ as trustworthy as the tree reader itself.
   scan cursor do — including *inheriting* the ancestor bound onto a node's
   first child — so a chunk that the read paths would reject (keys below its
   position) is a `CorruptChunk`, never a false clean. Losing that
-  first-child inheritance was a real false-clean caught in review.
-- **Scope boundaries, with follow-ups filed.** This skeletal verifier walks
-  workspaces (`refs/acetone/workspaces/*`) and branch history
-  (`refs/heads/*`), the ref sets the bead names. It does **not** yet walk
-  `refs/tags/*` (annotated tags need dereferencing) and it re-verifies each
-  commit's maps independently, without deduplicating chunk sets shared
-  across versions — so verifying deep history is O(history × tree). Both are
-  tracked as follow-up beads; neither is a correctness (false-clean) gap,
-  only coverage and cost. (Follow-ups: `acetone-8t3` tag coverage,
-  `acetone-7fe` cross-version deduplication.)
+  first-child inheritance was a real false-clean caught in review. Inner
+  nodes are hash-deduplicated so a shared subtree is walked once; a chunk's
+  `last_key` is content-addressed and every parent's boundary claim is
+  checked, which (as the review independently verified) forces any
+  misplaced shared subtree to be flagged at its shallowest reference or on
+  fresh descent — so deduplication cannot hide a stricter-bound violation
+  and no separate re-expansion pass is needed.
+- **Deep history stays close to O(distinct chunks).** Map roots and whole
+  manifests are content-addressed, so one verified clean is memoised and a
+  later version reusing it is not re-walked; only genuinely new chunk sets
+  cost work.
+- **Scope boundaries, with follow-ups filed.** The verifier walks
+  workspaces (`refs/acetone/workspaces/*`), branch history (`refs/heads/*`)
+  and tags (`refs/tags/*`). A *lightweight* tag is verified like a branch; an
+  *annotated* tag is reported as an `Unverified` advisory because peeling
+  tag objects to their commit is deferred (`acetone-8t3`). The per-version
+  map/manifest memoisation above is in place; streaming the edge-symmetry
+  advisory so it need not materialise all edges per version is deferred
+  (`acetone-7fe`). Neither is a correctness (false-clean) gap.
 - **Revisit** when index verification and cross-map referential checks
   (every edge endpoint resolves to a node) arrive: those are new kinds,
   and some current advisories may become errors.

@@ -1,4 +1,4 @@
-//! Integration tests for `fsck` (spec §7, ADR-0011): over real bare git
+//! Integration tests for `fsck` (spec §7, ADR-0012): over real bare git
 //! repositories, a healthy graph verifies clean and every class of damage
 //! — missing chunk, physically and logically corrupt chunk, garbage
 //! manifest, non-commit ref, asymmetric edge maps — produces the right
@@ -7,14 +7,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use acetone_graph::fsck::{self, FindingKind, Severity};
+use acetone_graph::fsck::{self, FindingKind, MapId, Severity};
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::MapRoot;
 use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_prolly::{BatchOp, Hash, apply_batch, reachable_chunks};
-use acetone_store::{ChunkStore, RefStore};
+use acetone_store::{ChunkStore, CommitStore, NewCommit, RefStore};
 
 fn init_repo(dir: &Path) -> Repository {
     Repository::init(&dir.join("graph.git"), InitOptions::default()).expect("init")
@@ -325,6 +325,188 @@ fn undecodable_edge_entries_surface_as_advisory_not_silence() {
     assert!(
         !report.has_errors(),
         "the structurally sound chunk is not an error-severity finding: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn shared_root_hash_with_wrong_height_is_not_memoised_clean() {
+    // The cross-version memo must key on (root hash, height), not the hash
+    // alone: height lives in the manifest, not the content-addressed chunk,
+    // so a manifest that pairs a known-good root hash with a WRONG height
+    // must still be verified and flagged — not skipped because the hash was
+    // seen. The healthy default workspace is checked first (sorts before
+    // "zzz-bad") and seeds the memo; the bad workspace reuses its nodes root
+    // hash with height + 1.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    commit_many_nodes(&repo, 2500);
+    let base = repo.workspace_manifest().expect("manifest");
+    assert!(
+        base.nodes.height >= 2,
+        "need a multi-level nodes tree for a real height mismatch"
+    );
+
+    let mut bad = base.clone();
+    bad.nodes = MapRoot {
+        hash: base.nodes.hash,
+        height: base.nodes.height + 1,
+    };
+    let blob = repo.store().put(&bad.encode()).expect("put manifest");
+    repo.store()
+        .write_ref("refs/acetone/workspaces/zzz-bad", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.findings.iter().any(|f| {
+            f.kind == FindingKind::CorruptChunk
+                && f.map == Some(MapId::Nodes)
+                && matches!(&f.origin, acetone_graph::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/zzz-bad")
+        }),
+        "the wrong-height root must be flagged despite sharing the hash, got {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn reverse_only_edge_is_a_missing_forward_advisory() {
+    // Hand-build a manifest whose reverse edge map has an edge the forward
+    // map lacks — the mirror of the asymmetry test, exercising the
+    // missing_forward direction.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+
+    let base = repo.workspace_manifest().expect("manifest");
+    let empty_rev = base.edges_rev.to_root(base.chunk_params).expect("root");
+    let key = EdgeKey::new(node("Host", "a"), "LINK", node("Host", "b"), Value::Null).expect("key");
+    let rev = apply_batch(
+        store,
+        &empty_rev,
+        vec![BatchOp::Put(key.encode_rev().expect("encode"), Vec::new())],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.edges_rev = MapRoot::from_root(&rev);
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/revonly", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .advisories()
+            .any(|f| f.kind == FindingKind::EdgeAsymmetry
+                && f.detail.contains("no matching forward")),
+        "expected a missing-forward edge advisory, got {:?}",
+        report.findings
+    );
+    assert!(!report.has_errors(), "asymmetry is advisory, not error");
+}
+
+#[test]
+fn corrupt_manifest_inside_a_commit_is_a_manifest_finding() {
+    // The manifest damage must be caught in commit history too, not only
+    // behind a workspace ref: hand-build a commit whose manifest blob is
+    // garbage and point a branch at it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+
+    let commit = store
+        .create_commit(&NewCommit::new(
+            b"garbage bytes that are not a manifest",
+            "summary",
+            "message",
+        ))
+        .expect("create commit");
+    store
+        .write_ref("refs/heads/badmanifest", None, &commit)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.findings.iter().any(|f| {
+            f.kind == FindingKind::Manifest
+                && matches!(f.origin, acetone_graph::Origin::Commit { .. })
+        }),
+        "expected a Manifest finding attributed to the commit, got {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn absent_workspace_manifest_blob_is_a_manifest_finding() {
+    // A workspace ref pointing at an object the store does not have (the
+    // Ok(None) branch): reported, not skipped or panicked on.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+
+    let blob = store.put(b"placeholder manifest").expect("put");
+    store
+        .write_ref("refs/acetone/workspaces/absent", None, &blob)
+        .expect("ref");
+    fs::remove_file(loose_object_path(&repo, &blob)).expect("remove");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.findings.iter().any(|f| {
+            f.kind == FindingKind::Manifest
+                && matches!(&f.origin, acetone_graph::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/absent")
+                && f.detail.contains("absent")
+        }),
+        "expected an absent-manifest finding, got {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn lightweight_tag_is_verified_annotated_tag_is_an_advisory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    commit_many_nodes(&repo, 40);
+    let head = repo.head_commit().expect("head").expect("a commit");
+
+    // A lightweight tag (ref -> commit) is walked like a branch: clean.
+    repo.store()
+        .write_ref("refs/tags/light", None, &head)
+        .expect("tag ref");
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.is_clean(),
+        "lightweight tag on a healthy commit must verify clean: {:?}",
+        report.findings
+    );
+
+    // An annotated tag (ref -> tag object) is reported as Unverified, not a
+    // spurious Commit error.
+    let git_dir = repo.store().common_dir().to_owned();
+    let status = std::process::Command::new("git")
+        .args(["-c", "user.name=fsck-test", "-c", "user.email=fsck@test"])
+        .arg("-C")
+        .arg(&git_dir)
+        .args(["tag", "-a", "annotated", "-m", "annotated tag"])
+        .arg(head.to_hex())
+        .status()
+        .expect("run git tag");
+    assert!(status.success(), "git tag -a failed");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .advisories()
+            .any(|f| f.kind == FindingKind::Unverified),
+        "annotated tag must be an Unverified advisory, got {:?}",
+        report.findings
+    );
+    assert!(
+        !report.has_errors(),
+        "an annotated tag is not an error: {:?}",
         report.findings
     );
 }
