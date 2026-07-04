@@ -1,0 +1,293 @@
+<title>acetone — sprint demo: Phase 1</title>
+<style>
+  :root {
+    --paper: #fbfbf9;
+    --ink: #1a2321;
+    --muted: #5c6b66;
+    --accent: #0f6f5c;
+    --accent-soft: #e7f1ee;
+    --amber: #b0700a;
+    --amber-soft: #f8efe0;
+    --hairline: #e3e7e4;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  html { scroll-snap-type: y proximity; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    margin: 0;
+  }
+  .slide {
+    min-height: 100vh; box-sizing: border-box;
+    scroll-snap-align: start;
+    display: flex; flex-direction: column; justify-content: center;
+    max-width: 900px; margin: 0 auto;
+    padding: 56px 32px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+  }
+  .eyebrow .n { color: var(--muted); }
+  h1, h2 {
+    font-family: var(--mono); font-weight: 600; text-wrap: balance;
+    margin: 0 0 20px; line-height: 1.2;
+  }
+  h1 { font-size: 40px; }
+  h2 { font-size: 28px; }
+  h3 { font-size: 16px; font-family: var(--mono); margin: 28px 0 8px; }
+  p, li { max-width: 64ch; }
+  p.lead { font-size: 19px; color: var(--ink); }
+  .muted { color: var(--muted); }
+  ul { padding-left: 1.2em; margin: 10px 0; }
+  li { margin: 6px 0; }
+  li::marker { color: var(--accent); }
+  code, .k {
+    font-family: var(--mono); font-size: 0.92em;
+    background: var(--accent-soft); border-radius: 3px; padding: 1px 5px;
+  }
+  table {
+    border-collapse: collapse; font-size: 14.5px; margin: 14px 0;
+    font-variant-numeric: tabular-nums; width: 100%;
+  }
+  .tablewrap { overflow-x: auto; }
+  th { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+       text-transform: uppercase; color: var(--muted); text-align: left; }
+  th, td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  td.num { font-family: var(--mono); white-space: nowrap; }
+  .good { color: var(--accent); font-weight: 600; }
+  .warn { color: var(--amber); font-weight: 600; }
+  .callout {
+    border-left: 3px solid var(--amber); background: var(--amber-soft);
+    padding: 14px 18px; margin: 18px 0; max-width: 64ch;
+  }
+  .callout.ok { border-left-color: var(--accent); background: var(--accent-soft); }
+  .callout p { margin: 4px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 40px; }
+  @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  .bignum { font-family: var(--mono); font-size: 44px; font-weight: 700; line-height: 1; }
+  .bignum small { font-size: 15px; font-weight: 400; color: var(--muted); display: block; margin-top: 6px; }
+  .stats { display: flex; gap: 48px; flex-wrap: wrap; margin: 24px 0; }
+  .footer-hint { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 32px; }
+  a { color: var(--accent); }
+  pre {
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+    background: var(--accent-soft); border-radius: 6px; padding: 14px 18px;
+    overflow-x: auto; max-width: 100%;
+  }
+</style>
+
+<!-- ─── Slide 1 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">1/9</span> · sprint demo · 4 July 2026</p>
+  <h1>acetone — Phase 1</h1>
+  <p class="lead">Storage and model core: the format is now real. Every layer from
+  bytes to CLI exists, is property-tested, and survives a round trip through a
+  GitHub remote that has never heard of acetone.</p>
+  <p>Phase 0 proved the bet (git ODB as chunk store). Phase 1 built the house on
+  it: the normative encodings, the map layouts, the manifest, commits, workspaces,
+  the single-writer lock, a verifier, a CLI, regression benchmarks, and the
+  pack-on-write storage machinery — all through the adversarial review gate.</p>
+  <p class="muted">This deck covers what shipped, the decisions taken (five ADRs),
+  what review caught, and what's open. Then: a live demo, step by step; then the
+  docs are yours.</p>
+  <p class="footer-hint">scroll ↓ · 9 slides</p>
+</section>
+
+<!-- ─── Slide 2 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">2/9</span> · where we are</p>
+  <h2>Phase 1 complete bar your gate review</h2>
+  <div class="stats">
+    <div class="bignum">10<small>PRs merged this phase,<br>every one reviewer-signed</small></div>
+    <div class="bignum">12<small>of 13 Phase 1 beads closed<br>(the exit bead is yours)</small></div>
+    <div class="bignum">5<small>ADRs taken<br>(0008–0012)</small></div>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th>Layer</th><th>State</th></tr>
+    <tr><td><code>acetone-model</code> — encodings, map layouts, manifest (format_version 1)</td><td class="good">shipped (#9, #15, #23)</td></tr>
+    <tr><td><code>acetone-prolly</code> — trees, diff, merge, verifier walk</td><td class="good">shipped (#12, #22)</td></tr>
+    <tr><td><code>acetone-store</code> — git ODB backend, refs, commits, pack-on-write gc</td><td class="good">shipped (#10, #21)</td></tr>
+    <tr><td><code>acetone-graph</code> — commits, workspaces, lock, snapshots, fsck</td><td class="good">shipped (#19, #22)</td></tr>
+    <tr><td><code>acetone-cli</code> — init/status/commit/log/branch/checkout/fsck + plumbing</td><td class="good">shipped (#20, #24)</td></tr>
+    <tr><td>Regression benchmarks (<code>acetone-bench</code>)</td><td class="good">shipped (#18)</td></tr>
+    <tr><td>Exit evidence — e2e script in CI + GitHub round trip</td><td class="good">shipped (#24) + evidenced manually</td></tr>
+  </table></div>
+</section>
+
+<!-- ─── Slide 3 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">3/9</span> · the format</p>
+  <h2>Node identity has exactly one byte form, everywhere</h2>
+  <p>A node key — <code>(primary label, key tuple)</code> — encodes as a single
+  memcomparable list element, and those exact bytes appear standalone as the
+  nodes-map key and embedded inside edge and index keys (ADR-0008). Identity
+  comparisons are byte comparisons in every map; label scans are prefix scans.</p>
+  <pre>("Host", "web1")  →  0c 06 48 6f 73 74 … fb 06 77 65 62 31 … fb 00
+nodes map key         └── the same bytes ──┘
+edges_fwd key   [src node key][type][dst node key][disc]</pre>
+  <ul>
+    <li><strong>Key properties live only in the key</strong> — a record that disagrees
+      with its key is unrepresentable (Invariant 3 enforced structurally).</li>
+    <li><strong>The manifest is version-first</strong>: <code>[format_version, body]</code>,
+      so any future reader identifies a newer repository before parsing a byte of body.</li>
+    <li>All of it golden-pinned: changing any byte is a declared
+      <code>format_version</code> bump, not an accident.</li>
+  </ul>
+</section>
+
+<!-- ─── Slide 4 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">4/9</span> · the repository</p>
+  <h2>An acetone repo is a bare git repo you can read with git</h2>
+  <div class="grid2">
+    <div>
+      <h3>a commit, in git's eyes</h3>
+      <pre>commit fe0083c…
+├── README.md      (human summary)
+├── manifest       (the version record)
+└── chunks/        (anchors every chunk)</pre>
+      <p class="muted"><code>git log</code>, <code>git show</code>, hosting UIs,
+      <code>git fsck --strict</code>: all just work. Trailers carry provenance.</p>
+    </div>
+    <div>
+      <h3>the moving parts (ADR-0010)</h3>
+      <ul>
+        <li>Workspace = manifest blob at <code>refs/acetone/workspaces/&lt;name&gt;</code>,
+          advanced by compare-and-swap — a lost race is a typed error, never a lost write.</li>
+        <li>Single-writer lock held for a whole transaction; readers are pinned to
+          immutable manifests (MVCC for free).</li>
+        <li>Real git HEAD is the checked-out ref — clones see the right branch.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout ok">
+    <p><strong>Proven, not claimed:</strong> a committed 500-node version survives
+    <code>git gc --prune=now --aggressive</code> and a cold reopen — commits anchor the
+    complete chunk set of every map, so whole versions travel with clone/push/fetch.</p>
+  </div>
+</section>
+
+<!-- ─── Slide 5 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">5/9</span> · exit evidence</p>
+  <h2>The e2e script, and a real GitHub round trip</h2>
+  <p><code>scripts/phase1-e2e.sh</code> runs in CI on every push: init → plumbing
+  writes → commit with trailer → branch → mutate → root-level diff (diverged
+  branches differ at <code>&lt;branch&gt;:manifest</code>) → <code>acetone fsck</code>
+  clean → native git interop → gc survival.</p>
+  <p>Run manually against <code>github.com/curvelogic/acetone-phase1-e2e</code>
+  (private, created as evidence):</p>
+  <ul>
+    <li>pushed <code>main</code> + <code>feature</code>; bare-cloned back;
+      <code>git fsck --strict</code> clean on the clone;</li>
+    <li>workspace recreated in the clone with one line of plain git plumbing
+      (<code>git update-ref … main:manifest</code>);</li>
+    <li>acetone served node data, history and a clean fsck <em>from the clone</em>.</li>
+  </ul>
+  <div class="callout ok"><p><strong>Spec §3.5, demonstrated end to end:</strong>
+  “a remote need not know acetone exists.”</p></div>
+  <p class="muted">Property suites green across the workspace: history independence,
+  encoding order/canonicity, map-level merge determinism — plus an experimental
+  witness for Invariant 2 (5,000 records × every single-bit flip: zero aliasing).</p>
+</section>
+
+<!-- ─── Slide 6 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">6/9</span> · the hard two</p>
+  <h2>Pack-on-write productionised; fsck born paranoid</h2>
+  <div class="grid2">
+    <div>
+      <h3>pack-on-write (#21, ADR-0011)</h3>
+      <ul>
+        <li>Predecessor recording as a pure observer on <code>apply_batch</code> —
+          output bit-identical, proven by test.</li>
+        <li>Hand-rolled git delta encoder + v2 pack/idx writers; every delta
+          round-trip-verified against exact bytes before use.</li>
+        <li>gc consolidation: bases-first topological order, chain caps,
+          fsync-before-prune, prune gated on the written pack's own contents —
+          a planning bug fails loudly, never deletes data.</li>
+        <li>Phase 0 measured the win at 7.1× retention; the machinery now exists
+          to collect it.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>fsck (#22, ADR-0012)</h3>
+      <ul>
+        <li>Verifies every version reachable from workspaces, branches and tags:
+          manifest decode, chunk reachability, prolly structure at claimed positions.</li>
+        <li>MISSING and CORRUPT distinguished; every finding names its chunk.</li>
+        <li>Advisory tier for later-phase semantics (edge symmetry, annotated tags)
+          — incompleteness is declared, never silent.</li>
+        <li>Four review rounds; two proven false-cleans found and killed before
+          merge (next slide).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Slide 7 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">7/9</span> · process</p>
+  <h2>What the review gate caught this phase</h2>
+  <p>Every PR went through a fresh adversarial reviewer on the strongest model
+  tier (ADR-0009, your in-session ruling). Four would-have-shipped defect classes:</p>
+  <div class="tablewrap"><table>
+    <tr><th>PR</th><th>Caught before merge</th><th>Class</th></tr>
+    <tr><td>#18</td><td>Regression assert with zero headroom at 5M keys and a falsified justification — reviewer benchmarked 20k/1M/5M itself</td><td>false CI failures at scale</td></tr>
+    <tr><td>#20</td><td>CLI silently minted no-change commits; plus a store-level CAS contract leak found from behaviour alone</td><td>correctness / contract</td></tr>
+    <tr><td>#21</td><td>Proven stack overflow (SIGABRT PoC); prune gate claimed-but-not-implemented; no fsync before prune</td><td class="warn">data loss</td></tr>
+    <tr><td>#22</td><td>Two <em>proven</em> false-cleans in the verifier itself, across four rounds — including one introduced by a review fix</td><td class="warn">false clean</td></tr>
+  </table></div>
+  <p class="muted">Also: one suspected P1 invariant hole (record aliasing) was
+  investigated and downgraded — a test comparing floats with IEEE equality, not a
+  decoder bug; the disproof was brute-forced. Honest false alarms count too.</p>
+</section>
+
+<!-- ─── Slide 8 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">8/9</span> · decisions &amp; risks</p>
+  <h2>Five ADRs on record; open risks are beaded and bounded</h2>
+  <h3>decisions taken (made, not deferred)</h3>
+  <ul>
+    <li><strong>0008</strong> map layouts + manifest encoding · <strong>0010</strong> workspace
+      refs, writer lock, HEAD semantics · <strong>0011</strong> pack-on-write consolidation
+      (includes a deliberate spec §3.1 amendment) · <strong>0012</strong> fsck taxonomy ·
+      <strong>0009</strong> subagent model tiers (yours).</li>
+  </ul>
+  <h3>open risks (none blocker-class)</h3>
+  <ul>
+    <li><span class="warn">P2</span> <code>write_ref</code> create-CAS accepts a value-equal
+      no-op (acetone-0ej) · fsck can't run if the default workspace manifest itself is
+      the damaged object (acetone-zhp) · fsck tag-peeling and cross-version dedup
+      (acetone-8t3/7fe).</li>
+    <li><span class="warn">Format-level gap, documented</span>: uncommitted workspaces
+      don't survive a foreign <code>git gc</code> until acetone-gc protects them (ADR-0010).</li>
+    <li>P3s: checkout two-ref atomicity, library no-change-commit guard, consolidation
+      scaling, anchor-completeness check, and friends — all beaded.</li>
+  </ul>
+  <p class="muted">Milestone security review: run over the whole phase diff before this
+  report — verdict and triage in <code>docs/notes/phase1-security-review.md</code>.</p>
+</section>
+
+<!-- ─── Slide 9 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">9/9</span> · the boundary</p>
+  <h2>Your calls, then Phase 2</h2>
+  <ul>
+    <li><strong>Close acetone-63m.8</strong> (the Phase 1 gate) if the evidence holds —
+      that unblocks Phase 2 (Cypher read path: parser, binder, iterator executor,
+      TCK harness, <code>query</code>/<code>shell</code>).</li>
+    <li><strong>Gate B</strong> (parser adoption: decypher vs vendored grammar) is due in
+      week one of Phase 2 — it will be decided by ADR unless you want it now.</li>
+    <li><strong>acetone-63m.12</strong> — your go-ahead to file the gix ref-transaction
+      TOCTOU upstream.</li>
+    <li>The evidence repo <code>curvelogic/acetone-phase1-e2e</code> is yours to delete.</li>
+  </ul>
+  <p class="lead" style="margin-top:28px">Next: the live demo — the real CLI against a
+  real repository and a real remote, one step per turn.</p>
+  <p class="footer-hint">deck archived at docs/demos/2026-07-04-phase-1-sprint-demo.html ·
+  full detail in docs/reports/phase-1.md</p>
+</section>
