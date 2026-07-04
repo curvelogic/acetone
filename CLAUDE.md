@@ -106,6 +106,26 @@ cargo fmt --all --check
 
 Test-driven throughout: property tests for storage invariants land before or with the features they guard; TCK conformance drives the Cypher engine and the pass rate is published per release.
 
+## Autonomous Working Protocol
+
+Greg reviews **only at phase boundaries**. Between boundaries, agents work autonomously under these rules — this repository explicitly opts into the beads **Team-maintainer** profile (agents may close beads, run quality gates, commit, push, and merge as part of the workflow below).
+
+Per bead:
+
+1. **Claim**: `bd ready` → `bd update <id> --claim`. Work one bead at a time per agent.
+2. **Spec first**: before coding, record the approach in the bead (`bd update <id> --design`): interfaces, key types, test plan, and how the work protects the Load-Bearing Invariants. Non-trivial design choices get an ADR (see below).
+3. **TDD**: tests precede or accompany implementation; invariant-touching code carries property tests. No `unsafe` without justification and a test.
+4. **Branch & PR** per the branch discipline. CI (build, test, clippy `-D warnings`, fmt, audit) must be green.
+5. **Independent review — mandatory merge gate**: every PR is reviewed by a **fresh subagent with no implementation context**, prompted to review adversarially for correctness, security, spec conformance (docs/acetone-02-spec.md) and invariant protection. Each finding is either fixed or explicitly rebutted in a PR comment before merge. Docs-only changes may take a lighter single-pass review.
+6. **Merge & close**: squash-merge once CI and review are clean; delete the branch; close the bead with a one-paragraph summary of what shipped and any deviations from the spec'd design.
+
+Additional gates:
+
+- **Milestone security review**: at each phase's end, run a dedicated security-focused review (fresh subagent) over the whole phase diff — input handling, path/ref injection, panics on untrusted data, dependency risk — before writing the phase report.
+- **Decisions**: any choice Greg would plausibly care about (dependency adoption, format details, API shape, spec deviations) is recorded as `docs/adr/NNNN-<slug>.md` (context → decision → consequences, a page at most) and linked from a `decision`-type bead. Decisions are **made, not deferred** — ADRs are the agenda for phase-boundary discussion, not permission requests.
+- **Phase boundary**: agents never close a phase's exit-criteria bead. Instead, write `docs/reports/phase-N.md` — what shipped, gate evidence against the roadmap's exit criteria, ADRs taken, review findings summary, open risks — and stop. Greg reviews, discusses, and closes the gate bead; the next phase's beads unblock from there.
+- **Dependencies**: adding a crate requires a sentence of justification in the PR (maintenance health, licence, why not std/existing deps). `cargo audit`/`cargo deny` run in CI.
+
 ## Branch & Merge Discipline
 
 Trunk-based development with short-lived branches:
