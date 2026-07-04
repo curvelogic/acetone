@@ -41,17 +41,40 @@
 //! listed in [`NewCommit::anchors`] reachable from the commit — pass the
 //! complete chunk set of the version, and pair the commit with
 //! [`RefStore::write_ref`] so a ref reaches the commit.
+//!
+//! # Consolidation, and why `git gc` is safe-but-lossy (ADR-0011)
+//!
+//! Per-commit writes land as loose objects, which git's own delta heuristics
+//! compress poorly: content-addressed chunks have no stable path and no size
+//! correlation, so a rewritten chunk is never paired with its predecessor and
+//! history retains many times the changed bytes. [`GitStore::consolidate`] is
+//! acetone's own garbage-collecting repack: it rewrites the reachable object
+//! set into one self-contained pack whose entries are deltas against the
+//! predecessors recorded by [`GitStore::record_base_hints`] (which the prolly
+//! layer discovers at write time), recovering roughly a 7× retention win over
+//! `git gc`. It is **representation-only** — every object's bytes and address
+//! are preserved exactly — so no chunk address or prolly root hash ever
+//! changes.
+//!
+//! Running stock **`git gc`/`git repack` on an acetone repository is
+//! safe-but-lossy**: it corrupts nothing and every object still reads back,
+//! but it discards acetone's hand-chosen deltas and lands back near the
+//! poorly-compressed baseline. Re-running [`GitStore::consolidate`] restores
+//! the ratio.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod consolidate;
 mod error;
 mod git;
 mod hash;
+mod pack;
 mod store;
 
 pub use bytes::Bytes;
 
+pub use consolidate::{ConsolidateOptions, ConsolidateStats};
 pub use error::StoreError;
 pub use git::{DEFAULT_MAX_CHUNK_SIZE, GitStore, GitStoreOptions, ObjectFormat};
 pub use hash::Hash;
