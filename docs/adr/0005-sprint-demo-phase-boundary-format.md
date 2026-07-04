@@ -20,7 +20,9 @@ decisions, and closes the gate bead.
 ## Consequences
 
 The deck and demo become mandatory agent deliverables at every boundary,
-alongside `docs/reports/phase-N.md`. Roadmap exit criteria are already
+alongside `docs/reports/phase-N.md`. Decks are published as Artifacts for
+presentation and archived in the repo under `docs/demos/` (self-contained
+HTML, date-prefixed) so the boundary record outlives the session. Roadmap exit criteria are already
 demo-shaped (Phase 1's scripted end-to-end, Phase 4's flagship merge demo),
 so phase demo scripts should be checked in and reviewed like any artefact —
 the demo then constitutes gate evidence rather than a performance about it.

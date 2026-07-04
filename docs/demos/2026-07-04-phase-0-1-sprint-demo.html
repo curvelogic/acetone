@@ -1,0 +1,228 @@
+<title>acetone — sprint demo: Phase 0 → Phase 1</title>
+<style>
+  :root {
+    --paper: #fbfbf9;
+    --ink: #1a2321;
+    --muted: #5c6b66;
+    --accent: #0f6f5c;
+    --accent-soft: #e7f1ee;
+    --amber: #b0700a;
+    --amber-soft: #f8efe0;
+    --hairline: #e3e7e4;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  html { scroll-snap-type: y proximity; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    margin: 0;
+  }
+  .slide {
+    min-height: 100vh; box-sizing: border-box;
+    scroll-snap-align: start;
+    display: flex; flex-direction: column; justify-content: center;
+    max-width: 900px; margin: 0 auto;
+    padding: 56px 32px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+  }
+  .eyebrow .n { color: var(--muted); }
+  h1, h2 {
+    font-family: var(--mono); font-weight: 600; text-wrap: balance;
+    margin: 0 0 20px; line-height: 1.2;
+  }
+  h1 { font-size: 40px; }
+  h2 { font-size: 28px; }
+  h3 { font-size: 16px; font-family: var(--mono); margin: 28px 0 8px; }
+  p, li { max-width: 64ch; }
+  p.lead { font-size: 19px; color: var(--ink); }
+  .muted { color: var(--muted); }
+  ul { padding-left: 1.2em; margin: 10px 0; }
+  li { margin: 6px 0; }
+  li::marker { color: var(--accent); }
+  code, .k {
+    font-family: var(--mono); font-size: 0.92em;
+    background: var(--accent-soft); border-radius: 3px; padding: 1px 5px;
+  }
+  table {
+    border-collapse: collapse; font-size: 14.5px; margin: 14px 0;
+    font-variant-numeric: tabular-nums; width: 100%;
+  }
+  .tablewrap { overflow-x: auto; }
+  th { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+       text-transform: uppercase; color: var(--muted); text-align: left; }
+  th, td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  td.num { font-family: var(--mono); white-space: nowrap; }
+  .good { color: var(--accent); font-weight: 600; }
+  .warn { color: var(--amber); font-weight: 600; }
+  .callout {
+    border-left: 3px solid var(--amber); background: var(--amber-soft);
+    padding: 14px 18px; margin: 18px 0; max-width: 64ch;
+  }
+  .callout.ok { border-left-color: var(--accent); background: var(--accent-soft); }
+  .callout p { margin: 4px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 40px; }
+  @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  .bignum { font-family: var(--mono); font-size: 44px; font-weight: 700; line-height: 1; }
+  .bignum small { font-size: 15px; font-weight: 400; color: var(--muted); display: block; margin-top: 6px; }
+  .stats { display: flex; gap: 48px; flex-wrap: wrap; margin: 24px 0; }
+  .footer-hint { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 32px; }
+  a { color: var(--accent); }
+</style>
+
+<!-- ─── Slide 1 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">1/7</span> · sprint demo · 4 July 2026</p>
+  <h1>acetone</h1>
+  <p class="lead">A version-controlled labelled property graph database: Dolt-style
+  prolly trees stored in a real git repository, queried with openCypher, run as a
+  workbench, written in Rust.</p>
+  <p>The whole architecture rests on one bet — <strong>Decision 1, Option A</strong>:
+  that the git object database can be the chunk store, so clone, push, hosting,
+  review and CI come for free. Phase 0 existed solely to test that bet with
+  running code before anything was built on it.</p>
+  <p class="muted">This deck covers Phase 0 (complete, gate ratified) and the opening
+  of Phase 1 (in flight). Then: a live demo, then the docs are yours.</p>
+  <p class="footer-hint">scroll ↓ · 7 slides</p>
+</section>
+
+<!-- ─── Slide 2 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">2/7</span> · where we are</p>
+  <h2>Phase 0 done and ratified; Phase 1 under way</h2>
+  <div class="stats">
+    <div class="bignum">9<small>PRs merged, every one<br>through adversarial review</small></div>
+    <div class="bignum">8<small>beads closed<br>(6 Phase 0 + process + encodings)</small></div>
+    <div class="bignum">4<small>ADRs on record<br>(protocol, Gate A, licence, encodings)</small></div>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th>Milestone</th><th>State</th></tr>
+    <tr><td>Phase 0 — feasibility spike</td><td class="good">complete; Gate A ratified by you</td></tr>
+    <tr><td>Phase 1 — storage &amp; model core</td><td>3 of 12 beads landed or in review</td></tr>
+    <tr><td><code>acetone-model</code> encodings (format_version 1)</td><td class="good">merged (PR #9)</td></tr>
+    <tr><td><code>acetone-store</code> ChunkStore + git backend</td><td>in review — one design blocker being fixed (PR #10)</td></tr>
+    <tr><td>Pack-on-write validation experiment</td><td>running (bead 63m.10)</td></tr>
+  </table></div>
+</section>
+
+<!-- ─── Slide 3 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">3/7</span> · what we built</p>
+  <h2>Phase 0: the bet, tested with running code</h2>
+  <ul>
+    <li><strong>The spike</strong> — a prolly map whose chunks are git blobs, addresses are git
+      OIDs (one addressing scheme), commits are real git commits. Pure gitoxide;
+      the git2 fallback was never needed.</li>
+    <li><strong>History independence</strong> — five-property proptest suite; review
+      mutation-tested it: 3/3 seeded real bugs caught, 2 no-op mutations proved no-ops.</li>
+    <li><strong>Benchmarks at 100k / 1M / 5M keys</strong> — reviewer reproduced the 100k
+      numbers bit-exact before sign-off.</li>
+  </ul>
+  <div class="tablewrap"><table>
+    <tr><th>Measure (1M keys)</th><th>Result</th><th>Reading</th></tr>
+    <tr><td>Bulk load</td><td class="num">6.0 s</td><td>167k keys/s, linear to 5M</td></tr>
+    <tr><td>Point read p50</td><td class="num">58–170 µs</td><td>interactive, packed beats loose</td></tr>
+    <tr><td>Single-key update</td><td class="num">4 chunks (~20 KiB)</td><td>exactly the O(log n) spine</td></tr>
+    <tr><td>Diff, 1% churn (~10k changes)</td><td class="num">874 ms</td><td>~2 chunk reads per change, scale-independent, verified exact</td></tr>
+    <tr><td>Survives <code>gc --prune=now</code>, clone, fsck</td><td class="good">yes</td><td>fixes the prollytree crate's fatal flaw</td></tr>
+  </table></div>
+</section>
+
+<!-- ─── Slide 4 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">4/7</span> · the number to watch</p>
+  <h2>History growth under churn is the honest cost</h2>
+  <div class="stats">
+    <div class="bignum warn">17×<small>payload retained per 1%-churn<br>import commit (~39 MiB each)</small></div>
+    <div class="bignum warn">17 min<small>git gc at ~918k<br>accumulated loose objects</small></div>
+  </div>
+  <p>Random 1% churn rewrites ~36% of leaf chunks per commit, and git's pack
+  heuristics <em>cannot</em> delta content-addressed blobs — aggressive repack
+  recovered only ~1% more than plain gc.</p>
+  <div class="callout">
+    <p><strong>The proposed fix is an unvalidated hypothesis.</strong> Pack-on-write with
+    explicitly chosen delta bases (we know each chunk's predecessor at write time)
+    could recover most of it — but no existing git or gix tooling writes
+    custom-delta packs, so it means hand-rolling git's delta and pack formats.</p>
+    <p>That experiment (<code>acetone-63m.10</code>) is <strong>running right now</strong>;
+    success bar ≥5× improvement with git-readable packs. Fallbacks if it fails:
+    import key locality, coarser batching, history compaction.</p>
+  </div>
+</section>
+
+<!-- ─── Slide 5 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">5/7</span> · problems &amp; catches</p>
+  <h2>What the review gate caught (a selection)</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Where</th><th>Catch</th><th>Why it mattered</th></tr>
+    <tr><td>PR #9 encodings</td><td><code>i16::MIN.abs()</code> overflow: debug builds panic on an 11-byte crafted input; release builds <em>accept</em> it</td><td>a normative format whose accepted byte set varied by build profile — nearly unfixable once data exists</td></tr>
+    <tr><td>PR #9 encodings</td><td>CBOR tags squatted in IANA "Specification Required" space</td><td>moved to genuine FCFS range <em>before</em> the golden vectors froze</td></tr>
+    <tr><td>PR #10 store</td><td>commit contract couldn't express chunk reachability — unanchored chunks don't just die at gc, they <em>silently don't clone or push</em></td><td>caught before the prolly layer built on the wrong trait</td></tr>
+    <tr><td>PR #10 store</td><td>found a real upstream gitoxide bug: ref CAS preconditions checked before the lock (8/8 racing writers "won")</td><td>worked around with a store-level lock; upstream report queued for your go-ahead</td></tr>
+    <tr><td>PR #2 / #8 CI</td><td>cargo-deny job red on its own PR; later, our own crates silently exempt from licence checks</td><td>the gate now audits its own machinery too</td></tr>
+    <tr><td>Security review</td><td><code>main</code> had no server-side protection; agents could technically force-push</td><td>ruleset now live: PR + 4 checks required, force-push blocked</td></tr>
+  </table></div>
+  <p class="muted">Five review rounds ran two cycles before sign-off. Zero rubber stamps; one finding was rebutted with evidence.</p>
+</section>
+
+<!-- ─── Slide 6 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">6/7</span> · decisions</p>
+  <h2>Made, ratified, and open</h2>
+  <div class="grid2">
+    <div>
+      <h3>Ratified by you</h3>
+      <ul>
+        <li><strong>Gate A</strong>: git ODB as chunk store — go (ADR-0002)</li>
+        <li><strong>Licence</strong>: MIT OR Apache-2.0 (ADR-0003)</li>
+        <li><strong>MPL-2.0</strong>: uluru-scoped exception — since made moot: feature-trimmed gix dropped it entirely</li>
+        <li><strong>Review class</strong>: executable config = governing docs</li>
+      </ul>
+      <h3>Taken by agents (ADR'd)</h3>
+      <ul>
+        <li>Build <code>acetone-prolly</code> from scratch; prollytree crate disqualified with evidence</li>
+        <li>gitoxide-only write path, gix ≥ 0.85</li>
+        <li>Encoding format decisions (ADR-0004): chunked 8+1 string framing, NaN rejected in keys, −0.0 → +0.0, tags 74100–74102</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Open — need you</h3>
+      <ul>
+        <li><strong>NaN in indexes</strong>: float-NaN properties can't produce an index key; skip-from-index aligns with Cypher comparison semantics but ORDER-BY-via-index would never surface those rows (bead 6g5.3, needed by Phase 5)</li>
+        <li><strong>Upstream gix bug report</strong>: outward-facing, awaiting your go-ahead (bead 63m.12)</li>
+      </ul>
+      <h3>Consequences flagged forward</h3>
+      <ul>
+        <li>Key order deliberately diverges from openCypher ORDER BY (no Int/Float interleave; Null first) — Phase 2 needs its own comparator; recorded on the executor bead</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Slide 7 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">7/7</span> · live demo &amp; next</p>
+  <h2>Demo agenda, then over to you</h2>
+  <ul>
+    <li><strong>The spike as a git citizen</strong> — bulk-load 100k keys into a temp repo,
+      then poke it with plain git: <code>git log</code>, <code>cat-file</code> the manifest,
+      <code>fsck</code>, <code>gc --prune=now</code>, re-read everything intact.</li>
+    <li><strong>History independence live</strong> — shuffled load orders converging on the
+      same root OID; then the property suite (~30 s).</li>
+    <li><strong>Diff as the product moment</strong> — 1% churn commit, structural diff in
+      ~70 ms, verified exact against the op set.</li>
+    <li><strong>The new production crates</strong> — <code>acetone-model</code> golden vectors
+      (format_version 1) and, if PR #10 has landed, the store's gc/clone-survival tests.</li>
+  </ul>
+  <h3>While you review docs, agents continue on</h3>
+  <ul>
+    <li>PR #10 blocker fix (commit anchoring), then <code>acetone-prolly</code> — the heart of Phase 1</li>
+    <li>Pack-on-write verdict lands in <code>docs/notes/pack-on-write-validation.md</code></li>
+  </ul>
+  <p class="footer-hint">docs: reports/phase-0.md · adr/0001–0004 · notes/phase0-benchmarks.md · notes/phase0-security-review.md</p>
+</section>
