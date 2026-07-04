@@ -10,3 +10,13 @@ repository.workspace = true
 
 [dependencies]
 acetone-model.workspace = true
+acetone-prolly.workspace = true
+acetone-store.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# proptest: edges_fwd/edges_rev symmetry under arbitrary mutation
+# sequences (spec §3.3 transactionality).
+proptest.workspace = true
+# tempfile: temporary git repositories for Repository integration tests.
+tempfile.workspace = true

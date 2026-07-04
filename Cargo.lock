@@ -22,6 +22,11 @@ name = "acetone-graph"
 version = "0.0.1"
 dependencies = [
  "acetone-model",
+ "acetone-prolly",
+ "acetone-store",
+ "proptest",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

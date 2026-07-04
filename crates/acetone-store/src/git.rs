@@ -172,6 +172,14 @@ impl GitStore {
         })
     }
 
+    /// The repository's common git directory (shared by all worktrees,
+    /// like refs). Repository-scoped coordination files — e.g. the
+    /// single-writer lock of spec §4, owned by the layer above — belong
+    /// here.
+    pub fn common_dir(&self) -> &Path {
+        self.repo.common_dir()
+    }
+
     /// Write one blob, enforcing the size cap; `what` names the blob's
     /// role in error context.
     fn write_blob_capped(&self, data: &[u8], what: &'static str) -> Result<Hash, StoreError> {
@@ -425,6 +433,75 @@ impl RefStore for GitStore {
             .edit_reference(edit)
             .map_err(|e| map_ref_edit_error(name, e))?;
         Ok(())
+    }
+
+    fn read_head(&self) -> Result<Option<String>, StoreError> {
+        let head = self
+            .repo
+            .head()
+            .map_err(|e| StoreError::backend("reading HEAD", e))?;
+        Ok(match head.kind {
+            gix::head::Kind::Symbolic(reference) => Some(reference.name.as_bstr().to_string()),
+            gix::head::Kind::Unborn(full_name) => Some(full_name.as_bstr().to_string()),
+            gix::head::Kind::Detached { .. } => None,
+        })
+    }
+
+    fn set_head(&self, ref_name: &str) -> Result<(), StoreError> {
+        use gix::refs::Target;
+        use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+
+        let target = validated_ref_name(ref_name)?;
+        let edit = RefEdit {
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "acetone: set_head".into(),
+                },
+                expected: PreviousValue::Any,
+                new: Target::Symbolic(target),
+            },
+            name: gix::refs::FullName::try_from("HEAD").expect("HEAD is a valid ref name"),
+            deref: false,
+        };
+        self.repo
+            .edit_reference(edit)
+            .map_err(|e| StoreError::backend("setting HEAD", e))?;
+        Ok(())
+    }
+
+    fn list_refs(&self, prefix: &str) -> Result<Vec<(String, Hash)>, StoreError> {
+        // The same validation door as every other ref name; a prefix is a
+        // ref-namespace name.
+        if !prefix.starts_with("refs/") {
+            return Err(StoreError::InvalidRefName {
+                name: prefix.to_owned(),
+                reason: "ref prefixes must be full names under refs/".into(),
+            });
+        }
+        let platform = self
+            .repo
+            .references()
+            .map_err(|e| StoreError::backend("listing refs", e))?;
+        let iter = platform
+            .prefixed(prefix)
+            .map_err(|e| StoreError::backend("listing refs", e))?;
+        let mut out = Vec::new();
+        for reference in iter {
+            // The iteration error is an unsized boxed error; rewrap it so
+            // it fits the sized bound of `backend`.
+            let reference = reference
+                .map_err(|e| StoreError::backend("listing refs", std::io::Error::other(e)))?;
+            if let gix::refs::TargetRef::Object(oid) = reference.target() {
+                out.push((
+                    reference.name().as_bstr().to_string(),
+                    Hash::from_oid(oid.to_owned()),
+                ));
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 }
 

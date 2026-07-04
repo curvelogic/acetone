@@ -93,6 +93,21 @@ pub trait RefStore {
     /// Fails with [`StoreError::CasFailed`] when the precondition does not
     /// hold at commit time.
     fn write_ref(&self, name: &str, expected: Option<&Hash>, new: &Hash) -> Result<(), StoreError>;
+
+    /// The full ref name the checked-out-ref pointer (git `HEAD`)
+    /// currently designates, e.g. `refs/heads/main` — including when that
+    /// branch is still unborn. `None` when the pointer is detached.
+    fn read_head(&self) -> Result<Option<String>, StoreError>;
+
+    /// Point the checked-out-ref pointer at `ref_name` (a full name under
+    /// `refs/`), symbolically — the target branch need not exist yet.
+    fn set_head(&self, ref_name: &str) -> Result<(), StoreError>;
+
+    /// All direct refs whose full name starts with `prefix` (itself under
+    /// `refs/`), as `(full name, target)` pairs in name order. Symbolic
+    /// refs under the prefix are skipped. The reachability walk of `fsck`
+    /// and branch listing are built on this.
+    fn list_refs(&self, prefix: &str) -> Result<Vec<(String, Hash)>, StoreError>;
 }
 
 /// Author or committer identity for a commit.
