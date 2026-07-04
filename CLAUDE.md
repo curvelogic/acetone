@@ -122,7 +122,7 @@ Per unit of work (one bead, or a small coherent group claimed together — the g
 Review depth by change class:
 
 - **Code**: full adversarial review as above, always.
-- **Governing documents** (CLAUDE.md, `docs/acetone-01/02/03-*.md`): full adversarial review — never the lighter path — plus an ADR, listed prominently in the next phase report. Agents must never weaken the review gate or expand their own merge rights; such changes are proposed in the phase report and made only after Greg agrees.
+- **Governing documents** (CLAUDE.md, `docs/acetone-01/02/03-*.md`, and executable configuration that runs on Greg's machine: `.beads/hooks/`, `.codex/`, `.claude/settings.json` — added at the Phase 0 boundary with Greg's approval): full adversarial review — never the lighter path — plus an ADR, listed prominently in the next phase report. Agents must never weaken the review gate or expand their own merge rights; such changes are proposed in the phase report and made only after Greg agrees.
 - **Other docs** (notes, reports, ADR text): lighter single-pass review, still by a fresh subagent, checking factual accuracy and consistency with the design record.
 
 Additional gates:

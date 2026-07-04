@@ -7,9 +7,9 @@ yanked = "deny"
 
 [licenses]
 version = 2
-# Workspace crates are unpublished (publish = false) pending Greg's licence
-# decision; ignore them rather than fail unlicensed.
-private = { ignore = true }
+# Workspace crates are licensed (MIT OR Apache-2.0, ADR-0003) and checked
+# like any other crate despite publish = false.
+private = { ignore = false }
 # Additions require a justification in the PR per CLAUDE.md's dependency rule.
 allow = [
     "MIT",
@@ -21,6 +21,12 @@ allow = [
     "Zlib",
     "Unicode-3.0",
 ]
+
+# Greg's ruling (ADR-0003): crate-specific exception only — MPL-2.0 stays
+# denied in general so any future MPL dependency forces a fresh decision.
+[[licenses.exceptions]]
+name = "uluru"
+allow = ["MPL-2.0"]
 
 [bans]
 multiple-versions = "warn"

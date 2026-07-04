@@ -12,6 +12,7 @@ name = "prolly-git-spike"
 version = "0.0.1"
 edition = "2024"
 publish = false
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 # gix (gitoxide): the whole point of the spike is to exercise the gitoxide
