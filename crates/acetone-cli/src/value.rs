@@ -29,6 +29,15 @@ pub fn parse_kv<'a>(raw: &'a str, flag: &str) -> Result<(&'a str, &'a str)> {
     }
 }
 
+/// Render a label, relationship type or other identifier-shaped string for
+/// output, escaping it the same way [`format_value`] escapes
+/// [`Value::String`]. Graph data is attacker-writable and reaches the
+/// terminal verbatim otherwise (control characters, ANSI escapes); Rust's
+/// `{:?}` string escaping neutralises that.
+pub fn format_label(s: &str) -> String {
+    format!("{s:?}")
+}
+
 /// Render a value for human-readable output (`get-node`, `list-nodes`).
 /// Only [`Value::Int`] and [`Value::String`] are reachable from this CLI's
 /// own input, but every variant is handled so a record written by another
@@ -81,5 +90,12 @@ mod tests {
     fn kv_rejects_missing_equals_or_empty_key() {
         assert!(parse_kv("noequals", "--prop").is_err());
         assert!(parse_kv("=value", "--prop").is_err());
+    }
+
+    #[test]
+    fn format_label_escapes_control_characters() {
+        assert_eq!(format_label("Person"), "\"Person\"");
+        assert_eq!(format_label("a\x1b[31mb"), "\"a\\u{1b}[31mb\"");
+        assert_eq!(format_label("a\nb"), "\"a\\nb\"");
     }
 }

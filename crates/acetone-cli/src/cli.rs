@@ -34,6 +34,10 @@ pub enum Command {
     /// Show the current branch, head commit and workspace state.
     Status,
     /// Turn the workspace's staged changes into a commit.
+    ///
+    /// Refuses when the workspace has no changes since HEAD — including,
+    /// on a brand new repository, an empty root commit. There is no
+    /// `--allow-empty` yet.
     Commit {
         /// Commit message.
         #[arg(short = 'm', long)]

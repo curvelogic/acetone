@@ -12,7 +12,7 @@ use acetone_store::ObjectFormat;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::Command;
-use crate::value::{format_value, parse_kv, parse_value};
+use crate::value::{format_label, format_value, parse_kv, parse_value};
 
 /// Dispatch one parsed command.
 pub fn run(repo_path: &Path, command: Command) -> Result<()> {
@@ -96,6 +96,16 @@ fn status(repo_path: &Path) -> Result<()> {
 
 fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
     let repo = open(repo_path)?;
+    // Thin-client guard: acetone_graph::Transaction::commit has no
+    // no-change guard of its own yet (library-level fix tracked
+    // separately), so a bare `commit` on an already-committed workspace
+    // would otherwise silently mint a pointless commit every time it is
+    // run. This also refuses an empty root commit on a brand new
+    // repository, which is the CLI's help text for `commit` documents as
+    // accepted Phase-1 behaviour.
+    if !repo.is_dirty()? {
+        bail!("nothing to commit (workspace matches HEAD)");
+    }
     let trailers: Vec<(String, String)> = trailers
         .iter()
         .map(|raw| parse_kv(raw, "--trailer").map(|(k, v)| (k.to_owned(), v.to_owned())))
@@ -170,8 +180,15 @@ fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Resul
     let mut txn = repo.begin_write()?;
     txn.put_node(&node_key, &record)?;
     txn.save().context("saving workspace")?;
-    println!("put node {label} {key}");
+    println!("put node {}", format_node_key(&node_key));
     Ok(())
+}
+
+/// `Label [key, ...]`, escaped — the one place a node key is rendered, used
+/// by every command that echoes one.
+fn format_node_key(key: &NodeKey) -> String {
+    let key_repr: Vec<String> = key.key().iter().map(format_value).collect();
+    format!("{} [{}]", format_label(key.label()), key_repr.join(", "))
 }
 
 fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
@@ -181,13 +198,16 @@ fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
     match snapshot.get_node(&node_key)? {
         None => println!("not found"),
         Some(record) => {
-            println!("label: {label}");
-            println!("key: {key}");
+            // Echo the canonical parsed key, not the raw argument: the two
+            // agree today (single-column keys only), but this stays
+            // correct if a richer key grammar ever changes how a raw
+            // argument maps to a value.
+            println!("node: {}", format_node_key(&node_key));
             let labels = record.secondary_labels().join(", ");
             println!("secondary_labels: [{labels}]");
             println!("properties:");
             for (name, value) in record.properties() {
-                println!("  {name}: {}", format_value(value));
+                println!("  {}: {}", format_label(name), format_value(value));
             }
         }
     }
@@ -210,7 +230,12 @@ fn put_edge(
     let mut txn = repo.begin_write()?;
     txn.put_edge(&edge_key, &record)?;
     txn.save().context("saving workspace")?;
-    println!("put edge {src_label} {src_key} -{rtype}-> {dst_label} {dst_key}");
+    println!(
+        "put edge {} -{}-> {}",
+        format_node_key(edge_key.src()),
+        format_label(edge_key.rtype()),
+        format_node_key(edge_key.dst()),
+    );
     Ok(())
 }
 
@@ -221,8 +246,7 @@ fn list_nodes(repo_path: &Path, label: Option<&str>) -> Result<()> {
         if label.is_some_and(|l| l != key.label()) {
             continue;
         }
-        let key_repr: Vec<String> = key.key().iter().map(format_value).collect();
-        println!("{} [{}]", key.label(), key_repr.join(", "));
+        println!("{}", format_node_key(&key));
     }
     Ok(())
 }
