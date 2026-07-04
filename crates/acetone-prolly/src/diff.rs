@@ -42,13 +42,119 @@ struct Region {
 
 /// Ordered stream of differences between two roots. Yields `Err` once and
 /// stops on storage corruption.
+///
+/// Streaming: leaf chunks are read one at a time as the iterator is
+/// consumed, so a partially consumed diff of a large change costs only the
+/// chunks behind the entries actually taken. Inner (reference-level) nodes
+/// of a mismatched region are expanded a level at a time; the refs of a
+/// fully-different level are held in memory (~35 bytes/chunk), which is
+/// the same order as the region's key material and only significant when
+/// the two maps share nothing.
 pub struct Diff<'s, S> {
     store: &'s S,
     /// Pending regions, key order; the top of the stack is the earliest.
     regions: Vec<Region>,
-    /// Entries decoded from the current leaf region, drained in order.
-    buffered: std::vec::IntoIter<DiffEntry>,
+    /// The level-0 region currently being merged, if any.
+    leaves: Option<LeafMerge>,
     done: bool,
+}
+
+/// Incremental key-merge of one level-0 region: reads each side's next
+/// leaf only when its entry buffer runs dry.
+struct LeafMerge {
+    a_refs: std::vec::IntoIter<NodeRef>,
+    b_refs: std::vec::IntoIter<NodeRef>,
+    a: std::collections::VecDeque<(Bytes, Bytes)>,
+    b: std::collections::VecDeque<(Bytes, Bytes)>,
+    pseudo: bool,
+}
+
+impl LeafMerge {
+    fn new(region: Region) -> Self {
+        debug_assert_eq!(region.level, 0);
+        LeafMerge {
+            a_refs: region.a.into_iter(),
+            b_refs: region.b.into_iter(),
+            a: std::collections::VecDeque::new(),
+            b: std::collections::VecDeque::new(),
+            pseudo: region.pseudo,
+        }
+    }
+
+    /// Top up one side's buffer from its next leaf, if needed and possible.
+    fn top_up<S: ChunkStore>(
+        store: &S,
+        buf: &mut std::collections::VecDeque<(Bytes, Bytes)>,
+        refs: &mut std::vec::IntoIter<NodeRef>,
+        pseudo: bool,
+    ) -> Result<(), ProllyError> {
+        while buf.is_empty() {
+            let Some(r) = refs.next() else { return Ok(()) };
+            let expect_last = (!pseudo).then_some(r.last_key.as_ref());
+            match read_node(store, &r.hash, 0, expect_last, None)? {
+                Node::Leaf(entries) => buf.extend(entries),
+                Node::Inner(_) => unreachable!("level 0 checked by read_node"),
+            }
+        }
+        Ok(())
+    }
+
+    /// The next difference in this region, or `None` when it is drained.
+    fn next_entry<S: ChunkStore>(&mut self, store: &S) -> Result<Option<DiffEntry>, ProllyError> {
+        loop {
+            Self::top_up(store, &mut self.a, &mut self.a_refs, self.pseudo)?;
+            Self::top_up(store, &mut self.b, &mut self.b_refs, self.pseudo)?;
+            match (self.a.front(), self.b.front()) {
+                (None, None) => return Ok(None),
+                (Some(_), None) => {
+                    let (key, va) = self.a.pop_front().expect("checked front");
+                    return Ok(Some(DiffEntry {
+                        key,
+                        before: Some(va),
+                        after: None,
+                    }));
+                }
+                (None, Some(_)) => {
+                    let (key, vb) = self.b.pop_front().expect("checked front");
+                    return Ok(Some(DiffEntry {
+                        key,
+                        before: None,
+                        after: Some(vb),
+                    }));
+                }
+                (Some((ka, _)), Some((kb, _))) => match ka.cmp(kb) {
+                    std::cmp::Ordering::Less => {
+                        let (key, va) = self.a.pop_front().expect("checked front");
+                        return Ok(Some(DiffEntry {
+                            key,
+                            before: Some(va),
+                            after: None,
+                        }));
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let (key, vb) = self.b.pop_front().expect("checked front");
+                        return Ok(Some(DiffEntry {
+                            key,
+                            before: None,
+                            after: Some(vb),
+                        }));
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let (key, va) = self.a.pop_front().expect("checked front");
+                        let (_, vb) = self.b.pop_front().expect("checked front");
+                        if va != vb {
+                            return Ok(Some(DiffEntry {
+                                key,
+                                before: Some(va),
+                                after: Some(vb),
+                            }));
+                        }
+                        // Equal entry: skip and continue.
+                    }
+                },
+            }
+        }
+    }
 }
 
 /// Structural diff of `b` relative to `a`: an ordered stream of
@@ -61,7 +167,7 @@ pub fn diff<'s, S: ChunkStore>(
     let mut out = Diff {
         store,
         regions: Vec::new(),
-        buffered: Vec::new().into_iter(),
+        leaves: None,
         done: false,
     };
     if a.hash == b.hash {
@@ -120,37 +226,21 @@ fn expand<S: ChunkStore>(
     Ok(out)
 }
 
-/// Read every leaf in `refs` and concatenate their entries. `pseudo` is
-/// true only for the initial root-references region (height-1 trees).
-fn leaf_entries<S: ChunkStore>(
-    store: &S,
-    refs: &[NodeRef],
-    pseudo: bool,
-) -> Result<Vec<(Bytes, Bytes)>, ProllyError> {
-    let mut out = Vec::new();
-    for r in refs {
-        let expect_last = (!pseudo).then_some(r.last_key.as_ref());
-        match read_node(store, &r.hash, 0, expect_last, None)? {
-            Node::Leaf(entries) => out.extend(entries),
-            Node::Inner(_) => unreachable!("level 0 checked by read_node"),
-        }
-    }
-    Ok(out)
-}
-
 impl<S: ChunkStore> Diff<'_, S> {
-    /// Process regions until leaf differences are buffered or everything
-    /// is exhausted.
-    fn refill(&mut self) -> Result<(), ProllyError> {
-        while let Some(region) = self.regions.pop() {
-            if region.level == 0 {
-                let ea = leaf_entries(self.store, &region.a, region.pseudo)?;
-                let eb = leaf_entries(self.store, &region.b, region.pseudo)?;
-                let entries = merge_leaf_diff(ea, eb);
-                if !entries.is_empty() {
-                    self.buffered = entries.into_iter();
-                    return Ok(());
+    /// The next difference, descending into pending regions as needed.
+    fn next_entry(&mut self) -> Result<Option<DiffEntry>, ProllyError> {
+        loop {
+            if let Some(leaves) = &mut self.leaves {
+                if let Some(entry) = leaves.next_entry(self.store)? {
+                    return Ok(Some(entry));
                 }
+                self.leaves = None;
+            }
+            let Some(region) = self.regions.pop() else {
+                return Ok(None);
+            };
+            if region.level == 0 {
+                self.leaves = Some(LeafMerge::new(region));
                 continue;
             }
             let ca = expand(self.store, &region.a, region.level, region.pseudo)?;
@@ -160,8 +250,6 @@ impl<S: ChunkStore> Diff<'_, S> {
             subs.reverse();
             self.regions.extend(subs);
         }
-        self.done = true;
-        Ok(())
     }
 }
 
@@ -220,79 +308,22 @@ fn align_regions(a: &[NodeRef], b: &[NodeRef], level: u8) -> Vec<Region> {
     regions
 }
 
-/// Key-merge two sorted leaf-entry runs covering the same key span,
-/// keeping only genuine differences.
-fn merge_leaf_diff(a: Vec<(Bytes, Bytes)>, b: Vec<(Bytes, Bytes)>) -> Vec<DiffEntry> {
-    let mut out = Vec::new();
-    let mut ai = a.into_iter().peekable();
-    let mut bi = b.into_iter().peekable();
-    loop {
-        match (ai.peek(), bi.peek()) {
-            (Some((ka, _)), Some((kb, _))) => match ka.cmp(kb) {
-                std::cmp::Ordering::Less => {
-                    let (key, va) = ai.next().expect("peeked");
-                    out.push(DiffEntry {
-                        key,
-                        before: Some(va),
-                        after: None,
-                    });
-                }
-                std::cmp::Ordering::Greater => {
-                    let (key, vb) = bi.next().expect("peeked");
-                    out.push(DiffEntry {
-                        key,
-                        before: None,
-                        after: Some(vb),
-                    });
-                }
-                std::cmp::Ordering::Equal => {
-                    let (key, va) = ai.next().expect("peeked");
-                    let (_, vb) = bi.next().expect("peeked");
-                    if va != vb {
-                        out.push(DiffEntry {
-                            key,
-                            before: Some(va),
-                            after: Some(vb),
-                        });
-                    }
-                }
-            },
-            (Some(_), None) => {
-                let (key, va) = ai.next().expect("peeked");
-                out.push(DiffEntry {
-                    key,
-                    before: Some(va),
-                    after: None,
-                });
-            }
-            (None, Some(_)) => {
-                let (key, vb) = bi.next().expect("peeked");
-                out.push(DiffEntry {
-                    key,
-                    before: None,
-                    after: Some(vb),
-                });
-            }
-            (None, None) => break,
-        }
-    }
-    out
-}
-
 impl<S: ChunkStore> Iterator for Diff<'_, S> {
     type Item = Result<DiffEntry, ProllyError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(entry) = self.buffered.next() {
-                return Some(Ok(entry));
-            }
-            if self.done {
-                return None;
-            }
-            if let Err(e) = self.refill() {
+        if self.done {
+            return None;
+        }
+        match self.next_entry() {
+            Ok(Some(entry)) => Some(Ok(entry)),
+            Ok(None) => {
                 self.done = true;
-                return Some(Err(e));
+                None
+            }
+            Err(e) => {
+                self.done = true;
+                Some(Err(e))
             }
         }
     }
