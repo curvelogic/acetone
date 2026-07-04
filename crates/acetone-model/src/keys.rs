@@ -351,6 +351,19 @@ fn write_element(out: &mut Vec<u8>, value: &Value, depth: usize) -> Result<(), K
     Ok(())
 }
 
+/// Encode the *opening* of a list element — the list tag and the given
+/// leading elements, without the closing terminator — for use as a range-
+/// scan prefix: every encoded list whose first elements equal `elems`
+/// starts with exactly these bytes. Crate-internal: the graph-key layer
+/// uses it for label-prefix scans over the nodes map.
+pub(crate) fn encode_list_prefix(elems: &[Value]) -> Result<Vec<u8>, KeyEncodeError> {
+    let mut out = vec![TAG_LIST];
+    for elem in elems {
+        write_element(&mut out, elem, 1)?;
+    }
+    Ok(out)
+}
+
 /// Order-preserving chunked framing for arbitrary byte strings; see the
 /// module docs. Always emits at least one group, so the empty string is
 /// eight zero bytes plus marker `0xf7`.
