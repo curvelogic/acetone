@@ -1,0 +1,113 @@
+//! Error type for the repository/graph layer.
+
+use acetone_model::graph_keys::GraphKeyError;
+use acetone_model::manifest::ManifestDecodeError;
+use acetone_model::records::{RecordDecodeError, RecordEncodeError};
+use acetone_model::schema::SchemaError;
+use acetone_prolly::ProllyError;
+use acetone_store::StoreError;
+use std::path::PathBuf;
+use thiserror::Error;
+
+/// Errors from repository operations.
+#[derive(Debug, Error)]
+pub enum GraphError {
+    /// The chunk/ref/commit store failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// A prolly-tree operation failed.
+    #[error(transparent)]
+    Prolly(#[from] ProllyError),
+    /// The workspace or commit manifest did not decode.
+    #[error(transparent)]
+    Manifest(#[from] ManifestDecodeError),
+    /// A graph key failed to encode or decode.
+    #[error(transparent)]
+    GraphKey(#[from] GraphKeyError),
+    /// A record failed to encode.
+    #[error(transparent)]
+    RecordEncode(#[from] RecordEncodeError),
+    /// A record failed to decode.
+    #[error(transparent)]
+    RecordDecode(#[from] RecordDecodeError),
+    /// A schema entry failed to decode or validate.
+    #[error(transparent)]
+    Schema(#[from] SchemaError),
+    /// Another writer holds the repository's single-writer lock
+    /// (spec §4).
+    #[error(
+        "repository is locked by another writer ({holder}); if that process is dead, \
+         remove {path} manually"
+    )]
+    Locked {
+        /// Contents of the lock file (pid and timestamp of the holder).
+        holder: String,
+        /// The lock file's path, for the manual-recovery instruction.
+        path: PathBuf,
+    },
+    /// The workspace ref moved underneath this transaction (another
+    /// writer advanced it between load and save).
+    #[error("workspace {name:?} changed concurrently; reload and retry")]
+    WorkspaceConflict {
+        /// Workspace name.
+        name: String,
+    },
+    /// A branch ref moved underneath a commit (concurrent advance).
+    #[error("branch {name:?} changed concurrently; reload and retry")]
+    BranchConflict {
+        /// Branch name.
+        name: String,
+    },
+    /// The named workspace does not exist (repository not initialised
+    /// with acetone, or wrong directory).
+    #[error("no acetone workspace {name:?} in this repository — run acetone init?")]
+    NoWorkspace {
+        /// Workspace name.
+        name: String,
+    },
+    /// A refspec did not resolve to a branch, ref or commit.
+    #[error("cannot resolve {refspec:?} to a branch, ref or commit")]
+    UnresolvedRefspec {
+        /// The refspec as given.
+        refspec: String,
+    },
+    /// A ref resolved but the object it names is not a readable commit.
+    #[error("ref {name:?} does not point at an acetone commit")]
+    NotACommit {
+        /// The ref name.
+        name: String,
+    },
+    /// Committing requires the checked-out ref to be a branch.
+    #[error("cannot commit: the checked-out ref is not a branch")]
+    NoCurrentBranch,
+    /// The workspace has uncommitted changes that the operation would
+    /// discard.
+    #[error("workspace has uncommitted changes; commit them first")]
+    DirtyWorkspace,
+    /// The workspace is mid-merge (`conflicts` map present); this
+    /// operation is not available until the merge completes (Phase 4
+    /// delivers merge completion).
+    #[error("workspace is in a merge; resolve and complete it first")]
+    MergeInProgress,
+    /// A branch that was expected to exist does not.
+    #[error("no such branch {name:?}")]
+    NoSuchBranch {
+        /// Branch name.
+        name: String,
+    },
+    /// A branch that was expected not to exist already does.
+    #[error("branch {name:?} already exists")]
+    BranchExists {
+        /// Branch name.
+        name: String,
+    },
+    /// Creating or inspecting the lock file failed for filesystem
+    /// reasons other than the lock being held.
+    #[error("lock file I/O at {path}: {source}")]
+    LockIo {
+        /// The lock file's path.
+        path: PathBuf,
+        /// The underlying I/O error.
+        source: std::io::Error,
+    },
+}
