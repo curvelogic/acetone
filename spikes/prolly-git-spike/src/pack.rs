@@ -311,24 +311,28 @@ fn push_obj_header(type_code: u8, size: usize, out: &mut Vec<u8>) {
 
 const OBJ_REF_DELTA: u8 = 7;
 
-/// Serialise a version-2 pack file from `entries`. Entries whose `base` is
-/// set are written as REF_DELTA when the delta pays for itself. Bases need
-/// not be in the pack (a thin pack); complete it with
-/// `git index-pack --stdin --fix-thin`, or index it as-is with
-/// [`write_idx`] to probe git's tolerance of external bases.
-pub fn write_pack(entries: &[PackEntry]) -> Result<PackFile, String> {
+/// Serialise a version-2 pack file from exactly `count` entries, streamed
+/// (so a whole history can be consolidated without materialising every
+/// object at once). Entries whose `base` is set are written as REF_DELTA
+/// when the delta pays for itself. Bases need not be in the pack (a thin
+/// pack); complete it with `git index-pack --stdin --fix-thin`, or index it
+/// as-is with [`write_idx`] to probe git's tolerance of external bases.
+pub fn write_pack(
+    count: usize,
+    entries: impl IntoIterator<Item = PackEntry>,
+) -> Result<PackFile, String> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"PACK");
     bytes.extend_from_slice(&2u32.to_be_bytes());
-    bytes.extend_from_slice(
-        &(u32::try_from(entries.len()).map_err(|_| "too many entries")?).to_be_bytes(),
-    );
+    bytes.extend_from_slice(&(u32::try_from(count).map_err(|_| "too many entries")?).to_be_bytes());
 
-    let mut index_entries = Vec::with_capacity(entries.len());
+    let mut index_entries = Vec::with_capacity(count);
     let mut deltas = 0usize;
     let mut whole = 0usize;
     let mut delta_bytes = 0u64;
+    let mut written = 0usize;
     for e in entries {
+        written += 1;
         let offset = bytes.len() as u64;
         let delta = e.base.as_ref().and_then(|(boid, bdata)| {
             if *boid == e.oid {
@@ -360,6 +364,9 @@ pub fn write_pack(entries: &[PackEntry]) -> Result<PackFile, String> {
             offset,
             crc32: crc.finalize(),
         });
+    }
+    if written != count {
+        return Err(format!("pack header said {count} entries, wrote {written}"));
     }
     let trailer = sha1(&bytes)?;
     bytes.extend_from_slice(trailer.as_slice());
@@ -603,7 +610,7 @@ mod tests {
             (e_thin.oid, thin_target),
         ];
 
-        let pack = write_pack(&[e_whole, e_inpack, e_thin]).expect("write pack");
+        let pack = write_pack(3, [e_whole, e_inpack, e_thin]).expect("write pack");
         assert_eq!(pack.deltas, 2, "both deltas must pay for themselves");
         index_pack_fix_thin(&repo_path, &pack.bytes);
 
@@ -628,7 +635,7 @@ mod tests {
         let blobs: Vec<Vec<u8>> = (0..5).map(|_| rand_bytes(&mut rng, 1000)).collect();
         let entries: Vec<PackEntry> = blobs.iter().map(|b| blob_entry(b, None)).collect();
         let oids: Vec<ObjectId> = entries.iter().map(|e| e.oid).collect();
-        let pack = write_pack(&entries).expect("write pack");
+        let pack = write_pack(entries.len(), entries).expect("write pack");
         let idx = write_idx(&pack).expect("write idx");
 
         let pack_dir = repo_path.join("objects/pack");
