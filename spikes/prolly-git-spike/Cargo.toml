@@ -2,6 +2,11 @@
 # A prolly map over the git object database, to de-risk Decision 1 Option A
 # (git ODB as chunk store). Not production code; feeds Phase 0 benchmarks
 # (acetone-28x.4) and the history-independence property tests (acetone-28x.5).
+# Empty workspace table: this package is workspace-excluded at the root, and
+# this keeps cargo from adopting an enclosing workspace when the repo is
+# checked out nested inside another tree (e.g. a git worktree).
+[workspace]
+
 [package]
 name = "prolly-git-spike"
 version = "0.0.1"
