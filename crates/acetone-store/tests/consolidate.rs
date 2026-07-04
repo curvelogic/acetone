@@ -12,7 +12,8 @@ mod common;
 use std::collections::BTreeSet;
 
 use acetone_store::{
-    ChunkStore, CommitStore, ConsolidateOptions, GitStore, Hash, NewCommit, RefStore,
+    ChunkStore, CommitStore, ConsolidateOptions, GitStore, GitStoreOptions, Hash, NewCommit,
+    ObjectFormat, RefStore,
 };
 use common::{git, new_store, repo_path};
 
@@ -168,6 +169,37 @@ fn consolidation_is_representation_only_and_deltifies() {
         loose_object_count(&repo) < loose_before,
         "loose objects should have dropped"
     );
+    git(&repo, &["fsck", "--strict"]);
+}
+
+#[test]
+fn consolidation_is_representation_only_on_a_sha256_repo() {
+    // The pack/index writers are hash-kind parameterised; exercise the 32-byte
+    // OID path end to end (base refs, oid table, both trailers) against a real
+    // SHA-256 repository.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo.git");
+    let mut options = GitStoreOptions::default();
+    options.object_format = ObjectFormat::Sha256;
+    let store = GitStore::create_with(&repo, options).expect("create sha256 store");
+    let all = build_history(&store, 8, 4);
+
+    let before = all_object_oids(&repo);
+    let stats = store
+        .consolidate(ConsolidateOptions::default())
+        .expect("consolidate");
+    assert_eq!(stats.objects, before.len());
+    assert!(stats.deltas > 0, "sha256 deltas must be chosen too");
+
+    let store = GitStore::open(&repo).expect("reopen");
+    assert_eq!(
+        before,
+        all_object_oids(&repo),
+        "representation-only (sha256)"
+    );
+    for (hash, data) in &all {
+        assert_eq!(store.get(hash).unwrap().unwrap().as_ref(), data.as_slice());
+    }
     git(&repo, &["fsck", "--strict"]);
 }
 

@@ -303,6 +303,15 @@ pub(crate) struct PackFile {
     pub whole: usize,
 }
 
+impl PackFile {
+    /// The object IDs actually written into this pack. Consolidation prunes an
+    /// old representation only for OIDs this reports, so pruning is gated on
+    /// the pack that was really produced, not on what was intended (ADR-0011).
+    pub(crate) fn oids(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.index_entries.iter().map(|e| e.oid)
+    }
+}
+
 fn zlib(data: &[u8]) -> Vec<u8> {
     let mut enc = flate2::write::ZlibEncoder::new(
         Vec::with_capacity(data.len() / 2 + 16),
@@ -364,13 +373,16 @@ fn choose_delta(entry: &PackEntry, hash_len: usize) -> Option<(ObjectId, Vec<u8>
     }
 }
 
-/// Serialise a version-2 pack from exactly `count` entries, streamed (so a
-/// whole history can be consolidated without materialising every object at
-/// once). `hash_kind` is the repository object format, sizing OIDs, base
-/// references and the trailer. Entries whose `base` is set are written as
-/// REF_DELTA when [`choose_delta`] approves; the base must appear elsewhere in
-/// the pack (the consolidator only sets bases that are in the packed set), so
-/// the pack is self-contained and needs no thin completion.
+/// Serialise a version-2 pack from exactly `count` entries. The entry iterator
+/// is consumed lazily, so objects are read from the store one at a time rather
+/// than all up front; the assembled pack bytes are, however, buffered in
+/// memory (a whole-repo consolidation of a very large history is bounded by
+/// pack size — see ADR-0011's deferred work). `hash_kind` is the repository
+/// object format, sizing OIDs, base references and the trailer. Entries whose
+/// `base` is set are written as REF_DELTA when [`choose_delta`] approves; the
+/// base must appear elsewhere in the pack (the consolidator only sets bases
+/// that are in the packed set), so the pack is self-contained and needs no
+/// thin completion.
 pub(crate) fn write_pack(
     hash_kind: Kind,
     count: usize,

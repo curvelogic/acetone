@@ -141,9 +141,16 @@ impl GitStore {
     /// prune the superseded loose objects and prior consolidation packs.
     ///
     /// Representation-only: every object's bytes, and therefore its address,
-    /// are preserved exactly (see the module docs). Safe to call at any time;
-    /// safe to interrupt (a partial run leaves the old representations intact
-    /// because pruning happens only after the new pack is durably written).
+    /// are preserved exactly (see the module docs). Safe to interrupt — a
+    /// partial run leaves the old representations intact, because pruning
+    /// happens only after the new pack is durably `fsync`ed.
+    ///
+    /// **Single-writer**, like `git gc`: this assumes no other process is
+    /// consolidating the same repository or appending base hints concurrently.
+    /// Two concurrent consolidations would race the sidecar pack-list
+    /// read-modify-write and could leak a superseded pack (never lose data —
+    /// pruning is still gated on the pack each run actually wrote). Ordinary
+    /// readers and ref writers are unaffected and need no coordination.
     pub fn consolidate(&self, options: ConsolidateOptions) -> Result<ConsolidateStats, StoreError> {
         let reachable = self.reachable_objects()?;
         let present: HashSet<ObjectId> = reachable.iter().map(|(oid, _)| *oid).collect();
@@ -169,10 +176,26 @@ impl GitStore {
         let idx = pack::write_idx(self.object_hash(), &pack)
             .map_err(|e| StoreError::corrupt("consolidation index", e))?;
 
+        // Pruning is gated on the OIDs the pack *actually* indexes, never on
+        // what we intended to write, so a planning bug can never delete the
+        // last copy of an object the pack omitted. As a loud tripwire for such
+        // a bug, refuse to prune unless the pack covers the whole reachable set
+        // (it must: one entry per reachable object).
+        let packed: HashSet<ObjectId> = pack.oids().collect();
+        if packed.len() != present.len() {
+            return Err(StoreError::corrupt(
+                "consolidation pack",
+                format!(
+                    "pack indexes {} objects but {} are reachable; refusing to prune",
+                    packed.len(),
+                    present.len()
+                ),
+            ));
+        }
+
         let stem = format!("pack-{}", pack.trailer);
         self.install_pack(&stem, &pack.bytes, &idx)?;
 
-        let packed: HashSet<ObjectId> = present.iter().copied().collect();
         let pruned_loose = if options.prune_loose {
             self.prune_loose(&packed)?
         } else {
@@ -295,24 +318,30 @@ impl GitStore {
         Ok(hints)
     }
 
-    /// Write a pack and its index into `objects/pack`.
+    /// Write a pack and its index into `objects/pack`, durably.
     ///
-    /// git treats a pack as present only once its `.idx` exists, and then
-    /// requires the `.pack`. So the `.pack` is written in full first (a pack
-    /// with no index is simply ignored, and pruning happens only after this
-    /// returns, so the objects remain available as loose), and the index is
-    /// published last via an atomic rename — a reader therefore never sees a
-    /// dangling index or a torn one, whatever moment a crash lands on.
+    /// Because consolidation prunes the old (loose) representations after this
+    /// returns, the new pack must survive power loss before any pruning — so
+    /// the bytes are `fsync`ed, not merely written into the page cache. git
+    /// treats a pack as present only once its `.idx` exists, and then requires
+    /// the `.pack`; so the `.pack` is written and `fsync`ed in full first (a
+    /// pack with no index is simply ignored, and the objects remain available
+    /// as loose until pruning), then the index is `fsync`ed to a temp file and
+    /// published via an atomic rename, and finally the directory entry itself
+    /// is `fsync`ed. A crash at any point leaves either no index (pack ignored)
+    /// or a complete, durable index over a complete, durable pack — never a
+    /// dangling or torn index, and never a pack that can evaporate after its
+    /// loose sources were deleted.
     fn install_pack(&self, stem: &str, pack: &[u8], idx: &[u8]) -> Result<(), StoreError> {
         let dir = self.repo().common_dir().join("objects").join("pack");
         std::fs::create_dir_all(&dir)
             .map_err(|e| StoreError::backend("creating objects/pack", e))?;
-        std::fs::write(dir.join(format!("{stem}.pack")), pack)
-            .map_err(|e| StoreError::backend("writing pack", e))?;
+        write_synced(&dir.join(format!("{stem}.pack")), pack, "writing pack")?;
         let idx_tmp = dir.join(format!("{stem}.idx.tmp"));
-        std::fs::write(&idx_tmp, idx).map_err(|e| StoreError::backend("writing pack index", e))?;
+        write_synced(&idx_tmp, idx, "writing pack index")?;
         std::fs::rename(&idx_tmp, dir.join(format!("{stem}.idx")))
             .map_err(|e| StoreError::backend("publishing pack index", e))?;
+        fsync_dir(&dir)?;
         Ok(())
     }
 
@@ -346,6 +375,10 @@ impl GitStore {
         let dir = self.repo().common_dir().join("objects").join("pack");
         let prior = self.read_pack_stems()?;
         let mut pruned = 0usize;
+        // A prior pack that cannot be fully superseded (it holds an OID the new
+        // pack does not) must stay *and* stay tracked, so a later run can
+        // supersede it; only forgetting it would leak it permanently.
+        let mut survivors: Vec<String> = Vec::new();
         for stem in &prior {
             if stem == new_stem {
                 continue;
@@ -362,9 +395,12 @@ impl GitStore {
                 remove_if_present(&dir.join(format!("{stem}.pack")))?;
                 remove_if_present(&idx_path)?;
                 pruned += 1;
+            } else {
+                survivors.push(stem.clone());
             }
         }
-        self.write_pack_stems(&[new_stem.to_owned()])?;
+        survivors.push(new_stem.to_owned());
+        self.write_pack_stems(&survivors)?;
         Ok(pruned)
     }
 
@@ -522,15 +558,13 @@ impl Plan {
             }
         }
 
-        // Cap chain length: walking each object down to its (post-cycle-break)
-        // root, force a whole object every MAX_CHAIN links. Memoised depth.
-        let mut depth: HashMap<ObjectId, usize> = HashMap::new();
-        // Deterministic pass over a sorted view so capping is reproducible.
+        // Cap chain length: force a whole object every MAX_CHAIN links, so no
+        // retained delta chain grows without bound. Deterministic over a sorted
+        // view; iterative so a legitimately long single-chunk history cannot
+        // overflow the stack.
         let mut sorted: Vec<ObjectId> = present.iter().copied().collect();
         sorted.sort();
-        for oid in &sorted {
-            resolve_depth(*oid, &mut base, &mut depth);
-        }
+        cap_chains(&mut base, &sorted);
 
         // Emit bases-first: roots (no base) in sorted order, then dependents
         // as their base becomes available (Kahn over the forest).
@@ -561,30 +595,55 @@ impl Plan {
     }
 }
 
-/// Following `base` from `oid` to its root, capping chains at [`MAX_CHAIN`] by
-/// clearing the base of every MAX_CHAIN-th link. Memoised in `depth`.
-fn resolve_depth(
-    oid: ObjectId,
-    base: &mut HashMap<ObjectId, ObjectId>,
-    depth: &mut HashMap<ObjectId, usize>,
-) -> usize {
-    if let Some(d) = depth.get(&oid) {
-        return *d;
-    }
-    let d = match base.get(&oid).copied() {
-        None => 0,
-        Some(b) => {
-            let bd = resolve_depth(b, base, depth);
-            if bd + 1 >= MAX_CHAIN {
-                base.remove(&oid); // whole anchor: reset the chain here
-                0
+/// Cap every delta chain at [`MAX_CHAIN`] links by clearing the base of each
+/// object whose distance from its chain root would reach the cap (turning it
+/// into a fresh whole "anchor"). `base` is a forest here — cycles were already
+/// broken — so each node has at most one outgoing base edge.
+///
+/// Iterative by construction: for each unresolved object it walks *down* the
+/// base chain, collecting the path until it reaches a root or an
+/// already-resolved node, then assigns depths walking back *up*. A single
+/// chain of length N is therefore O(N) time and O(1) stack, however long a
+/// chunk's retained history is (the recursive form overflowed the stack at a
+/// few thousand links).
+fn cap_chains(base: &mut HashMap<ObjectId, ObjectId>, sorted: &[ObjectId]) {
+    let mut depth: HashMap<ObjectId, usize> = HashMap::new();
+    for &start in sorted {
+        if depth.contains_key(&start) {
+            continue;
+        }
+        // Descend the chain, collecting nodes whose depth is not yet known.
+        let mut path: Vec<ObjectId> = Vec::new();
+        let mut node = start;
+        let (mut below, root_in_path) = loop {
+            if let Some(&d) = depth.get(&node) {
+                break (d, false); // joined an already-resolved chain at `node`
+            }
+            path.push(node);
+            match base.get(&node).copied() {
+                Some(b) => node = b,
+                None => break (0, true), // `node` (last pushed) is a chain root
+            }
+        };
+        if root_in_path {
+            let root = path.pop().expect("root was pushed");
+            depth.insert(root, 0);
+            below = 0;
+        }
+        // Assign depths from the deepest collected node up to `start`, resetting
+        // the chain whenever the cap is reached.
+        for &node in path.iter().rev() {
+            let d = below + 1;
+            if d >= MAX_CHAIN {
+                base.remove(&node); // whole anchor: reset the chain here
+                depth.insert(node, 0);
+                below = 0;
             } else {
-                bd + 1
+                depth.insert(node, d);
+                below = d;
             }
         }
-    };
-    depth.insert(oid, d);
-    d
+    }
 }
 
 /// Parse the object IDs out of a v2 pack index (`\377tOc`, version 2). Used to
@@ -636,6 +695,25 @@ fn remove_if_present(path: &std::path::Path) -> Result<(), StoreError> {
     }
 }
 
+/// Write `data` to `path` and `fsync` it, so the bytes are on stable storage
+/// before the caller relies on them (here, before pruning the loose sources).
+fn write_synced(path: &std::path::Path, data: &[u8], what: &'static str) -> Result<(), StoreError> {
+    let mut file = std::fs::File::create(path).map_err(|e| StoreError::backend(what, e))?;
+    file.write_all(data)
+        .map_err(|e| StoreError::backend(what, e))?;
+    file.sync_all().map_err(|e| StoreError::backend(what, e))?;
+    Ok(())
+}
+
+/// `fsync` a directory so a newly created or renamed entry within it survives
+/// power loss. On the Unix targets acetone supports, opening the directory and
+/// `sync_all`-ing it is the portable way to do this.
+fn fsync_dir(dir: &std::path::Path) -> Result<(), StoreError> {
+    std::fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(|e| StoreError::backend("fsyncing objects/pack", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,6 +721,11 @@ mod tests {
 
     /// A distinct blob OID per `n`, so tests can build hint graphs by number.
     fn oid(n: u16) -> ObjectId {
+        gix::objs::compute_hash(gix::hash::Kind::Sha1, Kind::Blob, &n.to_be_bytes()).expect("hash")
+    }
+
+    /// As [`oid`] but over the full `u32` range, for large-chain tests.
+    fn oid_u32(n: u32) -> ObjectId {
         gix::objs::compute_hash(gix::hash::Kind::Sha1, Kind::Blob, &n.to_be_bytes()).expect("hash")
     }
 
@@ -741,6 +824,43 @@ mod tests {
             plan.base.len() < n as usize,
             "capping must break at least one link"
         );
+    }
+
+    #[test]
+    fn a_very_long_chain_caps_without_overflowing_the_stack() {
+        // A hint chain grows one link per retained version of a chunk, so a
+        // long real history reaches here. The recursive capper overflowed the
+        // stack in the low thousands; this must complete and stay capped.
+        let n: u32 = 100_000;
+        let objs: Vec<(ObjectId, Kind)> = (0..n).map(|i| (oid_u32(i), Kind::Blob)).collect();
+        let hints: HashMap<ObjectId, ObjectId> =
+            (1..n).map(|i| (oid_u32(i), oid_u32(i - 1))).collect();
+        let plan = Plan::build(&objs, &hints);
+        assert_eq!(plan.order.len(), n as usize);
+        // Bases-first, checked in O(n) via a position index (the small-N helper
+        // scans linearly and would be O(n^2) here).
+        let position: HashMap<ObjectId, usize> = plan
+            .order
+            .iter()
+            .enumerate()
+            .map(|(i, o)| (*o, i))
+            .collect();
+        for (oid, base) in &plan.base {
+            assert!(
+                position[base] < position[oid],
+                "base must precede dependant"
+            );
+        }
+        // No surviving delta chain exceeds the cap.
+        for (oid, _) in &objs {
+            let mut depth = 0usize;
+            let mut cur = *oid;
+            while let Some(b) = plan.base.get(&cur) {
+                depth += 1;
+                assert!(depth <= MAX_CHAIN, "chain exceeds cap");
+                cur = *b;
+            }
+        }
     }
 
     #[test]
