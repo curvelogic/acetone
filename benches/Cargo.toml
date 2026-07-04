@@ -1,0 +1,27 @@
+# The Phase 0 benchmark suite, ported to run against the real acetone-store
+# and acetone-prolly crates (bead acetone-63m.9). A custom bin harness rather
+# than criterion: the suite measures on-disk repo size, chunk-write
+# amplification and load/scan throughput over simulated import commits, which
+# a statistical micro-benchmark harness does not express, and it reuses only
+# existing workspace dependencies (no new crate, cargo-deny stays trivially
+# green). See README.md for how to run and docs/notes/phase0-benchmarks.md for
+# the original spike numbers this stays comparable to.
+[package]
+name = "acetone-bench"
+version.workspace = true
+edition.workspace = true
+publish = false
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"
+
+[dependencies]
+acetone-store.workspace = true
+acetone-prolly.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
