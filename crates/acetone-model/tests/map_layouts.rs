@@ -192,6 +192,34 @@ fn manifest() -> impl Strategy<Value = Manifest> {
 }
 
 // ---------------------------------------------------------------------------
+// Bit-exact equality (aliasing tests)
+// ---------------------------------------------------------------------------
+
+/// Value equality by encoded identity: floats compare by bit pattern, so
+/// `+0.0 != -0.0` (distinct canonical encodings) and NaN equals itself.
+/// Derived `PartialEq` follows IEEE semantics and cannot make these
+/// distinctions, which is what aliasing tests must judge (acetone-9rw).
+fn value_eq_bitexact(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::List(xs), Value::List(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| value_eq_bitexact(x, y))
+        }
+        _ => a == b,
+    }
+}
+
+/// Record equality under [`value_eq_bitexact`].
+fn record_eq_bitexact(a: &NodeRecord, b: &NodeRecord) -> bool {
+    a.secondary_labels() == b.secondary_labels()
+        && a.properties().len() == b.properties().len()
+        && a.properties()
+            .iter()
+            .zip(b.properties())
+            .all(|((ka, va), (kb, vb))| ka == kb && value_eq_bitexact(va, vb))
+}
+
+// ---------------------------------------------------------------------------
 // Properties
 // ---------------------------------------------------------------------------
 
@@ -323,6 +351,13 @@ proptest! {
     /// Strict canonicity under mutation: flipping one bit of a valid
     /// record either fails to decode or decodes to a different record —
     /// each record has exactly one accepted byte form.
+    ///
+    /// "Different" must be judged **bit-exactly**: derived `PartialEq`
+    /// follows IEEE semantics where `-0.0 == 0.0`, but `+0.0` and `-0.0`
+    /// are distinct values with distinct canonical encodings (`f9 0000`
+    /// vs `f9 8000` — zero sign is preserved in values, ADR-0004), so a
+    /// sign-bit flip produces a genuinely different record that derived
+    /// equality cannot see (acetone-9rw).
     #[test]
     fn record_mutation_never_aliases(rec in node_record(), idx in any::<prop::sample::Index>(), bit in 0u8..8) {
         let bytes = rec.encode().expect("encodable");
@@ -331,7 +366,10 @@ proptest! {
         let i = idx.index(mutated.len());
         mutated[i] ^= 1 << bit;
         if let Ok(back) = NodeRecord::decode(&mutated) {
-            prop_assert_ne!(back, rec, "mutated bytes decoded to the same record");
+            prop_assert!(
+                !record_eq_bitexact(&back, &rec),
+                "mutated bytes decoded to the same record"
+            );
         }
     }
 
