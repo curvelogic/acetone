@@ -134,12 +134,46 @@ force. Invariant 2 stands, now with an experimental witness.
   acetone-sdg** (P3–P4) — library no-change-commit guard; fsck
   anchor-completeness check; symbolic-ref visibility; consolidation
   scaling; pack benchmark; spike gix minimisation.
-- **Documented format-level gap** (ADR-0010): uncommitted workspaces do
-  not survive a foreign `git gc`; owned by future acetone-gc work.
+- **Format-level gap** (ADR-0010): uncommitted workspaces do not survive
+  a foreign `git gc`. *Superseded by a boundary decision* — see below —
+  to close it by anchoring workspace chunk sets (bead acetone-huo).
 - The private evidence repo `curvelogic/acetone-phase1-e2e` can be deleted
   once you've seen it.
 
 None of these is blocker-class for closing the phase.
+
+## Boundary decisions (sprint review, 2026-07-04)
+
+The live boundary discussion produced four decisions, each captured as a
+bead (the ADR agenda for the phases they touch), all post-Phase-1:
+
+- **acetone-huo** — *anchor workspace chunk sets so uncommitted state
+  survives any gc.* Decided: anchoring is the default (workspace ref
+  points at a `{manifest, chunks/}` tree, like commits); the bare-blob
+  workspace becomes a future optimisation. Local-only representational
+  change — no `format_version` bump, no migration. Watch-item: build the
+  *incremental* anchor-maintenance path (off pack-on-write's change set),
+  not the O(total chunks)/save naive one. Blocks the Phase 3 write path
+  (acetone-mex.2). Supersedes the foreign-gc risk above.
+- **acetone-rjf** — *make worktrees first-class:* per-worktree workspace
+  ref (git's `refs/worktree/*`) and per-worktree writer lock, so writers
+  in different worktrees run concurrently. Co-designed with acetone-huo;
+  both block acetone-mex.2 so the write path isn't built on the current
+  shared-scope workspace.
+- **acetone-5w6** — *embedded/co-tenant mode* (graph living inside a code
+  repo), kept open as a mid-term post-0.1 goal. Near-term path: history
+  under a `refs/heads/acetone/*` subnamespace (proxy-safe); long-term,
+  the cleaner Dolt-style top-level `refs/acetone/heads/*` as proxy
+  support for such namespaces matures — so the history namespace should
+  be parameterised, not hard-coded.
+- **acetone-gbd** — *namespace the commit-tree entries* (`.acetone/manifest`,
+  `.acetone/chunks/`) so they never collide with user content in a shared
+  tree; keep `README.md` at the root for hosting-UI rendering. Cheap now,
+  a migration later — blocks the format freeze (Gate D, acetone-cbl.1).
+
+Also open, awaiting Greg: **acetone-63m.12** (file the gix ref-transaction
+TOCTOU issue upstream) needs a go-ahead; **acetone-0ej** (P2, the
+`write_ref` create-CAS no-op) is queued for early Phase 2/3.
 
 ## Milestone security review
 
