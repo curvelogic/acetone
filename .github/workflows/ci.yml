@@ -50,6 +50,16 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
+      # Phase 1 exit script (acetone-63m.8): the scripted end-to-end
+      # session against a real repository. The remote round trip is
+      # skipped in CI (E2E_REMOTE unset); it is evidenced manually.
+      - name: phase 1 end-to-end script
+        run: ACETONE=target/debug/acetone scripts/phase1-e2e.sh
+        env:
+          GIT_AUTHOR_NAME: ci
+          GIT_AUTHOR_EMAIL: ci@acetone.invalid
+          GIT_COMMITTER_NAME: ci
+          GIT_COMMITTER_EMAIL: ci@acetone.invalid
 
   deny:
     name: cargo-deny (advisories, licences, sources)
