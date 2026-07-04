@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/acetone-store",
+    "crates/acetone-prolly",
+    "crates/acetone-model",
+    "crates/acetone-graph",
+    "crates/acetone-cypher",
+    "crates/acetone-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.96"
+repository = "https://github.com/curvelogic/acetone"
+
+[workspace.dependencies]
+acetone-store = { path = "crates/acetone-store" }
+acetone-prolly = { path = "crates/acetone-prolly" }
+acetone-model = { path = "crates/acetone-model" }
+acetone-graph = { path = "crates/acetone-graph" }
+acetone-cypher = { path = "crates/acetone-cypher" }

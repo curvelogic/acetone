@@ -1,0 +1,10 @@
+[package]
+name = "acetone-model"
+description = "Node/edge keys, records, order-preserving encodings, schema and manifest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+acetone-prolly.workspace = true

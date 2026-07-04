@@ -1,0 +1,10 @@
+[package]
+name = "acetone-cypher"
+description = "openCypher front end, binder, planner and iterator-model executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+acetone-graph.workspace = true

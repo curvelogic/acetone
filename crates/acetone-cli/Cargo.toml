@@ -1,0 +1,15 @@
+[package]
+name = "acetone-cli"
+description = "The acetone command-line workbench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "acetone"
+path = "src/main.rs"
+
+[dependencies]
+acetone-cypher.workspace = true
+acetone-graph.workspace = true
