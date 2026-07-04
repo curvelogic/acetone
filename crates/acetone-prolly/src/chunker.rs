@@ -1,12 +1,13 @@
 //! Content-defined chunking for prolly-tree nodes.
 //!
 //! A gear rolling hash runs over the serialised entry stream of each tree
-//! level. The hash is tested at every byte, but cuts are only taken at entry
-//! boundaries: if any byte within an entry satisfies the boundary condition
-//! (and the chunk has reached `min_bytes`), the chunk is cut after that
-//! entry. This gives a byte-based target chunk size (mean roughly
-//! `min_bytes + 2^mask_bits` bytes) independent of entry size, unlike
-//! entry-count-based splitting.
+//! level, and the boundary condition is evaluated **once per entry, at the
+//! entry's end**, weighted by entry size: cut when
+//! `gear_hash & (2^mask_bits - 1) < entry_len`. Each entry is therefore a
+//! cut with probability ≈ `entry_len / 2^mask_bits`, giving a byte-based
+//! expected chunk size of roughly `min_bytes + 2^mask_bits` bytes
+//! independent of entry size, like per-byte CDC but with the decision
+//! anchored to entry boundaries (the only places a cut may land anyway).
 //!
 //! Determinism / history independence (spec §3.2, normative): the gear
 //! state is reset at every chunk boundary, so the chunking of a level is a
@@ -14,6 +15,24 @@
 //! restarted at any existing boundary reproduces the remainder of the
 //! chunking exactly, which is what makes incremental updates splice back
 //! into unchanged chunks (see `tree.rs`).
+//!
+//! # Why entry-end evaluation (deviation from the Phase 0 spike)
+//!
+//! The spike tested the boundary condition at every byte. A gear hash's
+//! low `mask_bits` bits depend only on the trailing `mask_bits` bytes of
+//! input, so a per-byte test inside a long *constant* region — an inner
+//! entry's key bytes, which are identical at every tree level — makes the
+//! same cut decision at every level. Two inner entries with long keys can
+//! then split identically forever: a deterministic fixed point in which no
+//! level ever has fewer chunks than the one below, and the build never
+//! converges on a root. The history-independence suite's non-default-
+//! parameter property found exactly this (see the committed
+//! `.proptest-regressions` seed). Evaluating at entry ends removes the
+//! fixed point structurally: an inner entry *ends* with the child hash, so
+//! the decision window always covers bytes that change from level to
+//! level. [`Chunker`] additionally never cuts a chunk with fewer than two
+//! entries, so inner fan-out is at least 2 and any build of `n` entries
+//! converges within `log2(n)` levels by construction.
 
 use std::sync::LazyLock;
 
@@ -35,12 +54,13 @@ pub const MAX_CHUNK_MAX_BYTES: u32 = 1 << 20;
 pub struct ChunkParams {
     /// No cut before the chunk reaches this many bytes.
     min_bytes: u32,
-    /// Boundary condition: low `mask_bits` bits of the gear hash all zero.
-    /// Expected gap between eligible cut points is `2^mask_bits` bytes.
+    /// Boundary condition (see module docs): an entry cuts when the low
+    /// `mask_bits` bits of the gear hash fall below the entry's length, so
+    /// eligible cut points arrive every `2^mask_bits` bytes in expectation.
     mask_bits: u32,
-    /// Force a cut once the chunk reaches this many bytes (the chunk may
-    /// overshoot by at most one entry, since cuts land on entry
-    /// boundaries).
+    /// Force a cut once the chunk reaches this many bytes (a chunk may
+    /// overshoot: cuts land on entry boundaries, and never before a
+    /// chunk's second entry).
     max_bytes: u32,
 }
 
@@ -93,14 +113,14 @@ impl ChunkParams {
         self.min_bytes
     }
 
-    /// Low bits of the gear hash that must be zero at an eligible cut
-    /// point; the expected gap between eligible cuts is `2^mask_bits`
-    /// bytes.
+    /// Width of the boundary test window: eligible cut points arrive
+    /// every `2^mask_bits` bytes in expectation (see module docs).
     pub fn mask_bits(&self) -> u32 {
         self.mask_bits
     }
 
-    /// Force a cut once the chunk reaches this many bytes.
+    /// Force a cut once the chunk reaches this many bytes (never before a
+    /// chunk's second entry).
     pub fn max_bytes(&self) -> u32 {
         self.max_bytes
     }
@@ -134,7 +154,7 @@ pub(crate) struct Chunker {
     params: ChunkParams,
     hash: u64,
     len: u64,
-    cut_pending: bool,
+    entries: u64,
 }
 
 impl Chunker {
@@ -143,38 +163,47 @@ impl Chunker {
             params,
             hash: 0,
             len: 0,
-            cut_pending: false,
+            entries: 0,
         }
     }
 
     /// Feed one serialised entry. Returns true if the chunk should be cut
-    /// after this entry.
+    /// after this entry. The decision is a pure function of the entries
+    /// fed since the last [`reset`](Chunker::reset).
     pub(crate) fn feed_entry(&mut self, bytes: &[u8]) -> bool {
-        let mask = self.params.mask();
-        let min = u64::from(self.params.min_bytes);
         for &b in bytes {
-            self.len += 1;
             self.hash = self.hash.wrapping_shl(1).wrapping_add(GEAR[b as usize]);
-            if self.len >= min && self.hash & mask == 0 {
-                self.cut_pending = true;
-            }
+        }
+        self.len += bytes.len() as u64;
+        self.entries += 1;
+        // Never cut a single-entry chunk: guarantees fan-out >= 2 at every
+        // level, which bounds tree height by log2(entries) and makes the
+        // non-convergent fixed point (module docs) structurally impossible
+        // even under degenerate parameters. Affects only entries so large
+        // they exceed min_bytes on their own.
+        if self.entries < 2 {
+            return false;
         }
         if self.len >= u64::from(self.params.max_bytes) {
-            self.cut_pending = true;
+            return true;
         }
-        self.cut_pending
+        // Size-weighted boundary test: an entry is a cut with probability
+        // ~ entry_len / 2^mask_bits, so eligible cut points arrive every
+        // ~2^mask_bits bytes whatever the entry-size mix.
+        self.len >= u64::from(self.params.min_bytes)
+            && self.hash & self.params.mask() < bytes.len() as u64
     }
 
     /// Reset state for the next chunk (call after emitting a chunk).
     ///
-    /// The caller constructs a fresh `Chunker` per level, so parts of this
-    /// reset are redundant with construction on the first chunk — kept
-    /// deliberately (as in the validated spike): the reset being total is
-    /// what makes each chunk's boundary a pure function of its own bytes.
+    /// The caller constructs a fresh `Chunker` per level, so this reset is
+    /// redundant with construction on the first chunk — kept deliberately
+    /// (as in the validated spike): the reset being total is what makes
+    /// each chunk's boundary a pure function of its own bytes.
     pub(crate) fn reset(&mut self) {
         self.hash = 0;
         self.len = 0;
-        self.cut_pending = false;
+        self.entries = 0;
     }
 }
 
