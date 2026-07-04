@@ -35,8 +35,16 @@ regressions double as invariant guards:
 - **history independence** (Load-Bearing Invariant 1): a tree reached via
   `apply_batch` has the same root hash as a fresh `bulk_load` of the resulting
   contents;
-- single-key update write amplification stays within the root→leaf spine
-  (`≤ height + 2` chunks).
+- single-key update write amplification stays within the empirical `2 × height`
+  envelope (content-defined boundary ripple means it is not a hard structural
+  bound; Phase 0 saw maxima of 5/8/10 chunks at heights 3/4/5). This is
+  hard-asserted only in the deterministic smoke run; full-scale runs print a
+  warning if exceeded rather than aborting.
+
+Absolute magnitudes (chunk counts, heights, repo sizes) are not directly
+comparable to the phase-0 tables: this suite uses `ChunkParams::default()`
+(≈5 KiB mean), which need not match the spike's chunking. The scenario shapes,
+ratios and invariants are what it guards.
 
 ## Running
 

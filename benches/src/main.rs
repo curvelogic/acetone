@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use acetone_bench::{ALL_SCENARIOS, Config, run};
+use acetone_bench::{ALL_SCENARIOS, Config, TempRepo, run};
 
 fn parse_keys(s: &str) -> Result<u64, String> {
     match s.to_ascii_lowercase().as_str() {
@@ -88,10 +88,11 @@ fn real_main() -> Result<(), String> {
         let base = dir.unwrap_or_else(std::env::temp_dir);
         let repo = base.join(format!("acetone-bench-smoke-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&repo);
-        let mut cfg = Config::smoke(repo.clone());
+        // Guard cleans the repo up on drop even if `run` returns early.
+        let _guard = TempRepo::new(repo.clone());
+        let mut cfg = Config::smoke(repo);
         cfg.quiet = quiet;
         let report = run(cfg, scenarios.as_deref()).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_dir_all(&repo);
         println!("\nsmoke report: {report:?}");
         return Ok(());
     }
@@ -114,6 +115,10 @@ fn real_main() -> Result<(), String> {
         updates,
         growth_commits,
         verify,
+        // Full-scale runs sample randomly; the amplification envelope is
+        // print-and-warn, not a hard assert (the deterministic smoke run is
+        // the gate). See the `update` scenario.
+        strict_amp: false,
         quiet,
     };
 

@@ -31,8 +31,10 @@
 //!   [`apply_batch`](acetone_prolly::apply_batch) has the same root hash as a
 //!   fresh [`bulk_load`](acetone_prolly::bulk_load) of the resulting
 //!   contents;
-//! - single-key update write amplification stays within the root→leaf spine
-//!   (`<= height + 2` chunks), the property that makes Option A viable.
+//! - single-key update write amplification stays within the empirical
+//!   `2 * height` envelope (Phase 0 maxima were 5/8/10 chunks at heights
+//!   3/4/5) — the O(log n)-writes property that makes Option A viable. This is
+//!   hard-asserted only for the deterministic smoke run; full-scale runs warn.
 //!
 //! # Fidelity note
 //!
@@ -45,6 +47,19 @@
 //! tree write amplification — excluding the manifest/reachability-tree
 //! objects that commits write straight through git, which the spike's
 //! `chunks_written()` folded in (+1/commit).
+//!
+//! **Absolute magnitudes are not directly comparable to the phase-0 tables.**
+//! This suite chunks with [`ChunkParams::default`](acetone_prolly::ChunkParams)
+//! (≈5 KiB mean), which is not guaranteed identical to the spike's chunking
+//! (and differs again from the graph layer's production parameters), so chunk
+//! counts, tree heights and repo sizes here may not line up digit-for-digit
+//! with `docs/notes/phase0-benchmarks.md`. What this suite guards is the
+//! *shape*: scenario semantics, ratios (e.g. loose vs packed reads, gc size
+//! reduction), the amplification envelope and the invariants — not exact
+//! numbers. A few spike-only readouts are also dropped as low-value here: the
+//! `commit_after_updates` line (subsumed by the growth scenario's
+//! `commit_per_commit`) and the raw `git count-objects` dumps (a git-plumbing
+//! detail; repo size via `du` is the number that matters).
 //!
 //! # Out of scope: pack-on-write
 //!
@@ -410,6 +425,13 @@ pub struct Config {
     /// independence). Cheap only at small `n`; on by default under
     /// [`Config::smoke`].
     pub verify: bool,
+    /// Whether to *hard-assert* the single-key update amplification envelope
+    /// rather than merely print-and-warn. Set only for the deterministic
+    /// [`Config::smoke`] run, where the observed maximum is a fixed,
+    /// machine-independent number; full-scale runs sample randomly and the
+    /// envelope is empirical (see the `update` scenario), so they warn
+    /// instead of aborting.
+    pub strict_amp: bool,
     /// Suppress progress lines on stderr.
     pub quiet: bool,
 }
@@ -427,6 +449,7 @@ impl Config {
             updates: 50,
             growth_commits: 5,
             verify: true,
+            strict_amp: true,
             quiet: true,
         }
     }
@@ -455,8 +478,11 @@ pub struct Report {
     pub history_independent: Option<bool>,
     /// Commits applied by the growth scenario.
     pub growth_commits: usize,
-    /// Keys read back from the head after growth (must equal current key
-    /// count).
+    /// Keys read back from the head after growth. The exact count is not
+    /// tracked (growth can re-insert keys the diff deleted); the growth
+    /// scenario instead checks that the committed manifest reconstructs the
+    /// in-memory root exactly (a stronger property than a count) and that this
+    /// value is non-zero.
     pub growth_readback: Option<u64>,
     /// Point-read samples that resolved to a value after a repack.
     pub packed_reads_found: Option<usize>,
@@ -709,13 +735,36 @@ impl Bench {
             sum as f64 / chunk_counts.len().max(1) as f64,
             chunk_counts[chunk_counts.len() / 2],
         );
-        // A single put rewrites only the root→leaf spine; a boundary shift can
-        // add at most a split/merge either side. This is the property that
-        // makes the git-ODB chunk store viable (Option A) — assert it.
-        assert!(
-            amp_max <= height as u64 + 2,
-            "single-key update amplification {amp_max} exceeds spine bound (height {height} + 2)"
-        );
+        // A single put mostly rewrites the root→leaf spine, but content-defined
+        // chunk boundaries make the amplification *empirical*, not structurally
+        // bounded: a value change can shift a boundary and split or merge a
+        // chunk, and that ripple can touch more than one node per level and
+        // cascade upward. The Phase 0 data (docs/notes/phase0-benchmarks.md
+        // scenario 4) shows single-key maxima of 5/8/10 chunks at heights
+        // 3/4/5 — i.e. roughly `2 * height`. That is the envelope used here.
+        // It is what keeps the git-ODB chunk store viable (Option A: writes
+        // stay O(log n), not O(n)); a regression to whole-tree rewrites would
+        // blow far past it.
+        //
+        // The envelope is asserted hard only for the deterministic smoke run
+        // (`strict_amp`), where `amp_max` is a fixed, machine-independent
+        // value. Full-scale runs sample randomly, so they warn instead of
+        // aborting — a rare boundary ripple that nudges a single sample over
+        // the line must not fail a manual benchmark, and the CI gate is the
+        // smoke test regardless.
+        let envelope = 2 * height as u64;
+        if self.cfg.strict_amp {
+            assert!(
+                amp_max <= envelope,
+                "single-key update amplification {amp_max} exceeds the empirical \
+                 envelope (2 * height {height} = {envelope})"
+            );
+        } else if amp_max > envelope {
+            println!(
+                "WARNING: update amplification max={amp_max} exceeds the empirical \
+                 envelope (2 * height {height} = {envelope}); investigate if this is a regression"
+            );
+        }
         Ok(())
     }
 
@@ -810,10 +859,11 @@ impl Bench {
             println!("diff_verified_against_scan: ok");
 
             // History independence: apply_batch's new_root must equal a fresh
-            // bulk_load of the resulting contents.
+            // bulk_load of the resulting contents. The scratch repo is removed
+            // by the guard's Drop even if the assertion below panics.
             let final_contents: Vec<(Vec<u8>, Vec<u8>)> = b;
-            let tmp = tempdir_repo()?;
-            let scratch = CountingStore::create(&tmp)?;
+            let scratch_dir = TempRepo::new(tempdir_repo()?);
+            let scratch = CountingStore::create(scratch_dir.path())?;
             let rebuilt = bulk_load(&scratch, self.params, final_contents)?;
             let independent = rebuilt.hash() == new_root.hash();
             report.history_independent = Some(independent);
@@ -821,7 +871,6 @@ impl Bench {
                 independent,
                 "history independence violated: apply_batch root != bulk_load root"
             );
-            std::fs::remove_dir_all(&tmp).ok();
             println!("history_independence: ok (apply_batch root == bulk_load root)");
         }
 
@@ -854,6 +903,10 @@ impl Bench {
         let mut chunk_counts = Vec::new();
         let mut root = self.head.clone();
         let mut parent = self.head_commit;
+        // The headline Phase 0 number is repo growth over commits; print the
+        // loose size every 10 commits (and the final total below), as the
+        // spike did, so a run shows the trajectory not just the endpoint.
+        println!("size_trajectory (after N commits, raw loose):");
         for c in 0..self.cfg.growth_commits {
             let ver = 3_000_000 + c as u64;
             let ops: Vec<BatchOp> = (0..churn)
@@ -876,12 +929,14 @@ impl Bench {
                 Some(parent),
             )?;
             commit_times.push(t.elapsed());
-            if !self.cfg.quiet && (c + 1) % 10 == 0 {
+            if (c + 1) % 10 == 0 {
+                let kb = du_kb(&self.cfg.repo);
+                println!("  after {:3} commits: {}", c + 1, fmt_kb(kb));
                 self.progress(&format!(
                     "growth: {}/{} commits, repo {}",
                     c + 1,
                     self.cfg.growth_commits,
-                    fmt_kb(du_kb(&self.cfg.repo))
+                    fmt_kb(kb)
                 ));
             }
         }
@@ -1043,6 +1098,33 @@ fn naive_scan_diff(
     out
 }
 
+/// RAII guard for a temporary repository directory: removes the tree on drop,
+/// so a scratch/smoke repo is cleaned up even when a scenario panics or `run`
+/// returns early with an error. (A drop guard rather than the `tempfile` crate
+/// keeps the binary free of an extra runtime dependency; `tempfile` stays a
+/// dev-dependency for the smoke test only.)
+pub struct TempRepo {
+    path: PathBuf,
+}
+
+impl TempRepo {
+    /// Guard `path`; the directory need not exist yet.
+    pub fn new(path: PathBuf) -> Self {
+        TempRepo { path }
+    }
+
+    /// The guarded path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempRepo {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 /// A fresh temporary bare-repo path under the system temp dir, without a
 /// tempfile dependency in the binary. Used for the history-independence
 /// scratch store. Uniqueness comes from the pid, a wall-clock nanosecond
@@ -1070,6 +1152,18 @@ pub fn run(cfg: Config, scenarios: Option<&[String]>) -> BenchResult<Report> {
     let requested: Vec<String> = scenarios
         .map(|s| s.to_vec())
         .unwrap_or_else(|| ALL_SCENARIOS.iter().map(|s| s.to_string()).collect());
+    // Reject unknown scenario names rather than silently ignoring them (the
+    // spike panicked; a typo should fail loudly, not run a partial suite).
+    if let Some(bad) = requested
+        .iter()
+        .find(|name| !ALL_SCENARIOS.contains(&name.as_str()))
+    {
+        return Err(format!(
+            "unknown scenario '{bad}'; valid scenarios: {}",
+            ALL_SCENARIOS.join(", ")
+        )
+        .into());
+    }
     let want = |name: &str| requested.iter().any(|s| s == name);
 
     let (mut bench, mut report) = Bench::create(cfg)?;
