@@ -29,6 +29,8 @@ name = "acetone-cypher"
 version = "0.0.1"
 dependencies = [
  "acetone-graph",
+ "proptest",
+ "thiserror",
 ]
 
 [[package]]

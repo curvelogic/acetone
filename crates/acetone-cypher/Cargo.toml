@@ -10,3 +10,9 @@ repository.workspace = true
 
 [dependencies]
 acetone-graph.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# proptest: parser fuzzing — no panics on arbitrary input, depth-limit
+# behaviour on generated deep nesting.
+proptest.workspace = true
