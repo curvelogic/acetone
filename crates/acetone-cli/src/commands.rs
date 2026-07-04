@@ -14,6 +14,8 @@ use anyhow::{Context, Result, bail};
 use crate::cli::Command;
 use crate::value::{format_label, format_value, parse_kv, parse_value, sanitise_line};
 
+use crate::output::outln;
+
 /// Dispatch one parsed command.
 pub fn run(repo_path: &Path, command: Command) -> Result<()> {
     match command {
@@ -48,12 +50,12 @@ fn fsck(repo_path: &Path) -> Result<()> {
     for finding in &report.findings {
         // Findings embed repository-controlled text (index names, ref
         // names, decode-error detail): sanitise at the terminal boundary.
-        println!("{}", sanitise_line(&finding.to_string()));
+        outln!("{}", sanitise_line(&finding.to_string()));
     }
     if report.is_clean() {
-        println!("fsck: clean");
+        outln!("fsck: clean");
     } else {
-        println!(
+        outln!(
             "fsck: {} error(s), {} advisory(ies)",
             report.errors().count(),
             report.advisories().count()
@@ -77,7 +79,7 @@ fn init(repo_path: &Path, object_format: &str, path: Option<PathBuf>) -> Result<
     options.object_format = object_format;
     Repository::init(&target, options)
         .with_context(|| format!("initialising repository at {}", target.display()))?;
-    println!(
+    outln!(
         "Initialized empty acetone repository in {}",
         target.display()
     );
@@ -96,20 +98,20 @@ fn status(repo_path: &Path) -> Result<()> {
             let short = branch
                 .strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
                 .unwrap_or(&branch);
-            println!("On branch {short}");
+            outln!("On branch {short}");
         }
-        None => println!("Not on any branch (detached)"),
+        None => outln!("Not on any branch (detached)"),
     }
     match repo.head_commit()? {
-        Some(head) => println!("HEAD: {}", head.to_hex()),
-        None => println!("HEAD: (no commits yet)"),
+        Some(head) => outln!("HEAD: {}", head.to_hex()),
+        None => outln!("HEAD: (no commits yet)"),
     }
-    println!(
+    outln!(
         "workspace: {}",
         if repo.is_dirty()? { "dirty" } else { "clean" }
     );
     let snapshot = repo.workspace_snapshot()?;
-    println!(
+    outln!(
         "nodes: {}, edges: {}, schema entries: {}",
         snapshot.nodes()?.len(),
         snapshot.edges()?.len(),
@@ -138,7 +140,7 @@ fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
     let id = txn
         .commit(message, &trailers, None)
         .context("committing workspace")?;
-    println!("committed {}", id.to_hex());
+    outln!("committed {}", id.to_hex());
     Ok(())
 }
 
@@ -149,9 +151,9 @@ fn log(repo_path: &Path) -> Result<()> {
         // hostile clones (lossily decoded, not constrained by git):
         // sanitise before they reach the terminal.
         let subject = entry.message.lines().next().unwrap_or("");
-        println!("{} {}", entry.id.to_hex(), sanitise_line(subject));
+        outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
         for (key, value) in &entry.trailers {
-            println!("    {}: {}", sanitise_line(key), sanitise_line(value));
+            outln!("    {}: {}", sanitise_line(key), sanitise_line(value));
         }
     }
     Ok(())
@@ -169,14 +171,14 @@ fn branch(repo_path: &Path, name: Option<&str>) -> Result<()> {
                 } else {
                     " "
                 };
-                println!("{marker} {short}");
+                outln!("{marker} {short}");
             }
         }
         Some(name) => {
             let target = repo
                 .create_branch(name, None)
                 .with_context(|| format!("creating branch {name:?}"))?;
-            println!("created branch {name:?} at {}", target.to_hex());
+            outln!("created branch {name:?} at {}", target.to_hex());
         }
     }
     Ok(())
@@ -186,7 +188,7 @@ fn checkout(repo_path: &Path, name: &str) -> Result<()> {
     let repo = open(repo_path)?;
     repo.checkout_branch(name)
         .with_context(|| format!("checking out branch {name:?}"))?;
-    println!("switched to branch {name:?}");
+    outln!("switched to branch {name:?}");
     Ok(())
 }
 
@@ -207,7 +209,7 @@ fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Resul
     let mut txn = repo.begin_write()?;
     txn.put_node(&node_key, &record)?;
     txn.save().context("saving workspace")?;
-    println!("put node {}", format_node_key(&node_key));
+    outln!("put node {}", format_node_key(&node_key));
     Ok(())
 }
 
@@ -223,13 +225,13 @@ fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
     let node_key = single_key(label, key)?;
     let snapshot = repo.workspace_snapshot()?;
     match snapshot.get_node(&node_key)? {
-        None => println!("not found"),
+        None => outln!("not found"),
         Some(record) => {
             // Echo the canonical parsed key, not the raw argument: the two
             // agree today (single-column keys only), but this stays
             // correct if a richer key grammar ever changes how a raw
             // argument maps to a value.
-            println!("node: {}", format_node_key(&node_key));
+            outln!("node: {}", format_node_key(&node_key));
             // Secondary labels are repository-controlled and content-
             // unvalidated: escape each like every other label.
             let labels: Vec<String> = record
@@ -237,10 +239,10 @@ fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
                 .iter()
                 .map(|l| format_label(l))
                 .collect();
-            println!("secondary_labels: [{}]", labels.join(", "));
-            println!("properties:");
+            outln!("secondary_labels: [{}]", labels.join(", "));
+            outln!("properties:");
             for (name, value) in record.properties() {
-                println!("  {}: {}", format_label(name), format_value(value));
+                outln!("  {}: {}", format_label(name), format_value(value));
             }
         }
     }
@@ -263,7 +265,7 @@ fn put_edge(
     let mut txn = repo.begin_write()?;
     txn.put_edge(&edge_key, &record)?;
     txn.save().context("saving workspace")?;
-    println!(
+    outln!(
         "put edge {} -{}-> {}",
         format_node_key(edge_key.src()),
         format_label(edge_key.rtype()),
@@ -279,7 +281,7 @@ fn list_nodes(repo_path: &Path, label: Option<&str>) -> Result<()> {
         if label.is_some_and(|l| l != key.label()) {
             continue;
         }
-        println!("{}", format_node_key(&key));
+        outln!("{}", format_node_key(&key));
     }
     Ok(())
 }
