@@ -58,20 +58,70 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 <!-- END BEADS INTEGRATION -->
 
 
-## Build & Test
+## What Acetone Is
 
-_Add your build and test commands here_
+Acetone is an embedded, single-node, **version-controlled labelled property graph database**: Dolt-style prolly trees stored in a git-compatible object store, queried with openCypher, operated as a workbench (CLI + Rust library, not a server). Written entirely in Rust.
 
-```bash
-# Example:
-# npm install
-# npm test
-```
+The design record lives in `docs/` and is authoritative:
+
+- `docs/acetone-01-design-space.md` — vision, prior art, and the six shaping decisions
+- `docs/acetone-02-spec.md` — the v0.1 specification (data model, storage, encodings, query language, diff/merge, CLI)
+- `docs/acetone-03-roadmap.md` — phased implementation plan (Phase 0–6) with exit criteria and decision gates
+
+Read the spec before implementing anything; when code and spec diverge, either fix the code or update the spec deliberately — never silently.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+Cargo workspace of six crates with strictly downward dependencies:
+
+```
+acetone-cli     — thin CLI client
+acetone-cypher  — parser front end, binder, planner, iterator-model executor, TCK harness
+acetone-graph   — graph mutations, constraints, validation, merge orchestration
+acetone-model   — node/edge keys, records, order-preserving encodings, schema, manifest
+acetone-prolly  — prolly trees: build, scan, diff, three-way merge
+acetone-store   — ChunkStore trait; git object database backend (gitoxide, git2 fallback); refs/commits
+```
+
+Plus `tck/` (vendored openCypher TCK runner) and `benches/` (Phase 0 benchmarks kept as regressions).
+
+## Load-Bearing Invariants
+
+These are normative and enforced by property tests — breaking any of them is a format/design bug, not a refactor:
+
+1. **History independence**: identical map contents MUST yield identical prolly-tree root hashes regardless of operation order.
+2. **Deterministic encodings**: memcomparable key encoding (byte order == logical order) and canonical deterministic CBOR values. Any change bumps `format_version`.
+3. **Node identity is `(primary label, key tuple)`** — natural keys mandatory, declared in schema. `SET` must never modify key properties.
+4. **Merge determinism**: `merge(base, ours, theirs)` is a pure function; conflicts are data (the `conflicts` map), not errors.
+5. **Derived maps** (`edges_rev`, indexes) must be exactly reproducible from their sources (`reindex` yields identical roots).
+
+## Build & Test
+
+```bash
+cargo build --workspace
+cargo test --workspace          # includes property tests (proptest)
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+```
+
+Test-driven throughout: property tests for storage invariants land before or with the features they guard; TCK conformance drives the Cypher engine and the pass rate is published per release.
+
+## Branch & Merge Discipline
+
+Trunk-based development with short-lived branches:
+
+- **`main` is always green**: builds, `cargo test --workspace`, clippy at `-D warnings` and `fmt --check` must pass on every commit that lands there. Never commit directly to `main`; never force-push it.
+- **One bead per branch**, named `<bead-id>/<short-slug>` (e.g. `acetone-28x.1/scaffold-workspace`). A branch may cover a small coherent group of beads when they only make sense together — say so in the PR description.
+- **Merge via PR, squash-merged**, so `main` stays linear and one commit ≈ one bead. Delete the branch after merge.
+- **PR title = squash commit subject**: imperative mood, ≤ 72 chars, referencing the bead, e.g. `Scaffold cargo workspace and CI (acetone-28x.1)`. The PR body carries the detail; close the bead when the PR merges.
+- **Rebase on `main`** to update a branch; never merge `main` into a feature branch.
+- **Phase exit criteria are review points**: the exit-criteria bead of each phase is closed by a human (Greg) after reviewing the gate evidence, not by an agent.
+- `.beads/` sync is bd's business (`refs/dolt/data`); don't hand-edit or commit beads data through ordinary git operations.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- Rust 2024 edition; `rustfmt` defaults; clippy clean at `-D warnings`.
+- Errors via `thiserror` in library crates; `anyhow` only in `acetone-cli`.
+- No `unsafe` without a comment justifying it and a test exercising it.
+- UK English in docs and user-facing text.
+- Work is tracked in beads: phases from the roadmap are epics; issues carry dependencies mirroring the phase gates. Check `bd ready` before starting anything.
