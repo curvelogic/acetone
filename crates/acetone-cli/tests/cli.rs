@@ -230,3 +230,80 @@ fn control_characters_in_labels_are_escaped_not_raw() {
     assert!(!text.contains('\u{1b}'));
     assert!(text.contains("\\u{1b}"));
 }
+
+#[test]
+fn fsck_reports_clean_and_detects_damage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let out = init(&repo);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+
+    // Healthy repo, with some committed content: clean, exit 0.
+    let out = acetone(&repo, &["put-node", "Host", "web1", "--prop", "os=linux"]);
+    assert!(out.status.success());
+    let out = acetone(&repo, &["commit", "-m", "seed"]);
+    assert!(out.status.success());
+    let out = acetone(&repo, &["fsck"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("fsck: clean"));
+
+    // Surgically destroy the repository's objects, sparing only the
+    // workspace manifest blob (so `open` still succeeds and fsck itself
+    // runs): fsck must report error findings, exit non-zero, no Debug
+    // dump. (A random victim won't do — a fresh repo also holds
+    // unreachable superseded manifests whose loss fsck rightly ignores.)
+    let manifest_oid = git_rev_parse(&repo, "refs/acetone/workspaces/default");
+    let spared = repo
+        .join("objects")
+        .join(&manifest_oid[..2])
+        .join(&manifest_oid[2..]);
+    for object in loose_objects(&repo.join("objects")) {
+        if object != spared {
+            std::fs::remove_file(&object).expect("remove object");
+        }
+    }
+    let out = acetone(&repo, &["fsck"]);
+    assert!(!out.status.success(), "fsck must fail on a damaged repo");
+    let text = stdout(&out);
+    assert!(
+        text.contains("[error]"),
+        "must print an error finding: {text}"
+    );
+    assert!(stderr(&out).contains("integrity"), "{}", stderr(&out));
+}
+
+fn git_rev_parse(repo: &Path, refname: &str) -> String {
+    let out = Command::new("git")
+        .args(["-C", repo.to_str().unwrap(), "rev-parse", refname])
+        .output()
+        .expect("git rev-parse");
+    assert!(out.status.success());
+    String::from_utf8(out.stdout)
+        .expect("hex")
+        .trim()
+        .to_owned()
+}
+
+/// Every loose-object file under `objects/` (two-hex-char fan-out
+/// directories only).
+fn loose_objects(objects: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(objects) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let is_fanout = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.len() == 2 && n.chars().all(|c| c.is_ascii_hexdigit()));
+        if dir.is_dir() && is_fanout {
+            for file in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                if file.path().is_file() {
+                    found.push(file.path());
+                }
+            }
+        }
+    }
+    found
+}

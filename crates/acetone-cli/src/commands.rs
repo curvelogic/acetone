@@ -38,7 +38,29 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             repo_path, &src_label, &src_key, &rtype, &dst_label, &dst_key,
         ),
         Command::ListNodes { label } => list_nodes(repo_path, label.as_deref()),
+        Command::Fsck => fsck(repo_path),
     }
+}
+
+fn fsck(repo_path: &Path) -> Result<()> {
+    let repo = open(repo_path)?;
+    let report = acetone_graph::fsck::check(&repo)?;
+    for finding in &report.findings {
+        println!("{finding}");
+    }
+    if report.is_clean() {
+        println!("fsck: clean");
+    } else {
+        println!(
+            "fsck: {} error(s), {} advisory(ies)",
+            report.errors().count(),
+            report.advisories().count()
+        );
+    }
+    if report.has_errors() {
+        bail!("repository has integrity errors");
+    }
+    Ok(())
 }
 
 fn init(repo_path: &Path, object_format: &str, path: Option<PathBuf>) -> Result<()> {

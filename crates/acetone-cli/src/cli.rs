@@ -96,4 +96,9 @@ pub enum Command {
         #[arg(long)]
         label: Option<String>,
     },
+    /// Verify repository integrity: manifest decode, chunk reachability
+    /// and prolly-tree structure for every version reachable from
+    /// workspaces, branches and tags; edge-map symmetry as an advisory.
+    /// Exits non-zero when any error-severity finding exists.
+    Fsck,
 }
