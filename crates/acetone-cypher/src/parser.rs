@@ -1168,12 +1168,20 @@ impl Parser {
     }
 
     /// `(` at atom position opens either a parenthesised expression or a
-    /// pattern predicate (`(h)-[:RUNS]->(:Software)`). Decided by a
-    /// single linear token scan — NOT by speculative parsing, which is
-    /// exponential on nested parentheses (each level would parse its
-    /// interior twice): skip to the matching `)` and check whether a
-    /// relationship connector follows. `<-`, `--`, `-->` and `-[` open
-    /// relationships; a lone `-` before anything else is subtraction.
+    /// pattern predicate (`(h)-[:RUNS]->(:Software)`). Decided by linear
+    /// token scans — NOT by speculative parsing, which is exponential on
+    /// nested parentheses, and NOT by parse-then-fallback, which
+    /// resurrects the same blow-up when every nesting level fails late
+    /// and re-parses. We commit to a pattern only when the group is
+    /// node-shaped AND a relationship connector follows; committed
+    /// patterns that then fail to parse are hard errors.
+    ///
+    /// Known deliberate divergence (matches the Neo4j reading): a
+    /// node-shaped group followed by a connector is always a pattern, so
+    /// arithmetic that mimics one — `(a) - -(b)`, `(xs) - [0] - 1` — is
+    /// rejected or read as a pattern. Subtraction with an unambiguous
+    /// right-hand side (`(1) - -2`, `(1+2) - [0]`, `(1) - -(2+3)`) parses
+    /// as arithmetic because the shape checks disambiguate it.
     fn paren_expr_or_pattern_predicate(&mut self) -> Result<Expr, ParseError> {
         if self.paren_group_starts_pattern() {
             let pattern = self.path_pattern()?;
@@ -1192,34 +1200,91 @@ impl Parser {
         Ok(inner)
     }
 
-    /// With the cursor on `(`: does the token after the matching `)` open
-    /// a relationship pattern? Linear in the distance to the close paren.
+    /// With the cursor on `(`: is this group a node pattern followed by a
+    /// relationship connector? Linear in the distance to the close paren.
     fn paren_group_starts_pattern(&self) -> bool {
         debug_assert!(self.at(&TokenKind::LParen));
-        let mut offset = 0usize;
-        let mut parens = 0usize;
+        let Some(close) = self.matching_close(0, &TokenKind::LParen, &TokenKind::RParen) else {
+            return false;
+        };
+        self.connector_follows(close) && self.node_shaped_interior(close)
+    }
+
+    /// Offset of the token that closes the group opened at `offset`
+    /// (tracking nesting of the same delimiter kind), or `None` if input
+    /// ends first.
+    fn matching_close(&self, offset: usize, open: &TokenKind, close: &TokenKind) -> Option<usize> {
+        debug_assert!(&self.peek_at(offset).kind == open);
+        let mut at = offset;
+        let mut depth = 0usize;
         loop {
-            match &self.peek_at(offset).kind {
-                TokenKind::LParen => parens += 1,
-                TokenKind::RParen => {
-                    parens -= 1;
-                    if parens == 0 {
-                        break;
+            let kind = &self.peek_at(at).kind;
+            if kind == open {
+                depth += 1;
+            } else if kind == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            } else if kind == &TokenKind::Eof {
+                return None;
+            }
+            at += 1;
+        }
+    }
+
+    /// Does a relationship connector follow the group closing at `close`?
+    /// `<-` always does; `-` only as `-->`, as `--` followed by `(`
+    /// (undirected step into a node — a lone `- -` is double negation),
+    /// or as `-[...]` whose bracket group is closed by `-` or `->`
+    /// (relationship detail — otherwise it is subtraction of a list).
+    fn connector_follows(&self, close: usize) -> bool {
+        match &self.peek_at(close + 1).kind {
+            TokenKind::LArrow => true,
+            TokenKind::Minus => match &self.peek_at(close + 2).kind {
+                TokenKind::Arrow => true,
+                TokenKind::Minus => self.peek_at(close + 3).kind == TokenKind::LParen,
+                TokenKind::LBracket => {
+                    match self.matching_close(close + 2, &TokenKind::LBracket, &TokenKind::RBracket)
+                    {
+                        Some(bracket_close) => matches!(
+                            &self.peek_at(bracket_close + 1).kind,
+                            TokenKind::Minus | TokenKind::Arrow
+                        ),
+                        None => false,
                     }
                 }
-                TokenKind::Eof => return false,
-                _ => {}
-            }
-            offset += 1;
-        }
-        match &self.peek_at(offset + 1).kind {
-            TokenKind::LArrow => true,
-            TokenKind::Minus => matches!(
-                &self.peek_at(offset + 2).kind,
-                TokenKind::Minus | TokenKind::Arrow | TokenKind::LBracket
-            ),
+                _ => false,
+            },
             _ => false,
         }
+    }
+
+    /// Do the tokens inside the group closing at `close` match the node
+    /// pattern grammar `[variable] (':' label)* [properties]`? A group
+    /// like `(1+2)` cannot be a node, so a trailing `-`-shape after it is
+    /// arithmetic, not a pattern.
+    fn node_shaped_interior(&self, close: usize) -> bool {
+        let mut at = 1usize;
+        if matches!(self.peek_at(at).kind, TokenKind::Ident { .. }) {
+            at += 1;
+        }
+        while self.peek_at(at).kind == TokenKind::Colon
+            && matches!(self.peek_at(at + 1).kind, TokenKind::Ident { .. })
+        {
+            at += 2;
+        }
+        match &self.peek_at(at).kind {
+            TokenKind::Parameter(_) => at += 1,
+            TokenKind::LBrace => {
+                match self.matching_close(at, &TokenKind::LBrace, &TokenKind::RBrace) {
+                    Some(brace_close) => at = brace_close + 1,
+                    None => return false,
+                }
+            }
+            _ => {}
+        }
+        at == close
     }
 }
 
@@ -1364,6 +1429,50 @@ mod tests {
             m.where_clause,
             Some(Expr::PatternPredicate { .. })
         ));
+    }
+
+    /// Arithmetic whose surface mimics relationship connectors must stay
+    /// arithmetic (PR #30 review finding 5): the shape checks look at
+    /// both sides of the `-`.
+    #[test]
+    fn connector_lookalike_arithmetic_parses() {
+        for query in [
+            "RETURN (1) - -2",
+            "RETURN (a.x) - -1",
+            "RETURN (1) - -(2 + 3)",
+            "RETURN (1 + 2) - [0]",
+            "RETURN (xs) - [0]",
+            "RETURN (1) * -2",
+            "RETURN (1) + -2",
+        ] {
+            let q = parse_ok(query);
+            assert!(
+                !matches!(only_return_expr(&q), Expr::PatternPredicate { .. }),
+                "parsed as pattern: {query}"
+            );
+        }
+    }
+
+    /// The deliberate residual divergence: a node-shaped group followed
+    /// by a genuine connector shape always reads as a pattern, matching
+    /// Neo4j. `(a) - -(b)` is therefore the undirected pattern
+    /// `(a)--(b)`, not `a - (-b)`; and rel-detail-shaped brackets after a
+    /// node-shaped group commit to a pattern even when their contents
+    /// then fail to parse as one.
+    #[test]
+    fn node_shaped_group_with_connector_is_a_pattern() {
+        let q = parse_ok("MATCH (n) WHERE (a) - -(b) RETURN n");
+        let Some(Clause::Match(m)) = q.clauses.first() else {
+            panic!()
+        };
+        assert!(matches!(
+            m.where_clause,
+            Some(Expr::PatternPredicate { .. })
+        ));
+
+        // Committed pattern whose bracket contents are not a relationship
+        // detail: hard error, not silent reinterpretation as arithmetic.
+        assert!(parse("RETURN (xs) - [0] - 1").is_err());
     }
 
     #[test]
