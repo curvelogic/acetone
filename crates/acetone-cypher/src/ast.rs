@@ -262,6 +262,210 @@ impl Expr {
             | Expr::PatternPredicate { span, .. } => *span,
         }
     }
+
+    /// Borrow every direct child expression, including those buried in an
+    /// embedded pattern's property maps. Keep in step with
+    /// [`Expr::take_children`].
+    fn children(&self) -> Vec<&Expr> {
+        let mut out = Vec::new();
+        match self {
+            Expr::Literal { .. } | Expr::Parameter { .. } | Expr::Variable { .. } => {}
+            Expr::Property { base, .. } => out.push(&**base),
+            Expr::Unary { operand, .. } => out.push(&**operand),
+            Expr::Binary { lhs, rhs, .. } => {
+                out.push(&**lhs);
+                out.push(&**rhs);
+            }
+            Expr::IsNull { operand, .. } => out.push(&**operand),
+            Expr::FunctionCall { args, .. } => out.extend(args.iter()),
+            Expr::Case {
+                operand,
+                whens,
+                else_expr,
+                ..
+            } => {
+                out.extend(operand.iter().map(|b| &**b));
+                for (condition, value) in whens {
+                    out.push(condition);
+                    out.push(value);
+                }
+                out.extend(else_expr.iter().map(|b| &**b));
+            }
+            Expr::ListLiteral { items, .. } => out.extend(items.iter()),
+            Expr::ListComprehension {
+                list,
+                where_clause,
+                map,
+                ..
+            } => {
+                out.push(&**list);
+                out.extend(where_clause.iter().map(|b| &**b));
+                out.extend(map.iter().map(|b| &**b));
+            }
+            Expr::MapLiteral { entries, .. } => out.extend(entries.iter().map(|(_, v)| v)),
+            Expr::Index { base, index, .. } => {
+                out.push(&**base);
+                out.push(&**index);
+            }
+            Expr::Slice { base, from, to, .. } => {
+                out.push(&**base);
+                out.extend(from.iter().map(|b| &**b));
+                out.extend(to.iter().map(|b| &**b));
+            }
+            Expr::PatternPredicate { pattern, .. } => {
+                out.extend(pattern.start.properties.iter());
+                for (rel, node) in &pattern.steps {
+                    out.extend(rel.properties.iter());
+                    out.extend(node.properties.iter());
+                }
+            }
+        }
+        out
+    }
+
+    /// Move every direct child expression out of `self`, leaving cheap
+    /// placeholders behind. Used by the iterative `Drop`. Keep in step
+    /// with [`Expr::children`].
+    fn take_children(&mut self, out: &mut Vec<Expr>) {
+        fn take_box(boxed: &mut Expr, out: &mut Vec<Expr>) {
+            let placeholder = Expr::Literal {
+                value: Literal::Null,
+                span: Span::default(),
+            };
+            out.push(std::mem::replace(boxed, placeholder));
+        }
+        match self {
+            Expr::Literal { .. } | Expr::Parameter { .. } | Expr::Variable { .. } => {}
+            Expr::Property { base, .. } => take_box(base, out),
+            Expr::Unary { operand, .. } => take_box(operand, out),
+            Expr::Binary { lhs, rhs, .. } => {
+                take_box(lhs, out);
+                take_box(rhs, out);
+            }
+            Expr::IsNull { operand, .. } => take_box(operand, out),
+            Expr::FunctionCall { args, .. } => out.append(args),
+            Expr::Case {
+                operand,
+                whens,
+                else_expr,
+                ..
+            } => {
+                if let Some(boxed) = operand {
+                    take_box(boxed, out);
+                }
+                for (condition, value) in whens.drain(..) {
+                    out.push(condition);
+                    out.push(value);
+                }
+                if let Some(boxed) = else_expr {
+                    take_box(boxed, out);
+                }
+            }
+            Expr::ListLiteral { items, .. } => out.append(items),
+            Expr::ListComprehension {
+                list,
+                where_clause,
+                map,
+                ..
+            } => {
+                take_box(list, out);
+                if let Some(boxed) = where_clause {
+                    take_box(boxed, out);
+                }
+                if let Some(boxed) = map {
+                    take_box(boxed, out);
+                }
+            }
+            Expr::MapLiteral { entries, .. } => {
+                out.extend(entries.drain(..).map(|(_, v)| v));
+            }
+            Expr::Index { base, index, .. } => {
+                take_box(base, out);
+                take_box(index, out);
+            }
+            Expr::Slice { base, from, to, .. } => {
+                take_box(base, out);
+                if let Some(boxed) = from {
+                    take_box(boxed, out);
+                }
+                if let Some(boxed) = to {
+                    take_box(boxed, out);
+                }
+            }
+            Expr::PatternPredicate { pattern, .. } => {
+                out.extend(pattern.start.properties.take());
+                for (rel, node) in &mut pattern.steps {
+                    out.extend(rel.properties.take());
+                    out.extend(node.properties.take());
+                }
+            }
+        }
+    }
+}
+
+/// `Expr` trees can be arbitrarily deep in the operator-chain dimension
+/// during parsing (the post-parse depth check rejects them, but they must
+/// still be torn down). The derived recursive drop glue would overflow the
+/// stack on such transients, so drop iteratively via a worklist.
+impl Drop for Expr {
+    fn drop(&mut self) {
+        let mut stack = Vec::new();
+        self.take_children(&mut stack);
+        while let Some(mut expr) = stack.pop() {
+            expr.take_children(&mut stack);
+            // `expr` now has no children; its own drop at the end of this
+            // iteration finds nothing to recurse into.
+        }
+    }
+}
+
+impl Query {
+    /// Maximum expression nesting depth anywhere in the query, computed
+    /// iteratively (no recursion, whatever the shape). The parser rejects
+    /// queries deeper than its `MAX_AST_DEPTH`, so consumers (binder,
+    /// planner, Drop) may rely on the bound.
+    pub fn depth(&self) -> usize {
+        let mut roots: Vec<&Expr> = Vec::new();
+        for clause in &self.clauses {
+            match clause {
+                Clause::Match(m) => {
+                    for pattern in &m.patterns {
+                        roots.extend(pattern.start.properties.iter());
+                        for (rel, node) in &pattern.steps {
+                            roots.extend(rel.properties.iter());
+                            roots.extend(node.properties.iter());
+                        }
+                    }
+                    roots.extend(m.where_clause.iter());
+                }
+                Clause::Unwind(u) => roots.push(&u.expr),
+                Clause::With(p) | Clause::Return(p) => {
+                    for item in &p.items {
+                        if let ProjectionItem::Expr { expr, .. } = item {
+                            roots.push(expr);
+                        }
+                    }
+                    roots.extend(p.order_by.iter().map(|s| &s.expr));
+                    roots.extend(p.skip.iter());
+                    roots.extend(p.limit.iter());
+                    roots.extend(p.where_clause.iter());
+                }
+                Clause::Call(c) => {
+                    roots.extend(c.args.iter());
+                    roots.extend(c.where_clause.iter());
+                }
+            }
+        }
+        let mut max = 0usize;
+        let mut stack: Vec<(&Expr, usize)> = roots.into_iter().map(|e| (e, 1)).collect();
+        while let Some((expr, depth)) = stack.pop() {
+            max = max.max(depth);
+            for child in expr.children() {
+                stack.push((child, depth + 1));
+            }
+        }
+        max
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

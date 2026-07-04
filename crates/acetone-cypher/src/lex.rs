@@ -426,6 +426,9 @@ fn lex_number(input: &str, at: usize) -> Result<(TokenKind, usize), ParseError> 
 
     let text = &rest[..width];
     if is_float {
+        // f64::parse saturates overflowing literals to infinity (`1e999`
+        // lexes as `inf`); Neo4j/openCypher accept the same, so this is
+        // deliberate rather than an error.
         match text.parse::<f64>() {
             Ok(x) => Ok((TokenKind::Float(x), width)),
             Err(e) => Err(lex_error(
@@ -497,6 +500,11 @@ mod tests {
         );
         assert_eq!(kinds("0xff"), vec![TokenKind::Integer(255), TokenKind::Eof]);
         assert_eq!(kinds("0o17"), vec![TokenKind::Integer(15), TokenKind::Eof]);
+        // Overflowing floats saturate to infinity, matching Neo4j.
+        assert_eq!(
+            kinds("1e999"),
+            vec![TokenKind::Float(f64::INFINITY), TokenKind::Eof]
+        );
     }
 
     #[test]

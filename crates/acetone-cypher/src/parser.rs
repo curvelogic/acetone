@@ -20,13 +20,15 @@ use crate::span::Span;
 /// debug builds, where frames are at their fattest.
 pub const MAX_DEPTH: usize = 64;
 
-/// Maximum AST depth including loop-folded operator chains
-/// (`a + b + ...`, `NOT NOT ...`, `x.a.b...`), which nest the AST without
-/// recursing at parse time. Bounding this protects `Drop` and every later
-/// recursive walk (binder, planner) from adversarial chain lengths, while
-/// staying loose enough for machine-generated queries with a few hundred
-/// terms. Drop glue and walker frames are far smaller than parser frames,
-/// hence the looser bound.
+/// Maximum total AST depth [`parse`] will return, enforced by an
+/// iterative post-parse measurement ([`Query::depth`]). Loop-folded
+/// operator chains (`a + b + ...`, `NOT NOT ...`, `x.a.b...`) nest the
+/// AST without recursing at parse time, so a parse-time recursion guard
+/// alone cannot bound this. The bound is what makes recursive walks over
+/// the AST (binder, planner) safe; teardown of deeper transients inside
+/// `parse` itself is safe regardless because `Expr::drop` is iterative.
+/// Loose enough for machine-generated queries with a few hundred chained
+/// terms.
 pub const MAX_AST_DEPTH: usize = 256;
 
 /// Words that cannot be used as variable names, aliases or yield items
@@ -86,6 +88,10 @@ fn is_reserved(word: &str) -> bool {
 }
 
 /// Parse a single openCypher query into a spanned AST.
+///
+/// Guarantees, whatever the input: no panics, bounded parse-time
+/// recursion ([`MAX_DEPTH`]), and any returned `Query` has expression
+/// nesting no deeper than [`MAX_AST_DEPTH`].
 pub fn parse(input: &str) -> Result<Query, ParseError> {
     let tokens = lex(input)?;
     let mut parser = Parser {
@@ -95,6 +101,12 @@ pub fn parse(input: &str) -> Result<Query, ParseError> {
     };
     let query = parser.query()?;
     parser.expect_end()?;
+    if query.depth() > MAX_AST_DEPTH {
+        return Err(ParseError::RecursionLimit {
+            limit: MAX_AST_DEPTH,
+            span: query.span,
+        });
+    }
     Ok(query)
 }
 
@@ -629,10 +641,10 @@ impl Parser {
     /// through here, so nesting depth is bounded by [`MAX_DEPTH`].
     ///
     /// Operator chains folded by loops (`a OR b OR ...`, `NOT NOT ...`,
-    /// `x.a.b.c...`) also charge the same budget via [`Self::charge`]:
-    /// they nest the AST even though parsing them does not recurse, and an
-    /// unbounded AST is a stack overflow deferred to `Drop` or to any
-    /// later recursive walk (binder, planner).
+    /// `x.a.b.c...`) nest the AST without recursing here; the total AST
+    /// depth they can build is bounded separately by the post-parse
+    /// [`ast_depth`] check in [`parse`], and teardown of any transient
+    /// deep AST is safe because [`Expr`]'s `Drop` is iterative.
     fn expression(&mut self) -> Result<Expr, ParseError> {
         if self.depth >= MAX_DEPTH {
             return Err(ParseError::RecursionLimit {
@@ -646,24 +658,9 @@ impl Parser {
         result
     }
 
-    /// Check that a chain of `links` additional AST levels on top of the
-    /// current nesting stays within [`MAX_AST_DEPTH`].
-    fn charge(&self, links: usize) -> Result<(), ParseError> {
-        if self.depth.saturating_add(links) > MAX_AST_DEPTH {
-            return Err(ParseError::RecursionLimit {
-                limit: MAX_AST_DEPTH,
-                span: self.peek().span,
-            });
-        }
-        Ok(())
-    }
-
     fn expr_or(&mut self) -> Result<Expr, ParseError> {
         let mut lhs = self.expr_xor()?;
-        let mut links = 0usize;
         while self.eat_kw("OR") {
-            links += 1;
-            self.charge(links)?;
             let rhs = self.expr_xor()?;
             let span = lhs.span().to(rhs.span());
             lhs = Expr::Binary {
@@ -678,10 +675,7 @@ impl Parser {
 
     fn expr_xor(&mut self) -> Result<Expr, ParseError> {
         let mut lhs = self.expr_and()?;
-        let mut links = 0usize;
         while self.eat_kw("XOR") {
-            links += 1;
-            self.charge(links)?;
             let rhs = self.expr_and()?;
             let span = lhs.span().to(rhs.span());
             lhs = Expr::Binary {
@@ -696,10 +690,7 @@ impl Parser {
 
     fn expr_and(&mut self) -> Result<Expr, ParseError> {
         let mut lhs = self.expr_not()?;
-        let mut links = 0usize;
         while self.eat_kw("AND") {
-            links += 1;
-            self.charge(links)?;
             let rhs = self.expr_not()?;
             let span = lhs.span().to(rhs.span());
             lhs = Expr::Binary {
@@ -718,7 +709,6 @@ impl Parser {
         let mut nots: Vec<Span> = Vec::new();
         while self.at_kw("NOT") {
             nots.push(self.bump().span);
-            self.charge(nots.len())?;
         }
         let mut expr = self.expr_comparison()?;
         for span in nots.into_iter().rev() {
@@ -734,10 +724,7 @@ impl Parser {
 
     fn expr_comparison(&mut self) -> Result<Expr, ParseError> {
         let mut lhs = self.expr_additive()?;
-        let mut links = 0usize;
         loop {
-            links += 1;
-            self.charge(links)?;
             let op = if self.eat(&TokenKind::Eq) {
                 BinaryOp::Eq
             } else if self.eat(&TokenKind::Ne) {
@@ -783,10 +770,7 @@ impl Parser {
 
     fn expr_additive(&mut self) -> Result<Expr, ParseError> {
         let mut lhs = self.expr_multiplicative()?;
-        let mut links = 0usize;
         loop {
-            links += 1;
-            self.charge(links)?;
             let op = if self.eat(&TokenKind::Plus) {
                 BinaryOp::Add
             } else if self.eat(&TokenKind::Minus) {
@@ -808,10 +792,7 @@ impl Parser {
 
     fn expr_multiplicative(&mut self) -> Result<Expr, ParseError> {
         let mut lhs = self.expr_power()?;
-        let mut links = 0usize;
         loop {
-            links += 1;
-            self.charge(links)?;
             let op = if self.eat(&TokenKind::Star) {
                 BinaryOp::Mul
             } else if self.eat(&TokenKind::Slash) {
@@ -838,7 +819,6 @@ impl Parser {
     fn expr_power(&mut self) -> Result<Expr, ParseError> {
         let mut operands = vec![self.expr_unary()?];
         while self.eat(&TokenKind::Caret) {
-            self.charge(operands.len())?;
             operands.push(self.expr_unary()?);
         }
         let mut expr = operands.pop().expect("at least one operand");
@@ -866,7 +846,6 @@ impl Parser {
             } else {
                 break;
             }
-            self.charge(prefixes.len())?;
         }
         let mut expr = self.expr_postfix()?;
         for (op, span) in prefixes.into_iter().rev() {
@@ -882,10 +861,7 @@ impl Parser {
 
     fn expr_postfix(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.expr_atom()?;
-        let mut links = 0usize;
         loop {
-            links += 1;
-            self.charge(links)?;
             if self.at(&TokenKind::Dot) {
                 self.bump();
                 let (key, end) = self.any_name("a property name after '.'")?;
@@ -1192,25 +1168,58 @@ impl Parser {
     }
 
     /// `(` at atom position opens either a parenthesised expression or a
-    /// pattern predicate (`(h)-[:RUNS]->(:Software)`). Bounded
-    /// backtracking: try a path pattern first and require at least one
-    /// relationship step, otherwise rewind and parse an expression.
+    /// pattern predicate (`(h)-[:RUNS]->(:Software)`). Decided by a
+    /// single linear token scan — NOT by speculative parsing, which is
+    /// exponential on nested parentheses (each level would parse its
+    /// interior twice): skip to the matching `)` and check whether a
+    /// relationship connector follows. `<-`, `--`, `-->` and `-[` open
+    /// relationships; a lone `-` before anything else is subtraction.
     fn paren_expr_or_pattern_predicate(&mut self) -> Result<Expr, ParseError> {
-        let checkpoint = self.pos;
-        if let Ok(pattern) = self.path_pattern()
-            && !pattern.steps.is_empty()
-        {
+        if self.paren_group_starts_pattern() {
+            let pattern = self.path_pattern()?;
+            if pattern.steps.is_empty() {
+                return Err(self.unexpected("a relationship pattern"));
+            }
             let span = pattern.span;
             return Ok(Expr::PatternPredicate {
                 pattern: Box::new(pattern),
                 span,
             });
         }
-        self.pos = checkpoint;
         self.expect(&TokenKind::LParen, "'('")?;
         let inner = self.expression()?;
         self.expect(&TokenKind::RParen, "')' to close the expression")?;
         Ok(inner)
+    }
+
+    /// With the cursor on `(`: does the token after the matching `)` open
+    /// a relationship pattern? Linear in the distance to the close paren.
+    fn paren_group_starts_pattern(&self) -> bool {
+        debug_assert!(self.at(&TokenKind::LParen));
+        let mut offset = 0usize;
+        let mut parens = 0usize;
+        loop {
+            match &self.peek_at(offset).kind {
+                TokenKind::LParen => parens += 1,
+                TokenKind::RParen => {
+                    parens -= 1;
+                    if parens == 0 {
+                        break;
+                    }
+                }
+                TokenKind::Eof => return false,
+                _ => {}
+            }
+            offset += 1;
+        }
+        match &self.peek_at(offset + 1).kind {
+            TokenKind::LArrow => true,
+            TokenKind::Minus => matches!(
+                &self.peek_at(offset + 2).kind,
+                TokenKind::Minus | TokenKind::Arrow | TokenKind::LBracket
+            ),
+            _ => false,
+        }
     }
 }
 
@@ -1427,9 +1436,13 @@ mod tests {
         ));
     }
 
+    /// Recursion-guarded nesting: deep parens/lists error cleanly on a
+    /// normal test stack. (MAX_DEPTH levels of debug-build parser frames
+    /// legitimately need on the order of 1 MiB, so callers are expected to
+    /// provide an ordinary >= 2 MiB stack; the guard's job is bounding
+    /// depth *beyond* that.)
     #[test]
     fn depth_limit_is_an_error_not_a_stack_overflow() {
-        // Parse-time recursion: nested parens and lists.
         let deep = format!("RETURN {}1{}", "(".repeat(10_000), ")".repeat(10_000));
         assert!(matches!(
             parse(&deep),
@@ -1441,12 +1454,17 @@ mod tests {
             parse(&deep_lists),
             Err(ParseError::RecursionLimit { .. })
         ));
+    }
 
-        // Loop-folded chains build AST depth without parse recursion; an
-        // unbounded AST is a stack overflow deferred to Drop or to any
-        // recursive walk (binder, planner), so chains charge the same
-        // budget.
-        for pathological in [
+    /// Loop-folded operator chains build deep ASTs with *constant*
+    /// parse-time recursion; the post-parse depth check must reject them
+    /// and — the point of the 128 KiB stack — tearing the transient deep
+    /// AST down must not recurse either (iterative `Expr::drop`). Before
+    /// that Drop was iterative, several of these aborted the process from
+    /// inside a successful-looking parse.
+    #[test]
+    fn deep_operator_chains_are_rejected_and_dropped_on_a_tiny_stack() {
+        let inputs = vec![
             format!("RETURN {} true", "NOT ".repeat(10_000)),
             format!("RETURN {}1", "-".repeat(10_000)),
             format!("RETURN 1{}", " + 1".repeat(10_000)),
@@ -1454,23 +1472,71 @@ mod tests {
             format!("RETURN true{}", " OR true".repeat(10_000)),
             format!("RETURN x{}", ".p".repeat(10_000)),
             format!("RETURN x{}", "[0]".repeat(10_000)),
-        ] {
-            assert!(
-                matches!(parse(&pathological), Err(ParseError::RecursionLimit { .. })),
-                "expected RecursionLimit for: {}...",
-                &pathological[..40]
-            );
-        }
+            // Mixed precedence levels compounding on one spine (the shape
+            // that defeated a per-level chain budget in review).
+            format!("RETURN 1{}", " + 1 * -2 ^ x.p".repeat(5_000)),
+        ];
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                for pathological in &inputs {
+                    assert!(
+                        matches!(parse(pathological), Err(ParseError::RecursionLimit { .. })),
+                        "expected RecursionLimit for: {}...",
+                        &pathological[..40]
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Regression for the exponential-backtracking DoS found in review: a
+    /// ~176-byte query of nested parenthesised map values took 10 s under
+    /// speculative pattern parsing (2^n). With the token-scan decision it
+    /// is linear; at depth 500 an exponential parser would never return,
+    /// so this test completing at all is the assertion.
+    #[test]
+    fn nested_paren_map_values_parse_in_linear_time() {
+        let depth = 500;
+        let query = format!("RETURN {}1{}", "({a: ".repeat(depth), "})".repeat(depth));
+        // Two expression levels per textual level: exceeds MAX_DEPTH and
+        // must fail fast with the recursion guard, not hang.
+        assert!(matches!(
+            parse(&query),
+            Err(ParseError::RecursionLimit { .. })
+        ));
+
+        // A shallow instance of the same shape parses fine.
+        let depth = 20;
+        let query = format!("RETURN {}1{}", "({a: ".repeat(depth), "})".repeat(depth));
+        parse_ok(&query);
     }
 
     #[test]
     fn depth_limit_leaves_reasonable_queries_alone() {
         let nested = format!("RETURN {}1{}", "(".repeat(60), ")".repeat(60));
         parse_ok(&nested);
-        let chain = format!("RETURN 1{}", " + 1".repeat(100));
+        let chain = format!("RETURN 1{}", " + 1".repeat(200));
         parse_ok(&chain);
         let nots = format!("RETURN {} true", "NOT ".repeat(50));
         parse_ok(&nots);
+    }
+
+    /// The returned AST's depth is bounded by MAX_AST_DEPTH exactly: a
+    /// chain just inside the bound parses, one just past it is rejected.
+    #[test]
+    fn ast_depth_bound_is_exact() {
+        let ok = format!("RETURN 1{}", " + 1".repeat(MAX_AST_DEPTH - 1));
+        let query = parse_ok(&ok);
+        assert!(query.depth() <= MAX_AST_DEPTH);
+
+        let too_deep = format!("RETURN 1{}", " + 1".repeat(MAX_AST_DEPTH));
+        assert!(matches!(
+            parse(&too_deep),
+            Err(ParseError::RecursionLimit { limit, .. }) if limit == MAX_AST_DEPTH
+        ));
     }
 
     #[test]
