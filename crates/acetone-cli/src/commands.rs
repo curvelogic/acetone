@@ -12,7 +12,7 @@ use acetone_store::ObjectFormat;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::Command;
-use crate::value::{format_label, format_value, parse_kv, parse_value};
+use crate::value::{format_label, format_value, parse_kv, parse_value, sanitise_line};
 
 /// Dispatch one parsed command.
 pub fn run(repo_path: &Path, command: Command) -> Result<()> {
@@ -46,7 +46,9 @@ fn fsck(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
     let report = acetone_graph::fsck::check(&repo)?;
     for finding in &report.findings {
-        println!("{finding}");
+        // Findings embed repository-controlled text (index names, ref
+        // names, decode-error detail): sanitise at the terminal boundary.
+        println!("{}", sanitise_line(&finding.to_string()));
     }
     if report.is_clean() {
         println!("fsck: clean");
@@ -143,10 +145,13 @@ fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
 fn log(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
     for entry in repo.log(None)? {
+        // Commit messages and trailers are raw bytes from potentially
+        // hostile clones (lossily decoded, not constrained by git):
+        // sanitise before they reach the terminal.
         let subject = entry.message.lines().next().unwrap_or("");
-        println!("{} {}", entry.id.to_hex(), subject);
+        println!("{} {}", entry.id.to_hex(), sanitise_line(subject));
         for (key, value) in &entry.trailers {
-            println!("    {key}: {value}");
+            println!("    {}: {}", sanitise_line(key), sanitise_line(value));
         }
     }
     Ok(())
@@ -225,8 +230,14 @@ fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
             // correct if a richer key grammar ever changes how a raw
             // argument maps to a value.
             println!("node: {}", format_node_key(&node_key));
-            let labels = record.secondary_labels().join(", ");
-            println!("secondary_labels: [{labels}]");
+            // Secondary labels are repository-controlled and content-
+            // unvalidated: escape each like every other label.
+            let labels: Vec<String> = record
+                .secondary_labels()
+                .iter()
+                .map(|l| format_label(l))
+                .collect();
+            println!("secondary_labels: [{}]", labels.join(", "));
             println!("properties:");
             for (name, value) in record.properties() {
                 println!("  {}: {}", format_label(name), format_value(value));
