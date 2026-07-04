@@ -1,7 +1,6 @@
 # ADR-0009: Subagent model tiers
 
-Status: accepted (Greg, 2026-07-04)
-Date: 2026-07-04
+*Status: accepted (Greg) · Date: 2026-07-04 · Bead: acetone-xat · PR: #16*
 
 ## Context
 
