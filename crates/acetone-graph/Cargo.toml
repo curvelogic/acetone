@@ -1,0 +1,11 @@
+[package]
+name = "acetone-graph"
+description = "Graph mutations, constraints, validation and merge orchestration"
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+acetone-model.workspace = true
