@@ -1,10 +1,11 @@
 //! The acetone data model (spec §2–§3.4).
 //!
-//! Node keys `(primary label, key tuple)`, edge keys, property values and
-//! their encodings: memcomparable key encoding (byte order equals logical
-//! order) and canonical deterministic CBOR for values. Also the schema map
-//! layout and the manifest — the record of map roots that constitutes a
-//! graph version. Encoding changes bump `format_version`.
+//! Currently: the property [`Value`] model and the two normative
+//! encodings — memcomparable keys (byte order equals logical order) and
+//! canonical deterministic CBOR values. Records, schema layout and the
+//! manifest (the record of map roots that constitutes a graph version)
+//! join this crate in later beads. Encoding changes bump
+//! `format_version`.
 //!
 //! Two encoding modules (spec §3.4, Load-Bearing Invariant 2):
 //!

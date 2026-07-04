@@ -273,4 +273,110 @@ proptest! {
             prop_assert_eq!(keys::encode_key(&t).unwrap(), bytes[..n].to_vec());
         }
     }
+
+    /// Adversarial arm the range-clamped strategies above cannot reach:
+    /// syntactically well-formed temporal encodings whose *fields* span the
+    /// full unclamped bit range. Decoders must never panic (identically in
+    /// debug and release) and must accept exactly the in-range values.
+    /// Regression: an `i16::MIN` offset overflowed a naive `.abs()` check —
+    /// panicking in debug, wrongly accepted in release.
+    #[test]
+    fn hostile_temporal_fields_never_panic(
+        epoch_bits in any::<u64>(),
+        offset_bits in prop_oneof![
+            4 => any::<u16>(),
+            // Edge patterns, always exercised: 0x0000 un-flips to
+            // i16::MIN (the historical panic), 0x8000 to zero, 0xffff
+            // to i16::MAX.
+            1 => Just(0x0000u16),
+            1 => Just(0x8000u16),
+            1 => Just(0xffffu16),
+        ],
+        nanos in prop_oneof![
+            4 => any::<u64>(),
+            1 => Just(NANOS_PER_DAY - 1),
+            1 => Just(NANOS_PER_DAY),
+            1 => Just(u64::MAX),
+        ],
+    ) {
+        let offset = (offset_bits ^ 0x8000) as i16; // full i16 range incl. i16::MIN
+        let offset_ok = offset.unsigned_abs() <= MAX_OFFSET_MINUTES.unsigned_abs();
+        let nanos_ok = nanos < NANOS_PER_DAY;
+
+        // Key DateTime: 0x0a + sign-flipped epoch + sign-flipped offset.
+        let mut kb = vec![0x0a];
+        kb.extend_from_slice(&epoch_bits.to_be_bytes());
+        kb.extend_from_slice(&offset_bits.to_be_bytes());
+        match keys::decode_key(&kb) {
+            Ok(t) => {
+                prop_assert!(offset_ok, "accepted out-of-range key offset {offset}");
+                prop_assert_eq!(keys::encode_key(&t).unwrap(), kb);
+            }
+            Err(_) => prop_assert!(!offset_ok, "rejected in-range key offset {offset}"),
+        }
+
+        // Key Time: 0x09 + unsigned nanos.
+        let mut kb = vec![0x09];
+        kb.extend_from_slice(&nanos.to_be_bytes());
+        match keys::decode_key(&kb) {
+            Ok(_) => prop_assert!(nanos_ok),
+            Err(_) => prop_assert!(!nanos_ok),
+        }
+
+        // Value DateTime: canonical CBOR built by hand so out-of-range
+        // offsets are reachable.
+        let mut vb = cbor_head(6, values::TAG_DATETIME);
+        vb.extend(cbor_head(4, 2));
+        vb.extend(cbor_int(epoch_bits as i64));
+        vb.extend(cbor_int(i64::from(offset)));
+        match values::decode_value(&vb) {
+            Ok(v) => {
+                prop_assert!(offset_ok, "accepted out-of-range value offset {offset}");
+                prop_assert_eq!(values::encode_value(&v).unwrap(), vb);
+            }
+            Err(_) => prop_assert!(!offset_ok, "rejected in-range value offset {offset}"),
+        }
+
+        // Value Time: unsigned nanos over the full u64 range.
+        let mut vb = cbor_head(6, values::TAG_TIME);
+        vb.extend(cbor_head(0, nanos));
+        match values::decode_value(&vb) {
+            Ok(_) => prop_assert!(nanos_ok),
+            Err(_) => prop_assert!(!nanos_ok),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test-local canonical CBOR head writer, for building hostile inputs the
+// public encoder refuses to produce.
+// ---------------------------------------------------------------------------
+
+fn cbor_head(major: u8, value: u64) -> Vec<u8> {
+    let m = major << 5;
+    if value < 24 {
+        vec![m | value as u8]
+    } else if value <= 0xff {
+        vec![m | 24, value as u8]
+    } else if value <= 0xffff {
+        let mut v = vec![m | 25];
+        v.extend_from_slice(&(value as u16).to_be_bytes());
+        v
+    } else if value <= 0xffff_ffff {
+        let mut v = vec![m | 26];
+        v.extend_from_slice(&(value as u32).to_be_bytes());
+        v
+    } else {
+        let mut v = vec![m | 27];
+        v.extend_from_slice(&value.to_be_bytes());
+        v
+    }
+}
+
+fn cbor_int(n: i64) -> Vec<u8> {
+    if n >= 0 {
+        cbor_head(0, n as u64)
+    } else {
+        cbor_head(1, !(n as u64))
+    }
 }

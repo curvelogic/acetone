@@ -30,13 +30,14 @@
 //! | `String`     | major 3, definite length, UTF-8                        |
 //! | `Bytes`      | major 2, definite length                               |
 //! | `Date`       | tag 100 (RFC 8943), integer days since 1970-01-01      |
-//! | `Time`       | tag 4100, unsigned integer nanoseconds since midnight  |
-//! | `DateTime`   | tag 4101, array `[epoch_nanos, offset_minutes]`        |
-//! | `Duration`   | tag 4102, array `[months, days, nanos]`                |
+//! | `Time`       | tag 74100, unsigned integer nanoseconds since midnight |
+//! | `DateTime`   | tag 74101, array `[epoch_nanos, offset_minutes]`       |
+//! | `Duration`   | tag 74102, array `[months, days, nanos]`               |
 //! | `List`       | major 4, definite length                               |
 //!
-//! Tags 4100–4102 are acetone-assigned from the CBOR first-come
-//! first-served tag space; they are format-internal, not registered.
+//! Tags 74100–74102 are acetone-assigned from the CBOR first-come
+//! first-served tag range (values of 32768 and up, RFC 8949 §9.2); they
+//! are format-internal and not IANA-registered.
 //!
 //! # Float canonicalisation (format decisions)
 //!
@@ -57,11 +58,11 @@ use thiserror::Error;
 /// CBOR tag for [`Date`]: days since the epoch date (RFC 8943).
 pub const TAG_DATE: u64 = 100;
 /// CBOR tag for [`Time`]: unsigned nanoseconds since midnight (acetone).
-pub const TAG_TIME: u64 = 4100;
+pub const TAG_TIME: u64 = 74100;
 /// CBOR tag for [`DateTime`]: `[epoch_nanos, offset_minutes]` (acetone).
-pub const TAG_DATETIME: u64 = 4101;
+pub const TAG_DATETIME: u64 = 74101;
 /// CBOR tag for [`Duration`]: `[months, days, nanos]` (acetone).
-pub const TAG_DURATION: u64 = 4102;
+pub const TAG_DURATION: u64 = 74102;
 
 /// Maximum nesting depth accepted by encoder and decoder.
 pub const MAX_DEPTH: usize = 128;
@@ -255,7 +256,7 @@ fn write_value(out: &mut Vec<u8>, value: &Value, depth: usize) -> Result<(), Val
             epoch_nanos,
             offset_minutes,
         }) => {
-            if offset_minutes.abs() > MAX_OFFSET_MINUTES {
+            if offset_minutes.unsigned_abs() > MAX_OFFSET_MINUTES.unsigned_abs() {
                 return Err(ValueEncodeError::OffsetOutOfRange(*offset_minutes));
             }
             write_head(out, MAJOR_TAG, TAG_DATETIME);
@@ -459,9 +460,16 @@ fn read_value(reader: &mut Reader, depth: usize) -> Result<Value, ValueDecodeErr
 fn read_tagged(reader: &mut Reader, tag: u64) -> Result<Value, ValueDecodeError> {
     match tag {
         TAG_DATE => {
-            let days = read_i64(reader).map_err(|_| ValueDecodeError::InvalidTagContent {
-                tag: TAG_DATE,
-                reason: "expected integer days",
+            // Reclassify only the wrong-shape error; truncation and
+            // canonicality errors keep their precise kind.
+            let days = read_i64(reader).map_err(|e| match e {
+                ValueDecodeError::Unsupported("expected integer") => {
+                    ValueDecodeError::InvalidTagContent {
+                        tag: TAG_DATE,
+                        reason: "expected integer days",
+                    }
+                }
+                other => other,
             })?;
             Ok(Value::Date(Date { days }))
         }
@@ -485,7 +493,7 @@ fn read_tagged(reader: &mut Reader, tag: u64) -> Result<Value, ValueDecodeError>
             let offset = read_i64(reader)?;
             let offset_minutes =
                 i16::try_from(offset).map_err(|_| ValueDecodeError::OffsetOutOfRange)?;
-            if offset_minutes.abs() > MAX_OFFSET_MINUTES {
+            if offset_minutes.unsigned_abs() > MAX_OFFSET_MINUTES.unsigned_abs() {
                 return Err(ValueDecodeError::OffsetOutOfRange);
             }
             Ok(Value::DateTime(DateTime {
@@ -509,12 +517,17 @@ fn read_tagged(reader: &mut Reader, tag: u64) -> Result<Value, ValueDecodeError>
 }
 
 fn expect_array(reader: &mut Reader, count: u64, tag: u64) -> Result<(), ValueDecodeError> {
-    let n = reader
-        .read_head(MAJOR_ARRAY)
-        .map_err(|_| ValueDecodeError::InvalidTagContent {
-            tag,
-            reason: "expected array",
-        })?;
+    // Reclassify only the wrong-major error; truncation and canonicality
+    // errors keep their precise kind.
+    let n = reader.read_head(MAJOR_ARRAY).map_err(|e| match e {
+        ValueDecodeError::Unsupported("unexpected major type") => {
+            ValueDecodeError::InvalidTagContent {
+                tag,
+                reason: "expected array",
+            }
+        }
+        other => other,
+    })?;
     if n != count {
         return Err(ValueDecodeError::InvalidTagContent {
             tag,
@@ -831,6 +844,32 @@ mod tests {
         );
     }
 
+    /// Regression: `i16::MIN` has no i16 absolute value, so a naive
+    /// `.abs()` range check panics in debug builds and wraps (accepting
+    /// the value) in release builds. Both directions must reject it
+    /// identically in every build profile.
+    #[test]
+    fn offset_i16_min_is_rejected_without_panicking() {
+        // Encode direction.
+        assert_eq!(
+            encode_value(&Value::DateTime(DateTime {
+                epoch_nanos: 0,
+                offset_minutes: i16::MIN
+            })),
+            Err(ValueEncodeError::OffsetOutOfRange(i16::MIN))
+        );
+        // Decode direction: [0, -32768] under the datetime tag.
+        let mut bytes = Vec::new();
+        write_head(&mut bytes, MAJOR_TAG, TAG_DATETIME);
+        write_head(&mut bytes, MAJOR_ARRAY, 2);
+        write_int(&mut bytes, 0);
+        write_int(&mut bytes, -32768);
+        assert_eq!(
+            decode_value(&bytes),
+            Err(ValueDecodeError::OffsetOutOfRange)
+        );
+    }
+
     #[test]
     fn encoder_rejects_excessive_depth() {
         let mut v = Value::Int(0);
@@ -1021,29 +1060,63 @@ mod tests {
         ));
         // Time with negative nanos.
         assert!(matches!(
-            de("d9100420"),
+            de("da0001217420"),
             Err(ValueDecodeError::InvalidTagContent { .. })
         ));
         // Time out of range (86400e9 exactly).
         assert_eq!(
-            de("d910041b00004e94914f0000"),
+            de("da000121741b00004e94914f0000"),
             Err(ValueDecodeError::TimeOutOfRange)
         );
         // DateTime with wrong arity.
         assert!(matches!(
-            de("d910058100"),
+            de("da000121758100"),
             Err(ValueDecodeError::InvalidTagContent { .. })
         ));
         // DateTime with out-of-range offset (2000 minutes).
         assert_eq!(
-            de("d910058200 1907d0".replace(' ', "").as_str()),
+            de("da000121758200 1907d0".replace(' ', "").as_str()),
             Err(ValueDecodeError::OffsetOutOfRange)
         );
         // Duration with wrong arity.
         assert!(matches!(
-            de("d91006820001"),
+            de("da00012176820001"),
             Err(ValueDecodeError::InvalidTagContent { .. })
         ));
+    }
+
+    /// The pre-format-fix tags 4100–4102 sat in RFC 8949 §9.2's
+    /// Specification Required range; the format now uses 74100–74102
+    /// (first-come first-served range) and the old tags are unknown.
+    #[test]
+    fn decoder_rejects_retired_tags() {
+        assert_eq!(de("d9100400"), Err(ValueDecodeError::UnknownTag(4100)));
+        assert_eq!(de("d91005820000"), Err(ValueDecodeError::UnknownTag(4101)));
+        assert_eq!(
+            de("d9100683010203"),
+            Err(ValueDecodeError::UnknownTag(4102))
+        );
+    }
+
+    /// Tag-content errors are reclassified as `InvalidTagContent` only for
+    /// wrong-shape content; truncation, canonicality and indefinite-length
+    /// errors keep their precise kind.
+    #[test]
+    fn tag_content_errors_preserve_inner_kind() {
+        // Truncated date content.
+        assert_eq!(de("d864"), Err(ValueDecodeError::UnexpectedEnd));
+        // Overlong head inside date content.
+        assert_eq!(
+            de("d8641817"),
+            Err(ValueDecodeError::NonCanonical("overlong head"))
+        );
+        // Truncated datetime content (no array head at all).
+        assert_eq!(de("da00012175"), Err(ValueDecodeError::UnexpectedEnd));
+        // Indefinite-length array under the datetime tag.
+        assert_eq!(
+            de("da000121759f0000ff"),
+            Err(ValueDecodeError::Unsupported("indefinite length"))
+        );
     }
 
     #[test]

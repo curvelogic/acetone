@@ -95,23 +95,23 @@ fn golden_values_temporal() {
         Value::Time(Time {
             nanos: 43_200_000_000_000,
         }),
-        "d910041b0000274a48a78000",
+        "da000121741b0000274a48a78000",
     );
-    assert_value_golden(Value::Time(Time { nanos: 0 }), "d9100400");
+    assert_value_golden(Value::Time(Time { nanos: 0 }), "da0001217400");
     // 2023-11-14T22:13:20Z as 1_700_000_000_000_000_000 ns, offset +01:00.
     assert_value_golden(
         Value::DateTime(DateTime {
             epoch_nanos: 1_700_000_000_000_000_000,
             offset_minutes: 60,
         }),
-        "d91005821b17979cfe362a0000183c",
+        "da00012175821b17979cfe362a0000183c",
     );
     assert_value_golden(
         Value::DateTime(DateTime {
             epoch_nanos: 0,
             offset_minutes: 0,
         }),
-        "d91005820000",
+        "da00012175820000",
     );
     assert_value_golden(
         Value::Duration(Duration {
@@ -119,7 +119,7 @@ fn golden_values_temporal() {
             days: 2,
             nanos: 3,
         }),
-        "d9100683010203",
+        "da0001217683010203",
     );
     assert_value_golden(
         Value::Duration(Duration {
@@ -127,7 +127,7 @@ fn golden_values_temporal() {
             days: -2,
             nanos: -3,
         }),
-        "d9100683202122",
+        "da0001217683202122",
     );
 }
 

@@ -65,7 +65,7 @@
 //!   not a temporal-length order (none exists — a month is not a fixed
 //!   span). It is deterministic, which is all key order requires.
 //!
-//! # Format decisions (flagged for ADR)
+//! # Format decisions (recorded in ADR-0004)
 //!
 //! - **NaN is rejected in key positions** ([`KeyEncodeError::NanNotPermitted`]).
 //!   NaN breaks the equality/identity semantics merge determinism relies
@@ -75,6 +75,29 @@
 //! - **Negative zero is normalised to positive zero** at key-encode time,
 //!   so `-0.0` and `0.0` — equal in openCypher — cannot become two
 //!   distinct keys. Values preserve the sign of zero.
+//!
+//! # Cypher-layer consequences
+//!
+//! This key order deliberately differs from openCypher's `ORDER BY` total
+//! order (where integers and floats interleave numerically, NaN sorts
+//! after all other numbers, and null sorts last). Three consequences the
+//! query layer (Phase 2) inherits:
+//!
+//! 1. **Numeric range predicates cannot be a single key range.** A
+//!    predicate like `n.x < 10` over a numerically-typed property must
+//!    scan (and union) both the `Int` tag range and the `Float` tag
+//!    range of an index, because the two types occupy disjoint tag
+//!    regions rather than interleaving.
+//! 2. **`ORDER BY` cannot be satisfied by a raw index byte scan** over
+//!    mixed-type values: the executor must merge Int and Float runs (and
+//!    place nulls and NaNs per openCypher rules) rather than emitting
+//!    index order directly. Single-type columns — the common schema-keyed
+//!    case — do sort correctly straight off the index.
+//! 3. **A NaN float property value cannot produce an index key** (NaN is
+//!    rejected at encode time). The index layer must either skip such
+//!    entries (making the index partial with respect to NaN) or reject
+//!    the write; whichever it picks must be recorded and reflected in
+//!    planner decisions about index-only answers.
 //!
 //! The decoder is strict and total: it never panics on untrusted input,
 //! rejects non-canonical padding/markers and encodings the encoder would
@@ -189,8 +212,9 @@ pub fn decode_key(bytes: &[u8]) -> Result<Vec<Value>, KeyDecodeError> {
 ///
 /// Elementwise lexicographic; elements of different types order by type
 /// tag (see module docs). For floats, `-0.0` equals `0.0` (both encode
-/// identically) and NaN — though not encodable — sorts after `+∞` via
-/// IEEE total order, keeping this function total.
+/// identically); NaN — though not encodable — is ordered by
+/// `f64::total_cmp` (negative NaN before `-∞`, positive NaN after `+∞`),
+/// keeping this function total.
 pub fn key_cmp(a: &[Value], b: &[Value]) -> Ordering {
     for (x, y) in a.iter().zip(b.iter()) {
         let ord = value_cmp(x, y);
@@ -299,7 +323,7 @@ fn write_element(out: &mut Vec<u8>, value: &Value, depth: usize) -> Result<(), K
             epoch_nanos,
             offset_minutes,
         }) => {
-            if offset_minutes.abs() > MAX_OFFSET_MINUTES {
+            if offset_minutes.unsigned_abs() > MAX_OFFSET_MINUTES.unsigned_abs() {
                 return Err(KeyEncodeError::OffsetOutOfRange(*offset_minutes));
             }
             out.push(TAG_DATETIME);
@@ -433,7 +457,7 @@ fn read_element(reader: &mut Reader, depth: usize) -> Result<Value, KeyDecodeErr
         TAG_DATETIME => {
             let epoch_nanos = unflip_sign_i64(reader.read_array()?);
             let offset_minutes = (u16::from_be_bytes(reader.read_array()?) ^ 0x8000) as i16;
-            if offset_minutes.abs() > MAX_OFFSET_MINUTES {
+            if offset_minutes.unsigned_abs() > MAX_OFFSET_MINUTES.unsigned_abs() {
                 return Err(KeyDecodeError::NonCanonical("UTC offset out of range"));
             }
             Ok(Value::DateTime(DateTime {
@@ -685,6 +709,30 @@ mod tests {
                 offset_minutes: 1081
             })]),
             Err(KeyEncodeError::OffsetOutOfRange(1081))
+        );
+    }
+
+    /// Regression: `i16::MIN` has no i16 absolute value, so a naive
+    /// `.abs()` range check panics in debug builds and wraps (accepting
+    /// the value) in release builds. Both directions must reject it
+    /// identically in every build profile.
+    #[test]
+    fn offset_i16_min_is_rejected_without_panicking() {
+        // Encode direction.
+        assert_eq!(
+            encode_key(&[Value::DateTime(DateTime {
+                epoch_nanos: 0,
+                offset_minutes: i16::MIN
+            })]),
+            Err(KeyEncodeError::OffsetOutOfRange(i16::MIN))
+        );
+        // Decode direction: offset field 0x0000 un-flips to -32768.
+        let mut bytes = vec![TAG_DATETIME];
+        bytes.extend_from_slice(&SIGN_BIT.to_be_bytes());
+        bytes.extend_from_slice(&[0x00, 0x00]);
+        assert_eq!(
+            decode_key(&bytes),
+            Err(KeyDecodeError::NonCanonical("UTC offset out of range"))
         );
     }
 
