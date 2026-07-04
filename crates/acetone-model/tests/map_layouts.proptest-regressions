@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+#
+# cc 5a6f… : acetone-9rw — a sign-bit flip on an encoded Float(0.0)
+# yields the canonical encoding of the distinct value -0.0; the
+# aliasing test must compare bit-exactly, not via derived PartialEq.
+cc 5a6f1f2df3b0a420fd0450d8891e4804a29995d9596c5e6049b97cd690e6aadf
