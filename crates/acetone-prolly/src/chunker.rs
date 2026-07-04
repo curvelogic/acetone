@@ -16,7 +16,7 @@
 //! chunking exactly, which is what makes incremental updates splice back
 //! into unchanged chunks (see `tree.rs`).
 //!
-//! # Why entry-end evaluation (deviation from the Phase 0 spike)
+//! # Why entry-end evaluation (deviation from the Phase 0 spike; ADR-0006)
 //!
 //! The spike tested the boundary condition at every byte. A gear hash's
 //! low `mask_bits` bits depend only on the trailing `mask_bits` bytes of

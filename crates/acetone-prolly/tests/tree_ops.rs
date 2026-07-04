@@ -353,3 +353,132 @@ fn oversized_entry_is_rejected_not_truncated() {
     let msg = err.to_string();
     assert!(msg.contains("exceeds"), "expected a size error, got: {msg}");
 }
+
+// ---------------------------------------------------------------------------
+// Property — random ranges, both directions, against a reference filter
+// ---------------------------------------------------------------------------
+
+use proptest::prelude::*;
+
+/// One randomly generated range bound: unbounded, anchored on an existing
+/// key (by index, so it actually lands in the map), or an arbitrary byte
+/// string (usually falling between keys or outside the key space).
+#[derive(Debug, Clone)]
+enum GenBound {
+    Unbounded,
+    IncludedExisting(prop::sample::Index),
+    ExcludedExisting(prop::sample::Index),
+    IncludedRandom(Vec<u8>),
+    ExcludedRandom(Vec<u8>),
+}
+
+fn gen_bound() -> impl Strategy<Value = GenBound> {
+    prop_oneof![
+        2 => Just(GenBound::Unbounded),
+        3 => any::<prop::sample::Index>().prop_map(GenBound::IncludedExisting),
+        3 => any::<prop::sample::Index>().prop_map(GenBound::ExcludedExisting),
+        2 => proptest::collection::vec(any::<u8>(), 0..40).prop_map(GenBound::IncludedRandom),
+        2 => proptest::collection::vec(any::<u8>(), 0..40).prop_map(GenBound::ExcludedRandom),
+    ]
+}
+
+fn resolve_bound(b: &GenBound, map: &Map) -> Bound<Vec<u8>> {
+    let existing = |idx: &prop::sample::Index| -> Vec<u8> {
+        if map.is_empty() {
+            Vec::new()
+        } else {
+            let keys: Vec<&Vec<u8>> = map.keys().collect();
+            idx.get(&keys).to_vec()
+        }
+    };
+    match b {
+        GenBound::Unbounded => Bound::Unbounded,
+        GenBound::IncludedExisting(i) => Bound::Included(existing(i)),
+        GenBound::ExcludedExisting(i) => Bound::Excluded(existing(i)),
+        GenBound::IncludedRandom(k) => Bound::Included(k.clone()),
+        GenBound::ExcludedRandom(k) => Bound::Excluded(k.clone()),
+    }
+}
+
+fn scan_cases(default: u32) -> ProptestConfig {
+    let cases = std::env::var("PROPTEST_CASES")
+        .ok()
+        .map(|v| {
+            v.parse()
+                .expect("PROPTEST_CASES must be a positive integer")
+        })
+        .unwrap_or(default);
+    ProptestConfig {
+        cases,
+        ..ProptestConfig::default()
+    }
+}
+
+proptest! {
+    #![proptest_config(scan_cases(64))]
+
+    /// For arbitrary bounds — inside, between and outside the key space,
+    /// inclusive/exclusive/unbounded, including inverted ranges — the
+    /// forward scan equals the reference filter over the map and the
+    /// reverse scan is exactly its reversal.
+    #[test]
+    fn random_range_scans_match_reference_both_directions(
+        n in 0usize..800,
+        seed in any::<u64>(),
+        start_gen in gen_bound(),
+        end_gen in gen_bound(),
+    ) {
+        let store = MemStore::new();
+        let map = bulk_entries(n, seed);
+        let root = bulk_load(&store, ChunkParams::default(), map.clone()).expect("bulk_load");
+
+        let start = resolve_bound(&start_gen, &map);
+        let end = resolve_bound(&end_gen, &map);
+
+        // Reference semantics by direct filtering (total on inverted
+        // ranges, unlike BTreeMap::range, which panics).
+        let in_range = |k: &Vec<u8>| {
+            (match &start {
+                Bound::Included(s) => k >= s,
+                Bound::Excluded(s) => k > s,
+                Bound::Unbounded => true,
+            }) && (match &end {
+                Bound::Included(e) => k <= e,
+                Bound::Excluded(e) => k < e,
+                Bound::Unbounded => true,
+            })
+        };
+        let expected: Vec<(Vec<u8>, Vec<u8>)> = map
+            .iter()
+            .filter(|(k, _)| in_range(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let range = (
+            match &start {
+                Bound::Included(k) => Bound::Included(k.as_slice()),
+                Bound::Excluded(k) => Bound::Excluded(k.as_slice()),
+                Bound::Unbounded => Bound::Unbounded,
+            },
+            match &end {
+                Bound::Included(k) => Bound::Included(k.as_slice()),
+                Bound::Excluded(k) => Bound::Excluded(k.as_slice()),
+                Bound::Unbounded => Bound::Unbounded,
+            },
+        );
+        let forward: Vec<(Vec<u8>, Vec<u8>)> = scan(&store, &root, range)
+            .expect("scan")
+            .map(|r| r.map(|(k, v)| (k.to_vec(), v.to_vec())))
+            .collect::<Result<_, _>>()
+            .expect("scan items");
+        prop_assert_eq!(&forward, &expected, "forward scan diverged from reference");
+
+        let mut reverse: Vec<(Vec<u8>, Vec<u8>)> = scan_rev(&store, &root, range)
+            .expect("scan_rev")
+            .map(|r| r.map(|(k, v)| (k.to_vec(), v.to_vec())))
+            .collect::<Result<_, _>>()
+            .expect("scan_rev items");
+        reverse.reverse();
+        prop_assert_eq!(&reverse, &expected, "reverse scan is not the reversed forward scan");
+    }
+}

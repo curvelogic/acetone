@@ -14,7 +14,7 @@
 //! - different changes on both sides (deleting counts as a change, so
 //!   delete-vs-modify conflicts) → a [`Conflict`] record.
 //!
-//! # Conflicted keys are absent from the merged root
+//! # Conflicted keys are absent from the merged root (ADR-0007)
 //!
 //! A conflicted key is **excluded from the merged tree entirely** and
 //! delivered only in the conflict stream. Neither side's value (nor the

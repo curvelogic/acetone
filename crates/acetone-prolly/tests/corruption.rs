@@ -259,6 +259,69 @@ fn wrong_but_well_formed_child_is_detected() {
     assert_detected(&f, "leaf replaced by a different valid leaf");
 }
 
+/// The first and last key of a raw leaf chunk (test-side decode).
+fn leaf_key_span(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut pos = 5usize;
+    let mut first: Option<Vec<u8>> = None;
+    let mut last: Vec<u8> = Vec::new();
+    while pos < data.len() {
+        let klen = u32::from_be_bytes(data[pos..pos + 4].try_into().expect("klen")) as usize;
+        pos += 4;
+        let key = data[pos..pos + klen].to_vec();
+        pos += klen;
+        let vlen = u32::from_be_bytes(data[pos..pos + 4].try_into().expect("vlen")) as usize;
+        pos += 4 + vlen;
+        if first.is_none() {
+            first = Some(key.clone());
+        }
+        last = key;
+    }
+    (first.expect("leaf has entries"), last)
+}
+
+#[test]
+fn donor_leaf_above_victim_range_is_corrupt_not_absent() {
+    // Directed regression for the parent boundary-claim check in
+    // `read_node` (mutation testing showed the broad corpus above did not
+    // kill its removal on the *point-get* path): replace a leaf with a
+    // well-formed donor whose key range sorts entirely ABOVE the victim's.
+    // Without the claim check, a `get` for a key resident in the victim
+    // leaf descends to the donor, misses its binary search, and returns
+    // Ok(None) — a wrong answer, the exact outcome the check exists to
+    // forbid. It must be Corrupt instead.
+    let f = fixture();
+    let mut by_range: Vec<(Vec<u8>, Vec<u8>, Hash)> = f
+        .leaves
+        .iter()
+        .map(|h| {
+            let raw = f.store.raw(h).expect("raw");
+            let (first, last) = leaf_key_span(&raw);
+            (first, last, *h)
+        })
+        .collect();
+    by_range.sort();
+    let (victim_first, victim_last, victim) = by_range[2].clone();
+    let (donor_first, _, donor) = by_range[by_range.len() - 2].clone();
+    assert!(
+        donor_first > victim_last,
+        "donor must sort entirely above the victim"
+    );
+
+    let donor_bytes = f.store.raw(&donor).expect("raw").to_vec();
+    f.store.corrupt(&victim, donor_bytes);
+
+    // victim_first is a real map key that lives in the victim leaf.
+    assert!(f.map.contains_key(&victim_first), "probe is real");
+    match get(&f.store, &f.root, &victim_first) {
+        Err(ProllyError::Corrupt { .. }) => {}
+        Err(other) => panic!("expected Corrupt, got {other}"),
+        Ok(v) => panic!(
+            "wrong answer instead of error: get returned {:?}",
+            v.map(|b| b.len())
+        ),
+    }
+}
+
 #[test]
 fn dangling_references_are_missing_chunk_errors() {
     let f = fixture();
