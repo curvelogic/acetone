@@ -13,6 +13,7 @@
 //! Not production code. See `docs/acetone-03-roadmap.md` Phase 0.
 
 pub mod chunker;
+pub mod pack;
 mod tree;
 
 use std::path::Path;
@@ -21,6 +22,20 @@ use gix::ObjectId;
 
 use chunker::ChunkParams;
 pub use tree::Scan;
+
+/// Chunk writes observed while recording is enabled (see
+/// [`Store::start_recording`]) — the raw material for pack-on-write
+/// (bead acetone-63m.10): which chunks are new, and which old chunk each
+/// one replaces (its chosen delta base).
+#[derive(Debug, Default, Clone)]
+pub struct WriteRecord {
+    /// Every chunk OID handed to the ODB while recording, in write order
+    /// (includes manifest blobs written by `commit_root`).
+    pub written: Vec<ObjectId>,
+    /// Chosen delta base per written chunk: the predecessor chunk it
+    /// replaces at the same tree level (new OID -> old OID).
+    pub bases: std::collections::HashMap<ObjectId, ObjectId>,
+}
 
 /// Root of one map version: everything needed to read it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +86,7 @@ fn giterr(e: impl std::fmt::Display) -> SpikeError {
 pub struct Store {
     repo: gix::Repository,
     chunks_written: std::cell::Cell<u64>,
+    recorder: std::cell::RefCell<Option<WriteRecord>>,
 }
 
 const MANIFEST_FORMAT: &str = "prolly-git-spike-v0";
@@ -82,6 +98,7 @@ impl Store {
         Ok(Store {
             repo,
             chunks_written: std::cell::Cell::new(0),
+            recorder: std::cell::RefCell::new(None),
         })
     }
 
@@ -91,7 +108,34 @@ impl Store {
         Ok(Store {
             repo,
             chunks_written: std::cell::Cell::new(0),
+            recorder: std::cell::RefCell::new(None),
         })
+    }
+
+    /// Start recording chunk writes and their chosen delta bases (for
+    /// pack-on-write, bead acetone-63m.10). Any previous recording is
+    /// discarded.
+    pub fn start_recording(&self) {
+        *self.recorder.borrow_mut() = Some(WriteRecord::default());
+    }
+
+    /// Stop recording and return what was captured since
+    /// [`Store::start_recording`].
+    pub fn take_recording(&self) -> Option<WriteRecord> {
+        self.recorder.borrow_mut().take()
+    }
+
+    pub(crate) fn recording(&self) -> bool {
+        self.recorder.borrow().is_some()
+    }
+
+    pub(crate) fn record_base(&self, new: ObjectId, base: ObjectId) {
+        if new == base {
+            return; // an unchanged chunk needs no delta
+        }
+        if let Some(rec) = self.recorder.borrow_mut().as_mut() {
+            rec.bases.entry(new).or_insert(base);
+        }
     }
 
     /// Number of chunk blobs serialised and handed to the ODB so far.
@@ -104,7 +148,11 @@ impl Store {
     /// Write one chunk as a git blob; the returned OID is its address.
     pub(crate) fn write_chunk(&self, data: &[u8]) -> Result<ObjectId, SpikeError> {
         self.chunks_written.set(self.chunks_written.get() + 1);
-        Ok(self.repo.write_blob(data).map_err(giterr)?.detach())
+        let oid = self.repo.write_blob(data).map_err(giterr)?.detach();
+        if let Some(rec) = self.recorder.borrow_mut().as_mut() {
+            rec.written.push(oid);
+        }
+        Ok(oid)
     }
 
     /// Read one chunk back by OID.

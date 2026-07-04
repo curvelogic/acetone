@@ -29,12 +29,22 @@
 //!   bulk-load, point-read, scan, update, diff, growth, repack-read
 //! `growth` is skipped by default above 2M keys (the roadmap pins it to the
 //! 1M-key graph); pass it explicitly to force.
+//!
+//! Additional opt-in scenarios for the pack-on-write experiment (bead
+//! acetone-63m.10), not part of the default set — each uses its own fresh
+//! repo under `--dir`:
+//!   pack-growth  the growth scenario re-run writing one hand-rolled pack
+//!                per commit with explicitly chosen REF_DELTA bases
+//!   pack-probe   does git tolerate on-disk packs whose REF_DELTA bases
+//!                live outside the pack (no --fix-thin completion)?
 
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use prolly_git_spike::pack::{self, PackEntry};
 use prolly_git_spike::{BatchOp, Root, Store};
 
 // ---------------------------------------------------------------------------
@@ -944,6 +954,655 @@ fn repack_read(ctx: &Ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Pack-on-write experiment (bead acetone-63m.10)
+// ---------------------------------------------------------------------------
+
+/// Run git returning success and combined output (the plain `git` helper
+/// only eprints failures; correctness checks need the status).
+fn git_check(repo: &Path, args: &[&str]) -> (bool, String) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+/// Feed a (possibly thin) pack to `git index-pack --stdin --fix-thin`,
+/// which stores it in `objects/pack`, appending any external delta bases.
+/// Returns the stored pack's name hash.
+fn index_pack_fix_thin(repo: &Path, pack_bytes: &[u8]) -> String {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["index-pack", "--stdin", "--fix-thin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn git index-pack");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(pack_bytes)
+        .expect("pipe pack to index-pack");
+    let out = child.wait_with_output().expect("wait for index-pack");
+    assert!(
+        out.status.success(),
+        "index-pack --fix-thin failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // stdout is `pack\t<hex>` (or `keep\t<hex>`).
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .last()
+        .expect("index-pack reports the pack hash")
+        .to_string()
+}
+
+/// Newest pack index in `objects/pack`, for verify-pack.
+fn newest_idx(repo: &Path) -> Option<PathBuf> {
+    let dir = repo.join("objects/pack");
+    let mut idxs: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "idx"))
+        .map(|e| {
+            (
+                e.metadata().and_then(|m| m.modified()).expect("mtime"),
+                e.path(),
+            )
+        })
+        .collect();
+    idxs.sort();
+    idxs.pop().map(|(_, p)| p)
+}
+
+mod pow {
+    //! Building the per-commit pack entry list: everything `apply_batch` +
+    //! `commit_root` wrote, each with its chosen delta base — chunks against
+    //! their recorded predecessor, trees/manifest against the parent
+    //! commit's counterpart.
+
+    use std::collections::{HashMap, HashSet};
+
+    use gix::ObjectId;
+    use prolly_git_spike::WriteRecord;
+    use prolly_git_spike::pack::PackEntry;
+
+    pub fn obj_data(repo: &gix::Repository, oid: ObjectId) -> (gix::object::Kind, Vec<u8>) {
+        let o = repo.find_object(oid).expect("object readable").detach();
+        (o.kind, o.data)
+    }
+
+    /// Decode a tree object into (filename -> entry OID).
+    fn tree_map(repo: &gix::Repository, oid: ObjectId) -> HashMap<Vec<u8>, ObjectId> {
+        let (kind, data) = obj_data(repo, oid);
+        assert_eq!(kind, gix::object::Kind::Tree, "expected tree {oid}");
+        gix::objs::TreeRef::from_bytes(&data, gix::hash::Kind::Sha1)
+            .expect("valid tree")
+            .entries
+            .iter()
+            .map(|e| (e.filename.to_vec(), e.oid.to_owned()))
+            .collect()
+    }
+
+    struct Builder<'r> {
+        repo: &'r gix::Repository,
+        seen: HashSet<ObjectId>,
+        entries: Vec<PackEntry>,
+    }
+
+    impl Builder<'_> {
+        fn push(&mut self, oid: ObjectId, base: Option<ObjectId>) {
+            if !self.seen.insert(oid) {
+                return;
+            }
+            let (kind, data) = obj_data(self.repo, oid);
+            let base = base
+                .filter(|b| *b != oid)
+                .map(|b| (b, obj_data(self.repo, b).1));
+            self.entries.push(PackEntry {
+                oid,
+                kind,
+                data,
+                base,
+            });
+        }
+    }
+
+    /// All objects created by one growth commit, with chosen delta bases.
+    pub fn build_entries(
+        repo: &gix::Repository,
+        commit_oid: ObjectId,
+        rec: &WriteRecord,
+    ) -> Vec<PackEntry> {
+        let mut b = Builder {
+            repo,
+            seen: HashSet::new(),
+            entries: Vec::with_capacity(rec.written.len() + 300),
+        };
+
+        let commit = repo
+            .find_object(commit_oid)
+            .expect("commit")
+            .try_into_commit()
+            .expect("commit object");
+        let tree_id = commit.tree_id().expect("tree id").detach();
+        let parent_tree = commit.parent_ids().next().map(|p| {
+            p.object()
+                .expect("parent")
+                .try_into_commit()
+                .expect("parent commit")
+                .tree_id()
+                .expect("parent tree id")
+                .detach()
+        });
+
+        b.push(commit_oid, None);
+        if parent_tree != Some(tree_id) {
+            b.push(tree_id, parent_tree);
+        }
+        let new_top = tree_map(repo, tree_id);
+        let old_top = parent_tree.map(|t| tree_map(repo, t)).unwrap_or_default();
+
+        // Manifest blob: delta against the parent's manifest.
+        let manifest = new_top.get(b"manifest".as_slice()).copied();
+        let old_manifest = old_top.get(b"manifest".as_slice()).copied();
+        if let Some(m) = manifest
+            && old_manifest != Some(m)
+        {
+            b.push(m, old_manifest);
+        }
+
+        // Reachability trees: `chunks/` and its shard subtrees, each delta
+        // against the parent commit's same-named tree.
+        let chunks = new_top.get(b"chunks".as_slice()).copied();
+        let old_chunks = old_top.get(b"chunks".as_slice()).copied();
+        if let Some(ct) = chunks
+            && old_chunks != Some(ct)
+        {
+            b.push(ct, old_chunks);
+            let new_shards = tree_map(repo, ct);
+            let old_shards = old_chunks.map(|t| tree_map(repo, t)).unwrap_or_default();
+            for (name, oid) in &new_shards {
+                let old = old_shards.get(name).copied();
+                if old != Some(*oid) {
+                    b.push(*oid, old);
+                }
+            }
+        }
+
+        // Chunk blobs, each against its recorded predecessor.
+        for oid in &rec.written {
+            b.push(*oid, rec.bases.get(oid).copied());
+        }
+        b.entries
+    }
+}
+
+/// Order pack entries so every in-pack delta base precedes its children,
+/// breaking any delta cycle by storing the entry whole. Creation order is
+/// not quite topological: a chunk OID can re-appear after a content-defined
+/// boundary shifts back (see the consolidation comment in `pack_growth`).
+fn topo_sort_entries(entries: Vec<PackEntry>) -> Vec<PackEntry> {
+    let index: std::collections::HashMap<gix::ObjectId, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.oid, i))
+        .collect();
+    let mut slots: Vec<Option<PackEntry>> = entries.into_iter().map(Some).collect();
+    let mut out: Vec<PackEntry> = Vec::with_capacity(slots.len());
+    for i in 0..slots.len() {
+        let mut chain: Vec<usize> = Vec::new();
+        let mut cur = Some(i);
+        while let Some(j) = cur {
+            let Some(entry) = slots[j].as_mut() else {
+                break; // ancestor already placed
+            };
+            if chain.contains(&j) {
+                entry.base = None; // break a delta cycle: store whole
+                break;
+            }
+            let next = entry.base.as_ref().and_then(|(b, _)| index.get(b).copied());
+            chain.push(j);
+            cur = next;
+        }
+        for j in chain.into_iter().rev() {
+            if let Some(e) = slots[j].take() {
+                out.push(e);
+            }
+        }
+    }
+    out
+}
+
+/// Scenario pack-growth: the growth scenario (same op stream, same seeds)
+/// re-run against a fresh repo, writing one hand-rolled pack per commit in
+/// which every new chunk is a REF_DELTA against its predecessor. Measures
+/// retained bytes per commit, what `git repack -a -d` then does to the
+/// hand-chosen deltas, and verifies correctness (fsck, verify-pack, clone,
+/// full read-back).
+fn pack_growth(ctx: &Ctx) {
+    section(
+        "pack-growth (pack-on-write import commits at 1% churn)",
+        ctx,
+    );
+    let repo = ctx.repo.with_file_name(format!("repo-{}-pack", ctx.n));
+    assert!(
+        !repo.exists(),
+        "repo {} already exists; use a fresh --dir or delete it",
+        repo.display()
+    );
+    let store = Store::create(&repo).expect("create store");
+    progress(&format!("bulk-loading {} keys...", ctx.n));
+    let root = store
+        .bulk_load((0..ctx.n).map(|i| (key_for(i), value_for(i, 0))))
+        .expect("bulk_load");
+    store
+        .commit_root(&root, REF_V0, "bench: base version v0")
+        .expect("commit v0");
+    store
+        .commit_root(&root, REF_HEAD, "bench: base version v0")
+        .expect("commit head");
+    progress("packing the base version (git repack -a -d)...");
+    git(&repo, &["repack", "-a", "-d", "--quiet"]);
+    let base_kb = du_kb(&repo);
+    println!("base_size_packed: {}", fmt_kb(base_kb));
+    // Pack creation order; per-commit packs get replaced by the native
+    // consolidation pack below.
+    let mut pack_order: Vec<String> = vec![
+        newest_idx(&repo)
+            .expect("base pack")
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.strip_prefix("pack-"))
+            .expect("pack-<hex>.idx name")
+            .to_string(),
+    ];
+
+    let churn = (ctx.n / 100).max(1) as usize;
+    let mut vers: Vec<u64> = vec![0; ctx.n as usize];
+    let mut rng = Rng::new(0x94011 + ctx.n);
+    let mut root = root;
+    println!(
+        "commits={} churn_per_commit={churn} (op stream identical to the growth scenario)",
+        ctx.growth_commits
+    );
+    let mut apply_times = Vec::new();
+    let mut pack_times = Vec::new();
+    let mut thin_bytes = Vec::new();
+    let mut n_deltas = 0u64;
+    let mut n_whole = 0u64;
+    let mut delta_payload = 0u64;
+    // (oid, chosen base) of every growth object in creation order, for the
+    // native consolidation pack below.
+    let mut growth_meta: Vec<(gix::ObjectId, Option<gix::ObjectId>)> = Vec::new();
+    println!("size_trajectory (after N commits, packs incl. --fix-thin bases):");
+    for c in 0..ctx.growth_commits {
+        // Fresh handles per commit: one pack arrives per iteration, and gix
+        // sizes its object-store slotmap from the disk state seen at open
+        // time (a long-lived handle overflows after ~30 new packs).
+        let store = Store::open(&repo).expect("reopen store");
+        let gxr = gix::open(&repo).expect("reopen gix repo");
+        let ver = 3_000_000 + c as u64;
+        let ops: Vec<BatchOp> = (0..churn)
+            .map(|_| {
+                let i = rng.below(ctx.n);
+                vers[i as usize] = ver;
+                BatchOp::Put(key_for(i), value_for(i, ver))
+            })
+            .collect();
+        store.start_recording();
+        let t = Instant::now();
+        root = store.apply_batch(&root, ops).expect("apply_batch");
+        let commit_oid = store
+            .commit_root(&root, REF_HEAD, &format!("bench: import commit {}", c + 1))
+            .expect("commit");
+        apply_times.push(t.elapsed());
+        let rec = store.take_recording().expect("recording enabled");
+
+        let t = Instant::now();
+        let entries = topo_sort_entries(pow::build_entries(&gxr, commit_oid, &rec));
+        growth_meta.extend(
+            entries
+                .iter()
+                .map(|e| (e.oid, e.base.as_ref().map(|(b, _)| *b))),
+        );
+        let pf = pack::write_pack(entries.len(), entries).expect("write pack");
+        pack_order.push(index_pack_fix_thin(&repo, &pf.bytes));
+        git(&repo, &["prune-packed", "--quiet"]);
+        pack_times.push(t.elapsed());
+        thin_bytes.push(pf.bytes.len() as u64);
+        n_deltas += pf.deltas as u64;
+        n_whole += pf.whole as u64;
+        delta_payload += pf.delta_bytes;
+
+        if (c + 1) % 10 == 0 {
+            let kb = du_kb(&repo);
+            println!("  after {:3} commits: {}", c + 1, fmt_kb(kb));
+            progress(&format!(
+                "pack-growth: {}/{} commits, repo {}",
+                c + 1,
+                ctx.growth_commits,
+                fmt_kb(kb)
+            ));
+        }
+    }
+    let commits = ctx.growth_commits as u64;
+    let (amean, ap50, ap99, _) = dur_stats(apply_times);
+    let (pmean, pp50, pp99, _) = dur_stats(pack_times);
+    let thin_total: u64 = thin_bytes.iter().sum();
+    println!(
+        "apply_and_commit_per_commit (spike-only latency): mean={} p50={} p99={}",
+        fmt_dur(amean),
+        fmt_dur(ap50),
+        fmt_dur(ap99)
+    );
+    println!(
+        "pack_write_index_prune_per_commit: mean={} p50={} p99={}",
+        fmt_dur(pmean),
+        fmt_dur(pp50),
+        fmt_dur(pp99)
+    );
+    println!(
+        "thin_pack_bytes_per_commit (before --fix-thin base completion): mean={} total={}",
+        fmt_kb(thin_total / commits / 1024),
+        fmt_kb(thin_total / 1024)
+    );
+    println!(
+        "pack_entries_per_commit: deltas={:.0} whole={:.0} raw_delta_payload={} mean/delta={:.0} bytes",
+        n_deltas as f64 / commits as f64,
+        n_whole as f64 / commits as f64,
+        fmt_kb(delta_payload / 1024),
+        delta_payload as f64 / n_deltas.max(1) as f64
+    );
+
+    let raw = du_kb(&repo);
+    println!(
+        "repo_size_pack_on_write: {} ({} retained/commit)",
+        fmt_kb(raw),
+        fmt_kb(raw.saturating_sub(base_kb) / commits)
+    );
+    println!("count_objects: {}", count_objects(&repo));
+
+    // Correctness of the hand-written (thin-completed) packs.
+    let idx = newest_idx(&repo).expect("a pack exists");
+    let (ok, text) = git_check(&repo, &["verify-pack", "-s", idx.to_str().expect("utf8")]);
+    assert!(ok, "verify-pack on hand-written pack failed: {text}");
+    println!("verify_pack_last_commit_pack: ok\n{}", text.trim_end());
+    progress("git fsck --strict ...");
+    let (ok, text) = git_check(&repo, &["fsck", "--strict", "--no-progress"]);
+    assert!(ok, "fsck failed: {text}");
+    println!("fsck_before_repack: clean");
+
+    // What does a stock repack do to the hand-chosen deltas? Run it on a
+    // copy: for objects present in several packs (every --fix-thin base
+    // duplicate), pack-objects keeps whichever representation it happens to
+    // find first, so a fraction of the hand-chosen deltas is replaced by the
+    // whole duplicates.
+    let stock = ctx
+        .repo
+        .with_file_name(format!("repo-{}-pack-stock", ctx.n));
+    let out = Command::new("cp")
+        .arg("-Rp")
+        .arg(&repo)
+        .arg(&stock)
+        .output()
+        .expect("cp");
+    assert!(out.status.success(), "cp -Rp failed");
+    progress("git repack -a -d (stock, on a copy) ...");
+    let t = Instant::now();
+    git(&stock, &["repack", "-a", "-d", "--quiet"]);
+    let repack = t.elapsed();
+    let packed = du_kb(&stock);
+    println!(
+        "repo_size_after_stock_repack: {} ({} retained/commit, repack took {})",
+        fmt_kb(packed),
+        fmt_kb(packed.saturating_sub(base_kb) / commits),
+        fmt_dur(repack)
+    );
+    let idx = newest_idx(&stock).expect("repacked pack exists");
+    let (ok, text) = git_check(&stock, &["verify-pack", "-s", idx.to_str().expect("utf8")]);
+    assert!(ok, "verify-pack after stock repack failed: {text}");
+    println!("verify_pack_after_stock_repack:\n{}", text.trim_end());
+    let (ok, text) = git_check(&stock, &["fsck", "--strict", "--no-progress"]);
+    assert!(ok, "fsck after stock repack failed: {text}");
+    println!("fsck_after_stock_repack: clean");
+
+    // Native consolidation on the original repo: one cumulative pack holding
+    // every growth object exactly once with its chosen delta representation
+    // (what a production acetone-store repack would write), replacing the
+    // 100 per-commit packs. The base pack is kept; --fix-thin re-appends
+    // only the first-generation bases it references.
+    progress("native consolidation pack ...");
+    let gxr = gix::open(&repo).expect("open gix repo for consolidation");
+    let t = Instant::now();
+    let mut base_of: std::collections::HashMap<gix::ObjectId, Option<gix::ObjectId>> =
+        std::collections::HashMap::new();
+    for (oid, base) in &growth_meta {
+        if base_of.contains_key(oid) {
+            continue; // first occurrence wins
+        }
+        // Guard against REF_DELTA cycles inside one pack (possible only if
+        // content re-appears across commits); walk the chain so far.
+        let mut chosen = *base;
+        let mut cur = chosen;
+        while let Some(b) = cur {
+            if b == *oid {
+                chosen = None;
+                break;
+            }
+            cur = base_of.get(&b).copied().flatten();
+        }
+        base_of.insert(*oid, chosen);
+    }
+    // Emit in topological order (base chains first). Creation order is not
+    // quite topological: a chunk OID can re-appear after a content-defined
+    // boundary shifts back, so an early entry may reference a base whose
+    // (deduplicated) pack entry would otherwise sit later; index-pack
+    // --fix-thin then appends a duplicate repo copy of that base and dies
+    // with "REF_DELTA already resolved (duplicate base)".
+    let mut order: Vec<gix::ObjectId> = Vec::with_capacity(base_of.len());
+    let mut emitted: HashSet<gix::ObjectId> = HashSet::with_capacity(base_of.len());
+    for (oid, _) in &growth_meta {
+        let mut chain: Vec<gix::ObjectId> = Vec::new();
+        let mut cur = Some(*oid);
+        while let Some(o) = cur {
+            if emitted.contains(&o) || !base_of.contains_key(&o) {
+                break; // already placed, or external to this pack
+            }
+            chain.push(o);
+            cur = base_of[&o];
+        }
+        for o in chain.into_iter().rev() {
+            if emitted.insert(o) {
+                order.push(o);
+            }
+        }
+    }
+    let pf = pack::write_pack(
+        order.len(),
+        order.iter().map(|oid| {
+            let (kind, data) = pow::obj_data(&gxr, *oid);
+            let base = base_of[oid].map(|b| (b, pow::obj_data(&gxr, b).1));
+            PackEntry {
+                oid: *oid,
+                kind,
+                data,
+                base,
+            }
+        }),
+    )
+    .expect("write consolidated pack");
+    let consolidated = index_pack_fix_thin(&repo, &pf.bytes);
+    for stale in &pack_order[1..] {
+        if *stale == consolidated {
+            continue;
+        }
+        for ext in ["pack", "idx"] {
+            let path = repo.join(format!("objects/pack/pack-{stale}.{ext}"));
+            std::fs::remove_file(&path)
+                .unwrap_or_else(|e| panic!("remove {}: {e}", path.display()));
+        }
+        // Reverse indexes are written by default since git 2.41; absence ok.
+        let _ = std::fs::remove_file(repo.join(format!("objects/pack/pack-{stale}.rev")));
+    }
+    println!(
+        "native_consolidation: objects={} deltas={} whole={} thin_pack={} took {}",
+        order.len(),
+        pf.deltas,
+        pf.whole,
+        fmt_kb(pf.bytes.len() as u64 / 1024),
+        fmt_dur(t.elapsed())
+    );
+    let packed = du_kb(&repo);
+    println!(
+        "repo_size_after_native_consolidation: {} ({} retained/commit)",
+        fmt_kb(packed),
+        fmt_kb(packed.saturating_sub(base_kb) / commits),
+    );
+    println!(
+        "count_objects_after_native_consolidation: {}",
+        count_objects(&repo)
+    );
+    let idx = newest_idx(&repo).expect("consolidated pack exists");
+    let (ok, text) = git_check(&repo, &["verify-pack", "-s", idx.to_str().expect("utf8")]);
+    assert!(ok, "verify-pack after consolidation failed: {text}");
+    println!(
+        "verify_pack_after_native_consolidation:\n{}",
+        text.trim_end()
+    );
+    let (ok, text) = git_check(&repo, &["fsck", "--strict", "--no-progress"]);
+    assert!(ok, "fsck after consolidation failed: {text}");
+    println!("fsck_after_native_consolidation: clean");
+
+    // Clone over the real object walk (no hardlink shortcut), then read
+    // every key back and compare against the expected final state.
+    let clone = ctx
+        .repo
+        .with_file_name(format!("repo-{}-pack-clone", ctx.n));
+    progress("git clone --mirror --no-local ...");
+    let out = Command::new("git")
+        .arg("clone")
+        .arg("--mirror")
+        .arg("--no-local")
+        .arg("--quiet")
+        .arg(&repo)
+        .arg(&clone)
+        .output()
+        .expect("git clone");
+    assert!(
+        out.status.success(),
+        "clone failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    println!("clone_size: {}", fmt_kb(du_kb(&clone)));
+    progress("verifying full read-back from the clone...");
+    let cstore = Store::open(&clone).expect("open clone");
+    let croot = cstore.read_manifest(REF_HEAD).expect("clone head manifest");
+    let mut count = 0u64;
+    for item in cstore.range_scan(&croot, ..).expect("scan clone") {
+        let (k, v) = item.expect("scan item");
+        assert_eq!(k, key_for(count), "key {count} in clone scan");
+        assert_eq!(
+            v,
+            value_for(count, vers[count as usize]),
+            "value of key {count} in clone scan"
+        );
+        count += 1;
+    }
+    assert_eq!(count, ctx.n, "clone must contain every key");
+    println!("clone_read_back: verified {count} keys against expected state");
+}
+
+/// Scenario pack-probe: git's tolerance of an ON-DISK pack whose REF_DELTA
+/// base lives outside the pack (a "thin" pack indexed as-is with a
+/// hand-written .idx, no --fix-thin completion). If tolerated, production
+/// pack-on-write could skip base duplication entirely.
+fn pack_probe(ctx: &Ctx) {
+    section("pack-probe (external REF_DELTA base, no --fix-thin)", ctx);
+    let repo = ctx.repo.with_file_name(format!("repo-{}-probe", ctx.n));
+    assert!(
+        !repo.exists(),
+        "repo {} already exists; use a fresh --dir or delete it",
+        repo.display()
+    );
+    let gxr = gix::init_bare(&repo).expect("init probe repo");
+
+    // ASCII contents so lossy stdout capture is faithful.
+    let base: Vec<u8> = (0..12).flat_map(|i| value_for(i, 0)).collect();
+    let mut target = base.clone();
+    let edit = value_for(99, 7);
+    target[400..400 + edit.len()].copy_from_slice(&edit);
+    let base_oid = gxr.write_blob(&base).expect("write base").detach();
+    let target_oid =
+        gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Blob, &target)
+            .expect("hash");
+
+    let pf = pack::write_pack(
+        1,
+        [PackEntry {
+            oid: target_oid,
+            kind: gix::object::Kind::Blob,
+            data: target.clone(),
+            base: Some((base_oid, base.clone())),
+        }],
+    )
+    .expect("write pack");
+    assert_eq!(pf.deltas, 1, "the probe entry must be stored as a delta");
+    let idx = pack::write_idx(&pf).expect("write idx");
+    let pack_dir = repo.join("objects/pack");
+    let stem = format!("pack-{}", pf.trailer);
+    std::fs::write(pack_dir.join(format!("{stem}.pack")), &pf.bytes).expect("store pack");
+    std::fs::write(pack_dir.join(format!("{stem}.idx")), &idx).expect("store idx");
+
+    let (ok, text) = git_check(&repo, &["cat-file", "blob", &target_oid.to_string()]);
+    println!(
+        "git_cat_file_external_base: status={} content_matches={} stderr_or_content_head={:?}",
+        if ok { "ok" } else { "FAILED" },
+        text.as_bytes() == target.as_slice(),
+        text.chars().take(80).collect::<String>()
+    );
+    let (ok, text) = git_check(&repo, &["fsck", "--strict", "--no-progress"]);
+    println!(
+        "git_fsck: status={} output_head={:?}",
+        if ok { "ok" } else { "FAILED" },
+        text.lines().take(3).collect::<Vec<_>>()
+    );
+    let (ok, text) = git_check(
+        &repo,
+        &[
+            "verify-pack",
+            "-v",
+            pack_dir.join(format!("{stem}.idx")).to_str().expect("utf8"),
+        ],
+    );
+    println!(
+        "git_verify_pack: status={} output_tail={:?}",
+        if ok { "ok" } else { "FAILED" },
+        text.lines().rev().take(3).collect::<Vec<_>>()
+    );
+    match gix::open(&repo)
+        .expect("reopen probe repo")
+        .find_object(target_oid)
+    {
+        Ok(o) => println!(
+            "gix_find_object: ok content_matches={}",
+            o.data == target.as_slice()
+        ),
+        Err(e) => println!("gix_find_object: FAILED ({e})"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1025,6 +1684,8 @@ fn main() {
             "diff" => diff(&ctx),
             "growth" => growth(&ctx),
             "repack-read" => repack_read(&ctx),
+            "pack-growth" => pack_growth(&ctx),
+            "pack-probe" => pack_probe(&ctx),
             other => panic!("unknown scenario {other}"),
         }
         progress(&format!("scenario {s} done in {}", fmt_dur(t.elapsed())));

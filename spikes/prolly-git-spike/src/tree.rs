@@ -281,7 +281,44 @@ impl Store {
             // Empty map: a single empty leaf is the canonical root.
             b.emit()?;
         }
+        if self.recording() {
+            self.record_level_bases(old, &b.out);
+        }
         Ok(b.out)
+    }
+
+    /// Pair freshly written chunks with the old chunks they replace, for
+    /// pack-on-write delta bases (bead acetone-63m.10). Reused children fix
+    /// exact positions in the old node list; between two reused anchors, the
+    /// fresh new chunks and the skipped old chunks cover the same key span
+    /// and are paired positionally (the overwhelmingly common case is one
+    /// old chunk rewritten as one new chunk; extra new chunks share the last
+    /// old chunk of the region, extra old chunks are dropped). Best-effort
+    /// by design: an unpaired chunk is merely stored whole in the pack.
+    fn record_level_bases(&self, old: &[NodeRef], children: &[ChildOut]) {
+        let pair = |news: &[ObjectId], olds: &[NodeRef]| {
+            if olds.is_empty() {
+                return;
+            }
+            for (k, new) in news.iter().enumerate() {
+                let base = &olds[k.min(olds.len() - 1)];
+                self.record_base(*new, base.oid);
+            }
+        };
+        let mut next_old = 0usize;
+        let mut fresh: Vec<ObjectId> = Vec::new();
+        for c in children {
+            match c.reused {
+                Some(i) => {
+                    debug_assert!(i >= next_old, "reused indices are increasing");
+                    pair(&fresh, &old[next_old.min(i)..i]);
+                    fresh.clear();
+                    next_old = i + 1;
+                }
+                None => fresh.push(c.node.oid),
+            }
+        }
+        pair(&fresh, &old[next_old.min(old.len())..]);
     }
 
     /// Build the levels above the leaves until a single root remains.
