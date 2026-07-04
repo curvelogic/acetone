@@ -16,15 +16,22 @@
 //! The walk never panics and never aborts on the first fault: sibling
 //! subtrees are still verified, so one damaged chunk does not mask the
 //! rest of the tree. Termination and bounded work on a maliciously
-//! cross-linked chunk set come from three things: levels strictly decrease
-//! on the way down (so no descent path exceeds [`MAX_HEIGHT`](crate::MAX_HEIGHT)), each inner
-//! node's subtree is **expanded at most once** however many parents point
-//! at it (so a diamond cannot blow up combinatorially), and each chunk is
-//! fetched and decoded at most once (cached). Every reference is still
-//! *position-checked* against the cached decode — level tag, parent
+//! cross-linked chunk set come from two things: levels strictly decrease
+//! on the way down (so no descent path exceeds
+//! [`MAX_HEIGHT`](crate::MAX_HEIGHT)), and each inner node's subtree is
+//! **expanded at most once** however many parents point at it (a diamond
+//! cannot blow up combinatorially, because a hash's children are enqueued
+//! only the first time it is reached). Total reads are therefore bounded by
+//! the number of references in the tree, not by any exponential of its
+//! depth. Every reference is still *position-checked* — level tag, parent
 //! boundary claim, sibling lower bound — so a chunk that is valid at one
 //! position but referenced from a wrong one (a self-reference, a forged
 //! pointer) is caught, not silently deduplicated away.
+//!
+//! Only inner nodes are cached (their decoded child lists, to re-check a
+//! second parent's claim and to mark the subtree expanded); leaves are
+//! position-checked and dropped, so the walk holds at most the internal
+//! nodes of one map in memory, not its leaves.
 //!
 //! A missing or corrupt *internal* node hides the addresses of everything
 //! beneath it, so faults strictly below a reported fault are not
