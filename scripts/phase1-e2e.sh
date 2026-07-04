@@ -34,6 +34,12 @@ REPO="$WORK/graph.git"
 step() { printf '\n== %s\n' "$*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# Assertion style: `cmd | grep -q X || fail` composes correctly with
+# pipefail (and outputs here are far below the pipe buffer, so grep -q
+# closing early cannot SIGPIPE the writer). Do NOT assert with
+# `cmd | grep X && fail || true` — a non-zero cmd skips the && branch
+# and the failure is swallowed.
+
 step "init"
 "$ACETONE" init "$REPO"
 
@@ -76,8 +82,12 @@ step "fsck (acetone)"
 step "native git interop"
 git -C "$REPO" log --oneline main | grep -q "initial infrastructure" \
     || fail "git log must render the acetone commit"
-git -C "$REPO" fsck --strict 2>&1 | grep -Ev "dangling blob" | grep -E "error|missing" \
-    && fail "git fsck must report no errors" || true
+# git fsck exits non-zero on real damage; dangling objects (superseded
+# workspace manifests, spec §4 garbage) are warnings and exit 0. Assert
+# on the exit code — a grep over its output composes badly with pipefail
+# (a non-zero fsck would skip the && branch and be swallowed).
+FSCK_OUT="$(git -C "$REPO" fsck --strict 2>&1)" \
+    || fail "git fsck reported problems: $FSCK_OUT"
 
 step "gc survival: committed versions survive git gc --prune=now"
 git -C "$REPO" gc --prune=now --quiet
@@ -92,8 +102,8 @@ if [ -n "${E2E_REMOTE:-}" ]; then
     step "remote round trip: clone back and verify"
     CLONE="$WORK/clone.git"
     git clone --quiet --bare "$E2E_REMOTE" "$CLONE"
-    git -C "$CLONE" fsck --strict 2>&1 | grep -E "error|missing" \
-        && fail "cloned repository must be connected" || true
+    FSCK_OUT="$(git -C "$CLONE" fsck --strict 2>&1)" \
+        || fail "cloned repository must be connected: $FSCK_OUT"
     # Workspace refs are local-only (never pushed); recreate the default
     # workspace in the clone by pointing it at main's manifest blob —
     # pure git plumbing, then acetone opens the clone like any repo.
