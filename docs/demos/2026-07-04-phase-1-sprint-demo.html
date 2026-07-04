@@ -72,6 +72,11 @@
   .stats { display: flex; gap: 48px; flex-wrap: wrap; margin: 24px 0; }
   .footer-hint { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 32px; }
   a { color: var(--accent); }
+  figure { margin: 22px 0; }
+  figure svg { width: 100%; height: auto; max-width: 660px; display: block; }
+  figcaption { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 10px; max-width: 60ch; }
+  .dgm-label { font-family: var(--mono); font-size: 12px; fill: var(--muted); }
+  .dgm-box { font-family: var(--mono); font-size: 12.5px; fill: var(--ink); }
   pre {
     font-family: var(--mono); font-size: 13px; line-height: 1.5;
     background: var(--accent-soft); border-radius: 6px; padding: 14px 18px;
@@ -81,7 +86,7 @@
 
 <!-- ─── Slide 1 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">1/9</span> · sprint demo · 4 July 2026</p>
+  <p class="eyebrow"><span class="n">1/11</span> · sprint demo · 4 July 2026</p>
   <h1>acetone — Phase 1</h1>
   <p class="lead">Storage and model core: the format is now real. Every layer from
   bytes to CLI exists, is property-tested, and survives a round trip through a
@@ -93,12 +98,12 @@
   <p class="muted">This deck covers what shipped, the decisions taken (five ADRs),
   what review caught, and what's open. Then: a live demo, step by step; then the
   docs are yours.</p>
-  <p class="footer-hint">scroll ↓ · 9 slides</p>
+  <p class="footer-hint">scroll ↓ · 11 slides</p>
 </section>
 
 <!-- ─── Slide 2 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">2/9</span> · where we are</p>
+  <p class="eyebrow"><span class="n">2/11</span> · where we are</p>
   <h2>Phase 1 complete bar your gate review</h2>
   <div class="stats">
     <div class="bignum">15<small>PRs merged this phase,<br>every one reviewer-signed</small></div>
@@ -119,7 +124,7 @@
 
 <!-- ─── Slide 3 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">3/9</span> · the format</p>
+  <p class="eyebrow"><span class="n">3/11</span> · the format</p>
   <h2>Node identity has exactly one byte form, everywhere</h2>
   <p>A node key — <code>(primary label, key tuple)</code> — encodes as a single
   memcomparable list element, and those exact bytes appear standalone as the
@@ -140,7 +145,7 @@ edges_fwd key   [src node key][type][dst node key][disc]</pre>
 
 <!-- ─── Slide 4 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">4/9</span> · the repository</p>
+  <p class="eyebrow"><span class="n">4/11</span> · the repository</p>
   <h2>An acetone repo is a bare git repo you can read with git</h2>
   <div class="grid2">
     <div>
@@ -172,7 +177,7 @@ edges_fwd key   [src node key][type][dst node key][disc]</pre>
 
 <!-- ─── Slide 5 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">5/9</span> · exit evidence</p>
+  <p class="eyebrow"><span class="n">5/11</span> · exit evidence</p>
   <h2>The e2e script, and a real GitHub round trip</h2>
   <p><code>scripts/phase1-e2e.sh</code> runs in CI on every push: init → plumbing
   writes → commit with trailer → branch → mutate → root-level diff (diverged
@@ -196,41 +201,137 @@ edges_fwd key   [src node key][type][dst node key][disc]</pre>
 
 <!-- ─── Slide 6 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">6/9</span> · the hard two</p>
-  <h2>Pack-on-write productionised; fsck born paranoid</h2>
-  <div class="grid2">
-    <div>
-      <h3>pack-on-write (#21, ADR-0011)</h3>
-      <ul>
-        <li>Predecessor recording as a pure observer on <code>apply_batch</code> —
-          output bit-identical, proven by test.</li>
-        <li>Hand-rolled git delta encoder + v2 pack/idx writers; every delta
-          round-trip-verified against exact bytes before use.</li>
-        <li>gc consolidation: bases-first topological order, chain caps,
-          fsync-before-prune, prune gated on the written pack's own contents —
-          a planning bug fails loudly, never deletes data.</li>
-        <li>Phase 0 measured the win at 7.1× retention; the machinery now exists
-          to collect it.</li>
-      </ul>
-    </div>
-    <div>
-      <h3>fsck (#22, ADR-0012)</h3>
-      <ul>
-        <li>Verifies every version reachable from workspaces, branches and tags:
-          manifest decode, chunk reachability, prolly structure at claimed positions.</li>
-        <li>MISSING and CORRUPT distinguished; every finding names its chunk.</li>
-        <li>Advisory tier for later-phase semantics (edge symmetry, annotated tags)
-          — incompleteness is declared, never silent.</li>
-        <li>Four review rounds; two proven false-cleans found and killed before
-          merge (next slide).</li>
-      </ul>
-    </div>
+  <p class="eyebrow"><span class="n">6/11</span> · storage economy</p>
+  <h2>Pack-on-write, part 1 — the problem, and the bet</h2>
+  <p>Every 1%-churn import commit rewrites the O(log n) spine of each touched
+  key. Chunk version <em>N+1</em> is almost identical to version <em>N</em> — a
+  prolly node with one entry changed — but git stores them as two independent
+  blobs.</p>
+  <div class="stats">
+    <div class="bignum">~39<small>MiB retained per<br>1%-churn commit (1M keys)</small></div>
+    <div class="bignum">~17×<small>the actual<br>changed payload</small></div>
+    <div class="bignum warn">~17<small>min for plain git gc<br>at ~900k loose objects</small></div>
   </div>
+  <p><code>git gc</code> reclaims some, but it is slow at that scale and picks
+  delta bases by a size/similarity <em>guess</em> that knows nothing about the
+  tree.</p>
+  <div class="callout ok">
+    <p><strong>The bet</strong> (validated in Phase 0, bead 63m.10, at <span class="good">7.1×</span>
+    better retention): we already know each new chunk's predecessor — so hand git
+    the exact delta base instead of making it guess.</p>
+  </div>
+  <p>Two foundations make that safe. <strong>Predecessor recording is a pure
+  observer</strong> on <code>apply_batch</code>: it receives <code>(new chunk →
+  predecessor)</code> after each chunk is stored, and the tree built is
+  byte-identical whether or not you are watching — history independence
+  (Invariant&nbsp;1) must not depend on observation. And the
+  <strong>representation-only invariant</strong>: consolidation changes <em>how</em>
+  bytes are stored, never <em>which</em> bytes and never any hash — a chunk's git
+  OID is the same loose, packed whole, or stored as a delta.</p>
 </section>
 
 <!-- ─── Slide 7 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">7/9</span> · process</p>
+  <p class="eyebrow"><span class="n">7/11</span> · storage economy</p>
+  <h2>Pack-on-write, part 2 — consolidation</h2>
+  <p><code>acetone gc</code> takes the accumulated loose chunks plus the
+  predecessor hints and rewrites them into one pack with chosen delta bases.</p>
+  <figure>
+    <svg viewBox="0 0 660 168" role="img" aria-label="A chain of chunk versions: a whole base object, then thin deltas each referencing its predecessor, with a fresh whole object restored roughly every 32 versions to cap the chain.">
+      <defs>
+        <marker id="ah" markerWidth="8" markerHeight="8" refX="6.5" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"></path>
+        </marker>
+      </defs>
+      <!-- whole base -->
+      <rect x="8" y="40" width="96" height="66" rx="5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+      <text class="dgm-box" x="56" y="69" text-anchor="middle">v1</text>
+      <text class="dgm-box" x="56" y="87" text-anchor="middle" style="fill:var(--accent)">whole</text>
+      <!-- deltas -->
+      <rect x="170" y="52" width="54" height="42" rx="5" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"></rect>
+      <text class="dgm-box" x="197" y="78" text-anchor="middle">Δ v2</text>
+      <rect x="266" y="52" width="54" height="42" rx="5" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"></rect>
+      <text class="dgm-box" x="293" y="78" text-anchor="middle">Δ v3</text>
+      <rect x="362" y="52" width="54" height="42" rx="5" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"></rect>
+      <text class="dgm-box" x="389" y="78" text-anchor="middle">Δ …</text>
+      <!-- delta references predecessor (arrows point back to base) -->
+      <line x1="170" y1="73" x2="106" y2="73" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#ah)"></line>
+      <line x1="266" y1="73" x2="226" y2="73" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#ah)"></line>
+      <line x1="362" y1="73" x2="322" y2="73" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#ah)"></line>
+      <text class="dgm-label" x="197" y="112" text-anchor="middle">delta vs. predecessor</text>
+      <!-- cap: whole again -->
+      <line x1="428" y1="73" x2="470" y2="73" stroke="var(--hairline)" stroke-width="1.2" stroke-dasharray="3 3"></line>
+      <rect x="472" y="40" width="96" height="66" rx="5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+      <text class="dgm-box" x="520" y="69" text-anchor="middle">v33</text>
+      <text class="dgm-box" x="520" y="87" text-anchor="middle" style="fill:var(--accent)">whole</text>
+      <rect x="592" y="52" width="54" height="42" rx="5" fill="var(--amber-soft)" stroke="var(--amber)" stroke-width="1.3"></rect>
+      <text class="dgm-box" x="619" y="78" text-anchor="middle">Δ …</text>
+      <line x1="592" y1="73" x2="570" y2="73" stroke="var(--muted)" stroke-width="1.2" marker-end="url(#ah)"></line>
+      <text class="dgm-label" x="520" y="26" text-anchor="middle">whole again ~every 32 → chain capped</text>
+    </svg>
+    <figcaption>A base is emitted before its deltas (bases-first); reconstruction
+    replays deltas from the nearest whole object, so the cap bounds read cost.</figcaption>
+  </figure>
+  <div class="grid2">
+    <div>
+      <h3>the four load-bearing mechanics</h3>
+      <ul>
+        <li><strong>Bases-first, iterative</strong> — each base precedes its deltas;
+          iterative not recursive (a recursive walk stack-overflowed at 100k chains,
+          caught in review), duplicate OIDs and cycles handled.</li>
+        <li><strong>Chain caps</strong> — a whole object ~every 32 versions bounds
+          reconstruction (&gt;6× vs 7.1×; reads stay fast).</li>
+      </ul>
+    </div>
+    <div>
+      <h3 style="visibility:hidden">.</h3>
+      <ul>
+        <li><strong>Prune gated on the pack</strong> — delete only OIDs the written
+          pack's index contains; a hard error if it misses the reachable set, so a
+          planning bug fails loud, never deletes the last copy.</li>
+        <li><strong>fsync before prune</strong> — pack + idx + dir durable before any
+          unlink; a dedicated <code>acetone-gc.lock</code> keeps commits unblocked.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="muted">Every emitted delta is round-trip-verified against the exact
+  chunk bytes and falls back to a whole object on any doubt (base past git's u32
+  offset, no size win, verify fail). Payoff: 7.1× (Phase 0); the regression
+  benchmark that keeps it honest is bead acetone-1qw. Run a foreign <code>git gc</code>
+  only after committing — let <code>acetone gc</code> do the packing.</p>
+</section>
+
+<!-- ─── Slide 8 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">8/11</span> · integrity</p>
+  <h2>fsck — born paranoid</h2>
+  <p>Built alongside the format, not after it: a verifier for every version a
+  repository can reach, on the assumption that repositories arrive over the
+  network from hostile origins.</p>
+  <ul>
+    <li>Verifies every version reachable from workspaces, branches and tags:
+      manifest decode, chunk reachability, and prolly structure checked at each
+      chunk's <em>claimed position in the tree</em> — a chunk valid in isolation
+      but referenced from the wrong place is caught, not trusted.</li>
+    <li><strong>MISSING and CORRUPT distinguished</strong>; every finding names its
+      offending chunk.</li>
+    <li>An <strong>advisory tier</strong> for later-phase semantics (edge symmetry,
+      annotated tags) — incompleteness is declared in the report, never silent.</li>
+    <li>Cross-version work memoised on <code>(root, height)</code> so a hostile repo
+      of many tiny commits can't force O(history × tree) re-verification.</li>
+  </ul>
+  <div class="callout">
+    <p>The hardest thing to get right in a verifier is that it never says
+    <em>clean</em> when the data isn't. Four review rounds; <strong>two proven
+    false-cleans</strong> — fsck reporting clean while <code>get</code>/<code>scan</code>
+    reject the same repo — found and killed before merge, one of them introduced
+    by an earlier review fix (next slide).</p>
+  </div>
+</section>
+
+<!-- ─── Slide 9 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">9/11</span> · process</p>
   <h2>What the review gate caught this phase</h2>
   <p>Every PR went through a fresh adversarial reviewer on the strongest model
   tier (ADR-0009, your in-session ruling). Four would-have-shipped defect classes:</p>
@@ -248,7 +349,7 @@ edges_fwd key   [src node key][type][dst node key][disc]</pre>
 
 <!-- ─── Slide 8 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">8/9</span> · decisions &amp; risks</p>
+  <p class="eyebrow"><span class="n">10/11</span> · decisions &amp; risks</p>
   <h2>Five ADRs on record; open risks are beaded and bounded</h2>
   <h3>decisions taken (made, not deferred)</h3>
   <ul>
@@ -274,7 +375,7 @@ edges_fwd key   [src node key][type][dst node key][disc]</pre>
 
 <!-- ─── Slide 9 ─────────────────────────────────────────── -->
 <section class="slide">
-  <p class="eyebrow"><span class="n">9/9</span> · the boundary</p>
+  <p class="eyebrow"><span class="n">11/11</span> · the boundary</p>
   <h2>Your calls, then Phase 2</h2>
   <ul>
     <li><strong>Close acetone-63m.8</strong> (the Phase 1 gate) if the evidence holds —
