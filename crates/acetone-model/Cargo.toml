@@ -16,3 +16,11 @@ thiserror.workspace = true
 # proptest: round-trip, ordering and canonicity properties over the
 # normative encodings (Load-Bearing Invariant 2).
 proptest.workspace = true
+# acetone-store (dev-only): the ChunkStore trait for the in-memory store
+# used by the prolly-layer integration tests (acceptance criterion of
+# acetone-63m.4). Already in the dependency tree via acetone-prolly.
+acetone-store.workspace = true
+# gix (dev-only): git-blob hashing for the in-memory test ChunkStore, so
+# manifest hashes match what a GitStore would produce. Already a
+# workspace dependency of acetone-store; adds nothing new to the tree.
+gix.workspace = true

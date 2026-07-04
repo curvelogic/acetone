@@ -52,6 +52,12 @@
 //! Any change to this encoding is a `format_version` bump (spec §10,
 //! Load-Bearing Invariant 2).
 
+use crate::cbor::{
+    HEAD_F16, HEAD_F32, HEAD_F64, MAJOR_ARRAY, MAJOR_BYTES, MAJOR_MAP, MAJOR_NEGATIVE,
+    MAJOR_SIMPLE, MAJOR_TAG, MAJOR_TEXT, MAJOR_UNSIGNED, Reader, SIMPLE_FALSE, SIMPLE_NULL,
+    SIMPLE_TRUE, f16_bits_to_f64, f16_from_f64_exact, f32_from_f64_exact, negative_to_i64,
+    read_i64, unsigned_to_i64, write_head, write_int,
+};
 use crate::{Date, DateTime, Duration, MAX_OFFSET_MINUTES, NANOS_PER_DAY, Time, Value};
 use thiserror::Error;
 
@@ -161,51 +167,9 @@ pub fn decode_value(bytes: &[u8]) -> Result<Value, ValueDecodeError> {
 // Encoding
 // ---------------------------------------------------------------------------
 
-const MAJOR_UNSIGNED: u8 = 0;
-const MAJOR_NEGATIVE: u8 = 1;
-const MAJOR_BYTES: u8 = 2;
-const MAJOR_TEXT: u8 = 3;
-const MAJOR_ARRAY: u8 = 4;
-const MAJOR_MAP: u8 = 5;
-const MAJOR_TAG: u8 = 6;
-const MAJOR_SIMPLE: u8 = 7;
-
-const SIMPLE_FALSE: u8 = 0xf4;
-const SIMPLE_TRUE: u8 = 0xf5;
-const SIMPLE_NULL: u8 = 0xf6;
-const HEAD_F16: u8 = 0xf9;
-const HEAD_F32: u8 = 0xfa;
-const HEAD_F64: u8 = 0xfb;
-
-/// Canonical (shortest-form) CBOR head.
-fn write_head(out: &mut Vec<u8>, major: u8, value: u64) {
-    let m = major << 5;
-    if value < 24 {
-        out.push(m | value as u8);
-    } else if value <= 0xff {
-        out.push(m | 24);
-        out.push(value as u8);
-    } else if value <= 0xffff {
-        out.push(m | 25);
-        out.extend_from_slice(&(value as u16).to_be_bytes());
-    } else if value <= 0xffff_ffff {
-        out.push(m | 26);
-        out.extend_from_slice(&(value as u32).to_be_bytes());
-    } else {
-        out.push(m | 27);
-        out.extend_from_slice(&value.to_be_bytes());
-    }
-}
-
-fn write_int(out: &mut Vec<u8>, n: i64) {
-    if n >= 0 {
-        write_head(out, MAJOR_UNSIGNED, n as u64);
-    } else {
-        // -1 - n, computed without overflow: !n reinterpreted as u64.
-        write_head(out, MAJOR_NEGATIVE, !(n as u64));
-    }
-}
-
+/// Canonical float item, shortest exact form, NaN canonicalised. Lives
+/// here rather than in [`crate::cbor`] because the NaN policy is a value-
+/// layer format decision (see module docs).
 fn write_float(out: &mut Vec<u8>, x: f64) {
     if x.is_nan() {
         // Canonical NaN: payloads are deliberately not preserved.
@@ -223,7 +187,11 @@ fn write_float(out: &mut Vec<u8>, x: f64) {
     }
 }
 
-fn write_value(out: &mut Vec<u8>, value: &Value, depth: usize) -> Result<(), ValueEncodeError> {
+pub(crate) fn write_value(
+    out: &mut Vec<u8>,
+    value: &Value,
+    depth: usize,
+) -> Result<(), ValueEncodeError> {
     if depth > MAX_DEPTH {
         return Err(ValueEncodeError::DepthExceeded);
     }
@@ -289,127 +257,7 @@ fn write_value(out: &mut Vec<u8>, value: &Value, depth: usize) -> Result<(), Val
 // Decoding
 // ---------------------------------------------------------------------------
 
-struct Reader<'a> {
-    input: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn remaining(&self) -> usize {
-        self.input.len() - self.pos
-    }
-
-    fn read_u8(&mut self) -> Result<u8, ValueDecodeError> {
-        let b = *self
-            .input
-            .get(self.pos)
-            .ok_or(ValueDecodeError::UnexpectedEnd)?;
-        self.pos += 1;
-        Ok(b)
-    }
-
-    fn read_exact(&mut self, n: usize) -> Result<&'a [u8], ValueDecodeError> {
-        if self.remaining() < n {
-            return Err(ValueDecodeError::UnexpectedEnd);
-        }
-        let slice = &self.input[self.pos..self.pos + n];
-        self.pos += n;
-        Ok(slice)
-    }
-
-    fn read_be_u64(&mut self, width: usize) -> Result<u64, ValueDecodeError> {
-        let bytes = self.read_exact(width)?;
-        let mut v: u64 = 0;
-        for &b in bytes {
-            v = (v << 8) | u64::from(b);
-        }
-        Ok(v)
-    }
-
-    /// Read a CBOR head for majors 0–6, enforcing shortest form and
-    /// definite length. Major 7 is handled separately (floats/simples).
-    fn read_head(&mut self, expected_major: u8) -> Result<u64, ValueDecodeError> {
-        let ib = self.read_u8()?;
-        let major = ib >> 5;
-        if major != expected_major {
-            return Err(ValueDecodeError::Unsupported("unexpected major type"));
-        }
-        self.read_head_value(ib & 0x1f)
-    }
-
-    fn read_head_value(&mut self, ai: u8) -> Result<u64, ValueDecodeError> {
-        match ai {
-            0..=23 => Ok(u64::from(ai)),
-            24 => {
-                let v = self.read_be_u64(1)?;
-                if v < 24 {
-                    return Err(ValueDecodeError::NonCanonical("overlong head"));
-                }
-                Ok(v)
-            }
-            25 => {
-                let v = self.read_be_u64(2)?;
-                if v <= 0xff {
-                    return Err(ValueDecodeError::NonCanonical("overlong head"));
-                }
-                Ok(v)
-            }
-            26 => {
-                let v = self.read_be_u64(4)?;
-                if v <= 0xffff {
-                    return Err(ValueDecodeError::NonCanonical("overlong head"));
-                }
-                Ok(v)
-            }
-            27 => {
-                let v = self.read_be_u64(8)?;
-                if v <= 0xffff_ffff {
-                    return Err(ValueDecodeError::NonCanonical("overlong head"));
-                }
-                Ok(v)
-            }
-            28..=30 => Err(ValueDecodeError::MalformedHead),
-            31 => Err(ValueDecodeError::Unsupported("indefinite length")),
-            _ => unreachable!("additional information is 5 bits"),
-        }
-    }
-
-    fn check_len(&self, declared: u64) -> Result<usize, ValueDecodeError> {
-        if declared > self.remaining() as u64 {
-            return Err(ValueDecodeError::LengthOverrun {
-                declared,
-                remaining: self.remaining(),
-            });
-        }
-        Ok(declared as usize)
-    }
-}
-
-fn unsigned_to_i64(v: u64) -> Result<i64, ValueDecodeError> {
-    i64::try_from(v).map_err(|_| ValueDecodeError::IntOutOfRange)
-}
-
-fn negative_to_i64(v: u64) -> Result<i64, ValueDecodeError> {
-    // Encoded value v represents -1 - v.
-    if v > i64::MAX as u64 {
-        return Err(ValueDecodeError::IntOutOfRange);
-    }
-    Ok(-1 - (v as i64))
-}
-
-/// Read an integer item (major 0 or 1) as i64.
-fn read_i64(reader: &mut Reader) -> Result<i64, ValueDecodeError> {
-    let ib = reader.read_u8()?;
-    let major = ib >> 5;
-    let v = reader.read_head_value(ib & 0x1f)?;
-    match major {
-        MAJOR_UNSIGNED => unsigned_to_i64(v),
-        MAJOR_NEGATIVE => negative_to_i64(v),
-        _ => Err(ValueDecodeError::Unsupported("expected integer")),
-    }
-}
-
-fn read_value(reader: &mut Reader, depth: usize) -> Result<Value, ValueDecodeError> {
+pub(crate) fn read_value(reader: &mut Reader, depth: usize) -> Result<Value, ValueDecodeError> {
     if depth > MAX_DEPTH {
         return Err(ValueDecodeError::DepthExceeded);
     }
@@ -584,76 +432,6 @@ fn read_simple_or_float(reader: &mut Reader, ai: u8) -> Result<Value, ValueDecod
         28..=30 => Err(ValueDecodeError::MalformedHead),
         31 => Err(ValueDecodeError::Unsupported("break")),
         _ => unreachable!("additional information is 5 bits"),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Half-precision helpers
-// ---------------------------------------------------------------------------
-
-/// Convert IEEE-754 binary16 bits to f64 exactly. NaN inputs must be
-/// filtered by the caller (this returns the canonical NaN for them).
-fn f16_bits_to_f64(bits: u16) -> f64 {
-    let negative = bits & 0x8000 != 0;
-    let exp = u32::from((bits >> 10) & 0x1f);
-    let frac = u64::from(bits & 0x03ff);
-    let magnitude = match exp {
-        0 => frac as f64 * 2f64.powi(-24),
-        31 => {
-            if frac == 0 {
-                f64::INFINITY
-            } else {
-                return f64::from_bits(CANONICAL_NAN_BITS);
-            }
-        }
-        e => (1024 + frac) as f64 * 2f64.powi(e as i32 - 25),
-    };
-    if negative { -magnitude } else { magnitude }
-}
-
-/// Return the binary16 bits representing `x` exactly, if any.
-/// `x` must not be NaN.
-fn f16_from_f64_exact(x: f64) -> Option<u16> {
-    debug_assert!(!x.is_nan());
-    let bits = x.to_bits();
-    let sign = (((bits >> 63) as u16) & 1) << 15;
-    if x == 0.0 {
-        return Some(sign); // ±0.0, preserving the sign bit
-    }
-    if x.is_infinite() {
-        return Some(sign | 0x7c00);
-    }
-    let exp = ((bits >> 52) & 0x7ff) as i32 - 1023;
-    let frac = bits & 0x000f_ffff_ffff_ffff;
-    if (-14..=15).contains(&exp) {
-        // Normal in f16 if the low 42 fraction bits are zero.
-        if frac & ((1u64 << 42) - 1) == 0 {
-            return Some(sign | (((exp + 15) as u16) << 10) | (frac >> 42) as u16);
-        }
-        return None;
-    }
-    if (-24..=-15).contains(&exp) {
-        // Subnormal in f16: x = k * 2^-24 with 1 <= k < 1024.
-        let significand = (1u64 << 52) | frac;
-        let shift = (28 - exp) as u32; // 43..=52
-        if significand & ((1u64 << shift) - 1) == 0 {
-            return Some(sign | (significand >> shift) as u16);
-        }
-        return None;
-    }
-    // Out of f16 range entirely (including f64 subnormals, exp == -1023).
-    None
-}
-
-/// Return `x` as f32 if the conversion is exact (bit-for-bit round trip).
-/// `x` must not be NaN.
-fn f32_from_f64_exact(x: f64) -> Option<f32> {
-    debug_assert!(!x.is_nan());
-    let y = x as f32;
-    if (f64::from(y)).to_bits() == x.to_bits() {
-        Some(y)
-    } else {
-        None
     }
 }
 

@@ -1,13 +1,6 @@
 //! The acetone data model (spec §2–§3.4).
 //!
-//! Currently: the property [`Value`] model and the two normative
-//! encodings — memcomparable keys (byte order equals logical order) and
-//! canonical deterministic CBOR values. Records, schema layout and the
-//! manifest (the record of map roots that constitutes a graph version)
-//! join this crate in later beads. Encoding changes bump
-//! `format_version`.
-//!
-//! Two encoding modules (spec §3.4, Load-Bearing Invariant 2):
+//! The two primitive encodings (spec §3.4, Load-Bearing Invariant 2):
 //!
 //! - [`keys`] — order-preserving (memcomparable) tuple encoding, so that
 //!   comparing encoded byte strings equals comparing logical key tuples and
@@ -15,10 +8,25 @@
 //! - [`values`] — canonical deterministic CBOR (RFC 8949 §4.2 core
 //!   deterministic encoding profile) for property values.
 //!
-//! Both encodings are **normative**: any change to either is a
+//! And their composition into the v0.1 maps (spec §3.3, ADR-0008):
+//!
+//! - [`graph_keys`] — node/edge/index key layouts for `nodes`,
+//!   `edges_fwd`, `edges_rev` and `idx/<name>`, plus scan-prefix helpers;
+//! - [`records`] — node and edge record values;
+//! - [`schema`] — the `schema` map: label, relationship-type and index
+//!   declarations;
+//! - [`manifest`] — the record of map roots that constitutes one graph
+//!   version, carrying [`manifest::FORMAT_VERSION`].
+//!
+//! Every encoding in this crate is **normative**: any change is a
 //! `format_version` bump in the manifest header (spec §10).
 
+pub(crate) mod cbor;
+pub mod graph_keys;
 pub mod keys;
+pub mod manifest;
+pub mod records;
+pub mod schema;
 pub mod values;
 
 /// Nanoseconds in a civil day; [`Time::nanos`] must be strictly below this.

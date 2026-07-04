@@ -15,8 +15,16 @@
 //! Appendix A; temporal and key fixtures were computed independently of
 //! the implementation.
 
+use acetone_model::graph_keys::{EdgeKey, IndexEntry, NodeKey, node_label_prefix};
+use acetone_model::manifest::{Manifest, MapRoot};
+use acetone_model::records::{EdgeRecord, NodeRecord};
+use acetone_model::schema::{
+    IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry, schema_kind_prefix,
+};
 use acetone_model::{Date, DateTime, Duration, Time, Value};
 use acetone_model::{keys, values};
+use acetone_prolly::{ChunkParams, Hash};
+use std::collections::BTreeMap;
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -223,4 +231,210 @@ fn golden_keys_tuples_and_lists() {
         &[Value::List(vec![Value::List(vec![Value::Null])])],
         "0c0c010000",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Spec §3.3 map layouts (ADR-0008) — format_version 1 fixtures
+// ---------------------------------------------------------------------------
+
+fn host_web1() -> NodeKey {
+    NodeKey::new("Host", vec![Value::String("web1".into())]).expect("valid")
+}
+
+fn service_db() -> NodeKey {
+    NodeKey::new("Service", vec![Value::String("db".into())]).expect("valid")
+}
+
+#[test]
+fn golden_node_keys() {
+    // List element wrapping String("Host"), String("web1"):
+    // 0c · string "Host" (one padded group, marker fb) · string "web1" ·
+    // list end 00. Verified by hand against the pinned key primitives.
+    let node = host_web1();
+    let bytes = node.encode().expect("encode");
+    assert_eq!(hex(&bytes), "0c06486f737400000000fb067765623100000000fb00");
+    assert_eq!(NodeKey::decode(&bytes).expect("decode"), node);
+    // The label prefix is the list opening plus the label element only.
+    assert_eq!(hex(&node_label_prefix("Host")), "0c06486f737400000000fb");
+}
+
+#[test]
+fn golden_edge_keys() {
+    let edge = EdgeKey::new(host_web1(), "DEPENDS_ON", service_db(), Value::Null).expect("valid");
+    // fwd = src node key ++ string "DEPENDS_ON" ++ dst node key ++ null.
+    assert_eq!(
+        hex(&edge.encode_fwd().expect("encode")),
+        "0c06486f737400000000fb067765623100000000fb00\
+         06444550454e44535fff4f4e000000000000f9\
+         0c065365727669636500fe066462000000000000f900\
+         01"
+        .replace(char::is_whitespace, "")
+    );
+    // rev swaps the endpoints, nothing else.
+    assert_eq!(
+        hex(&edge.encode_rev().expect("encode")),
+        "0c065365727669636500fe066462000000000000f900\
+         06444550454e44535fff4f4e000000000000f9\
+         0c06486f737400000000fb067765623100000000fb00\
+         01"
+        .replace(char::is_whitespace, "")
+    );
+}
+
+#[test]
+fn golden_index_entry() {
+    let entry =
+        IndexEntry::new("Host", "os", Value::String("linux".into()), host_web1()).expect("valid");
+    // (label, property, value, node key) — label/property as bare strings,
+    // the node key as its one list-element encoding.
+    assert_eq!(
+        hex(&entry.encode().expect("encode")),
+        "06486f737400000000fb066f73000000000000f9066c696e7578000000fc\
+         0c06486f737400000000fb067765623100000000fb00"
+            .replace(char::is_whitespace, "")
+    );
+}
+
+#[test]
+fn golden_node_and_edge_records() {
+    // [["Edge"], {"os": "linux", "cores": 8}] — property keys in canonical
+    // (length-first) order: "os" before "cores".
+    let record = NodeRecord::new(
+        ["Edge".to_owned()],
+        [
+            ("os".to_owned(), Value::String("linux".into())),
+            ("cores".to_owned(), Value::Int(8)),
+        ]
+        .into(),
+    );
+    let bytes = record.encode().expect("encode");
+    assert_eq!(
+        hex(&bytes),
+        "82816445646765a2626f73656c696e757865636f72657308"
+    );
+    assert_eq!(NodeRecord::decode(&bytes).expect("decode"), record);
+
+    // {"weight": 0.5} — bare properties map, shortest-form float.
+    let edge = EdgeRecord::new([("weight".to_owned(), Value::Float(0.5))].into());
+    let bytes = edge.encode().expect("encode");
+    assert_eq!(hex(&bytes), "a166776569676874f93800");
+    assert_eq!(EdgeRecord::decode(&bytes).expect("decode"), edge);
+}
+
+#[test]
+fn golden_schema_entries() {
+    let label = SchemaEntry::Label {
+        name: "Host".into(),
+        def: LabelDef::new(
+            vec!["name".into()],
+            [("os".to_owned(), PropertyType::String)].into(),
+            ["os".to_owned()],
+            ["serial".to_owned()],
+        )
+        .expect("valid"),
+    };
+    assert_eq!(
+        hex(&label.map_key()),
+        "066c6162656c000000fc06486f737400000000fb"
+    );
+    // {"key": ["name"], "types": {"os": "string"}, "exists": ["os"],
+    //  "unique": ["serial"], "surrogate": false} in canonical field order.
+    assert_eq!(
+        hex(&label.encode_value()),
+        "a5636b657981646e616d65657479706573a1626f7366737472696e67\
+         6665786973747381626f7366756e69717565816673657269616c\
+         69737572726f67617465f4"
+            .replace(char::is_whitespace, "")
+    );
+
+    let rtype = SchemaEntry::RelType {
+        name: "DEPENDS_ON".into(),
+        def: RelTypeDef::new(Some("port".into()), BTreeMap::new(), []).expect("valid"),
+    };
+    assert_eq!(
+        hex(&rtype.map_key()),
+        "067274797065000000fc06444550454e44535fff4f4e000000000000f9"
+    );
+    // {"disc": "port", "types": {}, "exists": []}.
+    assert_eq!(
+        hex(&rtype.encode_value()),
+        "a3646469736364706f7274657479706573a06665786973747380"
+    );
+
+    let index = SchemaEntry::Index {
+        name: "host_os".into(),
+        def: IndexDef::new("Host", "os").expect("valid"),
+    };
+    assert_eq!(
+        hex(&index.map_key()),
+        "06696e646578000000fc06686f73745f6f7300fe"
+    );
+    // {"label": "Host", "property": "os"}.
+    assert_eq!(
+        hex(&index.encode_value()),
+        "a2656c6162656c64486f73746870726f7065727479626f73"
+    );
+
+    assert_eq!(hex(&schema_kind_prefix("label")), "066c6162656c000000fc");
+
+    // All three decode back exactly.
+    for entry in [label, rtype, index] {
+        assert_eq!(
+            SchemaEntry::decode(&entry.map_key(), &entry.encode_value()).expect("decode"),
+            entry
+        );
+    }
+}
+
+#[test]
+fn golden_manifest() {
+    let root = |seed: u8, height: u32| MapRoot {
+        hash: Hash::from_bytes(&[seed; 20]).expect("SHA-1 width"),
+        height,
+    };
+    let manifest = Manifest {
+        chunk_params: ChunkParams::new(1024, 12, 65536).expect("valid"),
+        schema: root(0x11, 1),
+        nodes: root(0x22, 2),
+        edges_fwd: root(0x33, 1),
+        edges_rev: root(0x44, 1),
+        indexes: [("host_os".to_owned(), root(0x55, 1))].into(),
+        conflicts: None,
+    };
+    // [1, {"nodes": …, "schema": …, "indexes": {…}, "edges_fwd": …,
+    //      "edges_rev": …, "chunk_params": [1024, 12, 65536]}]
+    let expected = "8201a6\
+        656e6f6465738254222222222222222222222222222222222222222202\
+        66736368656d618254111111111111111111111111111111111111111101\
+        67696e6465786573a167686f73745f6f738254555555555555555555555555555555555555555501\
+        6965646765735f667764825433333333333333333333333333333333333333330\
+        16965646765735f726576825444444444444444444444444444444444444444440\
+        16c6368756e6b5f706172616d73831904000c1a00010000"
+        .replace(char::is_whitespace, "");
+    let bytes = manifest.encode();
+    assert_eq!(
+        hex(&bytes),
+        expected,
+        "manifest encoding changed — this is a format_version bump"
+    );
+    assert_eq!(Manifest::decode(&bytes).expect("decode"), manifest);
+
+    // Mid-merge variant carries a "conflicts" root between "indexes" and
+    // "edges_fwd" (canonical key order).
+    let merging = Manifest {
+        conflicts: Some(root(0x66, 1)),
+        ..manifest
+    };
+    let expected_merging = "8201a7\
+        656e6f6465738254222222222222222222222222222222222222222202\
+        66736368656d618254111111111111111111111111111111111111111101\
+        67696e6465786573a167686f73745f6f738254555555555555555555555555555555555555555501\
+        69636f6e666c69637473825466666666666666666666666666666666666666660\
+        16965646765735f667764825433333333333333333333333333333333333333330\
+        16965646765735f726576825444444444444444444444444444444444444444440\
+        16c6368756e6b5f706172616d73831904000c1a00010000"
+        .replace(char::is_whitespace, "");
+    let bytes = merging.encode();
+    assert_eq!(hex(&bytes), expected_merging);
+    assert_eq!(Manifest::decode(&bytes).expect("decode"), merging);
 }

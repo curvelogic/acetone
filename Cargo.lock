@@ -29,6 +29,8 @@ name = "acetone-model"
 version = "0.0.1"
 dependencies = [
  "acetone-prolly",
+ "acetone-store",
+ "gix",
  "proptest",
  "thiserror",
 ]
