@@ -13,7 +13,10 @@ phase-boundary bullet previously specified only the written report.
 Each phase boundary opens with a **sprint demo**, agent-prepared: (1) a
 several-slide presentation (Artifact) covering context, where we are, what
 was done, and the problems and decisions that arose; (2) a live demo —
-driving the phase's actual code, CLI and tooling in-session with commentary;
+driving the phase's actual code, CLI and tooling in-session, step by step,
+one step per turn with output quoted and discussed before proceeding
+(refined at the first demo, 2026-07-04: batched steps or background runs
+defeat the purpose);
 (3) Greg then reviews the docs in detail at his own pace, rules on queued
 decisions, and closes the gate bead.
 
