@@ -128,7 +128,16 @@ coarser batching, compaction) are not needed for this problem, though key
 locality remains worth having: rewrite amplification is now the dominant
 residual cost, deltas having removed the rest of the 17×.
 
-## Implications for acetone-store (63m.1)
+## Implications for acetone-store
+
+Two caveats for the production port, from review: the measured 7.1× uses
+uncapped depth-100 delta chains — the recommended periodic whole anchors
+(every ~32 versions) will shave the ratio slightly (rough arithmetic keeps
+it above 6×, still past the bar); and the experiment's delta encoder indexes
+positions as u32, so a production implementation must guard
+`base.len() <= u32::MAX` (or fall back to a whole object) — silent copy-op
+truncation on ≥4 GiB bases is exactly the kind of trap a port would hit,
+even though chunk max_bytes makes it unreachable here. (63m.1)
 
 - The batched-put path should thread the (new chunk → predecessor) mapping
   out of the prolly splice exactly as the spike does; it is a natural
