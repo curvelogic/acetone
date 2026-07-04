@@ -154,6 +154,16 @@ pub(crate) fn decode_node(data: &Bytes, expect_level: u8) -> Result<Node, Prolly
     Ok(node)
 }
 
+/// Decode a chunk against its *own* level tag, with no claim about where
+/// it sits in a tree. Used by the fsck walk, which validates position
+/// separately so it can classify a level mismatch as a fault rather than
+/// abort. Returns the self-reported level alongside the decoded node.
+pub(crate) fn decode_node_self(data: &Bytes) -> Result<(u8, Node), ProllyError> {
+    let level = *data.first().ok_or_else(|| corrupt("empty chunk"))?;
+    let node = decode_node(data, level)?;
+    Ok((level, node))
+}
+
 /// Fetch and decode the node at `hash`, validating:
 ///
 /// - the chunk exists ([`ProllyError::MissingChunk`] otherwise — dangling

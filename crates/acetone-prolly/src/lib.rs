@@ -51,6 +51,7 @@ mod merge;
 mod node;
 mod scan;
 mod tree;
+mod verify;
 mod walk;
 
 pub use acetone_store::{Bytes, Hash};
@@ -61,6 +62,7 @@ pub use error::ProllyError;
 pub use merge::{Conflict, MergeOutcome, merge};
 pub use scan::{Scan, scan, scan_rev};
 pub use tree::{apply_batch, apply_batch_recording, bulk_load, empty, get};
+pub use verify::{ChunkFault, ChunkFaultKind, verify_reachable};
 pub use walk::{collect_reachable_chunks, reachable_chunks};
 
 /// Maximum tree height (levels). Fan-out keeps real trees in single
