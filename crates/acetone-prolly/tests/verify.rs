@@ -13,10 +13,40 @@ mod common;
 use proptest::prelude::*;
 
 use acetone_prolly::{
-    BatchOp, ChunkFaultKind, ChunkParams, Hash, Root, apply_batch, bulk_load, empty,
-    reachable_chunks, verify_reachable,
+    BatchOp, ChunkFaultKind, ChunkParams, Hash, Root, apply_batch, bulk_load, empty, get,
+    reachable_chunks, scan, verify_reachable,
 };
+use acetone_store::ChunkStore;
 use common::{Map, MemStore, bulk_entries};
+
+/// Encode a leaf chunk (level 0) from `(key, value)` entries, in the node
+/// format, so tests can hand-build specific — including deliberately
+/// misplaced — trees whose chunks are honestly content-addressed.
+fn leaf(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
+    let mut out = vec![0u8];
+    out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+    for (k, v) in entries {
+        out.extend_from_slice(&(k.len() as u32).to_be_bytes());
+        out.extend_from_slice(k);
+        out.extend_from_slice(&(v.len() as u32).to_be_bytes());
+        out.extend_from_slice(v);
+    }
+    out
+}
+
+/// Encode an inner chunk at `level` from `(last_key, child hash)` refs.
+fn inner(level: u8, refs: &[(&[u8], Hash)]) -> Vec<u8> {
+    let mut out = vec![level];
+    out.extend_from_slice(&(refs.len() as u32).to_be_bytes());
+    for (k, h) in refs {
+        out.extend_from_slice(&(k.len() as u32).to_be_bytes());
+        out.extend_from_slice(k);
+        let bytes = h.as_bytes();
+        out.push(bytes.len() as u8);
+        out.extend_from_slice(bytes);
+    }
+    out
+}
 
 /// A store holding one multi-level tree, with its chunk addresses grouped
 /// into leaves (level tag 0) and inner nodes.
@@ -271,6 +301,81 @@ fn self_referencing_inner_node_cannot_trap_the_walk() {
             .iter()
             .any(|fault| fault.kind == ChunkFaultKind::Corrupt),
         "self-reference must surface as corruption: {faults:?}"
+    );
+}
+
+#[test]
+fn first_child_spine_bound_is_inherited() {
+    // Regression for a proven false-clean: the exclusive lower bound must be
+    // inherited down the FIRST-child spine, exactly as the read paths do
+    // (tree::get / Descent::descend use `prev_last_key.or(min_key_exclusive)`).
+    //
+    // Tree (honestly content-addressed, no bit-rot):
+    //   root L2 [("c", A1), ("zz", B1)]
+    //   A1  L1 [("c", leaf["b","c"])]
+    //   B1  L1 [("z", L0), ("zz", M0)]
+    //   L0 = leaf["a","z"]      <- first child of B1, whose inherited lower
+    //                              bound is "c" (B1 follows A1); "a" <= "c",
+    //                              so L0 holds keys below its position.
+    let store = MemStore::new();
+    let leaf_bc = store
+        .put(&leaf(&[(b"b", b"1"), (b"c", b"1")]))
+        .expect("put");
+    let l0 = store
+        .put(&leaf(&[(b"a", b"1"), (b"z", b"1")]))
+        .expect("put");
+    let m0 = store.put(&leaf(&[(b"zz", b"1")])).expect("put");
+    let a1 = store.put(&inner(1, &[(b"c", leaf_bc)])).expect("put");
+    let b1 = store
+        .put(&inner(1, &[(b"z", l0), (b"zz", m0)]))
+        .expect("put");
+    let root_hash = store
+        .put(&inner(2, &[(b"c", a1), (b"zz", b1)]))
+        .expect("put");
+    let root = Root::new(root_hash, 3, ChunkParams::default()).expect("root");
+
+    // The read paths reject this tree, so a clean verify would be a genuine
+    // false-clean.
+    assert!(
+        get(&store, &root, b"d").is_err(),
+        "get must reject the misplaced tree"
+    );
+    assert!(
+        scan(&store, &root, ..)
+            .and_then(|s| s.collect::<Result<Vec<_>, _>>())
+            .is_err(),
+        "scan must reject the misplaced tree"
+    );
+
+    let faults = verify_reachable(&store, &root);
+    assert!(
+        faults
+            .iter()
+            .any(|f| f.hash == l0 && f.kind == ChunkFaultKind::Corrupt),
+        "verify must flag L0 as corrupt (keys below its position), got {faults:?}"
+    );
+}
+
+#[test]
+fn shared_subtree_diamond_is_caught_and_terminates() {
+    // A hostile store serving the same inner node from two references with
+    // incompatible last-key claims (impossible to build honestly; a broken
+    // store can serve it). The walk must terminate and flag the disorder,
+    // never loop or return clean.
+    let store = MemStore::new();
+    let leaf_x = store
+        .put(&leaf(&[(b"a", b"1"), (b"m", b"1")]))
+        .expect("put");
+    let x = store.put(&inner(1, &[(b"m", leaf_x)])).expect("put"); // X.last = "m"
+    // Root references X twice: once truthfully ("m"), once with a false
+    // boundary claim ("z"). The second reference hits the cached path.
+    let root_hash = store.put(&inner(2, &[(b"m", x), (b"z", x)])).expect("put");
+    let root = Root::new(root_hash, 3, ChunkParams::default()).expect("root");
+
+    let faults = verify_reachable(&store, &root);
+    assert!(
+        faults.iter().any(|f| f.kind == ChunkFaultKind::Corrupt),
+        "a shared subtree with a false boundary claim must be flagged, got {faults:?}"
     );
 }
 

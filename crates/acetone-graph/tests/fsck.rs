@@ -281,6 +281,55 @@ fn asymmetric_edge_maps_are_an_advisory_not_an_error() {
 }
 
 #[test]
+fn undecodable_edge_entries_surface_as_advisory_not_silence() {
+    // A structurally valid edge chunk (verify_reachable is happy) whose
+    // *value* is not a valid edge record: Snapshot::edges() fails to decode.
+    // fsck must surface this, not silently pass the repository as clean.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+
+    let base = repo.workspace_manifest().expect("manifest");
+    let empty_fwd = base.edges_fwd.to_root(base.chunk_params).expect("root");
+    let key = EdgeKey::new(node("Host", "a"), "LINK", node("Host", "b"), Value::Null).expect("key");
+    let fwd = apply_batch(
+        store,
+        &empty_fwd,
+        vec![BatchOp::Put(
+            key.encode_fwd().expect("encode"),
+            b"this is not a valid edge record".to_vec(),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.edges_fwd = MapRoot::from_root(&fwd);
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/badedge", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        !report.is_clean(),
+        "an undecodable edge entry must not read as clean"
+    );
+    assert!(
+        report.advisories().any(|f| {
+            f.kind == FindingKind::EdgeAsymmetry
+                && matches!(&f.origin, acetone_graph::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/badedge")
+        }),
+        "expected an edge advisory for the bad-edge workspace, got {:?}",
+        report.findings
+    );
+    assert!(
+        !report.has_errors(),
+        "the structurally sound chunk is not an error-severity finding: {:?}",
+        report.findings
+    );
+}
+
+#[test]
 fn commit_history_versions_are_verified() {
     // Damage a chunk that only a *historical* commit references (not the
     // current workspace), and confirm fsck still catches it by walking

@@ -407,9 +407,13 @@ fn verify_map(
 /// key, so a reverse entry is matched to the forward entry for the same
 /// edge regardless of which map it came from.
 ///
-/// Structural corruption of either edge map has already been reported by
-/// [`verify_map`]; if scanning the maps fails here (the same corruption),
-/// the advisory is simply skipped rather than double-reported.
+/// [`verify_map`] has already confirmed both edge maps are structurally
+/// sound *prolly trees*, but a structurally valid chunk can still hold a
+/// byte string that is not a valid edge key or record. Full semantic
+/// validation of map contents is a later-phase concern (ADR-0011), so when
+/// an edge entry fails to decode this surfaces it as a clearly-labelled
+/// advisory — "could not check symmetry" — rather than silently passing
+/// the repository as clean.
 fn check_edge_symmetry(
     store: &GitStore,
     origin: &Origin,
@@ -417,9 +421,35 @@ fn check_edge_symmetry(
     report: &mut FsckReport,
 ) {
     let snapshot = Snapshot::new(store, manifest.clone());
-    let (forward, reverse) = match (snapshot.edges(), snapshot.reverse_edge_keys()) {
-        (Ok(forward), Ok(reverse)) => (forward, reverse),
-        _ => return,
+    let forward = match snapshot.edges() {
+        Ok(forward) => forward,
+        Err(err) => {
+            report.push(
+                FindingKind::EdgeAsymmetry,
+                origin,
+                Some(MapId::EdgesFwd),
+                format!(
+                    "forward edge entries could not be decoded as edges, so symmetry \
+                     was not checked: {err}"
+                ),
+            );
+            return;
+        }
+    };
+    let reverse = match snapshot.reverse_edge_keys() {
+        Ok(reverse) => reverse,
+        Err(err) => {
+            report.push(
+                FindingKind::EdgeAsymmetry,
+                origin,
+                Some(MapId::EdgesRev),
+                format!(
+                    "reverse edge entries could not be decoded as edges, so symmetry \
+                     was not checked: {err}"
+                ),
+            );
+            return;
+        }
     };
 
     let mut forward_ids = BTreeSet::new();

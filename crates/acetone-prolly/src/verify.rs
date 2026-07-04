@@ -119,7 +119,16 @@ pub fn verify_reachable<S: ChunkStore>(store: &S, root: &Root) -> Vec<ChunkFault
     while let Some(reference) = frontier.pop() {
         // A chunk we have already decoded as an inner node: re-check this
         // parent's claim against the cached decode, but do not re-read or
-        // re-expand it.
+        // re-expand it. Re-checking level and the last-key claim here is
+        // enough: a shared subtree that is *misplaced* (its keys fall below
+        // a tighter parent's position) cannot reach this branch undetected,
+        // because from a single root any two parents of a chunk have a
+        // lowest common ancestor that orders them — the misplaced parent is
+        // either the root's later child (flagged by its own bound before its
+        // children are enqueued) or is descended fresh, where the bound is
+        // threaded to the leaves. Two parents both descending a shared child
+        // would need overlapping, non-orderable sibling ranges, which the
+        // ancestor check rejects first.
         if let Some(inner) = inner_cache.get(&reference.hash) {
             let first = inner.children.first().map(|(k, _)| k.as_ref());
             let last = inner.children.last().map(|(k, _)| k.as_ref());
@@ -188,7 +197,12 @@ pub fn verify_reachable<S: ChunkStore>(store: &S, root: &Root) -> Vec<ChunkFault
             let children: Vec<(Bytes, Hash)> =
                 refs.iter().map(|r| (r.last_key.clone(), r.hash)).collect();
             let child_level = level - 1;
-            let mut prev: Option<Bytes> = None;
+            // The first child inherits *this* node's own lower bound (the
+            // ancestor bound threaded down the left spine); each later child
+            // is bounded below by its preceding sibling's last key. Losing
+            // this inheritance on the first child was a false-clean: a leaf
+            // on the left spine could hold keys below its position and pass.
+            let mut prev: Option<Bytes> = reference.min_key.clone();
             for (last_key, hash) in &children {
                 frontier.push(Reference {
                     hash: *hash,

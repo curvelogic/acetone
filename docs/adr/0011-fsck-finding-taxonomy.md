@@ -60,7 +60,12 @@ false when one fires.
   validates heights; kept so the walk stays total against hand-built
   manifests).
 - `EdgeAsymmetry` (advisory) — the forward and reverse edge maps disagree
-  on the edge set.
+  on the edge set, **or** an edge entry could not be decoded as an edge so
+  symmetry could not be checked. Full semantic validation of map *contents*
+  (that every key/value is a well-formed edge or index entry) is a
+  later-phase concern; a decode failure encountered while computing the
+  symmetry advisory is surfaced as an advisory rather than silently passed,
+  so the repository does not read as clean.
 
 Every chunk-level finding **names the offending chunk** (`chunk:
 Option<Hash>`), including `CorruptChunk` — the walk that produces them
@@ -102,6 +107,21 @@ as trustworthy as the tree reader itself.
   write path, their fsck checks can start as advisories and be promoted
   to `Error` once the write path guarantees them, without changing the
   report shape.
+- **Position checks match the read paths exactly.** The walk threads each
+  node's exclusive lower bound down the tree the way `tree::get` and the
+  scan cursor do — including *inheriting* the ancestor bound onto a node's
+  first child — so a chunk that the read paths would reject (keys below its
+  position) is a `CorruptChunk`, never a false clean. Losing that
+  first-child inheritance was a real false-clean caught in review.
+- **Scope boundaries, with follow-ups filed.** This skeletal verifier walks
+  workspaces (`refs/acetone/workspaces/*`) and branch history
+  (`refs/heads/*`), the ref sets the bead names. It does **not** yet walk
+  `refs/tags/*` (annotated tags need dereferencing) and it re-verifies each
+  commit's maps independently, without deduplicating chunk sets shared
+  across versions — so verifying deep history is O(history × tree). Both are
+  tracked as follow-up beads; neither is a correctness (false-clean) gap,
+  only coverage and cost. (Follow-ups: `acetone-8t3` tag coverage,
+  `acetone-7fe` cross-version deduplication.)
 - **Revisit** when index verification and cross-map referential checks
   (every edge endpoint resolves to a node) arrive: those are new kinds,
   and some current advisories may become errors.
