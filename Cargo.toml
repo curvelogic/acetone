@@ -1,5 +1,8 @@
 [workspace]
 resolver = "3"
+# Throwaway spike code (Phase 0) is deliberately excluded from the workspace
+# so it never gates the main build/CI. Run its tests from within its directory.
+exclude = ["spikes/prolly-git-spike"]
 members = [
     "crates/acetone-store",
     "crates/acetone-prolly",

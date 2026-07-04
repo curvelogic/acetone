@@ -1,0 +1,25 @@
+# THROWAWAY SPIKE (bead acetone-28x.2) — excluded from the acetone workspace.
+# A prolly map over the git object database, to de-risk Decision 1 Option A
+# (git ODB as chunk store). Not production code; feeds Phase 0 benchmarks
+# (acetone-28x.4) and the history-independence property tests (acetone-28x.5).
+[package]
+name = "prolly-git-spike"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[dependencies]
+# gix (gitoxide): the whole point of the spike is to exercise the gitoxide
+# write path (blobs, trees, commits, refs). Dual MIT/Apache-2.0, actively
+# maintained (Byron/gitoxide). git2 fallback only if a gix write path is
+# missing — none needed so far; see PR body.
+gix = "0.85"
+# thiserror: standard error-derive used across acetone library crates.
+thiserror = "2"
+
+[dev-dependencies]
+# tempfile: temporary bare repositories for tests. MIT/Apache-2.0.
+tempfile = "3"
+
+[profile.release]
+debug = true
