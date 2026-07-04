@@ -7,8 +7,9 @@ commit d48f129). Sandbox: `scratchpad/prollytree-eval` (kept out of the acetone 
 
 Do not adopt; do not fork. Four disqualifiers, each individually sufficient:
 
-1. **History independence — acetone's most load-bearing invariant — is broken in every
-   released version.** Fixed on unreleased main only weeks ago (#185, post-v0.4.0).
+1. **History independence — acetone's most load-bearing invariant — is broken in the
+   latest release (v0.4.0, measured), and the fix post-dates every release.** Fixed on
+   unreleased main only weeks ago (#185).
 2. **Structural diff is broken** for any tree deeper than one leaf, and the "working" diff
    is an O(n) full materialisation of both versions — the headline prolly-tree property
    (diff proportional to change) is not actually delivered anywhere in the crate.
