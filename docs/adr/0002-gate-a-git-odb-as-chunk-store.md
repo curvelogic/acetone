@@ -1,8 +1,8 @@
 # ADR-0002: Gate A — git object database as the chunk store
 
-*Status: proposed — Gate A is Greg's call; ratified when bead acetone-28x.6 is
-closed at the Phase 0 boundary · Date: 2026-07-04 · Bead: acetone-28x.6 ·
-Evidence: PRs #4, #5, #6*
+*Status: accepted — ratified by Greg closing bead acetone-28x.6 at the
+Phase 0 boundary, 2026-07-04 · Bead: acetone-28x.6 · Evidence: PRs #4, #5,
+#6*
 
 ## Context
 
