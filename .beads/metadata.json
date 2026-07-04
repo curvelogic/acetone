@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "acetone",
+  "project_id": "0d8296e7-23b2-4dd5-b9c8-9dbc056705de"
+}
