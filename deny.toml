@@ -7,9 +7,9 @@ yanked = "deny"
 
 [licenses]
 version = 2
-# Workspace crates are unpublished (publish = false) pending Greg's licence
-# decision; ignore them rather than fail unlicensed.
-private = { ignore = true }
+# Workspace crates are licensed (MIT OR Apache-2.0, ADR-0003) and checked
+# like any other crate despite publish = false.
+private = { ignore = false }
 # Additions require a justification in the PR per CLAUDE.md's dependency rule.
 allow = [
     "MIT",

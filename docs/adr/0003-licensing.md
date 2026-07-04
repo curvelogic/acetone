@@ -20,7 +20,8 @@ general, so any future MPL dependency triggers a fresh, deliberate decision.
 ## Consequences
 
 `license.workspace = true` across all crates; `LICENSE-MIT` and
-`LICENSE-APACHE` at the repo root; CI licence checking now covers our own
-crates. MPL-2.0's file-level copyleft on uluru is compatible with
+`LICENSE-APACHE` at the repo root; deny.toml's `private.ignore` flipped to
+false so CI licence checking genuinely covers our own crates (it previously
+skipped them as unpublished). MPL-2.0's file-level copyleft on uluru is compatible with
 permissive distribution (its files must stay MPL if modified; we do not
 modify them). Crates remain `publish = false` until 0.1 packaging.
