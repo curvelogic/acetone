@@ -38,6 +38,10 @@ name = "acetone-prolly"
 version = "0.0.1"
 dependencies = [
  "acetone-store",
+ "gix",
+ "proptest",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
