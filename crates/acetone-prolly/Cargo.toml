@@ -2,6 +2,7 @@
 name = "acetone-prolly"
 description = "Prolly trees over the chunk store: build, scan, diff, three-way merge"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

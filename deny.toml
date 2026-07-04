@@ -7,6 +7,9 @@ yanked = "deny"
 
 [licenses]
 version = 2
+# Workspace crates are unpublished (publish = false) pending Greg's licence
+# decision; ignore them rather than fail unlicensed.
+private = { ignore = true }
 # Additions require a justification in the PR per CLAUDE.md's dependency rule.
 allow = [
     "MIT",
@@ -22,6 +25,8 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Versionless path deps between workspace crates are not registry wildcards.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
