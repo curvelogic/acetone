@@ -25,3 +25,8 @@ acetone-prolly = { path = "crates/acetone-prolly" }
 acetone-model = { path = "crates/acetone-model" }
 acetone-graph = { path = "crates/acetone-graph" }
 acetone-cypher = { path = "crates/acetone-cypher" }
+
+# thiserror: standard error-derive for library crates (CLAUDE.md conventions).
+thiserror = "2"
+# proptest: property testing for encoding/storage invariants (dev-only).
+proptest = "1"

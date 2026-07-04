@@ -9,3 +9,9 @@ repository.workspace = true
 
 [dependencies]
 acetone-prolly.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# proptest: round-trip, ordering and canonicity properties over the
+# normative encodings (Load-Bearing Invariant 2).
+proptest.workspace = true
