@@ -66,8 +66,16 @@ enum Item {
         level: u8,
         is_final: bool,
     },
-    /// Fresh entries to chunk.
-    Fresh(Vec<Entry>),
+    /// Fresh entries to chunk. `base`, when set, is the old chunk these
+    /// entries were derived from (a rewritten leaf, or a re-chunked node):
+    /// the predecessor that the pack-on-write consolidator should delta the
+    /// resulting new chunk against (ADR-0011). `None` for entries with no
+    /// single predecessor (a bulk load, or inner entries reassembled from
+    /// several changed children).
+    Fresh {
+        entries: Vec<Entry>,
+        base: Option<Hash>,
+    },
 }
 
 /// One output of chunking a level.
@@ -93,19 +101,31 @@ struct OpenedInner {
     children: Vec<Hash>,
 }
 
+/// Collects `(new_chunk, predecessor)` pairs discovered while rebuilding, for
+/// pack-on-write consolidation (ADR-0011). The recorder only *observes*: it
+/// never influences which bytes are written, so a recorded rebuild is
+/// bit-identical to an unrecorded one.
+pub(crate) type Recorder<'a> = &'a mut Vec<(Hash, Hash)>;
+
 /// Streaming builder for one level: buffers serialised entries, cuts at
 /// content-defined boundaries, writes each chunk to the store.
-struct LevelBuilder {
+struct LevelBuilder<'r> {
     level: u8,
     chunker: Chunker,
     buf: Vec<u8>,
     count: u32,
     last_key: Vec<u8>,
     out: Vec<OutItem>,
+    /// Predecessor of the chunk currently being accumulated: the old chunk the
+    /// feeding entries came from, or `None` for entries with no predecessor.
+    /// Set by the caller before pushing each run of entries.
+    current_base: Option<Hash>,
+    /// Where discovered `(new, base)` pairs go, if recording is on.
+    recorder: Option<Recorder<'r>>,
 }
 
-impl LevelBuilder {
-    fn new(level: u8, params: ChunkParams) -> Self {
+impl<'r> LevelBuilder<'r> {
+    fn new(level: u8, params: ChunkParams, recorder: Option<Recorder<'r>>) -> Self {
         LevelBuilder {
             level,
             chunker: Chunker::new(params),
@@ -113,6 +133,8 @@ impl LevelBuilder {
             count: 0,
             last_key: Vec::new(),
             out: Vec::new(),
+            current_base: None,
+            recorder,
         }
     }
 
@@ -150,6 +172,12 @@ impl LevelBuilder {
         chunk.extend_from_slice(&self.count.to_be_bytes());
         chunk.extend_from_slice(&self.buf);
         let hash = store.put(&chunk)?;
+        if let Some(recorder) = self.recorder.as_deref_mut()
+            && let Some(base) = self.current_base
+            && base != hash
+        {
+            recorder.push((hash, base));
+        }
         self.out.push(OutItem::Chunk(NodeRef {
             last_key: Bytes::from(std::mem::take(&mut self.last_key)),
             hash,
@@ -190,13 +218,17 @@ fn chunk_level<S: ChunkStore>(
     level: u8,
     params: ChunkParams,
     items: Vec<Item>,
+    recorder: Option<Recorder<'_>>,
 ) -> Result<Vec<OutItem>, ProllyError> {
-    let mut b = LevelBuilder::new(level, params);
+    let mut b = LevelBuilder::new(level, params, recorder);
     let mut queue: VecDeque<Item> = items.into();
     while let Some(item) = queue.pop_front() {
         let is_last = queue.is_empty();
         match item {
-            Item::Fresh(entries) => {
+            Item::Fresh { entries, base } => {
+                // These entries were derived from `base` (a rewritten leaf) or
+                // from nothing (a bulk load / reassembled inner run).
+                b.current_base = base;
                 for e in &entries {
                     b.push(store, e)?;
                 }
@@ -205,7 +237,10 @@ fn chunk_level<S: ChunkStore>(
                 if b.at_boundary() && (!is_final || is_last) {
                     b.out.push(OutItem::Chunk(node));
                 } else {
+                    // Re-chunking an old node: the new chunks it produces are
+                    // near-copies of it, so it is their own predecessor.
                     let n = read_node(store, &node.hash, level, Some(&node.last_key), None)?;
+                    b.current_base = Some(node.hash);
                     for e in node_entries(n) {
                         b.push(store, &e)?;
                     }
@@ -277,9 +312,15 @@ fn chunk_level<S: ChunkStore>(
 fn promote(outputs: Vec<OutItem>, opened: &[OpenedInner], next_level: u8) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     let mut fresh: Vec<Entry> = Vec::new();
+    // Inner entries reassembled from several changed children have no single
+    // predecessor, so they carry no delta base; the far larger leaf level
+    // (and any re-chunked node) is where predecessors are recorded.
     let flush = |fresh: &mut Vec<Entry>, items: &mut Vec<Item>| {
         if !fresh.is_empty() {
-            items.push(Item::Fresh(std::mem::take(fresh)));
+            items.push(Item::Fresh {
+                entries: std::mem::take(fresh),
+                base: None,
+            });
         }
     };
 
@@ -362,10 +403,11 @@ fn build_levels<S: ChunkStore>(
     params: ChunkParams,
     mut items: Vec<Item>,
     opened: &[Vec<OpenedInner>],
+    mut recorder: Option<Recorder<'_>>,
 ) -> Result<Root, ProllyError> {
     let mut level: u8 = 0;
     loop {
-        let mut outputs = chunk_level(store, level, params, items)?;
+        let mut outputs = chunk_level(store, level, params, items, recorder.as_deref_mut())?;
         if outputs.len() == 1 {
             return Ok(match outputs.remove(0) {
                 OutItem::Chunk(r) => Root {
@@ -423,7 +465,16 @@ pub fn bulk_load<S: ChunkStore>(
             }),
         }
     }
-    build_levels(store, params, vec![Item::Fresh(deduped)], &[])
+    build_levels(
+        store,
+        params,
+        vec![Item::Fresh {
+            entries: deduped,
+            base: None,
+        }],
+        &[],
+        None,
+    )
 }
 
 /// The canonical empty map: a single empty leaf chunk.
@@ -455,7 +506,12 @@ impl<S: ChunkStore> Descent<'_, S> {
         let node = read_node(self.store, hash, level, expect_last_key, min_key_exclusive)?;
         match node {
             Node::Leaf(entries) => {
-                self.items.push(Item::Fresh(merge_ops(entries, ops)));
+                // The rewritten leaf is the predecessor of whatever new leaf
+                // chunks these merged entries produce (ADR-0011).
+                self.items.push(Item::Fresh {
+                    entries: merge_ops(entries, ops),
+                    base: Some(*hash),
+                });
                 Ok(())
             }
             Node::Inner(refs) => {
@@ -571,6 +627,37 @@ pub fn apply_batch<S: ChunkStore>(
     root: &Root,
     ops: impl IntoIterator<Item = BatchOp>,
 ) -> Result<Root, ProllyError> {
+    apply_batch_inner(store, root, ops, None)
+}
+
+/// Like [`apply_batch`], additionally returning the `(new_chunk, predecessor)`
+/// pairs discovered during the splice, for pack-on-write consolidation
+/// (ADR-0011, bead acetone-63m.13).
+///
+/// Each pair says "the new chunk was derived from this old chunk", which
+/// [`acetone_store::GitStore::record_base_hints`] uses to delta the new chunk
+/// against its predecessor when it later repacks history. The pairing is
+/// **best-effort**: it captures the common case (a rewritten leaf, a
+/// re-chunked node) and simply omits chunks with no clear predecessor, which
+/// consolidation then stores whole. The returned root is byte-for-byte
+/// identical to what [`apply_batch`] produces for the same inputs — recording
+/// only observes.
+pub fn apply_batch_recording<S: ChunkStore>(
+    store: &S,
+    root: &Root,
+    ops: impl IntoIterator<Item = BatchOp>,
+) -> Result<(Root, Vec<(Hash, Hash)>), ProllyError> {
+    let mut pairs: Vec<(Hash, Hash)> = Vec::new();
+    let new_root = apply_batch_inner(store, root, ops, Some(&mut pairs))?;
+    Ok((new_root, pairs))
+}
+
+fn apply_batch_inner<S: ChunkStore>(
+    store: &S,
+    root: &Root,
+    ops: impl IntoIterator<Item = BatchOp>,
+    recorder: Option<Recorder<'_>>,
+) -> Result<Root, ProllyError> {
     let mut sorted: Vec<BatchOp> = ops.into_iter().collect();
     // Stable sort preserves submission order between equal keys; the
     // dedupe below then keeps the last op for each key.
@@ -592,7 +679,7 @@ pub fn apply_batch<S: ChunkStore>(
         opened: (0..root.height).map(|_| Vec::new()).collect(),
     };
     descent.descend(&root.hash, root.top_level(), None, None, true, &ops)?;
-    build_levels(store, root.params, descent.items, &descent.opened)
+    build_levels(store, root.params, descent.items, &descent.opened, recorder)
 }
 
 /// Point lookup, loading only the root→leaf path for `key`.

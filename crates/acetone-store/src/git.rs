@@ -197,6 +197,41 @@ impl GitStore {
         Ok(Hash::from_oid(id.detach()))
     }
 
+    /// The underlying repository — crate-internal, for the consolidation
+    /// module (ADR-0011), which walks objects and installs packs directly.
+    pub(crate) fn repo(&self) -> &gix::Repository {
+        &self.repo
+    }
+
+    /// The repository's object format, sizing pack OIDs and checksums.
+    pub(crate) fn object_hash(&self) -> gix::hash::Kind {
+        self.repo.object_hash()
+    }
+
+    /// Read any object (of any git kind) after checking its announced size
+    /// against the cap — the consolidation read path, which handles commits,
+    /// trees, tags and blobs uniformly. `Ok(None)` if absent.
+    pub(crate) fn read_any_capped(
+        &self,
+        hash: &Hash,
+    ) -> Result<Option<(gix::object::Kind, Vec<u8>)>, StoreError> {
+        let Some(header) = self.find_header(hash)? else {
+            return Ok(None);
+        };
+        if header.size() > self.max_chunk_size {
+            return Err(StoreError::ObjectTooLarge {
+                size: header.size(),
+                limit: self.max_chunk_size,
+            });
+        }
+        let object = self
+            .repo
+            .find_object(hash.oid())
+            .map_err(|e| StoreError::backend("reading object for consolidation", e))?;
+        let object = object.detach();
+        Ok(Some((object.kind, object.data)))
+    }
+
     /// Look up an object header, translating "not found" to `None`.
     fn find_header(&self, hash: &Hash) -> Result<Option<gix::odb::find::Header>, StoreError> {
         self.repo

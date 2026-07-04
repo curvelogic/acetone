@@ -12,6 +12,14 @@ repository.workspace = true
 gix.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
+# Pack-on-write consolidation (ADR-0011): zlib for pack-entry compression and
+# CRC-32 for the v2 pack index. flate2 is pinned to the `zlib-rs` backend that
+# gix already compiles into the tree, so no second zlib implementation is
+# pulled; crc32fast is already a transitive dependency. gix cannot create new
+# deltas, so the pack writer is hand-rolled (ADR-0011).
+flate2 = { workspace = true }
+crc32fast = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+proptest.workspace = true

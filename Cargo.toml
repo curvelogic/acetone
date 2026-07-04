@@ -47,3 +47,10 @@ acetone-cypher = { path = "crates/acetone-cypher" }
 thiserror = "2"
 # proptest: property testing for encoding/storage invariants (dev-only).
 proptest = "1"
+# flate2: zlib compression for consolidation pack entries (ADR-0011). Pinned
+# to the `zlib-rs` backend gix already pulls, so no second zlib implementation
+# enters the tree. MIT/Apache-2.0.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+# crc32fast: CRC-32 for the v2 pack index (ADR-0011). Already present
+# transitively. MIT/Apache-2.0.
+crc32fast = "1"
