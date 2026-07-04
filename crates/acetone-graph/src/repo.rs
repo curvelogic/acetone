@@ -139,8 +139,10 @@ impl Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
         };
-        // Fail fast with a helpful error rather than on first use.
-        repo.workspace_manifest_hash()?;
+        // Fail fast: the workspace ref must exist AND its manifest must
+        // decode, so a damaged repository is reported at open, not on
+        // first use.
+        repo.workspace_manifest()?;
         Ok(repo)
     }
 
@@ -345,20 +347,29 @@ impl Repository {
 
     /// Resolve a refspec — branch short name, full ref name, or hex
     /// commit hash — to a commit address.
+    ///
+    /// A refspec that fails one interpretation (not a valid ref name, a
+    /// hex address naming a non-commit object) simply falls through to
+    /// the next and ultimately to [`GraphError::UnresolvedRefspec`];
+    /// genuine store damage still surfaces as its own error.
     pub fn resolve_commit(&self, refspec: &str) -> Result<Hash, GraphError> {
         let as_branch = format!("{BRANCH_REF_PREFIX}{refspec}");
-        if let Some(hash) = self.store.read_ref(&as_branch)? {
+        if let Some(hash) = read_ref_lenient(&self.store, &as_branch)? {
             return Ok(hash);
         }
         if refspec.starts_with("refs/")
-            && let Some(hash) = self.store.read_ref(refspec)?
+            && let Some(hash) = read_ref_lenient(&self.store, refspec)?
         {
             return Ok(hash);
         }
-        if let Ok(hash) = Hash::from_hex(refspec)
-            && self.store.read_commit(&hash)?.is_some()
-        {
-            return Ok(hash);
+        if let Ok(hash) = Hash::from_hex(refspec) {
+            match self.store.read_commit(&hash) {
+                Ok(Some(_)) => return Ok(hash),
+                // A hex address naming nothing, or a non-commit object,
+                // is an unresolvable refspec, not a store failure.
+                Ok(None) | Err(StoreError::WrongObjectKind { .. }) => {}
+                Err(e) => return Err(e.into()),
+            }
         }
         Err(GraphError::UnresolvedRefspec {
             refspec: refspec.to_owned(),
@@ -394,6 +405,17 @@ impl Repository {
 
 fn workspace_ref(name: &str) -> String {
     format!("{WORKSPACE_REF_PREFIX}{name}")
+}
+
+/// Read a ref for refspec resolution: a name that is not a valid direct
+/// ref (invalid format, symbolic) reads as absent rather than an error,
+/// so resolution can fall through to the next interpretation.
+fn read_ref_lenient(store: &GitStore, name: &str) -> Result<Option<Hash>, GraphError> {
+    match store.read_ref(name) {
+        Ok(found) => Ok(found),
+        Err(StoreError::InvalidRefName { .. } | StoreError::SymbolicRef { .. }) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn read_manifest_chunk(store: &GitStore, hash: &Hash) -> Result<Manifest, GraphError> {

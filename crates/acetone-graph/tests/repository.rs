@@ -244,8 +244,16 @@ fn committed_versions_survive_git_gc() {
     let repo_path = dir.path().join("graph.git");
     let repo = Repository::init(&repo_path, InitOptions::default()).expect("init");
 
-    // Enough nodes to force multi-chunk trees.
+    // Enough entries in every map to force multi-chunk trees, so
+    // under-anchoring of interior nodes would be caught.
     let mut tx = repo.begin_write().expect("begin");
+    for i in 0..100 {
+        tx.put_schema(&SchemaEntry::Label {
+            name: format!("Label{i:03}"),
+            def: LabelDef::new(vec!["name".into()], BTreeMap::new(), [], []).expect("valid"),
+        })
+        .expect("schema");
+    }
     for i in 0..500 {
         tx.put_node(
             &node("Host", &format!("host-{i:04}")),
@@ -286,6 +294,10 @@ fn committed_versions_survive_git_gc() {
     assert_eq!(
         snapshot.reverse_edge_keys().expect("rev survives gc").len(),
         250
+    );
+    assert_eq!(
+        snapshot.schema_entries().expect("schema survives gc").len(),
+        100
     );
 }
 
