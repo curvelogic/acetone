@@ -315,12 +315,24 @@ impl Store {
     }
 
     /// Create a map from an unsorted iterator of key/value pairs (duplicate
-    /// keys: last one wins) and return its root.
+    /// keys: last one wins) and return its root. Uses the default chunking
+    /// parameters.
     pub fn bulk_load(
         &self,
         entries: impl IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
     ) -> Result<Root, SpikeError> {
-        let params = ChunkParams::default();
+        self.bulk_load_with(ChunkParams::default(), entries)
+    }
+
+    /// `bulk_load` with explicit chunking parameters. Chunk parameters are
+    /// format-defining (spec §3.2: fixed at init, recorded in the manifest);
+    /// this entry point exists so the property suite can assert both halves
+    /// of that — same parameters always agree, different parameters diverge.
+    pub fn bulk_load_with(
+        &self,
+        params: ChunkParams,
+        entries: impl IntoIterator<Item = (Vec<u8>, Vec<u8>)>,
+    ) -> Result<Root, SpikeError> {
         let mut sorted: Vec<(Vec<u8>, Vec<u8>)> = entries.into_iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
         let mut deduped: Vec<Entry> = Vec::with_capacity(sorted.len());

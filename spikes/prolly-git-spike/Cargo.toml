@@ -8,6 +8,13 @@ version = "0.0.1"
 edition = "2024"
 publish = false
 
+# The spike is its own (single-crate) workspace. The root manifest's
+# `workspace.exclude` already keeps it out of the acetone workspace when
+# building from the repo root, but that exclusion is path-relative and does
+# not apply when the repo is checked out as a nested git worktree; this
+# empty table makes the exclusion unconditional.
+[workspace]
+
 [dependencies]
 # gix (gitoxide): the whole point of the spike is to exercise the gitoxide
 # write path (blobs, trees, commits, refs). Dual MIT/Apache-2.0, actively
@@ -20,6 +27,11 @@ thiserror = "2"
 [dev-dependencies]
 # tempfile: temporary bare repositories for tests. MIT/Apache-2.0.
 tempfile = "3"
+# proptest: property testing for the history-independence suite
+# (acetone-28x.5) — the same engine the acetone workspace will use for its
+# normative invariant tests. Dual MIT/Apache-2.0, actively maintained
+# (proptest-rs). Dev-only, spike-only (workspace-excluded).
+proptest = "1"
 
 [profile.release]
 debug = true
