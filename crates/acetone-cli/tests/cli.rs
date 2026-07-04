@@ -307,3 +307,67 @@ fn loose_objects(objects: &Path) -> Vec<std::path::PathBuf> {
     }
     found
 }
+
+#[test]
+fn log_sanitises_hostile_commit_messages() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let out = init(&repo);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+    let out = acetone(&repo, &["put-node", "Host", "web1"]);
+    assert!(out.status.success());
+    let out = acetone(&repo, &["commit", "-m", "seed"]);
+    assert!(out.status.success());
+
+    // Forge a hostile commit the way a malicious clone would arrive: same
+    // tree (still a valid acetone commit), but a message and trailer full
+    // of terminal escape sequences, spliced in with raw git plumbing.
+    let head = git_rev_parse(&repo, "refs/heads/main");
+    let tree = git_rev_parse(&repo, &format!("{head}^{{tree}}"));
+    let hostile_message =
+        "evil\u{1b}[8m hidden\u{7}\r spoof\n\nEvil-Trailer: \u{1b}]0;pwned\u{7}value";
+    let forged = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "commit-tree",
+            &tree,
+            "-m",
+            hostile_message,
+        ])
+        .output()
+        .expect("git commit-tree");
+    assert!(forged.status.success());
+    let forged_id = String::from_utf8(forged.stdout)
+        .expect("hex")
+        .trim()
+        .to_owned();
+    let out = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "update-ref",
+            "refs/heads/main",
+            &forged_id,
+        ])
+        .output()
+        .expect("git update-ref");
+    assert!(out.status.success());
+
+    let out = acetone(&repo, &["log"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        !text.contains('\u{1b}'),
+        "raw ESC reached the terminal: {text:?}"
+    );
+    assert!(
+        !text.contains('\u{7}'),
+        "raw BEL reached the terminal: {text:?}"
+    );
+    assert!(
+        text.contains("\\u{1b}"),
+        "escapes must be visible, not stripped"
+    );
+    assert!(text.contains("Evil-Trailer"), "trailer still listed");
+}

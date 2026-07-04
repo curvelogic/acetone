@@ -29,6 +29,30 @@ pub fn parse_kv<'a>(raw: &'a str, flag: &str) -> Result<(&'a str, &'a str)> {
     }
 }
 
+/// Neutralise control characters in a repository-controlled line of text
+/// destined for the terminal, leaving everything printable untouched.
+///
+/// Unlike [`format_label`]'s `{:?}` (right for identifier-shaped strings,
+/// where the quotes aid reading), this is for sentence- or line-shaped
+/// output — commit subjects, trailers, fsck findings — where quoting the
+/// whole line would hurt readability but ANSI/C1 sequences from a hostile
+/// clone must never reach the terminal raw.
+pub fn sanitise_line(s: &str) -> String {
+    if s.chars().any(char::is_control) {
+        s.chars()
+            .map(|c| {
+                if c.is_control() {
+                    c.escape_default().to_string()
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect()
+    } else {
+        s.to_owned()
+    }
+}
+
 /// Render a label, relationship type or other identifier-shaped string for
 /// output, escaping it the same way [`format_value`] escapes
 /// [`Value::String`]. Graph data is attacker-writable and reaches the
@@ -97,5 +121,26 @@ mod tests {
         assert_eq!(format_label("Person"), "\"Person\"");
         assert_eq!(format_label("a\x1b[31mb"), "\"a\\u{1b}[31mb\"");
         assert_eq!(format_label("a\nb"), "\"a\\nb\"");
+    }
+
+    #[test]
+    fn sanitise_line_neutralises_control_characters_only() {
+        // Printable text, including unicode and quotes, passes untouched.
+        assert_eq!(
+            sanitise_line("add web3 (\"fast\") — déjà vu"),
+            "add web3 (\"fast\") — déjà vu"
+        );
+        // ANSI escape, bell, carriage return: escaped, never raw.
+        let hostile = "ok\x1b[8m hidden\x07\rspoof";
+        let clean = sanitise_line(hostile);
+        assert!(!clean.contains('\x1b'));
+        assert!(!clean.contains('\x07'));
+        assert!(!clean.contains('\r'));
+        assert_eq!(
+            clean,
+            "ok\\u{{1b}}[8m hidden\\u{{7}}\\rspoof"
+                .replace("{{", "{")
+                .replace("}}", "}")
+        );
     }
 }
