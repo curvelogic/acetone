@@ -10,6 +10,11 @@
 //! sizes, randomised convergent histories, batch inversion) should carry
 //! over; only the store construction and API names will change.
 //!
+//! Regressions policy: if a property ever fails, proptest writes a
+//! `.proptest-regressions` file next to this test — COMMIT that file (the
+//! proptest convention) so the counterexample becomes a permanent
+//! regression seed. None exists yet because no property has failed.
+//!
 //! Case counts (64/160/96/32 per property below) are tuned so the whole
 //! suite runs in well under a minute in debug mode (~25 s on an M-series
 //! laptop). Each `proptest!` block takes its count from the
