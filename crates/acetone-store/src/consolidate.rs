@@ -295,19 +295,24 @@ impl GitStore {
         Ok(hints)
     }
 
-    /// Write a pack and its index into `objects/pack`, then refresh the object
-    /// database so the newly packed objects are visible for later reads.
+    /// Write a pack and its index into `objects/pack`.
+    ///
+    /// git treats a pack as present only once its `.idx` exists, and then
+    /// requires the `.pack`. So the `.pack` is written in full first (a pack
+    /// with no index is simply ignored, and pruning happens only after this
+    /// returns, so the objects remain available as loose), and the index is
+    /// published last via an atomic rename — a reader therefore never sees a
+    /// dangling index or a torn one, whatever moment a crash lands on.
     fn install_pack(&self, stem: &str, pack: &[u8], idx: &[u8]) -> Result<(), StoreError> {
         let dir = self.repo().common_dir().join("objects").join("pack");
         std::fs::create_dir_all(&dir)
             .map_err(|e| StoreError::backend("creating objects/pack", e))?;
-        // Write the index before the pack: git and gix treat a pack without an
-        // index as absent, so an interrupted install never exposes an
-        // unindexed pack.
-        std::fs::write(dir.join(format!("{stem}.idx")), idx)
-            .map_err(|e| StoreError::backend("writing pack index", e))?;
         std::fs::write(dir.join(format!("{stem}.pack")), pack)
             .map_err(|e| StoreError::backend("writing pack", e))?;
+        let idx_tmp = dir.join(format!("{stem}.idx.tmp"));
+        std::fs::write(&idx_tmp, idx).map_err(|e| StoreError::backend("writing pack index", e))?;
+        std::fs::rename(&idx_tmp, dir.join(format!("{stem}.idx")))
+            .map_err(|e| StoreError::backend("publishing pack index", e))?;
         Ok(())
     }
 
