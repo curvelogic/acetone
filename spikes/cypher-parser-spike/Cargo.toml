@@ -1,0 +1,24 @@
+[package]
+name = "cypher-parser-spike"
+version = "0.0.1"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# Gate B spike (bead acetone-yzc.1): evaluate decypher vs a vendored/hand-
+# rolled parser against a representative query set. Excluded from the main
+# workspace like spikes/prolly-git-spike; run from within this directory.
+[workspace]
+
+[dependencies]
+# Candidate under evaluation (spike A). Alpha-stage; not a workspace
+# dependency — adoption is exactly what this spike decides.
+decypher = "0.2.0-alpha.6"
+
+[[bin]]
+name = "decypher-eval"
+path = "src/bin/decypher_eval.rs"
+
+[[bin]]
+name = "handrolled-eval"
+path = "src/bin/handrolled_eval.rs"

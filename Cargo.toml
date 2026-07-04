@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
-# Throwaway spike code (Phase 0) is deliberately excluded from the workspace
-# so it never gates the main build/CI. Run its tests from within its directory.
-exclude = ["spikes/prolly-git-spike"]
+# Throwaway spike code (Phase 0 storage, Phase 2 Gate B parser) is
+# deliberately excluded from the workspace so it never gates the main
+# build/CI. Run each spike's tests from within its directory.
+exclude = ["spikes/prolly-git-spike", "spikes/cypher-parser-spike"]
 members = [
     "crates/acetone-store",
     "crates/acetone-prolly",
