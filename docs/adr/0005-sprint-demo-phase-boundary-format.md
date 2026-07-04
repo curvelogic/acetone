@@ -1,6 +1,6 @@
 # ADR-0005: Sprint-demo format for phase-boundary reviews
 
-*Status: accepted (Greg's direction, 2026-07-04) · PR: #11*
+*Status: accepted (Greg's direction, 2026-07-04) · Bead: — (Greg-directed, no queueing needed) · PR: #11*
 
 ## Context
 
