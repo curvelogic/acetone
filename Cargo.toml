@@ -10,6 +10,7 @@ members = [
     "crates/acetone-graph",
     "crates/acetone-cypher",
     "crates/acetone-cli",
+    "benches",
 ]
 
 [workspace.package]
