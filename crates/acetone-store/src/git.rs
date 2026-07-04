@@ -45,20 +45,42 @@ use crate::store::{ChunkStore, Commit, CommitStore, NewCommit, RefStore};
 /// via [`GitStoreOptions::max_chunk_size`] if a deployment needs more.
 pub const DEFAULT_MAX_CHUNK_SIZE: u64 = 64 * 1024 * 1024;
 
+/// The object format (hash function) of a repository (spec §3.1: SHA-1
+/// default, SHA-256 supported).
+///
+/// Only consulted when *creating* a repository; opening reads the format
+/// from the repository itself, and [`Hash`] is opaque either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ObjectFormat {
+    /// Git's legacy 160-bit format — the default, maximally interoperable.
+    #[default]
+    Sha1,
+    /// The 256-bit format (`extensions.objectFormat = sha256`).
+    Sha256,
+}
+
 /// Construction parameters for a [`GitStore`].
+///
+/// `#[non_exhaustive]`: construct with [`GitStoreOptions::default`] and
+/// assign the fields to override, so new options never break callers.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GitStoreOptions {
     /// Hard cap in bytes on any single object read or written; see
     /// [`DEFAULT_MAX_CHUNK_SIZE`]. Enforced by [`ChunkStore::put`] and, on
     /// every read path, checked against the object header *before* the
     /// object is materialised.
     pub max_chunk_size: u64,
+    /// Object format for newly created repositories (ignored on open).
+    pub object_format: ObjectFormat,
 }
 
 impl Default for GitStoreOptions {
     fn default() -> Self {
         GitStoreOptions {
             max_chunk_size: DEFAULT_MAX_CHUNK_SIZE,
+            object_format: ObjectFormat::default(),
         }
     }
 }
@@ -72,6 +94,19 @@ impl Default for GitStoreOptions {
 /// Not `Sync`: gix repositories carry per-instance caches. Open one
 /// `GitStore` per thread (they may all point at the same repository on
 /// disk; ref updates are atomic across instances and processes).
+///
+/// # Locking and crash recovery
+///
+/// [`RefStore::write_ref`] serialises all acetone writers on a repository
+/// through a lock file, `<common_dir>/acetone-refs.lock`, held only for
+/// the duration of one ref update and removed when the guard drops. If a
+/// process is killed while holding it (SIGKILL, power loss), the stale
+/// file makes every subsequent `write_ref` back off for ~5 seconds and
+/// then fail with [`StoreError::Backend`] rather than hang or corrupt
+/// anything. Recovery is manual and safe once no acetone process is
+/// running against the repository: delete
+/// `<git-dir>/acetone-refs.lock` (for worktrees, in the common/main git
+/// dir). Reads are never blocked by this lock.
 pub struct GitStore {
     repo: gix::Repository,
     max_chunk_size: u64,
@@ -95,8 +130,23 @@ impl GitStore {
 
     /// Initialise a new bare git repository at `path` and open it as a
     /// store.
+    ///
+    /// [`GitStoreOptions::object_format`] selects the repository's hash
+    /// function; SHA-1 repositories carry no `objectFormat` extension for
+    /// maximum interoperability, SHA-256 ones declare it as git does.
     pub fn create_with(path: &Path, options: GitStoreOptions) -> Result<Self, StoreError> {
-        gix::init_bare(path).map_err(|e| StoreError::backend("initialising repository", e))?;
+        let create_options = gix::create::Options {
+            destination_must_be_empty: None,
+            fs_capabilities: None,
+            // `None` means legacy SHA-1 with no extensions.objectFormat
+            // entry, exactly like `git init`.
+            object_hash: match options.object_format {
+                ObjectFormat::Sha1 => None,
+                ObjectFormat::Sha256 => Some(gix::hash::Kind::Sha256),
+            },
+        };
+        gix::ThreadSafeRepository::init(path, gix::create::Kind::Bare, create_options)
+            .map_err(|e| StoreError::backend("initialising repository", e))?;
         // Reopen through the one reduced-trust code path so a freshly
         // created store behaves identically to an opened one.
         Self::open_with(path, options)
@@ -122,8 +172,9 @@ impl GitStore {
         })
     }
 
-    /// Write one blob, enforcing the size cap.
-    fn write_blob_capped(&self, data: &[u8], _what: &'static str) -> Result<Hash, StoreError> {
+    /// Write one blob, enforcing the size cap; `what` names the blob's
+    /// role in error context.
+    fn write_blob_capped(&self, data: &[u8], what: &'static str) -> Result<Hash, StoreError> {
         let size = data.len() as u64;
         if size > self.max_chunk_size {
             return Err(StoreError::ObjectTooLarge {
@@ -134,7 +185,7 @@ impl GitStore {
         let id = self
             .repo
             .write_blob(data)
-            .map_err(|e| StoreError::backend("writing blob", e))?;
+            .map_err(|e| StoreError::backend(what, e))?;
         Ok(Hash::from_oid(id.detach()))
     }
 
@@ -174,11 +225,81 @@ impl GitStore {
             .map_err(|e| StoreError::backend("reading object", e))?;
         Ok(object.detach().data)
     }
+
+    /// Build the `chunks/` anchor tree for a commit: a two-level tree of
+    /// `<hh>/<rest-of-hex>` entries referencing every anchored chunk blob
+    /// (the pattern proven in the Phase 0 spike). Tree entries reference
+    /// the existing blobs, so this costs no chunk storage, and sharding by
+    /// the first hex byte lets successive versions share unchanged shard
+    /// trees. Every anchor is verified to exist as a blob so the resulting
+    /// commit is guaranteed connected under `git fsck`.
+    fn write_anchor_tree(&self, anchors: &[Hash]) -> Result<gix::ObjectId, StoreError> {
+        use gix::objs::tree::{Entry, EntryKind};
+
+        let mut oids: Vec<gix::ObjectId> = Vec::with_capacity(anchors.len());
+        for hash in anchors {
+            match self.find_header(hash)? {
+                None => {
+                    return Err(StoreError::InvalidAnchor {
+                        hash: *hash,
+                        reason: "object is not in the store",
+                    });
+                }
+                Some(header) if header.kind() != gix::object::Kind::Blob => {
+                    return Err(StoreError::InvalidAnchor {
+                        hash: *hash,
+                        reason: "only blobs (chunks) can be anchored",
+                    });
+                }
+                Some(_) => oids.push(hash.oid()),
+            }
+        }
+        oids.sort_unstable();
+        oids.dedup();
+
+        // Group into shards; `oids` is sorted, so shards come out in git
+        // tree order and so do the entries within each shard.
+        let mut shards: Vec<(String, Vec<Entry>)> = Vec::new();
+        for oid in oids {
+            let hex = oid.to_string();
+            let (prefix, rest) = hex.split_at(2);
+            let entry = Entry {
+                mode: EntryKind::Blob.into(),
+                filename: rest.into(),
+                oid,
+            };
+            match shards.last_mut() {
+                Some((shard_prefix, entries)) if shard_prefix == prefix => entries.push(entry),
+                _ => shards.push((prefix.to_owned(), vec![entry])),
+            }
+        }
+
+        let mut top_entries = Vec::with_capacity(shards.len());
+        for (prefix, entries) in shards {
+            let shard_id = self
+                .repo
+                .write_object(&gix::objs::Tree { entries })
+                .map_err(|e| StoreError::backend("writing anchor shard tree", e))?
+                .detach();
+            top_entries.push(Entry {
+                mode: EntryKind::Tree.into(),
+                filename: prefix.into(),
+                oid: shard_id,
+            });
+        }
+        Ok(self
+            .repo
+            .write_object(&gix::objs::Tree {
+                entries: top_entries,
+            })
+            .map_err(|e| StoreError::backend("writing anchor tree", e))?
+            .detach())
+    }
 }
 
 impl ChunkStore for GitStore {
     fn put(&self, data: &[u8]) -> Result<Hash, StoreError> {
-        self.write_blob_capped(data, "chunk")
+        self.write_blob_capped(data, "writing chunk")
     }
 
     fn get(&self, hash: &Hash) -> Result<Option<Bytes>, StoreError> {
@@ -249,6 +370,15 @@ impl RefStore for GitStore {
         }
     }
 
+    /// Atomic compare-and-swap ref update (see [`RefStore::write_ref`] for
+    /// the contract).
+    ///
+    /// Writers are serialised through `<common_dir>/acetone-refs.lock`,
+    /// released when this call returns. If a previous process died while
+    /// holding it, this call backs off for ~5 seconds and then fails with
+    /// [`StoreError::Backend`]; once no acetone process is running against
+    /// the repository, deleting that file recovers (see the
+    /// [`GitStore`] docs on locking and crash recovery).
     fn write_ref(&self, name: &str, expected: Option<&Hash>, new: &Hash) -> Result<(), StoreError> {
         use gix::refs::Target;
         use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
@@ -303,6 +433,10 @@ const MANIFEST_ENTRY: &str = "manifest";
 /// Name of the human-readable summary blob within a commit tree; `README.md`
 /// so hosting UIs render it.
 const SUMMARY_ENTRY: &str = "README.md";
+/// Name of the chunk-anchor tree within a commit tree: `chunks/<hh>/<hex>`
+/// entries reference every anchored chunk so git's reachability walk keeps
+/// them alive and transfers them.
+const ANCHORS_ENTRY: &str = "chunks";
 
 /// Validate one trailer pair against the git trailer format.
 fn validate_trailer(token: &str, value: &str) -> Result<(), StoreError> {
@@ -395,25 +529,29 @@ impl CommitStore for GitStore {
 
         let message = assemble_message(commit.message, commit.trailers)?;
         let signature = git_signature(&commit.author)?;
-        let manifest_id = self.write_blob_capped(commit.manifest, "manifest")?;
-        let summary_id = self.write_blob_capped(commit.summary.as_bytes(), "summary")?;
+        let manifest_id = self.write_blob_capped(commit.manifest, "writing manifest")?;
+        let summary_id = self.write_blob_capped(commit.summary.as_bytes(), "writing summary")?;
 
-        // Entries must be in git tree order; "README.md" < "manifest"
-        // byte-wise, so this literal order is already sorted.
-        let tree = gix::objs::Tree {
-            entries: vec![
-                Entry {
-                    mode: EntryKind::Blob.into(),
-                    filename: SUMMARY_ENTRY.into(),
-                    oid: summary_id.oid(),
-                },
-                Entry {
-                    mode: EntryKind::Blob.into(),
-                    filename: MANIFEST_ENTRY.into(),
-                    oid: manifest_id.oid(),
-                },
-            ],
-        };
+        // Entries must be in git tree order; "README.md" < "chunks" <
+        // "manifest" byte-wise, so this literal order is already sorted.
+        let mut entries = vec![Entry {
+            mode: EntryKind::Blob.into(),
+            filename: SUMMARY_ENTRY.into(),
+            oid: summary_id.oid(),
+        }];
+        if !commit.anchors.is_empty() {
+            entries.push(Entry {
+                mode: EntryKind::Tree.into(),
+                filename: ANCHORS_ENTRY.into(),
+                oid: self.write_anchor_tree(commit.anchors)?,
+            });
+        }
+        entries.push(Entry {
+            mode: EntryKind::Blob.into(),
+            filename: MANIFEST_ENTRY.into(),
+            oid: manifest_id.oid(),
+        });
+        let tree = gix::objs::Tree { entries };
         let tree_id = self
             .repo
             .write_object(&tree)

@@ -118,6 +118,7 @@ impl Default for Signature {
 
 /// Everything needed to create one acetone commit (spec §3.5).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NewCommit<'a> {
     /// The manifest bytes; stored as the `manifest` blob in the commit
     /// tree. Opaque to this crate — the model layer defines the format.
@@ -136,8 +137,42 @@ pub struct NewCommit<'a> {
     pub trailers: &'a [(String, String)],
     /// Parent commits, in order. Empty for a root commit.
     pub parents: &'a [Hash],
+    /// The chunks this commit keeps alive — this MUST be the **complete
+    /// set of chunks the manifest transitively references**.
+    ///
+    /// Git cannot parse the manifest: a chunk address stored *inside*
+    /// manifest or chunk bytes is invisible to git's reachability walk, so
+    /// an unanchored chunk is pruned by `git gc` **and is not transferred
+    /// by `git clone`/`push`/`fetch`** (git moves only ref-reachable
+    /// objects). Chunks reference their children by content too, so
+    /// anchoring only the roots is not enough — list every chunk of the
+    /// version being committed. Anchors are stored as a sharded `chunks/`
+    /// tree of entries referencing the existing blobs: no chunk data is
+    /// copied, and shards shared between versions deduplicate as tree
+    /// objects.
+    pub anchors: &'a [Hash],
     /// Author and committer identity (git-native; both set to this value).
     pub author: Signature,
+}
+
+impl<'a> NewCommit<'a> {
+    /// A commit with the given required parts and everything else empty or
+    /// defaulted: no trailers, no parents, **no anchors** (see
+    /// [`NewCommit::anchors`] — a commit over a manifest that references
+    /// chunks must anchor them all), default authorship. Set the public
+    /// fields to fill the rest in; the struct is `#[non_exhaustive]` so new
+    /// fields can be added without breaking construction sites.
+    pub fn new(manifest: &'a [u8], summary: &'a str, message: &'a str) -> Self {
+        NewCommit {
+            manifest,
+            summary,
+            message,
+            trailers: &[],
+            parents: &[],
+            anchors: &[],
+            author: Signature::default(),
+        }
+    }
 }
 
 /// A commit read back from the store.
@@ -166,11 +201,17 @@ pub struct Commit {
 ///
 /// # Contract
 ///
-/// - **A commit anchors its tree**: the manifest and summary blobs of a
-///   created commit are reachable from the commit and therefore survive
-///   `git gc` for as long as some ref reaches the commit. Creating a commit
-///   does *not* touch any ref — pair it with
-///   [`RefStore::write_ref`] to make it reachable.
+/// - **A commit anchors exactly what its tree references**: the manifest
+///   blob, the summary blob and every chunk listed in
+///   [`NewCommit::anchors`] become reachable from the commit, and
+///   therefore survive `git gc` and travel with `git clone`/`push`/`fetch`
+///   for as long as some ref reaches the commit. **Manifest *content* does
+///   not count**: git cannot parse the manifest, so chunk addresses stored
+///   inside manifest or chunk bytes make nothing reachable — a chunk not
+///   in `anchors` is pruned by gc and silently absent from clones. Pass
+///   the complete chunk set of the committed version. Creating a commit
+///   does *not* touch any ref — pair it with [`RefStore::write_ref`] to
+///   make the commit itself reachable.
 /// - **Reads distinguish absence from damage**: `Ok(None)` when no object
 ///   with that address exists; `Err(_)` when the object exists but is not a
 ///   well-formed acetone commit (not a commit, tree missing the `manifest`
@@ -178,9 +219,15 @@ pub struct Commit {
 pub trait CommitStore {
     /// Write `commit` as a git commit object and return its address.
     ///
-    /// The commit's tree contains the manifest blob (`manifest`) and the
-    /// human-readable summary (`README.md`); trailers are appended to the
-    /// message as the final paragraph in git trailer format.
+    /// The commit's tree contains the manifest blob (`manifest`), the
+    /// human-readable summary (`README.md`) and — when `commit.anchors` is
+    /// non-empty — a `chunks/` tree referencing every anchored chunk (see
+    /// [`NewCommit::anchors`] for why the anchor list must be the complete
+    /// chunk set of the version). Every anchor must already exist in the
+    /// store as a blob; a missing or non-blob anchor is a typed error, so
+    /// a commit that succeeds is guaranteed `git fsck`-connected.
+    /// Trailers are appended to the message as the final paragraph in git
+    /// trailer format.
     fn create_commit(&self, commit: &NewCommit<'_>) -> Result<Hash, StoreError>;
 
     /// Read a commit and its manifest bytes back.

@@ -16,6 +16,21 @@ pub fn new_store() -> (tempfile::TempDir, GitStore) {
     (dir, store)
 }
 
+/// Options with a non-default object size cap.
+pub fn capped_options(max_chunk_size: u64) -> acetone_store::GitStoreOptions {
+    let mut options = acetone_store::GitStoreOptions::default();
+    options.max_chunk_size = max_chunk_size;
+    options
+}
+
+/// A fresh bare-repository store with a non-default object size cap.
+pub fn new_capped_store(max_chunk_size: u64) -> (tempfile::TempDir, GitStore) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = GitStore::create_with(&dir.path().join("repo.git"), capped_options(max_chunk_size))
+        .expect("create store");
+    (dir, store)
+}
+
 /// Path of the repository created by [`new_store`].
 pub fn repo_path(dir: &tempfile::TempDir) -> std::path::PathBuf {
     dir.path().join("repo.git")

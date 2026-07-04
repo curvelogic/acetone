@@ -32,12 +32,15 @@
 //!
 //! # Durability model
 //!
-//! A chunk written by [`ChunkStore::put`] is stored but **unreachable**
-//! until a commit and ref anchor it; `git gc` may prune unanchored chunks.
-//! [`CommitStore::create_commit`] anchors the manifest and summary blobs;
-//! anchoring of the chunks a manifest refers to is the responsibility of
-//! the layer that knows the reference structure (see the roadmap's
-//! pack-on-write work, bead acetone-63m.10).
+//! A chunk written by [`ChunkStore::put`] is stored but **unreachable**:
+//! git prunes unreachable objects on `git gc` and — just as important —
+//! **does not transfer them** on `git clone`/`push`/`fetch`, and git
+//! cannot parse manifests, so a chunk address stored inside manifest or
+//! chunk bytes keeps nothing alive. [`CommitStore::create_commit`] is the
+//! anchoring mechanism: it makes the manifest, the summary and every chunk
+//! listed in [`NewCommit::anchors`] reachable from the commit — pass the
+//! complete chunk set of the version, and pair the commit with
+//! [`RefStore::write_ref`] so a ref reaches the commit.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -50,6 +53,6 @@ mod store;
 pub use bytes::Bytes;
 
 pub use error::StoreError;
-pub use git::{DEFAULT_MAX_CHUNK_SIZE, GitStore, GitStoreOptions};
+pub use git::{DEFAULT_MAX_CHUNK_SIZE, GitStore, GitStoreOptions, ObjectFormat};
 pub use hash::Hash;
 pub use store::{ChunkStore, Commit, CommitStore, NewCommit, RefStore, Signature};

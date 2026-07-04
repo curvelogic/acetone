@@ -3,7 +3,7 @@
 
 mod common;
 
-use acetone_store::{ChunkStore, GitStore, GitStoreOptions, Hash, StoreError};
+use acetone_store::{ChunkStore, GitStore, Hash, StoreError};
 use common::{new_store, repo_path};
 
 #[test]
@@ -61,14 +61,7 @@ fn put_batch_matches_individual_puts() {
 
 #[test]
 fn put_rejects_oversized_and_accepts_exact_cap() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let store = GitStore::create_with(
-        &dir.path().join("repo.git"),
-        GitStoreOptions {
-            max_chunk_size: 1024,
-        },
-    )
-    .expect("create store");
+    let (_dir, store) = common::new_capped_store(1024);
     assert_eq!(store.max_chunk_size(), 1024);
 
     // Exactly at the cap: accepted, round-trips.
@@ -100,13 +93,8 @@ fn get_rejects_oversized_object_before_materialising() {
     let hash = writer.put(&big).expect("put big");
     drop(writer);
 
-    let capped = GitStore::open_with(
-        &repo_path(&dir),
-        GitStoreOptions {
-            max_chunk_size: 4096,
-        },
-    )
-    .expect("open capped");
+    let capped =
+        GitStore::open_with(&repo_path(&dir), common::capped_options(4096)).expect("open capped");
     match capped.get(&hash) {
         Err(StoreError::ObjectTooLarge { size, limit }) => {
             assert_eq!(size, 512 * 1024);

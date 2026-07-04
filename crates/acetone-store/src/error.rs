@@ -75,6 +75,19 @@ pub enum StoreError {
         reason: String,
     },
 
+    /// An anchor passed to
+    /// [`create_commit`](crate::CommitStore::create_commit) cannot be
+    /// anchored: it names an object that is not in the store, or one that
+    /// is not a blob. Rejecting this up front keeps every created commit
+    /// fully connected under `git fsck`.
+    #[error("cannot anchor {hash}: {reason}")]
+    InvalidAnchor {
+        /// The anchor that was rejected.
+        hash: Hash,
+        /// Why it cannot be anchored.
+        reason: &'static str,
+    },
+
     /// A commit trailer token or value that cannot be represented in the
     /// git trailer format (spec §3.5).
     #[error("invalid commit trailer {token:?}: {reason}")]
