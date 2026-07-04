@@ -1179,7 +1179,8 @@ fn pack_growth(ctx: &Ctx) {
     git(&repo, &["repack", "-a", "-d", "--quiet"]);
     let base_kb = du_kb(&repo);
     println!("base_size_packed: {}", fmt_kb(base_kb));
-    // Pack creation order, for the mtime-inversion repack variant below.
+    // Pack creation order; per-commit packs get replaced by the native
+    // consolidation pack below.
     let mut pack_order: Vec<String> = vec![
         newest_idx(&repo)
             .expect("base pack")
@@ -1190,7 +1191,6 @@ fn pack_growth(ctx: &Ctx) {
             .to_string(),
     ];
 
-    let gxr = gix::open(&repo).expect("open gix repo");
     let churn = (ctx.n / 100).max(1) as usize;
     let mut vers: Vec<u64> = vec![0; ctx.n as usize];
     let mut rng = Rng::new(0x94011 + ctx.n);
@@ -1210,6 +1210,11 @@ fn pack_growth(ctx: &Ctx) {
     let mut growth_meta: Vec<(gix::ObjectId, Option<gix::ObjectId>)> = Vec::new();
     println!("size_trajectory (after N commits, packs incl. --fix-thin bases):");
     for c in 0..ctx.growth_commits {
+        // Fresh handles per commit: one pack arrives per iteration, and gix
+        // sizes its object-store slotmap from the disk state seen at open
+        // time (a long-lived handle overflows after ~30 new packs).
+        let store = Store::open(&repo).expect("reopen store");
+        let gxr = gix::open(&repo).expect("reopen gix repo");
         let ver = 3_000_000 + c as u64;
         let ops: Vec<BatchOp> = (0..churn)
             .map(|_| {
@@ -1341,6 +1346,7 @@ fn pack_growth(ctx: &Ctx) {
     // 100 per-commit packs. The base pack is kept; --fix-thin re-appends
     // only the first-generation bases it references.
     progress("native consolidation pack ...");
+    let gxr = gix::open(&repo).expect("open gix repo for consolidation");
     let t = Instant::now();
     let mut base_of: std::collections::HashMap<gix::ObjectId, Option<gix::ObjectId>> =
         std::collections::HashMap::new();
