@@ -15,3 +15,26 @@ path = "src/main.rs"
 [dependencies]
 acetone-cypher.workspace = true
 acetone-graph.workspace = true
+# acetone-model: NodeKey/EdgeKey/NodeRecord/EdgeRecord/Value construction
+# for the pre-Cypher plumbing commands (put-node/get-node/put-edge).
+acetone-model.workspace = true
+# acetone-store: only for the ObjectFormat enum, to plumb `init
+# --object-format` through to acetone_graph::InitOptions. Still downward
+# per the crate layout (CLAUDE.md), and acetone-cli already depends on
+# more than one lower crate.
+acetone-store.workspace = true
+# anyhow: the one crate in the workspace allowed ad hoc error handling
+# (CLAUDE.md) — used only here, to add context to acetone-graph's typed
+# errors on the way to a friendly top-level message.
+anyhow = "1"
+# clap (derive): mature, actively maintained, dual MIT/Apache-2.0 argument
+# parser. Justification (CLAUDE.md's dependency rule): this CLI has ten
+# subcommands, several with repeated flags (--prop, --trailer) and mixed
+# positional/optional arguments; hand-rolling that parsing correctly and
+# safely against adversarial input (missing args, unknown flags, malformed
+# UTF-8) is exactly the kind of bug class a well-tested, ubiquitous parser
+# exists to avoid. No std alternative exists for subcommand parsing.
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true
