@@ -41,7 +41,7 @@ not general claims. Known gaps, all confirmed during review:
   requirement on bead acetone-yzc.2.
 - **Unreserved keywords**: the slice treats keywords as ordinary
   identifiers, so some malformed queries parse — e.g.
-  `MATCH (n) WHERE n.x > RETURN n` reads `RETURN` as a variable. Its
+  `MATCH (n) WHERE n.x > RETURN` reads `RETURN` as a variable. Its
   rejection of `invalid-trailing-operator` in the set is incidental.
   Reserved words and clause-order validation are real-parser work.
 - Only three invalid inputs are in the set; error-quality evidence is
