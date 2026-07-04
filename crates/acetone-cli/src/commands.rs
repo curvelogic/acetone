@@ -230,8 +230,14 @@ fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
             // correct if a richer key grammar ever changes how a raw
             // argument maps to a value.
             println!("node: {}", format_node_key(&node_key));
-            let labels = record.secondary_labels().join(", ");
-            println!("secondary_labels: [{labels}]");
+            // Secondary labels are repository-controlled and content-
+            // unvalidated: escape each like every other label.
+            let labels: Vec<String> = record
+                .secondary_labels()
+                .iter()
+                .map(|l| format_label(l))
+                .collect();
+            println!("secondary_labels: [{}]", labels.join(", "));
             println!("properties:");
             for (name, value) in record.properties() {
                 println!("  {}: {}", format_label(name), format_value(value));

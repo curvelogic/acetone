@@ -371,3 +371,39 @@ fn log_sanitises_hostile_commit_messages() {
     );
     assert!(text.contains("Evil-Trailer"), "trailer still listed");
 }
+
+#[test]
+fn get_node_escapes_hostile_secondary_labels() {
+    use acetone_graph::{InitOptions, Repository};
+    use acetone_model::Value;
+    use acetone_model::graph_keys::NodeKey;
+    use acetone_model::records::NodeRecord;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    // Write a hostile secondary label through the library, the way a
+    // malicious clone's data would arrive (the CLI cannot author one).
+    let repository = Repository::init(&repo, InitOptions::default()).expect("init");
+    let key = NodeKey::new("Host", vec![Value::String("web1".into())]).expect("valid");
+    let record = NodeRecord::new(
+        ["z\u{1b}]0;PWNED\u{7}\u{1b}[31mred".to_owned()],
+        Default::default(),
+    );
+    let mut tx = repository.begin_write().expect("begin");
+    tx.put_node(&key, &record).expect("put");
+    tx.save().expect("save");
+    drop(repository);
+
+    let out = acetone(&repo, &["get-node", "Host", "web1"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        !text.contains('\u{1b}'),
+        "raw ESC reached the terminal: {text:?}"
+    );
+    assert!(
+        !text.contains('\u{7}'),
+        "raw BEL reached the terminal: {text:?}"
+    );
+    assert!(text.contains("\\u{1b}"), "escaped form must be visible");
+}
