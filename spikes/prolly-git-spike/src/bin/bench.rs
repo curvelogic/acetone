@@ -38,6 +38,7 @@
 //!   pack-probe   does git tolerate on-disk packs whose REF_DELTA bases
 //!                live outside the pack (no --fix-thin completion)?
 
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1147,6 +1148,42 @@ mod pow {
     }
 }
 
+/// Order pack entries so every in-pack delta base precedes its children,
+/// breaking any delta cycle by storing the entry whole. Creation order is
+/// not quite topological: a chunk OID can re-appear after a content-defined
+/// boundary shifts back (see the consolidation comment in `pack_growth`).
+fn topo_sort_entries(entries: Vec<PackEntry>) -> Vec<PackEntry> {
+    let index: std::collections::HashMap<gix::ObjectId, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.oid, i))
+        .collect();
+    let mut slots: Vec<Option<PackEntry>> = entries.into_iter().map(Some).collect();
+    let mut out: Vec<PackEntry> = Vec::with_capacity(slots.len());
+    for i in 0..slots.len() {
+        let mut chain: Vec<usize> = Vec::new();
+        let mut cur = Some(i);
+        while let Some(j) = cur {
+            let Some(entry) = slots[j].as_mut() else {
+                break; // ancestor already placed
+            };
+            if chain.contains(&j) {
+                entry.base = None; // break a delta cycle: store whole
+                break;
+            }
+            let next = entry.base.as_ref().and_then(|(b, _)| index.get(b).copied());
+            chain.push(j);
+            cur = next;
+        }
+        for j in chain.into_iter().rev() {
+            if let Some(e) = slots[j].take() {
+                out.push(e);
+            }
+        }
+    }
+    out
+}
+
 /// Scenario pack-growth: the growth scenario (same op stream, same seeds)
 /// re-run against a fresh repo, writing one hand-rolled pack per commit in
 /// which every new chunk is a REF_DELTA against its predecessor. Measures
@@ -1233,7 +1270,7 @@ fn pack_growth(ctx: &Ctx) {
         let rec = store.take_recording().expect("recording enabled");
 
         let t = Instant::now();
-        let entries = pow::build_entries(&gxr, commit_oid, &rec);
+        let entries = topo_sort_entries(pow::build_entries(&gxr, commit_oid, &rec));
         growth_meta.extend(
             entries
                 .iter()
@@ -1350,7 +1387,6 @@ fn pack_growth(ctx: &Ctx) {
     let t = Instant::now();
     let mut base_of: std::collections::HashMap<gix::ObjectId, Option<gix::ObjectId>> =
         std::collections::HashMap::new();
-    let mut order: Vec<gix::ObjectId> = Vec::new();
     for (oid, base) in &growth_meta {
         if base_of.contains_key(oid) {
             continue; // first occurrence wins
@@ -1367,7 +1403,30 @@ fn pack_growth(ctx: &Ctx) {
             cur = base_of.get(&b).copied().flatten();
         }
         base_of.insert(*oid, chosen);
-        order.push(*oid);
+    }
+    // Emit in topological order (base chains first). Creation order is not
+    // quite topological: a chunk OID can re-appear after a content-defined
+    // boundary shifts back, so an early entry may reference a base whose
+    // (deduplicated) pack entry would otherwise sit later; index-pack
+    // --fix-thin then appends a duplicate repo copy of that base and dies
+    // with "REF_DELTA already resolved (duplicate base)".
+    let mut order: Vec<gix::ObjectId> = Vec::with_capacity(base_of.len());
+    let mut emitted: HashSet<gix::ObjectId> = HashSet::with_capacity(base_of.len());
+    for (oid, _) in &growth_meta {
+        let mut chain: Vec<gix::ObjectId> = Vec::new();
+        let mut cur = Some(*oid);
+        while let Some(o) = cur {
+            if emitted.contains(&o) || !base_of.contains_key(&o) {
+                break; // already placed, or external to this pack
+            }
+            chain.push(o);
+            cur = base_of[&o];
+        }
+        for o in chain.into_iter().rev() {
+            if emitted.insert(o) {
+                order.push(o);
+            }
+        }
     }
     let pf = pack::write_pack(
         order.len(),
