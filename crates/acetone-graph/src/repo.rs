@@ -653,6 +653,13 @@ pub struct Snapshot<'s> {
 }
 
 impl<'s> Snapshot<'s> {
+    /// Pin a read-only view to an arbitrary manifest and store. Used by
+    /// [`crate::fsck`], which verifies historical and workspace manifests
+    /// that are not the current workspace snapshot.
+    pub(crate) fn new(store: &'s GitStore, manifest: Manifest) -> Self {
+        Snapshot { store, manifest }
+    }
+
     /// The manifest this snapshot is pinned to.
     pub fn manifest(&self) -> &Manifest {
         &self.manifest

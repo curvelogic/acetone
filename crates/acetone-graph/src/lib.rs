@@ -12,7 +12,10 @@
 //!   compare-and-swap, commit creation;
 //! - [`repo::Snapshot`] — readers pinned to immutable manifests (MVCC;
 //!   snapshot isolation by construction);
-//! - [`lock::WriteLock`] — the single-writer lock file.
+//! - [`lock::WriteLock`] — the single-writer lock file;
+//! - [`fsck::check`] — the integrity verifier (spec §7): chunk
+//!   reachability and manifest integrity over every workspace and every
+//!   reachable commit, reporting missing and corrupt chunks distinctly.
 //!
 //! Graph *semantics* — constraint enforcement, schema validation, index
 //! maintenance, merge orchestration and the conflicts-as-data model —
@@ -23,10 +26,12 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod fsck;
 pub mod lock;
 pub mod repo;
 
 pub use error::GraphError;
+pub use fsck::{Finding, FindingKind, FsckReport, MapId, Origin, Severity, check as fsck};
 pub use lock::WriteLock;
 pub use repo::{
     DEFAULT_BRANCH, DEFAULT_WORKSPACE, InitOptions, LogEntry, Repository, Snapshot, Transaction,
