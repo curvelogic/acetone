@@ -22,12 +22,6 @@ allow = [
     "Unicode-3.0",
 ]
 
-# Greg's ruling (ADR-0003): crate-specific exception only — MPL-2.0 stays
-# denied in general so any future MPL dependency forces a fresh decision.
-[[licenses.exceptions]]
-name = "uluru"
-allow = ["MPL-2.0"]
-
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
