@@ -163,9 +163,16 @@ Two observations worth pulling out:
   record, so near-perfect deltas exist, but pack-objects pairs delta
   candidates using name/size heuristics and content-addressed blobs have
   no stable name, so it largely fails to find them (`--aggressive`,
-  window 250, improved on plain gc by only ~1%). A future pack-on-write
-  path chooses its own delta bases — and the predecessor chunk is known at
-  write time — so this is recoverable, but not by leaning on stock `git gc`.
+  window 250, improved on plain gc by only ~1%). A pack-on-write path
+  choosing its own delta bases (the predecessor chunk is known at write
+  time) could in principle recover this — but note this is an
+  **unvalidated design hypothesis**: gix exposes no repository-level pack
+  writer, gitoxide's pack generation does not create new deltas, and stock
+  `git repack` cannot be told delta bases, so it means hand-rolling git's
+  delta encoding and pack format. Plausible (the format is simple and the
+  bases are known) but unmeasured. Relatedly, the roadmap's
+  "pack-first writing" arm of this scenario could not be run for the same
+  reason — only loose-then-repack was measured.
 
 ## Scenario 7 — loose vs packed point reads
 
@@ -219,8 +226,12 @@ inherent to uniform random churn and much milder under realistic key
 locality; (b) git's pack heuristics fail to delta content-addressed chunks
 (aggressive repack bought only ~1%), which a pack-on-write path with
 explicitly chosen delta bases (the predecessor chunk is known at write
-time) can address — spec §3.2's pack-first aspiration becomes a
-requirement rather than an optimisation if import cadence is high.
+time) may be able to address — an unvalidated hypothesis requiring custom
+delta/pack plumbing (no existing gix or git tooling does this; see
+scenario 6). If it validates, spec §3.2's pack-first aspiration becomes a
+requirement rather than an optimisation where import cadence is high; if
+it does not, the fallback positions are import key locality, coarser
+import batching, and history compaction/squashing.
 Operationally, letting ~918k loose objects accumulate before gc cost a
 17-minute gc; periodic incremental repack (or pack-on-write) is needed
 hygiene, not optional.
@@ -233,11 +244,13 @@ machine; the growth scenario was simply not run at 5M per the roadmap's
 Option A (git ODB as chunk store). Reads, updates, diffs and durability
 (everything survives `git gc --prune=now`; all state reachable from refs)
 behave as the design predicts at the target envelope. The honest cost is
-version-history storage growth under high-churn imports — bounded, linear,
-and improvable with pack-on-write — plus gc/repack operational cost at the
-million-object scale. Neither undermines the architecture; both should be
-named in the Phase 1 design (pack-on-write in `acetone-store`, repack
-policy in `gc`).
+version-history storage growth under high-churn imports — bounded and
+linear, with pack-on-write as the identified but **unvalidated** recovery
+path — plus gc/repack operational cost at the million-object scale.
+Neither undermines the architecture at workbench scale even unmitigated;
+but Phase 1 must treat pack-on-write validation as a named task in
+`acetone-store` (with repack policy in `gc`), and Gate A should weigh the
+growth number on the assumption the mitigation might not pan out.
 
 ## Reproducing
 
