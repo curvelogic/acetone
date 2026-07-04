@@ -21,6 +21,21 @@ rust-version = "1.96"
 repository = "https://github.com/curvelogic/acetone"
 
 [workspace.dependencies]
+# gix (gitoxide): the git object database is the v0.1 chunk store (ADR-0002,
+# Gate A). >= 0.85 required (RUSTSEC-2025-0140 in older gix-date).
+# Feature-minimised: object/ref plumbing only — no network transports, no
+# attributes/filters, no `command` support, so gix cannot spawn processes.
+gix = { version = "0.85", default-features = false, features = [
+    "sha1",
+    "sha256",
+] }
+# bytes: cheaply cloneable, shareable byte buffers for chunk data returned by
+# ChunkStore::get — the prolly layer caches and shares chunks without copying.
+# MIT, maintained by the tokio team.
+bytes = "1"
+# tempfile (dev): temporary repositories in tests. MIT/Apache-2.0.
+tempfile = "3"
+
 acetone-store = { path = "crates/acetone-store" }
 acetone-prolly = { path = "crates/acetone-prolly" }
 acetone-model = { path = "crates/acetone-model" }
