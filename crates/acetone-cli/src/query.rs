@@ -12,6 +12,7 @@ use acetone_graph::Repository;
 use anyhow::{Context, Result, anyhow};
 
 use crate::output::outln;
+use crate::value::sanitise_line;
 
 /// Output format for query results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,14 +197,19 @@ fn render_json(result: &QueryResult) {
 
 // --- Value rendering ---------------------------------------------------------
 
-/// Human-readable rendering for table/CSV cells.
+/// Human-readable rendering for table/CSV cells. Every string that
+/// originates in the graph (property values, labels, relationship types,
+/// property keys) is routed through [`sanitise_line`] — repository data
+/// is attacker-writable (a hostile clone), and ANSI/C1 escape sequences
+/// must never reach the terminal raw (the bar set by PR #25 for log/fsck
+/// output). JSON output escapes separately in `json_string`.
 fn render_value(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Int(n) => n.to_string(),
         Value::Float(x) => acetone_cypher::exec::functions::format_float(*x),
-        Value::String(s) => s.clone(),
+        Value::String(s) => sanitise_line(s),
         Value::List(items) => {
             let inner = items
                 .iter()
@@ -215,7 +221,7 @@ fn render_value(value: &Value) -> String {
         Value::Map(entries) => {
             let inner = entries
                 .iter()
-                .map(|(k, v)| format!("{k}: {}", render_value(v)))
+                .map(|(k, v)| format!("{}: {}", sanitise_line(k), render_value(v)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{{{inner}}}")
@@ -227,14 +233,18 @@ fn render_value(value: &Value) -> String {
 }
 
 fn render_node(node: &NodeValue) -> String {
-    let labels: String = node.labels.iter().map(|l| format!(":{l}")).collect();
+    let labels: String = node
+        .labels
+        .iter()
+        .map(|l| format!(":{}", sanitise_line(l)))
+        .collect();
     if node.properties.is_empty() {
         format!("({labels})")
     } else {
         let props = node
             .properties
             .iter()
-            .map(|(k, v)| format!("{k}: {}", render_value(v)))
+            .map(|(k, v)| format!("{}: {}", sanitise_line(k), render_value(v)))
             .collect::<Vec<_>>()
             .join(", ");
         format!("({labels} {{{props}}})")
@@ -242,7 +252,7 @@ fn render_node(node: &NodeValue) -> String {
 }
 
 fn render_rel(rel: &RelValue) -> String {
-    format!("[:{}]", rel.rel_type)
+    format!("[:{}]", sanitise_line(&rel.rel_type))
 }
 
 /// JSON rendering (a minimal, dependency-free serialiser).

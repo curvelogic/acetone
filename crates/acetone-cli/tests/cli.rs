@@ -606,3 +606,111 @@ fn query_errors_render_with_line_and_column() {
     assert!(err.starts_with("error: "));
     assert!(err.contains("line 1, column"), "{err}");
 }
+
+/// Query output must neutralise repository-controlled terminal-escape
+/// sequences (PR #25's bar; regression guard for PR #35). Labels and
+/// string property values are attacker-writable via a hostile clone.
+#[test]
+fn query_output_sanitises_hostile_strings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let evil_label = "Host\u{1b}[31mHACK";
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            evil_label,
+            "1",
+            "--prop",
+            "note=ok\u{1b}[31mred\u{7}",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Table: property value and label must be escaped, not raw.
+    let out = acetone(&repo, &["query", "MATCH (n) RETURN n.note AS note, n"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains('\u{1b}'), "raw ESC reached table output");
+    assert!(!text.contains('\u{7}'), "raw BEL reached table output");
+    assert!(text.contains("\\u{1b}"), "escaped form must be visible");
+
+    // CSV: same guarantee.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (n) RETURN n.note AS note",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains('\u{1b}'), "raw ESC reached CSV output");
+
+    // JSON: control characters must be \u-escaped.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (n) RETURN n.note AS note",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains('\u{1b}'), "raw ESC reached JSON output");
+    assert!(text.contains("\\u001b"), "JSON must \\u-escape the ESC");
+}
+
+/// The shell REPL runs queries and meta-commands from stdin.
+#[test]
+fn shell_runs_queries_and_meta_commands() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "Host", "b", "--prop", "x=2"])
+            .status
+            .success()
+    );
+
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "shell"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn shell");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b":format csv\nMATCH (h:Host) RETURN count(*) AS n;\n:quit\n")
+        .expect("write to shell");
+    let out = child.wait_with_output().expect("wait");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).expect("utf8");
+    // The CSV result of the count query appears in the transcript.
+    assert!(
+        text.contains("\nn\n2") || text.contains("n\n2"),
+        "shell transcript: {text}"
+    );
+}

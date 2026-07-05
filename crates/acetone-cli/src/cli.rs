@@ -111,8 +111,9 @@ pub enum Command {
     /// Start an interactive Cypher shell (readline REPL).
     ///
     /// Enter queries to run them against the current workspace state.
-    /// Conveniences: `:checkout <ref>`, `:log`, `:diff`, `:format
-    /// <table|json|csv>`, `:quit`.
+    /// Conveniences: `:checkout <ref>`, `:log`, `:format <table|json|csv>`,
+    /// `:quit`. (`:diff` from spec §7 arrives with the Phase 4 diff
+    /// machinery.)
     Shell,
     /// Verify repository integrity: manifest decode, chunk reachability
     /// and prolly-tree structure for every version reachable from
