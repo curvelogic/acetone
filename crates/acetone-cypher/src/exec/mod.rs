@@ -2,12 +2,14 @@
 //! expression evaluation, pattern matching and the clause pipeline, over
 //! a provider-pluggable [`source::GraphSource`].
 
+pub mod adapter;
 pub mod eval;
 pub mod functions;
 pub mod run;
 pub mod source;
 pub mod value;
 
+pub use adapter::{GraphSnapshot, catalogue_from_schema};
 pub use eval::{ExecError, Row};
 pub use run::{QueryResult, execute};
 pub use source::{EmptyGraph, GraphSource, MemoryGraph};

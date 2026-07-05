@@ -96,6 +96,24 @@ pub enum Command {
         #[arg(long)]
         label: Option<String>,
     },
+    /// Run an openCypher read query against the graph.
+    Query {
+        /// The query text.
+        cypher: String,
+        /// Read at a specific ref (branch, tag or commit hash) instead of
+        /// the current workspace state — whole-query time travel.
+        #[arg(long)]
+        at: Option<String>,
+        /// Output format.
+        #[arg(long, default_value = "table", value_parser = ["table", "json", "csv"])]
+        format: String,
+    },
+    /// Start an interactive Cypher shell (readline REPL).
+    ///
+    /// Enter queries to run them against the current workspace state.
+    /// Conveniences: `:checkout <ref>`, `:log`, `:diff`, `:format
+    /// <table|json|csv>`, `:quit`.
+    Shell,
     /// Verify repository integrity: manifest decode, chunk reachability
     /// and prolly-tree structure for every version reachable from
     /// workspaces, branches and tags; edge-map symmetry as an advisory.

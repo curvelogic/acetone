@@ -469,3 +469,140 @@ fn closed_stdout_pipe_is_a_clean_exit_not_a_panic() {
         "expected clean exit, got {status}: {errtext}"
     );
 }
+
+/// The `query` command (acetone-yzc.6): parse → bind → execute an
+/// openCypher read query against the repository, in table/JSON/CSV.
+#[test]
+fn query_command_runs_cypher_over_the_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    for (label, key, prop) in [
+        ("Host", "web-01", "os=debian"),
+        ("Host", "web-02", "os=ubuntu"),
+        ("Software", "nginx", "vendor=f5"),
+    ] {
+        let out = acetone(&repo, &["put-node", label, key, "--prop", prop]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let out = acetone(
+        &repo,
+        &["put-edge", "Host", "web-01", "RUNS", "Software", "nginx"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+
+    // Table output, ordered.
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (h:Host) RETURN h.os AS os ORDER BY os"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("debian"));
+    assert!(text.contains("ubuntu"));
+    assert!(text.find("debian").unwrap() < text.find("ubuntu").unwrap());
+    assert!(text.contains("2 rows"));
+
+    // Expansion + aggregate.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host)-[:RUNS]->(s:Software) RETURN count(*) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "n\n1");
+
+    // JSON output shape.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (s:Software) RETURN s.vendor AS vendor",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"vendor\": \"f5\""));
+}
+
+#[test]
+fn query_at_ref_is_whole_query_time_travel() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "one host"])
+            .status
+            .success()
+    );
+    let first = {
+        let out = acetone(&repo, &["log"]);
+        stdout(&out)
+            .lines()
+            .next()
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert!(
+        acetone(&repo, &["put-node", "Host", "b", "--prop", "x=2"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "two hosts"])
+            .status
+            .success()
+    );
+
+    let now = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(*) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&now).trim(), "n\n2");
+    let past = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(*) AS n",
+            "--format",
+            "csv",
+            "--at",
+            &first,
+        ],
+    );
+    assert_eq!(stdout(&past).trim(), "n\n1");
+}
+
+#[test]
+fn query_errors_render_with_line_and_column() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let out = acetone(&repo, &["query", "MATCH (n) RETURN"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.starts_with("error: "));
+    assert!(err.contains("line 1, column"), "{err}");
+}
