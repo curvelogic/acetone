@@ -11,8 +11,8 @@ pub mod value;
 
 pub use adapter::{GraphSnapshot, catalogue_from_schema};
 pub use eval::{ExecError, Row};
-pub use run::{QueryResult, execute};
-pub use source::{EmptyGraph, GraphSource, MemoryGraph};
+pub use run::{QueryResult, execute, execute_versioned};
+pub use source::{EmptyGraph, GraphSource, MemoryGraph, SingleVersion, VersionResolver};
 pub use value::Value;
 
 /// Parse, bind (lenient) and execute a query against a graph — the
@@ -306,5 +306,85 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, QueryError::Exec(ExecError::Overflow { .. })));
+    }
+
+    #[test]
+    fn clause_group_at_queries_another_version() {
+        use crate::bind::{BindMode, Catalogue, bind};
+        use crate::exec::source::VersionResolver;
+
+        // Two versions: "old" has one Host, "new" (the base) has two.
+        fn host_graph(n: usize) -> MemoryGraph {
+            let mut graph = MemoryGraph::new();
+            for i in 0..n {
+                let mut props = BTreeMap::new();
+                props.insert("id".to_string(), Value::Int(i as i64));
+                graph.add_node(["Host"], props);
+            }
+            graph
+        }
+
+        // NOTE: MemoryGraph identity is a per-graph counter, so
+        // cross-version *re-anchoring* would not align here — this test
+        // uses distinct variables (n, m) and never re-anchors. Stored
+        // graphs (the real path) identify by natural key, which is
+        // version-stable, so re-anchoring is sound there (see
+        // execute_versioned's doc comment).
+        struct TwoVersions {
+            base: MemoryGraph,
+        }
+        impl VersionResolver for TwoVersions {
+            fn base(&self) -> &dyn GraphSource {
+                &self.base
+            }
+            fn at(&self, refspec: &str) -> Result<Box<dyn GraphSource>, String> {
+                match refspec {
+                    "old" => Ok(Box::new(host_graph(1))),
+                    other => Err(format!("no such version '{other}'")),
+                }
+            }
+        }
+        let resolver = TwoVersions {
+            base: host_graph(2),
+        };
+
+        let exec = |q: &str| {
+            let parsed = crate::parse(q).unwrap();
+            let bound = bind(q, &parsed, &Catalogue::empty(), BindMode::Lenient).unwrap();
+            execute_versioned(&bound, &resolver, &BTreeMap::new()).unwrap()
+        };
+
+        // Base version: two hosts.
+        let now = exec("MATCH (h:Host) RETURN count(*) AS n");
+        assert!(matches!(now.rows[0][0], Value::Int(2)));
+
+        // Same query AT the old version: one host.
+        let past = exec("MATCH (h:Host) AT 'old' RETURN count(*) AS n");
+        assert!(matches!(past.rows[0][0], Value::Int(1)));
+
+        // One query spanning both versions.
+        let both = exec("MATCH (n:Host) AT 'old' MATCH (m:Host) RETURN count(*) AS pairs");
+        // 1 old host × 2 base hosts = 2 rows collapsed to a count.
+        assert!(matches!(both.rows[0][0], Value::Int(2)));
+
+        // An unresolvable ref is a clean error.
+        let parsed = crate::parse("MATCH (h) AT 'nope' RETURN h").unwrap();
+        let bound = bind(
+            "MATCH (h) AT 'nope' RETURN h",
+            &parsed,
+            &Catalogue::empty(),
+            BindMode::Lenient,
+        )
+        .unwrap();
+        let err = execute_versioned(&bound, &resolver, &BTreeMap::new()).unwrap_err();
+        assert!(matches!(err, ExecError::InvalidArgument { .. }));
+
+        // The single-graph path reports AT as unsupported, not a panic.
+        let err =
+            run_query("MATCH (h) AT 'x' RETURN h", &EmptyGraph, &BTreeMap::new()).unwrap_err();
+        assert!(matches!(
+            err,
+            QueryError::Exec(ExecError::InvalidArgument { .. })
+        ));
     }
 }
