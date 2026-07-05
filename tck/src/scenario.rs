@@ -85,8 +85,13 @@ pub struct ScenarioPlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expectation {
-    /// A result table (row content is not modelled until the executor lands).
-    Rows,
+    /// A result table: header, raw cell texts, and ordering semantics.
+    Rows {
+        header: Vec<String>,
+        rows: Vec<Vec<String>>,
+        ordered: bool,
+        lists_unordered: bool,
+    },
     EmptyResult,
     Error {
         error_type: String,
@@ -310,7 +315,24 @@ fn reduce_scenario(
             StepKind::ProcedureExists => plan.needs_procedures = true,
             StepKind::ExecutingQuery(query) => plan.query = Some(query),
             StepKind::ExecutingControlQuery(query) => plan.setup_queries.push(query),
-            StepKind::ExpectResult => plan.expectation = Expectation::Rows,
+            StepKind::ExpectResult {
+                ordered,
+                lists_unordered,
+            } => {
+                let (header, rows) = match &step.table {
+                    Some(table) => match table.rows.split_first() {
+                        Some((header, rows)) => (header.clone(), rows.to_vec()),
+                        None => (Vec::new(), Vec::new()),
+                    },
+                    None => (Vec::new(), Vec::new()),
+                };
+                plan.expectation = Expectation::Rows {
+                    header,
+                    rows,
+                    ordered,
+                    lists_unordered,
+                };
+            }
             StepKind::ExpectEmptyResult => plan.expectation = Expectation::EmptyResult,
             StepKind::ExpectError {
                 error_type,

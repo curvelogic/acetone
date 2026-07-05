@@ -24,6 +24,7 @@
 //! spec §5.1: "Each release MUST publish its TCK pass rate."
 
 pub mod classify;
+pub mod expected;
 pub mod report;
 pub mod scenario;
 pub mod vocabulary;

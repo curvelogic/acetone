@@ -23,7 +23,10 @@ pub enum StepKind {
     ExecutingControlQuery(String),
     /// `Then the result should be, in any order:` / `, in order:` /
     /// `(ignoring element order for lists)` variants — a result table
-    ExpectResult,
+    ExpectResult {
+        ordered: bool,
+        lists_unordered: bool,
+    },
     /// `Then the result should be empty`
     ExpectEmptyResult,
     /// `Then a <Type> should be raised at <phase>: <detail>`
@@ -58,11 +61,29 @@ pub fn match_step(text: &str, docstring: Option<&str>) -> Option<StepKind> {
         "parameters are:" => return Some(StepKind::Parameters),
         "executing query:" => return Some(StepKind::ExecutingQuery(doc())),
         "executing control query:" => return Some(StepKind::ExecutingControlQuery(doc())),
-        "the result should be, in any order:"
-        | "the result should be, in order:"
-        | "the result should be (ignoring element order for lists):"
-        | "the result should be, in order (ignoring element order for lists):" => {
-            return Some(StepKind::ExpectResult);
+        "the result should be, in any order:" => {
+            return Some(StepKind::ExpectResult {
+                ordered: false,
+                lists_unordered: false,
+            });
+        }
+        "the result should be, in order:" => {
+            return Some(StepKind::ExpectResult {
+                ordered: true,
+                lists_unordered: false,
+            });
+        }
+        "the result should be (ignoring element order for lists):" => {
+            return Some(StepKind::ExpectResult {
+                ordered: false,
+                lists_unordered: true,
+            });
+        }
+        "the result should be, in order (ignoring element order for lists):" => {
+            return Some(StepKind::ExpectResult {
+                ordered: true,
+                lists_unordered: true,
+            });
         }
         "the result should be empty" => return Some(StepKind::ExpectEmptyResult),
         "no side effects" => return Some(StepKind::NoSideEffects),
@@ -122,7 +143,7 @@ mod tests {
         );
         assert!(matches!(
             match_step("the result should be, in any order:", None),
-            Some(StepKind::ExpectResult)
+            Some(StepKind::ExpectResult { ordered: false, .. })
         ));
         assert_eq!(
             match_step(

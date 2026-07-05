@@ -1,0 +1,830 @@
+//! Query execution: a clause pipeline over materialised row sets.
+//!
+//! Heuristic planning per spec §5.3 lives in the pattern matcher's anchor
+//! choice (a bound variable or the most selective scan available); the
+//! spec's scan/expand operators are the matcher's internals rather than
+//! reified structs, and `IndexSeek` awaits physical index maps (Phase 5).
+//! Both are recorded deviations on the bead. Row sets are materialised —
+//! at workbench scale (spec §1) streaming buys nothing yet.
+//!
+//! Relationship uniqueness: per openCypher, a relationship is traversed
+//! at most once per MATCH clause (across all its comma patterns and
+//! within var-length expansions).
+
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashSet};
+
+use crate::bind::bound::*;
+use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
+use crate::exec::source::GraphSource;
+use crate::exec::value::{EntityId, NodeValue, PathValue, RelValue, Value};
+
+/// A completed query's output.
+#[derive(Debug, Clone)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
+}
+
+pub fn execute(
+    query: &BoundQuery,
+    graph: &dyn GraphSource,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<QueryResult, ExecError> {
+    let ctx = EvalCtx::new(graph, parameters);
+    let mut rows = vec![Row::default()];
+    let mut result = None;
+
+    for clause in &query.clauses {
+        match clause {
+            BoundClause::Match {
+                optional,
+                patterns,
+                at_ref,
+                where_clause,
+                span,
+            } => {
+                if at_ref.is_some() {
+                    return Err(ExecError::Unsupported {
+                        feature: "AT <ref> (arrives with acetone-yzc.7)",
+                        span: *span,
+                    });
+                }
+                rows = match_clause(rows, *optional, patterns, where_clause.as_ref(), &ctx)?;
+            }
+            BoundClause::Unwind { expr, alias, span } => {
+                let mut out = Vec::new();
+                for row in rows {
+                    let list = eval(expr, &row, &ctx)?;
+                    match list {
+                        Value::Null => {} // UNWIND null produces no rows
+                        Value::List(items) => {
+                            for item in items {
+                                let mut next = row.clone();
+                                next.set(*alias, item);
+                                out.push(next);
+                            }
+                        }
+                        other => {
+                            return Err(ExecError::Type {
+                                message: format!("UNWIND needs a list, got {}", other.type_name()),
+                                span: *span,
+                            });
+                        }
+                    }
+                }
+                rows = out;
+            }
+            BoundClause::With(projection) => {
+                rows = project(rows, projection, &ctx, true)?.1;
+            }
+            BoundClause::Return(projection) => {
+                let (columns, projected) = project(rows, projection, &ctx, false)?;
+                let output = projected
+                    .into_iter()
+                    .map(|row| {
+                        projection
+                            .items
+                            .iter()
+                            .map(|item| row.get(item.var))
+                            .collect()
+                    })
+                    .collect();
+                result = Some(QueryResult {
+                    columns,
+                    rows: output,
+                });
+                rows = Vec::new();
+            }
+            BoundClause::Call { span, .. } => {
+                return Err(ExecError::Unsupported {
+                    feature: "procedures (arrive with acetone-yzc.7)",
+                    span: *span,
+                });
+            }
+        }
+    }
+    Ok(result.unwrap_or(QueryResult {
+        columns: Vec::new(),
+        rows: Vec::new(),
+    }))
+}
+
+// --- MATCH ------------------------------------------------------------------
+
+struct MatchState {
+    row: Row,
+    used_rels: HashSet<EntityId>,
+}
+
+fn match_clause(
+    rows: Vec<Row>,
+    optional: bool,
+    patterns: &[BoundPathPattern],
+    where_clause: Option<&BoundExpr>,
+    ctx: &EvalCtx,
+) -> Result<Vec<Row>, ExecError> {
+    // Variables this clause mentions; on an empty optional match, those
+    // not already bound in the incoming row get nulls.
+    let mut mentioned: Vec<VarId> = Vec::new();
+    for pattern in patterns {
+        if let Some(var) = pattern.path_var {
+            mentioned.push(var);
+        }
+        mentioned.extend(pattern.start.var);
+        for (rel, node) in &pattern.steps {
+            mentioned.extend(rel.var);
+            mentioned.extend(node.var);
+        }
+    }
+
+    let mut out = Vec::new();
+    for row in rows {
+        let mut states = vec![MatchState {
+            row: row.clone(),
+            used_rels: HashSet::new(),
+        }];
+        for pattern in patterns {
+            let mut next = Vec::new();
+            for state in states {
+                next.extend(match_path(pattern, state, ctx)?);
+            }
+            states = next;
+        }
+        // The WHERE participates in the match (essential for OPTIONAL).
+        let mut matched = Vec::new();
+        for state in states {
+            if let Some(predicate) = where_clause
+                && truth(&eval(predicate, &state.row, ctx)?, predicate.span())? != Some(true)
+            {
+                continue;
+            }
+            matched.push(state.row);
+        }
+        if matched.is_empty() && optional {
+            let mut nulled = row;
+            for var in &mentioned {
+                if !nulled.contains(*var) {
+                    nulled.set(*var, Value::Null);
+                }
+            }
+            out.push(nulled);
+        } else {
+            out.extend(matched);
+        }
+    }
+    Ok(out)
+}
+
+fn match_path(
+    pattern: &BoundPathPattern,
+    state: MatchState,
+    ctx: &EvalCtx,
+) -> Result<Vec<MatchState>, ExecError> {
+    // Anchor at the leftmost node: a bound variable pins it; otherwise
+    // scan by labels (the heuristic planner's LabelScan/AllNodesScan).
+    let anchors: Vec<NodeValue> = match pattern.start.var {
+        // Bound variable: pinned (bound null or non-node matches nothing).
+        Some(var) if state.row.contains(var) => match state.row.get(var) {
+            Value::Node(node) => vec![node],
+            _ => return Ok(Vec::new()),
+        },
+        // Fresh or anonymous: scan (the heuristic LabelScan/AllNodesScan).
+        _ => ctx.graph.nodes_by_labels(&pattern.start.labels),
+    };
+
+    let mut results = Vec::new();
+    for anchor in anchors {
+        if !node_satisfies(&anchor, &pattern.start, &state.row, ctx)? {
+            continue;
+        }
+        let mut row = state.row.clone();
+        if let Some(var) = pattern.start.var {
+            row.set(var, Value::Node(anchor.clone()));
+        }
+        let path_state = PathBuild {
+            nodes: vec![anchor.clone()],
+            rels: Vec::new(),
+        };
+        walk_steps(
+            pattern,
+            0,
+            anchor,
+            MatchState {
+                row,
+                used_rels: state.used_rels.clone(),
+            },
+            path_state,
+            ctx,
+            &mut results,
+        )?;
+    }
+    Ok(results)
+}
+
+#[derive(Clone)]
+struct PathBuild {
+    nodes: Vec<NodeValue>,
+    rels: Vec<RelValue>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_steps(
+    pattern: &BoundPathPattern,
+    at: usize,
+    from: NodeValue,
+    state: MatchState,
+    path: PathBuild,
+    ctx: &EvalCtx,
+    results: &mut Vec<MatchState>,
+) -> Result<(), ExecError> {
+    let Some((rel_pattern, node_pattern)) = pattern.steps.get(at) else {
+        let mut done = state;
+        if let Some(var) = pattern.path_var {
+            done.row.set(
+                var,
+                Value::Path(PathValue {
+                    nodes: path.nodes.clone(),
+                    rels: path.rels.clone(),
+                }),
+            );
+        }
+        results.push(done);
+        return Ok(());
+    };
+
+    match rel_pattern.var_length {
+        None => {
+            for (rel, neighbour) in
+                ctx.graph
+                    .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
+            {
+                if state.used_rels.contains(&rel.id) {
+                    continue;
+                }
+                if !rel_satisfies(&rel, rel_pattern, &state.row, ctx)? {
+                    continue;
+                }
+                if !node_satisfies(&neighbour, node_pattern, &state.row, ctx)? {
+                    continue;
+                }
+                let mut next = MatchState {
+                    row: state.row.clone(),
+                    used_rels: state.used_rels.clone(),
+                };
+                next.used_rels.insert(rel.id.clone());
+                if let Some(var) = rel_pattern.var {
+                    if next.row.contains(var) {
+                        // Bound: an equality constraint (bound null or a
+                        // non-relationship matches nothing).
+                        match next.row.get(var) {
+                            Value::Relationship(bound) if bound.id == rel.id => {}
+                            _ => continue,
+                        }
+                    } else {
+                        next.row.set(var, Value::Relationship(rel.clone()));
+                    }
+                }
+                if let Some(var) = node_pattern.var {
+                    if next.row.contains(var) {
+                        match next.row.get(var) {
+                            Value::Node(bound) if bound.id == neighbour.id => {}
+                            _ => continue,
+                        }
+                    } else {
+                        next.row.set(var, Value::Node(neighbour.clone()));
+                    }
+                }
+                let mut next_path = path.clone();
+                next_path.rels.push(rel.clone());
+                next_path.nodes.push(neighbour.clone());
+                walk_steps(pattern, at + 1, neighbour, next, next_path, ctx, results)?;
+            }
+        }
+        Some(bounds) => {
+            let min = bounds.min.unwrap_or(1) as usize;
+            let max = bounds.max.map(|m| m as usize).unwrap_or(usize::MAX);
+            expand_var_length(
+                pattern,
+                at,
+                rel_pattern,
+                node_pattern,
+                from,
+                state,
+                path,
+                Vec::new(),
+                min,
+                max,
+                ctx,
+                results,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Var-length expansion with relationship uniqueness pruning; at each
+/// depth within bounds, try to close on the target node pattern.
+#[allow(clippy::too_many_arguments)]
+fn expand_var_length(
+    pattern: &BoundPathPattern,
+    at: usize,
+    rel_pattern: &BoundRelPattern,
+    node_pattern: &BoundNodePattern,
+    from: NodeValue,
+    state: MatchState,
+    path: PathBuild,
+    hops: Vec<RelValue>,
+    min: usize,
+    max: usize,
+    ctx: &EvalCtx,
+    results: &mut Vec<MatchState>,
+) -> Result<(), ExecError> {
+    if hops.len() >= min && node_satisfies(&from, node_pattern, &state.row, ctx)? {
+        let mut next = MatchState {
+            row: state.row.clone(),
+            used_rels: state.used_rels.clone(),
+        };
+        if let Some(var) = rel_pattern.var {
+            next.row.set(
+                var,
+                Value::List(hops.iter().cloned().map(Value::Relationship).collect()),
+            );
+        }
+        let target_ok = match node_pattern.var {
+            Some(var) if next.row.contains(var) => {
+                matches!(next.row.get(var), Value::Node(bound) if bound.id == from.id)
+            }
+            Some(var) => {
+                next.row.set(var, Value::Node(from.clone()));
+                true
+            }
+            None => true,
+        };
+        if target_ok {
+            walk_steps(
+                pattern,
+                at + 1,
+                from.clone(),
+                next,
+                path.clone(),
+                ctx,
+                results,
+            )?;
+        }
+    }
+    if hops.len() >= max {
+        return Ok(());
+    }
+    for (rel, neighbour) in ctx
+        .graph
+        .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
+    {
+        if state.used_rels.contains(&rel.id) {
+            continue;
+        }
+        if !rel_satisfies(&rel, rel_pattern, &state.row, ctx)? {
+            continue;
+        }
+        let mut next_state = MatchState {
+            row: state.row.clone(),
+            used_rels: state.used_rels.clone(),
+        };
+        next_state.used_rels.insert(rel.id.clone());
+        let mut next_path = path.clone();
+        next_path.rels.push(rel.clone());
+        next_path.nodes.push(neighbour.clone());
+        let mut next_hops = hops.clone();
+        next_hops.push(rel.clone());
+        expand_var_length(
+            pattern,
+            at,
+            rel_pattern,
+            node_pattern,
+            neighbour,
+            next_state,
+            next_path,
+            next_hops,
+            min,
+            max,
+            ctx,
+            results,
+        )?;
+    }
+    Ok(())
+}
+
+fn node_satisfies(
+    node: &NodeValue,
+    pattern: &BoundNodePattern,
+    row: &Row,
+    ctx: &EvalCtx,
+) -> Result<bool, ExecError> {
+    if !pattern.labels.iter().all(|l| node.labels.contains(l)) {
+        return Ok(false);
+    }
+    // A bound node variable pins identity (bound null matches nothing).
+    if let Some(var) = pattern.var
+        && row.contains(var)
+    {
+        match row.get(var) {
+            Value::Node(bound) if bound.id == node.id => {}
+            _ => return Ok(false),
+        }
+    }
+    properties_satisfy(&pattern.properties, &node.properties, row, ctx)
+}
+
+fn rel_satisfies(
+    rel: &RelValue,
+    pattern: &BoundRelPattern,
+    row: &Row,
+    ctx: &EvalCtx,
+) -> Result<bool, ExecError> {
+    properties_satisfy(&pattern.properties, &rel.properties, row, ctx)
+}
+
+fn properties_satisfy(
+    pattern_properties: &Option<BoundExpr>,
+    actual: &BTreeMap<String, Value>,
+    row: &Row,
+    ctx: &EvalCtx,
+) -> Result<bool, ExecError> {
+    let Some(expr) = pattern_properties else {
+        return Ok(true);
+    };
+    let expected = eval(expr, row, ctx)?;
+    let Value::Map(expected) = expected else {
+        return Ok(false);
+    };
+    for (key, want) in &expected {
+        let Some(have) = actual.get(key) else {
+            return Ok(false);
+        };
+        if have.eq3(want) != Some(true) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+// --- Projection (WITH / RETURN) ----------------------------------------------
+
+/// Wrapper giving Value a total order (the global sort order) for use as
+/// grouping keys.
+#[derive(Debug, Clone)]
+struct OrdValue(Value);
+
+impl PartialEq for OrdValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.equivalent(&other.0)
+    }
+}
+impl Eq for OrdValue {}
+impl PartialOrd for OrdValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrdValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.global_cmp(&other.0)
+    }
+}
+
+fn project(
+    rows: Vec<Row>,
+    projection: &BoundProjection,
+    ctx: &EvalCtx,
+    is_with: bool,
+) -> Result<(Vec<String>, Vec<Row>), ExecError> {
+    let columns: Vec<String> = projection
+        .items
+        .iter()
+        .map(|item| item.name.clone())
+        .collect();
+
+    // Rows carrying the projected values (and, merged, the pre-projection
+    // slots so ORDER BY / WITH..WHERE can see the union scope).
+    let mut merged: Vec<Row> = Vec::new();
+
+    if projection.aggregating {
+        // Group by the non-aggregating items' values.
+        let mut groups: BTreeMap<Vec<OrdValue>, Vec<Row>> = BTreeMap::new();
+        for row in rows {
+            let mut key = Vec::new();
+            for &index in &projection.grouping_items {
+                let value = eval(&projection.items[index].expr, &row, ctx)?;
+                key.push(OrdValue(value));
+            }
+            groups.entry(key).or_default().push(row);
+        }
+        // Aggregating over zero rows with no grouping keys still yields
+        // one output row (count(*) = 0 and friends).
+        if groups.is_empty() && projection.grouping_items.is_empty() {
+            groups.insert(Vec::new(), Vec::new());
+        }
+        for (_, group) in groups {
+            let representative = group.first().cloned().unwrap_or_default();
+            let mut out = representative.clone();
+            for item in &projection.items {
+                let value = eval_with_group(&item.expr, &group, &representative, ctx)?;
+                out.set(item.var, value);
+            }
+            merged.push(out);
+        }
+    } else {
+        for row in rows {
+            let mut out = row.clone();
+            for item in &projection.items {
+                let value = eval(&item.expr, &row, ctx)?;
+                out.set(item.var, value);
+            }
+            merged.push(out);
+        }
+    }
+
+    // WITH ... WHERE filters in the union scope.
+    if is_with && let Some(predicate) = &projection.where_clause {
+        let mut kept = Vec::new();
+        for row in merged {
+            if truth(&eval(predicate, &row, ctx)?, predicate.span())? == Some(true) {
+                kept.push(row);
+            }
+        }
+        merged = kept;
+    }
+
+    // DISTINCT over the projected values.
+    if projection.distinct {
+        let mut seen: Vec<Vec<OrdValue>> = Vec::new();
+        let mut kept = Vec::new();
+        for row in merged {
+            let key: Vec<OrdValue> = projection
+                .items
+                .iter()
+                .map(|item| OrdValue(row.get(item.var)))
+                .collect();
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            kept.push(row);
+        }
+        merged = kept;
+    }
+
+    // ORDER BY in the union scope, on the global sort order.
+    if !projection.order_by.is_empty() {
+        let mut keyed: Vec<(Vec<(OrdValue, bool)>, Row)> = Vec::new();
+        for row in merged {
+            let mut key = Vec::new();
+            for (expr, descending) in &projection.order_by {
+                key.push((OrdValue(eval(expr, &row, ctx)?), *descending));
+            }
+            keyed.push((key, row));
+        }
+        keyed.sort_by(|(a, _), (b, _)| {
+            for ((x, descending), (y, _)) in a.iter().zip(b) {
+                let ordering = x.cmp(y);
+                let ordering = if *descending {
+                    ordering.reverse()
+                } else {
+                    ordering
+                };
+                if ordering != std::cmp::Ordering::Equal {
+                    return ordering;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+        merged = keyed.into_iter().map(|(_, row)| row).collect();
+    }
+
+    // SKIP / LIMIT (constants or parameters).
+    let constant = Row::default();
+    if let Some(expr) = &projection.skip {
+        let count = usize_bound(eval(expr, &constant, ctx)?, expr.span())?;
+        merged = merged.into_iter().skip(count).collect();
+    }
+    if let Some(expr) = &projection.limit {
+        let count = usize_bound(eval(expr, &constant, ctx)?, expr.span())?;
+        merged.truncate(count);
+    }
+
+    Ok((columns, merged))
+}
+
+fn usize_bound(value: Value, span: crate::span::Span) -> Result<usize, ExecError> {
+    match value {
+        Value::Int(n) if n >= 0 => Ok(n as usize),
+        other => Err(ExecError::InvalidArgument {
+            message: format!("SKIP/LIMIT needs a non-negative integer, got {other:?}"),
+            span,
+        }),
+    }
+}
+
+/// Evaluate a projection item over a group: aggregates are accumulated
+/// across the group's rows and non-aggregate parts use a representative
+/// row.
+fn eval_with_group(
+    expr: &BoundExpr,
+    group: &[Row],
+    representative: &Row,
+    ctx: &EvalCtx,
+) -> Result<Value, ExecError> {
+    let mut aggregates = Vec::new();
+    collect_aggregates(expr, &mut aggregates);
+    let mut slots = Vec::with_capacity(aggregates.len());
+    for aggregate in aggregates {
+        slots.push(accumulate(aggregate, group, ctx)?);
+    }
+    let inner = EvalCtx {
+        graph: ctx.graph,
+        parameters: ctx.parameters,
+        aggregates: Some((&slots, Cell::new(0))),
+    };
+    eval(expr, representative, &inner)
+}
+
+/// Enumerate Aggregate nodes in the same traversal order `eval` visits
+/// them (depth-first, argument order). Aggregate arguments cannot contain
+/// aggregates (binder-enforced), so no recursion into them.
+fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
+    match expr {
+        BoundExpr::Aggregate { .. } => out.push(expr),
+        BoundExpr::Literal { .. } | BoundExpr::Parameter { .. } | BoundExpr::Variable { .. } => {}
+        BoundExpr::Property { base, .. } => collect_aggregates(base, out),
+        BoundExpr::Unary { operand, .. } | BoundExpr::IsNull { operand, .. } => {
+            collect_aggregates(operand, out);
+        }
+        BoundExpr::Binary { lhs, rhs, .. } => {
+            collect_aggregates(lhs, out);
+            collect_aggregates(rhs, out);
+        }
+        BoundExpr::Function { args, .. } => {
+            for arg in args {
+                collect_aggregates(arg, out);
+            }
+        }
+        BoundExpr::Case {
+            operand,
+            whens,
+            else_expr,
+            ..
+        } => {
+            if let Some(operand) = operand {
+                collect_aggregates(operand, out);
+            }
+            for (condition, value) in whens {
+                collect_aggregates(condition, out);
+                collect_aggregates(value, out);
+            }
+            if let Some(else_expr) = else_expr {
+                collect_aggregates(else_expr, out);
+            }
+        }
+        BoundExpr::ListLiteral { items, .. } => {
+            for item in items {
+                collect_aggregates(item, out);
+            }
+        }
+        BoundExpr::ListComprehension {
+            list,
+            where_clause,
+            map,
+            ..
+        } => {
+            collect_aggregates(list, out);
+            if let Some(expr) = where_clause {
+                collect_aggregates(expr, out);
+            }
+            if let Some(expr) = map {
+                collect_aggregates(expr, out);
+            }
+        }
+        BoundExpr::MapLiteral { entries, .. } => {
+            for (_, value) in entries {
+                collect_aggregates(value, out);
+            }
+        }
+        BoundExpr::Index { base, index, .. } => {
+            collect_aggregates(base, out);
+            collect_aggregates(index, out);
+        }
+        BoundExpr::Slice { base, from, to, .. } => {
+            collect_aggregates(base, out);
+            if let Some(expr) = from {
+                collect_aggregates(expr, out);
+            }
+            if let Some(expr) = to {
+                collect_aggregates(expr, out);
+            }
+        }
+        BoundExpr::PatternPredicate { .. } => {}
+    }
+}
+
+fn accumulate(aggregate: &BoundExpr, group: &[Row], ctx: &EvalCtx) -> Result<Value, ExecError> {
+    let BoundExpr::Aggregate {
+        def,
+        distinct,
+        arg,
+        span,
+    } = aggregate
+    else {
+        unreachable!("collect_aggregates only yields Aggregate nodes");
+    };
+    // Gather the argument values, skipping nulls (openCypher aggregates
+    // ignore null inputs; count(*) counts rows).
+    let mut values = Vec::new();
+    for row in group {
+        match arg {
+            None => values.push(Value::Int(1)), // count(*)
+            Some(expr) => {
+                let value = eval(expr, row, ctx)?;
+                if !value.is_null() {
+                    values.push(value);
+                }
+            }
+        }
+    }
+    if *distinct {
+        let mut unique: Vec<Value> = Vec::new();
+        for value in values {
+            if !unique.iter().any(|seen| seen.equivalent(&value)) {
+                unique.push(value);
+            }
+        }
+        values = unique;
+    }
+
+    match def.name {
+        "count" => Ok(Value::Int(values.len() as i64)),
+        "collect" => Ok(Value::List(values)),
+        "sum" => {
+            let mut int_sum = 0i64;
+            let mut float_sum = 0.0f64;
+            let mut is_float = false;
+            for value in &values {
+                match value {
+                    Value::Int(n) => {
+                        int_sum = int_sum
+                            .checked_add(*n)
+                            .ok_or(ExecError::Overflow { span: *span })?;
+                    }
+                    Value::Float(x) => {
+                        is_float = true;
+                        float_sum += x;
+                    }
+                    other => {
+                        return Err(ExecError::Type {
+                            message: format!("sum() needs numbers, got {}", other.type_name()),
+                            span: *span,
+                        });
+                    }
+                }
+            }
+            if is_float {
+                Ok(Value::Float(float_sum + int_sum as f64))
+            } else {
+                Ok(Value::Int(int_sum))
+            }
+        }
+        "avg" => {
+            if values.is_empty() {
+                return Ok(Value::Null);
+            }
+            let mut total = 0.0f64;
+            for value in &values {
+                match value {
+                    Value::Int(n) => total += *n as f64,
+                    Value::Float(x) => total += x,
+                    other => {
+                        return Err(ExecError::Type {
+                            message: format!("avg() needs numbers, got {}", other.type_name()),
+                            span: *span,
+                        });
+                    }
+                }
+            }
+            Ok(Value::Float(total / values.len() as f64))
+        }
+        "min" => Ok(values
+            .into_iter()
+            .min_by(|a, b| a.global_cmp(b))
+            .unwrap_or(Value::Null)),
+        "max" => Ok(values
+            .into_iter()
+            .max_by(|a, b| a.global_cmp(b))
+            .unwrap_or(Value::Null)),
+        other => Err(ExecError::Unsupported {
+            feature: "aggregate",
+            span: *span,
+        })
+        .inspect_err(|_e| {
+            let _ = other;
+        }),
+    }
+}
