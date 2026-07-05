@@ -220,6 +220,24 @@ pub enum Expr {
         map: Option<Box<Expr>>,
         span: Span,
     },
+    /// A list-predicate quantifier: `all|any|none|single (x IN list
+    /// WHERE predicate)`.
+    Quantifier {
+        kind: QuantifierKind,
+        variable: String,
+        list: Box<Expr>,
+        predicate: Box<Expr>,
+        span: Span,
+    },
+    /// `reduce(acc = init, x IN list | expr)`.
+    Reduce {
+        accumulator: String,
+        init: Box<Expr>,
+        variable: String,
+        list: Box<Expr>,
+        expr: Box<Expr>,
+        span: Span,
+    },
     MapLiteral {
         entries: Vec<(String, Expr)>,
         span: Span,
@@ -259,6 +277,8 @@ impl Expr {
             | Expr::MapLiteral { span, .. }
             | Expr::Index { span, .. }
             | Expr::Slice { span, .. }
+            | Expr::Quantifier { span, .. }
+            | Expr::Reduce { span, .. }
             | Expr::PatternPredicate { span, .. } => *span,
         }
     }
@@ -281,6 +301,8 @@ impl Expr {
             | Expr::MapLiteral { span, .. }
             | Expr::Index { span, .. }
             | Expr::Slice { span, .. }
+            | Expr::Quantifier { span, .. }
+            | Expr::Reduce { span, .. }
             | Expr::PatternPredicate { span, .. } => *span = new_span,
         }
     }
@@ -323,6 +345,19 @@ impl Expr {
                 out.push(&**list);
                 out.extend(where_clause.iter().map(|b| &**b));
                 out.extend(map.iter().map(|b| &**b));
+            }
+            Expr::Quantifier {
+                list, predicate, ..
+            } => {
+                out.push(&**list);
+                out.push(&**predicate);
+            }
+            Expr::Reduce {
+                init, list, expr, ..
+            } => {
+                out.push(&**init);
+                out.push(&**list);
+                out.push(&**expr);
             }
             Expr::MapLiteral { entries, .. } => out.extend(entries.iter().map(|(_, v)| v)),
             Expr::Index { base, index, .. } => {
@@ -397,6 +432,19 @@ impl Expr {
                 if let Some(boxed) = map {
                     take_box(boxed, out);
                 }
+            }
+            Expr::Quantifier {
+                list, predicate, ..
+            } => {
+                take_box(list, out);
+                take_box(predicate, out);
+            }
+            Expr::Reduce {
+                init, list, expr, ..
+            } => {
+                take_box(init, out);
+                take_box(list, out);
+                take_box(expr, out);
             }
             Expr::MapLiteral { entries, .. } => {
                 out.extend(entries.drain(..).map(|(_, v)| v));
@@ -497,6 +545,14 @@ pub enum Literal {
     Integer(i64),
     Float(f64),
     String(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantifierKind {
+    All,
+    Any,
+    None,
+    Single,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

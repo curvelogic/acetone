@@ -704,6 +704,19 @@ fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
                 collect_aggregates(expr, out);
             }
         }
+        BoundExpr::Quantifier {
+            list, predicate, ..
+        } => {
+            collect_aggregates(list, out);
+            collect_aggregates(predicate, out);
+        }
+        BoundExpr::Reduce {
+            init, list, expr, ..
+        } => {
+            collect_aggregates(init, out);
+            collect_aggregates(list, out);
+            collect_aggregates(expr, out);
+        }
         BoundExpr::MapLiteral { entries, .. } => {
             for (_, value) in entries {
                 collect_aggregates(value, out);

@@ -98,6 +98,80 @@ mod tests {
     }
 
     #[test]
+    fn quantifiers_with_three_valued_logic() {
+        // any: at least one true.
+        assert!(matches!(
+            single("RETURN any(x IN [1,2,3] WHERE x > 2)"),
+            Value::Bool(true)
+        ));
+        assert!(matches!(
+            single("RETURN any(x IN [1,2] WHERE x > 5)"),
+            Value::Bool(false)
+        ));
+        assert!(matches!(
+            single("RETURN any(x IN [] WHERE x > 0)"),
+            Value::Bool(false)
+        ));
+        // null propagation: no true but a null predicate -> null.
+        assert!(single("RETURN any(x IN [1, null] WHERE x > 5)").is_null());
+        // all: every element true.
+        assert!(matches!(
+            single("RETURN all(x IN [2,3,4] WHERE x > 1)"),
+            Value::Bool(true)
+        ));
+        assert!(matches!(
+            single("RETURN all(x IN [1,2] WHERE x > 1)"),
+            Value::Bool(false)
+        ));
+        assert!(matches!(
+            single("RETURN all(x IN [] WHERE x > 1)"),
+            Value::Bool(true)
+        ));
+        assert!(single("RETURN all(x IN [2, null] WHERE x > 1)").is_null());
+        // none = not any.
+        assert!(matches!(
+            single("RETURN none(x IN [1,2] WHERE x > 5)"),
+            Value::Bool(true)
+        ));
+        assert!(matches!(
+            single("RETURN none(x IN [1,6] WHERE x > 5)"),
+            Value::Bool(false)
+        ));
+        // single: exactly one true.
+        assert!(matches!(
+            single("RETURN single(x IN [1,2,3] WHERE x = 2)"),
+            Value::Bool(true)
+        ));
+        assert!(matches!(
+            single("RETURN single(x IN [2,2] WHERE x = 2)"),
+            Value::Bool(false)
+        ));
+        assert!(matches!(
+            single("RETURN single(x IN [1] WHERE x = 9)"),
+            Value::Bool(false)
+        ));
+        // null list -> null.
+        assert!(single("RETURN any(x IN null WHERE x > 0)").is_null());
+    }
+
+    #[test]
+    fn reduce_folds_a_list() {
+        assert!(matches!(
+            single("RETURN reduce(acc = 0, x IN [1,2,3,4] | acc + x)"),
+            Value::Int(10)
+        ));
+        assert!(matches!(
+            single("RETURN reduce(s = '', x IN ['a','b','c'] | s + x)"),
+            Value::String(s) if s == "abc"
+        ));
+        // Empty list yields the initial accumulator.
+        assert!(matches!(
+            single("RETURN reduce(acc = 7, x IN [] | acc + x)"),
+            Value::Int(7)
+        ));
+    }
+
+    #[test]
     fn unwind_and_aggregates() {
         let result = run("UNWIND [1, 2, 2, null] AS x RETURN count(x), sum(x), collect(x)");
         assert_eq!(result.rows.len(), 1);

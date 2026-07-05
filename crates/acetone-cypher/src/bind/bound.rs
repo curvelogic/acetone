@@ -210,6 +210,21 @@ pub enum BoundExpr {
         map: Option<Box<BoundExpr>>,
         span: Span,
     },
+    Quantifier {
+        kind: crate::ast::QuantifierKind,
+        variable: VarId,
+        list: Box<BoundExpr>,
+        predicate: Box<BoundExpr>,
+        span: Span,
+    },
+    Reduce {
+        accumulator: VarId,
+        init: Box<BoundExpr>,
+        variable: VarId,
+        list: Box<BoundExpr>,
+        expr: Box<BoundExpr>,
+        span: Span,
+    },
     MapLiteral {
         entries: Vec<(String, BoundExpr)>,
         span: Span,

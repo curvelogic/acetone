@@ -110,6 +110,17 @@ pub fn parse(input: &str) -> Result<Query, ParseError> {
     Ok(query)
 }
 
+/// The quantifier keyword, if `name` names one.
+fn quantifier_kind(name: &str) -> Option<QuantifierKind> {
+    match () {
+        _ if name.eq_ignore_ascii_case("all") => Some(QuantifierKind::All),
+        _ if name.eq_ignore_ascii_case("any") => Some(QuantifierKind::Any),
+        _ if name.eq_ignore_ascii_case("none") => Some(QuantifierKind::None),
+        _ if name.eq_ignore_ascii_case("single") => Some(QuantifierKind::Single),
+        _ => None,
+    }
+}
+
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -1027,6 +1038,19 @@ impl Parser {
                     if name.eq_ignore_ascii_case("case") {
                         return self.case_expression();
                     }
+                    // List-predicate quantifiers and reduce have their own
+                    // argument grammar (`x IN list WHERE p`, `acc = init,
+                    // x IN list | e`), distinguished from a same-named
+                    // function only when the parenthesised body opens with
+                    // that shape.
+                    if let Some(kind) = quantifier_kind(name)
+                        && self.at_quantifier_body()
+                    {
+                        return self.quantifier(kind);
+                    }
+                    if name.eq_ignore_ascii_case("reduce") && self.at_reduce_body() {
+                        return self.reduce_expression();
+                    }
                 }
                 self.variable_or_function_call()
             }
@@ -1117,6 +1141,64 @@ impl Parser {
             whens,
             else_expr,
             span: start.to(end),
+        })
+    }
+
+    /// With the cursor on a quantifier keyword: do the next tokens open a
+    /// quantifier body `( name IN ...`?
+    fn at_quantifier_body(&self) -> bool {
+        self.peek_at(1).kind == TokenKind::LParen
+            && matches!(self.peek_at(2).kind, TokenKind::Ident { .. })
+            && self.at_kw_at(3, "IN")
+    }
+
+    /// With the cursor on `reduce`: do the next tokens open `( name = `?
+    fn at_reduce_body(&self) -> bool {
+        self.peek_at(1).kind == TokenKind::LParen
+            && matches!(self.peek_at(2).kind, TokenKind::Ident { .. })
+            && self.peek_at(3).kind == TokenKind::Eq
+    }
+
+    /// `all|any|none|single ( variable IN list WHERE predicate )`.
+    fn quantifier(&mut self, kind: QuantifierKind) -> Result<Expr, ParseError> {
+        let start = self.bump().span; // the quantifier keyword
+        self.expect(&TokenKind::LParen, "'(' to open the quantifier")?;
+        let (variable, _) = self.binding_name("a quantifier variable", "a quantifier variable")?;
+        self.expect_kw("IN")?;
+        let list = Box::new(self.expression()?);
+        self.expect_kw("WHERE")?;
+        let predicate = Box::new(self.expression()?);
+        let close = self.expect(&TokenKind::RParen, "')' to close the quantifier")?;
+        Ok(Expr::Quantifier {
+            kind,
+            variable,
+            list,
+            predicate,
+            span: start.to(close.span),
+        })
+    }
+
+    /// `reduce ( accumulator = init , variable IN list | expr )`.
+    fn reduce_expression(&mut self) -> Result<Expr, ParseError> {
+        let start = self.bump().span; // `reduce`
+        self.expect(&TokenKind::LParen, "'(' to open reduce")?;
+        let (accumulator, _) = self.binding_name("an accumulator", "an accumulator")?;
+        self.expect(&TokenKind::Eq, "'=' in reduce")?;
+        let init = Box::new(self.expression()?);
+        self.expect(&TokenKind::Comma, "',' in reduce")?;
+        let (variable, _) = self.binding_name("a reduce variable", "a reduce variable")?;
+        self.expect_kw("IN")?;
+        let list = Box::new(self.expression()?);
+        self.expect(&TokenKind::Pipe, "'|' in reduce")?;
+        let expr = Box::new(self.expression()?);
+        let close = self.expect(&TokenKind::RParen, "')' to close reduce")?;
+        Ok(Expr::Reduce {
+            accumulator,
+            init,
+            variable,
+            list,
+            expr,
+            span: start.to(close.span),
         })
     }
 
@@ -1431,6 +1513,31 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn quantifiers_and_reduce_parse() {
+        // Quantifiers use list-predicate syntax, not function-call args.
+        for (query, kind) in [
+            ("RETURN all(x IN xs WHERE x > 0)", QuantifierKind::All),
+            ("RETURN any(x IN xs WHERE x > 0)", QuantifierKind::Any),
+            ("RETURN none(x IN xs WHERE x > 0)", QuantifierKind::None),
+            ("RETURN single(x IN xs WHERE x > 0)", QuantifierKind::Single),
+        ] {
+            let q = parse_ok(query);
+            let Expr::Quantifier { kind: k, .. } = only_return_expr(&q) else {
+                panic!("expected a quantifier for {query}");
+            };
+            assert_eq!(*k, kind);
+        }
+        // reduce has its own accumulator grammar.
+        let q = parse_ok("RETURN reduce(acc = 0, x IN xs | acc + x)");
+        assert!(matches!(only_return_expr(&q), Expr::Reduce { .. }));
+
+        // The same names remain callable as ordinary functions when not
+        // followed by the quantifier body shape.
+        let q = parse_ok("RETURN any([1, 2])");
+        assert!(matches!(only_return_expr(&q), Expr::FunctionCall { .. }));
     }
 
     #[test]

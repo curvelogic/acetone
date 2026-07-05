@@ -94,6 +94,19 @@ impl<'a> Binder<'a> {
         self.variables[id.0 as usize].kind
     }
 
+    /// Restore a name to its pre-shadow binding (or remove it) after a
+    /// scoped sub-expression (comprehension/quantifier/reduce variable).
+    fn restore(&mut self, name: &str, shadowed: Option<VarId>) {
+        match shadowed {
+            Some(outer) => {
+                self.scope.insert(name.to_string(), outer);
+            }
+            None => {
+                self.scope.remove(name);
+            }
+        }
+    }
+
     // --- clauses ---------------------------------------------------------
 
     fn clause(&mut self, clause: &ast::Clause) -> Result<BoundClause, BindError> {
@@ -747,6 +760,53 @@ impl<'a> Binder<'a> {
                     span: *span,
                 })
             }
+            ast::Expr::Quantifier {
+                kind,
+                variable,
+                list,
+                predicate,
+                span,
+            } => {
+                let list = Box::new(self.expr(list, ctx)?);
+                let shadowed = self.scope.get(variable).copied();
+                let id = self.declare(variable, EntityKind::Value, vec![]);
+                let predicate = Box::new(self.expr(predicate, ctx)?);
+                self.restore(variable, shadowed);
+                Ok(BoundExpr::Quantifier {
+                    kind: *kind,
+                    variable: id,
+                    list,
+                    predicate,
+                    span: *span,
+                })
+            }
+            ast::Expr::Reduce {
+                accumulator,
+                init,
+                variable,
+                list,
+                expr,
+                span,
+            } => {
+                let init = Box::new(self.expr(init, ctx)?);
+                let list = Box::new(self.expr(list, ctx)?);
+                // The accumulator and element variables scope the body.
+                let shadowed_acc = self.scope.get(accumulator).copied();
+                let acc_id = self.declare(accumulator, EntityKind::Value, vec![]);
+                let shadowed_var = self.scope.get(variable).copied();
+                let var_id = self.declare(variable, EntityKind::Value, vec![]);
+                let body = Box::new(self.expr(expr, ctx)?);
+                self.restore(variable, shadowed_var);
+                self.restore(accumulator, shadowed_acc);
+                Ok(BoundExpr::Reduce {
+                    accumulator: acc_id,
+                    init,
+                    variable: var_id,
+                    list,
+                    expr: body,
+                    span: *span,
+                })
+            }
             ast::Expr::MapLiteral { entries, span } => {
                 let mut bound = Vec::new();
                 for (key, value) in entries {
@@ -915,6 +975,19 @@ fn contains_aggregate(expr: &BoundExpr) -> bool {
                 stack.push(list);
                 stack.extend(where_clause.iter().map(|b| &**b));
                 stack.extend(map.iter().map(|b| &**b));
+            }
+            BoundExpr::Quantifier {
+                list, predicate, ..
+            } => {
+                stack.push(list);
+                stack.push(predicate);
+            }
+            BoundExpr::Reduce {
+                init, list, expr, ..
+            } => {
+                stack.push(init);
+                stack.push(list);
+                stack.push(expr);
             }
             BoundExpr::MapLiteral { entries, .. } => {
                 stack.extend(entries.iter().map(|(_, value)| value));
