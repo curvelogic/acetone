@@ -623,8 +623,10 @@ fn query_output_sanitises_hostile_strings() {
             "put-node",
             evil_label,
             "1",
+            // ESC (C0), DEL (0x7f) and a C1 control (0x9b, CSI) — all must
+            // be neutralised in every output format.
             "--prop",
-            "note=ok\u{1b}[31mred\u{7}",
+            "note=ok\u{1b}[31mred\u{7f}\u{9b}m",
         ],
     );
     assert!(out.status.success(), "{}", stderr(&out));
@@ -634,7 +636,8 @@ fn query_output_sanitises_hostile_strings() {
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
     assert!(!text.contains('\u{1b}'), "raw ESC reached table output");
-    assert!(!text.contains('\u{7}'), "raw BEL reached table output");
+    assert!(!text.contains('\u{7f}'), "raw DEL reached table output");
+    assert!(!text.contains('\u{9b}'), "raw C1 CSI reached table output");
     assert!(text.contains("\\u{1b}"), "escaped form must be visible");
 
     // CSV: same guarantee.
@@ -665,6 +668,60 @@ fn query_output_sanitises_hostile_strings() {
     let text = stdout(&out);
     assert!(!text.contains('\u{1b}'), "raw ESC reached JSON output");
     assert!(text.contains("\\u001b"), "JSON must \\u-escape the ESC");
+    // JSON must also escape DEL (0x7f) and C1 controls (0x80..=0x9f),
+    // which C0-only escaping missed (Phase 2 security review MINOR-1:
+    // align json_string with sanitise_line's coverage). These bytes are
+    // the ones that regress if the fix is reverted.
+    assert!(!text.contains('\u{7f}'), "raw DEL reached JSON output");
+    assert!(!text.contains('\u{9b}'), "raw C1 CSI reached JSON output");
+    assert!(text.contains("\\u007f"), "JSON must \\u-escape DEL");
+    assert!(text.contains("\\u009b"), "JSON must \\u-escape the C1 CSI");
+}
+
+/// The shell `:log` command must sanitise commit subjects (Phase 2
+/// security review MAJOR-3: a hostile clone's escape-bearing commit
+/// subject must not reach the terminal raw through the REPL).
+#[test]
+fn shell_log_sanitises_hostile_commit_subjects() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    let out = acetone(&repo, &["commit", "-m", "seed\u{1b}[31mHACK\u{7}"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "shell"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn shell");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b":log\n:quit\n")
+        .expect("write");
+    let out = child.wait_with_output().expect("wait");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains('\u{1b}'),
+        "raw ESC reached shell :log output"
+    );
+    assert!(!text.contains('\u{7}'), "raw BEL reached shell :log output");
+    assert!(
+        text.contains("\\u{1b}"),
+        "escaped form must be visible: {text}"
+    );
 }
 
 /// The shell REPL runs queries and meta-commands from stdin.

@@ -343,7 +343,10 @@ fn json_string(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            // Escape all control characters: C0 (< 0x20), DEL (0x7f) and
+            // the C1 range (0x80..=0x9f), matching sanitise_line's
+            // coverage so no format leaks a raw terminal control.
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
     }
@@ -436,8 +439,11 @@ fn handle_meta(repo_path: &std::path::Path, line: &str, format: &mut Format) -> 
         "log" => {
             let repo = Repository::open(repo_path)?;
             for entry in repo.log(None)? {
+                // Commit subjects are repository-controlled (a hostile
+                // clone); sanitise before the terminal, as the top-level
+                // `log` command does (PR #25 bar).
                 let subject = entry.message.lines().next().unwrap_or("");
-                outln!("{} {}", entry.id.to_hex(), subject);
+                outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
             }
         }
         other => outln!("unknown command ':{other}' (:help for the list)"),
