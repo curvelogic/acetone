@@ -69,3 +69,28 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
         with:
           command: check advisories licenses sources bans
+
+  tck:
+    # openCypher TCK conformance (spec §5.1: the pass rate is published
+    # per commit). The job gates on the HARNESS completing — an unreadable
+    # corpus or unknown step vocabulary fails — never on the pass rate
+    # itself; Gate C sets the bar at the Phase 2 boundary.
+    name: openCypher TCK conformance report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: run TCK harness
+        # pipefail: tee must not mask a harness failure.
+        run: |
+          set -o pipefail
+          cargo run --release -p acetone-tck --bin tck_runner -- --report tck-report.json | tee tck-report.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tck-conformance-report
+          path: |
+            tck-report.json
+            tck-report.txt

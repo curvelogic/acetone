@@ -1,0 +1,22 @@
+[package]
+name = "acetone-tck"
+description = "openCypher TCK harness: runs the vendored TCK against acetone and reports conformance"
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+acetone-cypher.workspace = true
+# gherkin: parses the vendored Cucumber feature files. The cucumber
+# framework itself is deliberately not used — it drags an async runtime
+# for no benefit; the TCK step vocabulary is small and fixed, so a custom
+# matcher over parsed Gherkin keeps the harness synchronous and exact.
+# MIT/Apache-2.0, maintained by the cucumber-rs org.
+gherkin = "0.14"
+# serde/serde_json: the machine-readable conformance report published as
+# a CI artefact. MIT/Apache-2.0, rust-lang-adjacent maintenance.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
