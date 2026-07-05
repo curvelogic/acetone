@@ -41,6 +41,15 @@ pub fn execute(
 /// Execute against a version resolver, so `MATCH ... AT <ref>` clauses
 /// (spec §5.2) query the graph at that commit while the rest of the
 /// query sees the base version.
+///
+/// Cross-version identity: a node bound in an `AT` clause carries its
+/// values (labels, properties) as a snapshot of that version, but is
+/// identified by its natural key (Load-Bearing Invariant #3), which is
+/// stable across versions. So re-anchoring it in a later base-version
+/// clause — `MATCH (h) AT old MATCH (h)-[:R]->(x)` — deterministically
+/// walks the *base* topology from that node's identity: the old node's
+/// values with current edges. This blend is the only coherent behaviour
+/// under natural-key identity.
 pub fn execute_versioned(
     query: &BoundQuery,
     resolver: &dyn VersionResolver,

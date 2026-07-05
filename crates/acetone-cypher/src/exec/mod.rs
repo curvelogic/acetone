@@ -324,9 +324,14 @@ mod tests {
             graph
         }
 
+        // NOTE: MemoryGraph identity is a per-graph counter, so
+        // cross-version *re-anchoring* would not align here — this test
+        // uses distinct variables (n, m) and never re-anchors. Stored
+        // graphs (the real path) identify by natural key, which is
+        // version-stable, so re-anchoring is sound there (see
+        // execute_versioned's doc comment).
         struct TwoVersions {
             base: MemoryGraph,
-            old: MemoryGraph,
         }
         impl VersionResolver for TwoVersions {
             fn base(&self) -> &dyn GraphSource {
@@ -341,9 +346,7 @@ mod tests {
         }
         let resolver = TwoVersions {
             base: host_graph(2),
-            old: host_graph(1),
         };
-        let _ = &resolver.old; // constructed for parity; `at` builds fresh
 
         let exec = |q: &str| {
             let parsed = crate::parse(q).unwrap();
