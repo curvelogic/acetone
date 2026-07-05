@@ -22,6 +22,11 @@ impl Catalogue {
         Catalogue::default()
     }
 
+    /// Whether the catalogue declares nothing — a schema-free repository.
+    pub fn is_empty(&self) -> bool {
+        self.labels.is_empty() && self.rel_types.is_empty() && self.indexes.is_empty()
+    }
+
     pub fn from_entries(entries: impl IntoIterator<Item = SchemaEntry>) -> Self {
         let mut catalogue = Catalogue::default();
         for entry in entries {

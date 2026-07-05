@@ -469,3 +469,248 @@ fn closed_stdout_pipe_is_a_clean_exit_not_a_panic() {
         "expected clean exit, got {status}: {errtext}"
     );
 }
+
+/// The `query` command (acetone-yzc.6): parse → bind → execute an
+/// openCypher read query against the repository, in table/JSON/CSV.
+#[test]
+fn query_command_runs_cypher_over_the_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    for (label, key, prop) in [
+        ("Host", "web-01", "os=debian"),
+        ("Host", "web-02", "os=ubuntu"),
+        ("Software", "nginx", "vendor=f5"),
+    ] {
+        let out = acetone(&repo, &["put-node", label, key, "--prop", prop]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let out = acetone(
+        &repo,
+        &["put-edge", "Host", "web-01", "RUNS", "Software", "nginx"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+
+    // Table output, ordered.
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (h:Host) RETURN h.os AS os ORDER BY os"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("debian"));
+    assert!(text.contains("ubuntu"));
+    assert!(text.find("debian").unwrap() < text.find("ubuntu").unwrap());
+    assert!(text.contains("2 rows"));
+
+    // Expansion + aggregate.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host)-[:RUNS]->(s:Software) RETURN count(*) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "n\n1");
+
+    // JSON output shape.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (s:Software) RETURN s.vendor AS vendor",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("\"vendor\": \"f5\""));
+}
+
+#[test]
+fn query_at_ref_is_whole_query_time_travel() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "one host"])
+            .status
+            .success()
+    );
+    let first = {
+        let out = acetone(&repo, &["log"]);
+        stdout(&out)
+            .lines()
+            .next()
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert!(
+        acetone(&repo, &["put-node", "Host", "b", "--prop", "x=2"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "two hosts"])
+            .status
+            .success()
+    );
+
+    let now = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(*) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&now).trim(), "n\n2");
+    let past = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(*) AS n",
+            "--format",
+            "csv",
+            "--at",
+            &first,
+        ],
+    );
+    assert_eq!(stdout(&past).trim(), "n\n1");
+}
+
+#[test]
+fn query_errors_render_with_line_and_column() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let out = acetone(&repo, &["query", "MATCH (n) RETURN"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.starts_with("error: "));
+    assert!(err.contains("line 1, column"), "{err}");
+}
+
+/// Query output must neutralise repository-controlled terminal-escape
+/// sequences (PR #25's bar; regression guard for PR #35). Labels and
+/// string property values are attacker-writable via a hostile clone.
+#[test]
+fn query_output_sanitises_hostile_strings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let evil_label = "Host\u{1b}[31mHACK";
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            evil_label,
+            "1",
+            "--prop",
+            "note=ok\u{1b}[31mred\u{7}",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Table: property value and label must be escaped, not raw.
+    let out = acetone(&repo, &["query", "MATCH (n) RETURN n.note AS note, n"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains('\u{1b}'), "raw ESC reached table output");
+    assert!(!text.contains('\u{7}'), "raw BEL reached table output");
+    assert!(text.contains("\\u{1b}"), "escaped form must be visible");
+
+    // CSV: same guarantee.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (n) RETURN n.note AS note",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains('\u{1b}'), "raw ESC reached CSV output");
+
+    // JSON: control characters must be \u-escaped.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (n) RETURN n.note AS note",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains('\u{1b}'), "raw ESC reached JSON output");
+    assert!(text.contains("\\u001b"), "JSON must \\u-escape the ESC");
+}
+
+/// The shell REPL runs queries and meta-commands from stdin.
+#[test]
+fn shell_runs_queries_and_meta_commands() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "Host", "b", "--prop", "x=2"])
+            .status
+            .success()
+    );
+
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "shell"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn shell");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b":format csv\nMATCH (h:Host) RETURN count(*) AS n;\n:quit\n")
+        .expect("write to shell");
+    let out = child.wait_with_output().expect("wait");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).expect("utf8");
+    // The CSV result of the count query appears in the transcript.
+    assert!(
+        text.contains("\nn\n2") || text.contains("n\n2"),
+        "shell transcript: {text}"
+    );
+}

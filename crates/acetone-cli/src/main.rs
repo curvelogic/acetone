@@ -3,6 +3,7 @@
 mod cli;
 mod commands;
 mod output;
+mod query;
 mod value;
 
 use clap::Parser;

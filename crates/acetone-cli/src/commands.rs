@@ -40,6 +40,11 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             repo_path, &src_label, &src_key, &rtype, &dst_label, &dst_key,
         ),
         Command::ListNodes { label } => list_nodes(repo_path, label.as_deref()),
+        Command::Query { cypher, at, format } => {
+            let format = crate::query::Format::parse(&format)?;
+            crate::query::run(repo_path, &cypher, at.as_deref(), format)
+        }
+        Command::Shell => crate::query::shell(repo_path),
         Command::Fsck => fsck(repo_path),
     }
 }
