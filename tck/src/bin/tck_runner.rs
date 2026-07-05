@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use acetone_tck::{classify, run, scenario};
+use acetone_tck::run;
 
 fn main() -> ExitCode {
     let mut features = PathBuf::from("tck/features");
@@ -31,22 +31,13 @@ fn main() -> ExitCode {
         }
     }
 
-    let mut report = match run(&features) {
+    let report = match run(&features) {
         Ok(report) => report,
         Err(e) => {
             eprintln!("tck harness error: {e}");
             return ExitCode::FAILURE;
         }
     };
-    // Parse statistics need the plans again; recompute rather than thread
-    // them through the report API.
-    match scenario::load_all(&features) {
-        Ok(plans) => report.parse = classify::parse_stats(&plans),
-        Err(e) => {
-            eprintln!("tck harness error: {e}");
-            return ExitCode::FAILURE;
-        }
-    }
 
     print!("{}", report.summary());
 
@@ -68,6 +59,6 @@ fn main() -> ExitCode {
 }
 
 fn usage(problem: &str) -> ExitCode {
-    eprintln!("{problem}\nusage: tck-runner [--features <dir>] [--report <file.json>]");
+    eprintln!("{problem}\nusage: tck_runner [--features <dir>] [--report <file.json>]");
     ExitCode::FAILURE
 }

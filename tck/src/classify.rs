@@ -39,22 +39,33 @@ pub enum UnsupportedReason {
 
 /// Keyword heuristic for deferred syntax. Token-based (not substring), so
 /// property names like `offset` do not trip `SET`; string literals can
-/// still fool it, which is acceptable for a reporting bucket — the
-/// classification this feeds is Unsupported vs Failed, never Passed.
+/// still fool it, which is acceptable for a reporting bucket. Applied
+/// symmetrically: a deferred-syntax parse rejection is never Failed AND
+/// never Passed — the parser rejecting a construct wholesale proves
+/// nothing about the specific flaw a scenario tests.
 fn uses_deferred_syntax(query: &str) -> bool {
     const DEFERRED: &[&str] = &[
-        // Level W — Phase 3 (acetone-mex.1)
+        // Level W — Phase 3 (acetone-mex.1).
         "CREATE",
         "MERGE",
         "SET",
         "REMOVE",
         "DELETE",
         "DETACH",
-        // spec §5.1 explicit deferrals
+        // spec §5.1 explicit deferrals that are keyword-detectable
+        // (FOREACH; shortest-path functions). CALL {} subqueries, map
+        // projections and temporal arithmetic are also deferred by §5.1
+        // but not detectable by token — their parse failures count as
+        // Failed, which errs against acetone.
         "FOREACH",
-        "UNION",
         "SHORTESTPATH",
         "ALLSHORTESTPATHS",
+        // Outside the §5.1 v0.1 target subset (not named in the Level R
+        // list): UNION, and EXISTS in both its function and subquery
+        // forms (the token check cannot tell them apart, which only
+        // matters on parse failure). Recorded on bead acetone-yzc.3 and
+        // flagged for the Phase 2 report.
+        "UNION",
         "EXISTS",
     ];
     query
@@ -77,8 +88,16 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
             ..
         } => {
             match (parse_result.is_err(), error_type.as_str()) {
+                // The parser rejects the construct wholesale, so the
+                // rejection says nothing about the flaw under test —
+                // crediting it would inflate the pass rate with passes
+                // that evaporate when the deferred syntax lands.
+                (true, _) if uses_deferred_syntax(query) => {
+                    Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+                }
                 // The TCK demanded a compile-time SyntaxError and the
-                // parser delivered one: verified end to end.
+                // parser delivered one. (The rejection *reason* is not
+                // verified — parse-only classification cannot know it.)
                 (true, "SyntaxError") => Verdict::Passed,
                 // Rejected at compile time, but the TCK wants a different
                 // error class — the binder must classify.

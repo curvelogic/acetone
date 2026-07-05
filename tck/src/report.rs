@@ -60,8 +60,14 @@ pub struct Report {
     pub parse: ParseStats,
 }
 
+impl Default for Report {
+    fn default() -> Self {
+        Report::new()
+    }
+}
+
 impl Report {
-    pub fn new(_expected_scenarios: usize) -> Self {
+    pub fn new() -> Self {
         Report {
             tck_commit: TCK_COMMIT,
             totals: Counts::default(),

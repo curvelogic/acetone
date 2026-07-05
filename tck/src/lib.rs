@@ -6,9 +6,12 @@
 //! bump cannot silently skip anything), and classifies each scenario
 //! honestly:
 //!
-//! - **Passed** — verified end to end. With the current parse-only
-//!   backend that means compile-time-`SyntaxError` scenarios whose query
-//!   acetone rejects at parse time.
+//! - **Passed** — the TCK-expected error class and phase were observed.
+//!   With the current parse-only backend that means compile-time
+//!   `SyntaxError` scenarios whose query acetone rejects at parse time,
+//!   excluding deferred-syntax queries (whose rejection proves nothing
+//!   about the flaw under test). The rejection *reason* is not verified —
+//!   parse-only classification cannot know it.
 //! - **Failed** — acetone demonstrably disagrees with the TCK. Parse-only
 //!   this means a query the TCK requires to be valid (or to fail only at
 //!   runtime) that our parser rejects, excluding deferred syntax.
@@ -37,10 +40,11 @@ pub use scenario::{HarnessError, ScenarioPlan};
 /// never silent skips.
 pub fn run(features_root: &Path) -> Result<Report, HarnessError> {
     let plans = scenario::load_all(features_root)?;
-    let mut report = Report::new(plans.len());
+    let mut report = Report::new();
     for plan in &plans {
         let verdict = classify(plan);
         report.record(plan, &verdict);
     }
+    report.parse = classify::parse_stats(&plans);
     Ok(report)
 }

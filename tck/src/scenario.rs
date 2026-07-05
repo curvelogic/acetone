@@ -132,11 +132,26 @@ pub fn load_all(features_root: &Path) -> Result<Vec<ScenarioPlan>, HarnessError>
 /// first step to be Given/When/Then. Normalise in memory — the vendored
 /// files are never edited. The keyword carries no semantics for this
 /// harness: steps are matched by their text, not their keyword.
-fn normalise_leading_and(text: &str) -> String {
+pub fn normalise_leading_and(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut expecting_first_step = false;
+    let mut in_docstring = false;
     for line in text.lines() {
         let trimmed = line.trim_start();
+        // Never rewrite inside `"""` docstrings: a future corpus bump
+        // whose query text happens to contain step-shaped lines must not
+        // be silently corrupted.
+        if trimmed.starts_with("\"\"\"") {
+            in_docstring = !in_docstring;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if in_docstring {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
         if trimmed.starts_with("Scenario:")
             || trimmed.starts_with("Scenario Outline:")
             || trimmed.starts_with("Background:")
@@ -206,11 +221,20 @@ fn reduce_feature(
         // Scenario Outline: expand each Examples row into a concrete
         // scenario by substituting <column> placeholders.
         for examples in &scenario.examples {
+            // Malformed Examples are harness errors, never silent skips.
             let Some(table) = examples.table.as_ref() else {
-                continue;
+                return Err(HarnessError::Outline {
+                    path: path.to_path_buf(),
+                    scenario: scenario.name.clone(),
+                    message: "Examples block without a table".into(),
+                });
             };
             let Some((header, rows)) = table.rows.split_first() else {
-                continue;
+                return Err(HarnessError::Outline {
+                    path: path.to_path_buf(),
+                    scenario: scenario.name.clone(),
+                    message: "Examples table without a header row".into(),
+                });
             };
             for (row_index, row) in rows.iter().enumerate() {
                 if row.len() != header.len() {
