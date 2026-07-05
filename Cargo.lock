@@ -29,6 +29,7 @@ name = "acetone-cypher"
 version = "0.0.1"
 dependencies = [
  "acetone-graph",
+ "acetone-model",
  "proptest",
  "thiserror 2.0.18",
 ]

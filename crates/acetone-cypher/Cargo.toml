@@ -9,6 +9,9 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+# acetone-model: the binder's catalogue is built from schema-map entries
+# (LabelDef, RelTypeDef, IndexDef). Downward dependency per crate layout.
+acetone-model.workspace = true
 acetone-graph.workspace = true
 thiserror.workspace = true
 

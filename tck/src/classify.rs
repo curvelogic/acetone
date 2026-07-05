@@ -12,6 +12,8 @@
 //!   write clauses), which is Unsupported instead.
 //! - Everything else is **Unsupported**, split by the missing capability.
 
+use acetone_cypher::bind::{BindError, BindMode, Catalogue, bind};
+
 use crate::scenario::{Expectation, ScenarioPlan};
 use crate::vocabulary::ErrorPhase;
 
@@ -30,7 +32,8 @@ pub enum Verdict {
 pub enum UnsupportedReason {
     /// Needs the executor (yzc.5) — the common case.
     Executor,
-    /// Needs the binder (yzc.4) to classify compile-time errors.
+    /// The front end rejects at compile time, but the TCK's expected
+    /// error class/detail could not be verified against the rejection.
     CompileClassification,
     /// Uses syntax acetone defers: spec §5.1 deferrals or Phase 3 write
     /// clauses (acetone-mex.1).
@@ -73,70 +76,164 @@ fn uses_deferred_syntax(query: &str) -> bool {
         .any(|token| DEFERRED.iter().any(|kw| token.eq_ignore_ascii_case(kw)))
 }
 
+/// Functions outside the v0.1 subset whose absence is deliberate:
+/// temporal constructors (spec §5.1 defers "full temporal arithmetic"),
+/// spatial (not in scope), and aggregates beyond the §5.1 list (count,
+/// sum, avg, min, max, collect). An UnknownFunction rejection naming one
+/// of these is deferral, not a defect.
+const DEFERRED_FUNCTIONS: &[&str] = &[
+    "date",
+    "datetime",
+    "localdatetime",
+    "localtime",
+    "time",
+    "duration",
+    "point",
+    "distance",
+    "percentileCont",
+    "percentileDisc",
+    "stDev",
+    "stDevP",
+    // Nondeterministic; not in the §5.1 subset.
+    "rand",
+];
+
+fn is_deferred_bind_error(error: &BindError) -> bool {
+    match error {
+        BindError::UnknownFunction { name, .. } => {
+            // Namespaced temporal functions (`datetime.truncate`,
+            // `duration.between`) defer with their namespace.
+            let head = name.split('.').next().unwrap_or(name);
+            DEFERRED_FUNCTIONS
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(head))
+        }
+        _ => false,
+    }
+}
+
 pub fn classify(plan: &ScenarioPlan) -> Verdict {
     let Some(query) = &plan.query else {
         // No `When executing query:` step the harness models — nothing to
         // judge without an executor.
         return Verdict::Unsupported(UnsupportedReason::Executor);
     };
-    let parse_result = acetone_cypher::parse(query);
+    // The front end available today: parse, then bind leniently against
+    // an empty catalogue (TCK graphs are schema-free).
+    let front_end = match acetone_cypher::parse(query) {
+        Err(e) => FrontEnd::ParseRejected(e),
+        Ok(parsed) => match bind(query, &parsed, &Catalogue::empty(), BindMode::Lenient) {
+            // Scenarios that register their own stub procedures need
+            // executor-side procedure infrastructure; the binder refusing
+            // the unregistered name is not a defect.
+            Err(BindError::ProcedureNotFound { .. }) if plan.needs_procedures => {
+                return Verdict::Unsupported(UnsupportedReason::Executor);
+            }
+            Err(e) => FrontEnd::BindRejected(e),
+            Ok(_) => FrontEnd::Accepted,
+        },
+    };
 
     match &plan.expectation {
         Expectation::Error {
             error_type,
             phase: ErrorPhase::CompileTime,
-            ..
-        } => {
-            match (parse_result.is_err(), error_type.as_str()) {
-                // The parser rejects the construct wholesale, so the
-                // rejection says nothing about the flaw under test —
-                // crediting it would inflate the pass rate with passes
-                // that evaporate when the deferred syntax lands.
-                (true, _) if uses_deferred_syntax(query) => {
-                    Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
-                }
-                // The TCK demanded a compile-time SyntaxError and the
-                // parser delivered one. (The rejection *reason* is not
-                // verified — parse-only classification cannot know it.)
-                (true, "SyntaxError") => Verdict::Passed,
-                // Rejected at compile time, but the TCK wants a different
-                // error class — the binder must classify.
-                (true, _) => Verdict::Unsupported(UnsupportedReason::CompileClassification),
-                // Parses cleanly; the compile-time error the TCK expects
-                // would come from the binder (aggregation misuse, unbound
-                // variables and so on are SyntaxError in TCK terms but
-                // post-parse in any real front end).
-                (false, _) => Verdict::Unsupported(UnsupportedReason::CompileClassification),
+            detail,
+        } => match &front_end {
+            // The parser or binder rejects a deferred construct
+            // wholesale, so the rejection says nothing about the flaw
+            // under test — crediting it would inflate the pass rate with
+            // passes that evaporate when the deferred syntax lands.
+            FrontEnd::ParseRejected(_) if uses_deferred_syntax(query) => {
+                Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
             }
-        }
+            FrontEnd::BindRejected(e)
+                if uses_deferred_syntax(query) || is_deferred_bind_error(e) =>
+            {
+                Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+            }
+            // The TCK demanded a compile-time SyntaxError and the parser
+            // delivered one. (The rejection *reason* is not verified —
+            // the parser cannot know it.)
+            FrontEnd::ParseRejected(_) if error_type == "SyntaxError" => Verdict::Passed,
+            FrontEnd::ParseRejected(_) => {
+                Verdict::Unsupported(UnsupportedReason::CompileClassification)
+            }
+            // The binder rejected: Passed only on a detail-verified match
+            // (SyntaxError covers post-parse compile errors in TCK
+            // vocabulary; ProcedureError maps to ProcedureNotFound).
+            FrontEnd::BindRejected(e) => {
+                let class_matches = match error_type.as_str() {
+                    "SyntaxError" => !matches!(e, BindError::ProcedureNotFound { .. }),
+                    "ProcedureError" => matches!(e, BindError::ProcedureNotFound { .. }),
+                    _ => false,
+                };
+                match e.tck_detail() {
+                    Some(our_detail) if class_matches && our_detail == detail => Verdict::Passed,
+                    _ => Verdict::Unsupported(UnsupportedReason::CompileClassification),
+                }
+            }
+            // Accepted cleanly; the compile-time error the TCK expects is
+            // beyond the current front end (type checks, semantics the
+            // binder does not model).
+            FrontEnd::Accepted => Verdict::Unsupported(UnsupportedReason::CompileClassification),
+        },
         Expectation::Error {
             phase: ErrorPhase::Runtime,
             ..
-        } => match parse_result {
-            // Runtime-error scenarios are compile-valid by definition.
-            Err(e) if !uses_deferred_syntax(query) => Verdict::Failed {
+        } => match &front_end {
+            // Runtime-error scenarios are compile-valid by definition: a
+            // front-end rejection is a defect unless the syntax is
+            // deferred.
+            FrontEnd::ParseRejected(e) if !uses_deferred_syntax(query) => Verdict::Failed {
                 reason: format!("TCK requires this query to compile, parser rejected it: {e}"),
             },
-            Err(_) => Verdict::Unsupported(UnsupportedReason::DeferredSyntax),
-            Ok(_) => Verdict::Unsupported(UnsupportedReason::Executor),
+            FrontEnd::BindRejected(e)
+                if !uses_deferred_syntax(query) && !is_deferred_bind_error(e) =>
+            {
+                Verdict::Failed {
+                    reason: format!("TCK requires this query to compile, binder rejected it: {e}"),
+                }
+            }
+            FrontEnd::ParseRejected(_) | FrontEnd::BindRejected(_) => {
+                Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+            }
+            FrontEnd::Accepted => Verdict::Unsupported(UnsupportedReason::Executor),
         },
         Expectation::Error {
             phase: ErrorPhase::AnyTime,
             ..
-        } => match parse_result {
+        } => match &front_end {
             // "Any time" allows compile-time rejection, but the TCK still
-            // pins the error class, which the parser cannot claim alone.
-            Err(_) => Verdict::Unsupported(UnsupportedReason::CompileClassification),
-            Ok(_) => Verdict::Unsupported(UnsupportedReason::Executor),
+            // pins the error class, which we do not verify here.
+            FrontEnd::ParseRejected(_) | FrontEnd::BindRejected(_) => {
+                Verdict::Unsupported(UnsupportedReason::CompileClassification)
+            }
+            FrontEnd::Accepted => Verdict::Unsupported(UnsupportedReason::Executor),
         },
-        Expectation::Rows | Expectation::EmptyResult | Expectation::None => match parse_result {
-            Err(e) if !uses_deferred_syntax(query) => Verdict::Failed {
+        Expectation::Rows | Expectation::EmptyResult | Expectation::None => match &front_end {
+            FrontEnd::ParseRejected(e) if !uses_deferred_syntax(query) => Verdict::Failed {
                 reason: format!("TCK requires this query to be valid, parser rejected it: {e}"),
             },
-            Err(_) => Verdict::Unsupported(UnsupportedReason::DeferredSyntax),
-            Ok(_) => Verdict::Unsupported(UnsupportedReason::Executor),
+            FrontEnd::BindRejected(e)
+                if !uses_deferred_syntax(query) && !is_deferred_bind_error(e) =>
+            {
+                Verdict::Failed {
+                    reason: format!("TCK requires this query to be valid, binder rejected it: {e}"),
+                }
+            }
+            FrontEnd::ParseRejected(_) | FrontEnd::BindRejected(_) => {
+                Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+            }
+            FrontEnd::Accepted => Verdict::Unsupported(UnsupportedReason::Executor),
         },
     }
+}
+
+enum FrontEnd {
+    ParseRejected(acetone_cypher::ParseError),
+    BindRejected(BindError),
+    Accepted,
 }
 
 /// Parse statistics over the corpus's queries-under-test, independent of
