@@ -101,6 +101,13 @@ impl<'a> Binder<'a> {
             ast::Clause::Match(m) => self.match_clause(m),
             ast::Clause::Unwind(u) => {
                 let expr = self.expr(&u.expr, NO_AGG)?;
+                // openCypher: an UNWIND alias cannot shadow a bound name.
+                if self.scope.contains_key(&u.alias) {
+                    return Err(BindError::VariableAlreadyBound {
+                        name: u.alias.clone(),
+                        span: u.span,
+                    });
+                }
                 let alias = self.declare(&u.alias, EntityKind::Value, vec![]);
                 Ok(BoundClause::Unwind {
                     expr,
@@ -168,8 +175,13 @@ impl<'a> Binder<'a> {
                     span: c.span,
                 });
             }
-            if yields.iter().any(|(existing, _)| existing == column) {
-                return Err(BindError::ColumnNameConflict {
+            // A yield column cannot shadow a bound name (TCK Call1
+            // [15]) nor repeat (Call5 [5][6]) — both VariableAlreadyBound
+            // in TCK vocabulary.
+            if self.scope.contains_key(column.as_str())
+                || yields.iter().any(|(existing, _)| existing == column)
+            {
+                return Err(BindError::VariableAlreadyBound {
                     name: column.clone(),
                     span: c.span,
                 });
@@ -297,6 +309,20 @@ impl<'a> Binder<'a> {
         // and the new output names (openCypher: "WHERE sees a variable
         // bound before but not after WITH" is valid); only afterwards
         // does the scope narrow to the projected names.
+        //
+        // CONCEDED LIMITS (bead acetone-1qj): this union scope is only
+        // correct for non-aggregating, non-DISTINCT projections. The
+        // binder currently over-accepts, deferring to later phases, four
+        // forms the TCK pins as compile-time errors: aggregates in ORDER
+        // BY after a non-aggregating RETURN (ReturnOrderBy2 [14],
+        // InvalidAggregation); ORDER BY on non-projected names after
+        // DISTINCT (ReturnOrderBy2 [13], UndefinedVariable);
+        // post-aggregation ORDER BY seeing the pre-scope (ReturnOrderBy6
+        // [4], UndefinedVariable); and projection items mixing aggregates
+        // with unaggregated pre-scope variables (With6 [8][9],
+        // AmbiguousAggregationExpression) — for which grouping_items also
+        // carries no planner signal yet. All classification-honest
+        // (never credited as Passed).
         let union_scope: HashMap<String, VarId> = self
             .scope
             .iter()
@@ -314,7 +340,6 @@ impl<'a> Binder<'a> {
             Some(expr) => Some(self.expr(expr, NO_AGG)?),
             None => None,
         };
-        let _ = is_with;
 
         // Re-scope: only the projected names survive.
         self.scope = new_scope;
@@ -520,6 +545,12 @@ impl<'a> Binder<'a> {
 
     /// Strict mode: a property map on a node whose label declares a shape
     /// may only use declared property names.
+    ///
+    /// Deliberate narrowing of the bead's recorded design (noted at bead
+    /// close, tracked in acetone-1qj): property ACCESS expressions
+    /// (`n.zzz` in WHERE/RETURN) are not checked — openCypher property
+    /// access on a missing property yields null, and flagging it belongs
+    /// with the workbench lint surface, not hard binding errors.
     fn check_declared_properties(
         &self,
         labels: &[String],

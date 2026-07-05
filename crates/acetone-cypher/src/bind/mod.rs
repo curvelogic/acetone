@@ -264,6 +264,20 @@ mod tests {
         assert!(matches!(err, BindError::InvalidNumberOfArguments { .. }));
         let err = bind_lenient("CALL acetone.diff('a', 'b') YIELD sandwich RETURN 1").unwrap_err();
         assert!(matches!(err, BindError::UnknownYieldColumn { .. }));
+        // Duplicate and shadowing YIELD columns are VariableAlreadyBound
+        // (TCK Call5 [5][6], Call1 [15]).
+        let err =
+            bind_lenient("CALL acetone.diff('a', 'b') YIELD kind, kind RETURN 1").unwrap_err();
+        assert!(matches!(err, BindError::VariableAlreadyBound { .. }));
+        let err = bind_lenient("MATCH (kind) CALL acetone.diff('a', 'b') YIELD kind RETURN kind")
+            .unwrap_err();
+        assert!(matches!(err, BindError::VariableAlreadyBound { .. }));
+    }
+
+    #[test]
+    fn unwind_alias_cannot_shadow() {
+        let err = bind_lenient("MATCH (n) UNWIND [1] AS n RETURN n").unwrap_err();
+        assert!(matches!(err, BindError::VariableAlreadyBound { .. }));
     }
 
     #[test]
