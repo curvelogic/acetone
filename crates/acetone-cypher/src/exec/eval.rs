@@ -376,9 +376,15 @@ fn add(a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
         (Float(a), Float(b)) => Ok(Float(a + b)),
         (String(a), String(b)) => Ok(String(a + &b)),
         (String(a), Int(b)) => Ok(String(format!("{a}{b}"))),
-        (String(a), Float(b)) => Ok(String(format!("{a}{b:?}"))),
+        (String(a), Float(b)) => Ok(String(format!(
+            "{a}{}",
+            crate::exec::functions::format_float(b)
+        ))),
         (Int(a), String(b)) => Ok(String(format!("{a}{b}"))),
-        (Float(a), String(b)) => Ok(String(format!("{a:?}{b}"))),
+        (Float(a), String(b)) => Ok(String(format!(
+            "{}{b}",
+            crate::exec::functions::format_float(a)
+        ))),
         (List(mut a), List(b)) => {
             a.extend(b);
             Ok(List(a))
@@ -427,7 +433,11 @@ fn divide(a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
     use Value::*;
     match (&a, &b) {
         (Int(_), Int(0)) => Err(ExecError::DivisionByZero { span }),
-        (Int(x), Int(y)) => Ok(Int(x.wrapping_div(*y))),
+        // `i64::MIN / -1` overflows i64 — an error, not a silent wrap.
+        (Int(x), Int(y)) => x
+            .checked_div(*y)
+            .map(Int)
+            .ok_or(ExecError::Overflow { span }),
         _ => arith(a, b, span, i64::checked_div, |x, y| x / y),
     }
 }
@@ -436,7 +446,10 @@ fn modulo(a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
     use Value::*;
     match (&a, &b) {
         (Int(_), Int(0)) => Err(ExecError::DivisionByZero { span }),
-        (Int(x), Int(y)) => Ok(Int(x.wrapping_rem(*y))),
+        (Int(x), Int(y)) => x
+            .checked_rem(*y)
+            .map(Int)
+            .ok_or(ExecError::Overflow { span }),
         _ => arith(a, b, span, i64::checked_rem, |x, y| x % y),
     }
 }

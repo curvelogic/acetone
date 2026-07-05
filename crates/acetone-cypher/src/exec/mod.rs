@@ -221,5 +221,14 @@ mod tests {
         ));
         let err = run_query("RETURN 1 + true", &EmptyGraph, &BTreeMap::new()).unwrap_err();
         assert!(matches!(err, QueryError::Exec(ExecError::Type { .. })));
+        // i64::MIN / -1 overflows i64 — an error, not a silent wrap.
+        // (i64::MIN has no positive literal, so build it by subtraction.)
+        let err = run_query(
+            "RETURN (-9223372036854775807 - 1) / -1",
+            &EmptyGraph,
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, QueryError::Exec(ExecError::Overflow { .. })));
     }
 }
