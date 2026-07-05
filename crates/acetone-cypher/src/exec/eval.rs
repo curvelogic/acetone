@@ -6,6 +6,7 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
+use crate::ast::QuantifierKind;
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::bind::bound::{BoundExpr, BoundPathPattern, VarId};
 use crate::exec::source::GraphSource;
@@ -217,6 +218,54 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 });
             }
             Ok(Value::List(out))
+        }
+        BoundExpr::Quantifier {
+            kind,
+            variable,
+            list,
+            predicate,
+            span,
+        } => {
+            let list = eval(list, row, ctx)?;
+            let items = match list {
+                Value::Null => return Ok(Value::Null),
+                Value::List(items) => items,
+                other => {
+                    return Err(ExecError::Type {
+                        message: format!("expected a list, got {}", other.type_name()),
+                        span: *span,
+                    });
+                }
+            };
+            quantify(*kind, *variable, &items, predicate, row, ctx, *span)
+        }
+        BoundExpr::Reduce {
+            accumulator,
+            init,
+            variable,
+            list,
+            expr,
+            span,
+        } => {
+            let list = eval(list, row, ctx)?;
+            let items = match list {
+                Value::Null => return Ok(Value::Null),
+                Value::List(items) => items,
+                other => {
+                    return Err(ExecError::Type {
+                        message: format!("reduce expects a list, got {}", other.type_name()),
+                        span: *span,
+                    });
+                }
+            };
+            let mut acc = eval(init, row, ctx)?;
+            let mut inner = row.clone();
+            for item in items {
+                inner.set(*accumulator, acc);
+                inner.set(*variable, item);
+                acc = eval(expr, &inner, ctx)?;
+            }
+            Ok(acc)
         }
         BoundExpr::MapLiteral { entries, span: _ } => {
             let mut map = BTreeMap::new();
@@ -672,6 +721,76 @@ fn probe_steps(
     Ok(false)
 }
 
+/// Evaluate a list-predicate quantifier with openCypher three-valued
+/// semantics. Counting elements whose predicate is true (T), false (F)
+/// or null (N):
+/// - any:    T>=1 -> true; T=0,N>=1 -> null; else false
+/// - all:    F>=1 -> false; F=0,N>=1 -> null; else true
+/// - none:   T>=1 -> false; T=0,N>=1 -> null; else true
+/// - single: T=1,N=0 -> true; T>=2 -> false; T=0,N=0 -> false; else null
+#[allow(clippy::too_many_arguments)]
+fn quantify(
+    kind: QuantifierKind,
+    variable: VarId,
+    items: &[Value],
+    predicate: &BoundExpr,
+    row: &Row,
+    ctx: &EvalCtx,
+    span: Span,
+) -> Result<Value, ExecError> {
+    let mut t = 0usize;
+    let mut n = 0usize;
+    let mut inner = row.clone();
+    for item in items {
+        inner.set(variable, item.clone());
+        match truth(&eval(predicate, &inner, ctx)?, span)? {
+            Some(true) => t += 1,
+            Some(false) => {}
+            None => n += 1,
+        }
+    }
+    let f = items.len() - t - n;
+    let value = match kind {
+        QuantifierKind::Any => {
+            if t >= 1 {
+                Value::Bool(true)
+            } else if n >= 1 {
+                Value::Null
+            } else {
+                Value::Bool(false)
+            }
+        }
+        QuantifierKind::All => {
+            if f >= 1 {
+                Value::Bool(false)
+            } else if n >= 1 {
+                Value::Null
+            } else {
+                Value::Bool(true)
+            }
+        }
+        QuantifierKind::None => {
+            if t >= 1 {
+                Value::Bool(false)
+            } else if n >= 1 {
+                Value::Null
+            } else {
+                Value::Bool(true)
+            }
+        }
+        QuantifierKind::Single => {
+            if t == 1 && n == 0 {
+                Value::Bool(true)
+            } else if t >= 2 || (t == 0 && n == 0) {
+                Value::Bool(false)
+            } else {
+                Value::Null
+            }
+        }
+    };
+    Ok(value)
+}
+
 impl BoundExpr {
     pub fn span(&self) -> Span {
         match self {
@@ -687,6 +806,8 @@ impl BoundExpr {
             | BoundExpr::Case { span, .. }
             | BoundExpr::ListLiteral { span, .. }
             | BoundExpr::ListComprehension { span, .. }
+            | BoundExpr::Quantifier { span, .. }
+            | BoundExpr::Reduce { span, .. }
             | BoundExpr::MapLiteral { span, .. }
             | BoundExpr::Index { span, .. }
             | BoundExpr::Slice { span, .. }
