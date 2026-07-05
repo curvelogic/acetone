@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 use acetone_cypher::bind::BindMode;
 use acetone_cypher::exec::value::{NodeValue, RelValue, Value};
-use acetone_cypher::exec::{GraphSnapshot, QueryResult, catalogue_from_schema, execute};
+use acetone_cypher::exec::{GraphSnapshot, QueryResult, catalogue_from_schema};
 use acetone_graph::Repository;
 use anyhow::{Context, Result, anyhow};
 
@@ -47,18 +47,43 @@ pub fn run(
             .with_context(|| format!("reading at {refspec:?}"))?,
         None => repo.workspace_snapshot().context("reading the workspace")?,
     };
-    let result = execute_query(&snapshot, cypher)?;
+    let result = execute_query(&repo, &snapshot, cypher)?;
     render(&result, format);
     Ok(())
 }
 
-/// Parse, bind and execute a query against a stored snapshot.
-fn execute_query(snapshot: &acetone_graph::Snapshot<'_>, cypher: &str) -> Result<QueryResult> {
+/// A version resolver backed by the open repository: clause-group
+/// `AT <ref>` reads the graph at that commit. The base version is the
+/// snapshot the query is run against (workspace, or the `--at` version).
+struct RepoResolver<'r> {
+    repo: &'r Repository,
+    base: GraphSnapshot,
+}
+
+impl acetone_cypher::exec::VersionResolver for RepoResolver<'_> {
+    fn base(&self) -> &dyn acetone_cypher::exec::GraphSource {
+        &self.base
+    }
+
+    fn at(&self, refspec: &str) -> Result<Box<dyn acetone_cypher::exec::GraphSource>, String> {
+        let snapshot = self.repo.snapshot(refspec).map_err(|e| e.to_string())?;
+        let nodes = snapshot.nodes().map_err(|e| e.to_string())?;
+        let edges = snapshot.edges().map_err(|e| e.to_string())?;
+        Ok(Box::new(GraphSnapshot::from_records(&nodes, &edges)))
+    }
+}
+
+/// Parse, bind and execute a query against a stored snapshot, resolving
+/// any clause-group `AT <ref>` against the repository.
+fn execute_query(
+    repo: &Repository,
+    snapshot: &acetone_graph::Snapshot<'_>,
+    cypher: &str,
+) -> Result<QueryResult> {
     let nodes = snapshot.nodes().context("reading nodes")?;
     let edges = snapshot.edges().context("reading edges")?;
     let schema = snapshot.schema_entries().context("reading schema")?;
 
-    let graph = GraphSnapshot::from_records(&nodes, &edges);
     let catalogue = catalogue_from_schema(schema);
     // Strict binding when the schema declares structure; a schema-free
     // repository (raw Phase 1 data) stays queryable under openCypher's
@@ -72,7 +97,12 @@ fn execute_query(snapshot: &acetone_graph::Snapshot<'_>, cypher: &str) -> Result
     let parsed = acetone_cypher::parse(cypher).map_err(|e| anyhow!("{}", e.render(cypher)))?;
     let bound = acetone_cypher::bind::bind(cypher, &parsed, &catalogue, mode)
         .map_err(|e| anyhow!("{}", e.render(cypher)))?;
-    let result = execute(&bound, &graph, &BTreeMap::new()).map_err(|e| anyhow!("{e}"))?;
+    let resolver = RepoResolver {
+        repo,
+        base: GraphSnapshot::from_records(&nodes, &edges),
+    };
+    let result = acetone_cypher::exec::execute_versioned(&bound, &resolver, &BTreeMap::new())
+        .map_err(|e| anyhow!("{e}"))?;
     Ok(result)
 }
 
@@ -378,7 +408,7 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
 fn run_in_shell(repo_path: &std::path::Path, cypher: &str, format: Format) -> Result<()> {
     let repo = Repository::open(repo_path)?;
     let snapshot = repo.workspace_snapshot()?;
-    let result = execute_query(&snapshot, cypher)?;
+    let result = execute_query(&repo, &snapshot, cypher)?;
     render(&result, format);
     Ok(())
 }

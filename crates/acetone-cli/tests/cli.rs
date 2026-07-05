@@ -714,3 +714,75 @@ fn shell_runs_queries_and_meta_commands() {
         "shell transcript: {text}"
     );
 }
+
+/// Clause-group AT (acetone-yzc.7): `MATCH ... AT <ref>` inside a query
+/// reads that clause's patterns from the graph at the given commit,
+/// while the rest of the query sees the base version.
+#[test]
+fn query_clause_group_at_reads_a_past_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "one host"])
+            .status
+            .success()
+    );
+    let first = {
+        let out = acetone(&repo, &["log"]);
+        stdout(&out)
+            .lines()
+            .next()
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert!(
+        acetone(&repo, &["put-node", "Host", "b", "--prop", "x=2"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "two hosts"])
+            .status
+            .success()
+    );
+
+    // AT the first commit: one host, in a query whose base is current.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            &format!("MATCH (h:Host) AT '{first}' RETURN count(*) AS n"),
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "n\n1");
+
+    // No AT: the base (current) version has two.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(*) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "n\n2");
+
+    // Unresolvable AT ref: a clean error, not a panic.
+    let out = acetone(&repo, &["query", "MATCH (h) AT 'nope' RETURN h"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("cannot resolve"), "{}", stderr(&out));
+}

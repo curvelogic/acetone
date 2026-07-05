@@ -14,9 +14,10 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 
+use crate::ast::AtRef;
 use crate::bind::bound::*;
 use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
-use crate::exec::source::GraphSource;
+use crate::exec::source::{GraphSource, SingleVersion, VersionResolver};
 use crate::exec::value::{EntityId, NodeValue, PathValue, RelValue, Value};
 
 /// A completed query's output.
@@ -26,12 +27,27 @@ pub struct QueryResult {
     pub rows: Vec<Vec<Value>>,
 }
 
+/// Execute against a single fixed graph. `AT <ref>` clauses are
+/// unsupported on this path (no repository to resolve refs against) —
+/// used by the TCK backend and executor tests.
 pub fn execute(
     query: &BoundQuery,
     graph: &dyn GraphSource,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<QueryResult, ExecError> {
-    let ctx = EvalCtx::new(graph, parameters);
+    execute_versioned(query, &SingleVersion::new(graph), parameters)
+}
+
+/// Execute against a version resolver, so `MATCH ... AT <ref>` clauses
+/// (spec §5.2) query the graph at that commit while the rest of the
+/// query sees the base version.
+pub fn execute_versioned(
+    query: &BoundQuery,
+    resolver: &dyn VersionResolver,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<QueryResult, ExecError> {
+    let base = resolver.base();
+    let ctx = EvalCtx::new(base, parameters);
     let mut rows = vec![Row::default()];
     let mut result = None;
 
@@ -44,13 +60,32 @@ pub fn execute(
                 where_clause,
                 span,
             } => {
-                if at_ref.is_some() {
-                    return Err(ExecError::Unsupported {
-                        feature: "AT <ref> (arrives with acetone-yzc.7)",
-                        span: *span,
-                    });
-                }
-                rows = match_clause(rows, *optional, patterns, where_clause.as_ref(), &ctx)?;
+                // A clause-group AT resolves this MATCH against another
+                // version; the resolved source is held for this clause.
+                let at_graph = match at_ref {
+                    None => None,
+                    Some(at) => {
+                        let refspec = resolve_at_ref(at, parameters)?;
+                        let graph = resolver.at(&refspec).map_err(|message| {
+                            ExecError::InvalidArgument {
+                                message,
+                                span: *span,
+                            }
+                        })?;
+                        Some(graph)
+                    }
+                };
+                let clause_ctx = match &at_graph {
+                    Some(graph) => EvalCtx::new(graph.as_ref(), parameters),
+                    None => EvalCtx::new(base, parameters),
+                };
+                rows = match_clause(
+                    rows,
+                    *optional,
+                    patterns,
+                    where_clause.as_ref(),
+                    &clause_ctx,
+                )?;
             }
             BoundClause::Unwind { expr, alias, span } => {
                 let mut out = Vec::new();
@@ -108,6 +143,26 @@ pub fn execute(
         columns: Vec::new(),
         rows: Vec::new(),
     }))
+}
+
+/// Resolve a clause-group `AT` reference to a refspec string. A
+/// parameter form (`AT $ref`) reads the parameter, which must be a
+/// string.
+fn resolve_at_ref(at: &AtRef, parameters: &BTreeMap<String, Value>) -> Result<String, ExecError> {
+    match at {
+        AtRef::Refspec { value, .. } => Ok(value.clone()),
+        AtRef::Parameter { name, span } => match parameters.get(name) {
+            Some(Value::String(s)) => Ok(s.clone()),
+            Some(other) => Err(ExecError::Type {
+                message: format!("AT parameter must be a string, got {}", other.type_name()),
+                span: *span,
+            }),
+            None => Err(ExecError::MissingParameter {
+                name: name.clone(),
+                span: *span,
+            }),
+        },
+    }
 }
 
 // --- MATCH ------------------------------------------------------------------

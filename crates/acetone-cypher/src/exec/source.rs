@@ -36,6 +36,45 @@ pub trait GraphSource {
     fn node(&self, id: &EntityId) -> Option<NodeValue>;
 }
 
+/// Resolves the graph a clause queries: the base (checked-out) version,
+/// or the version at a refspec for a clause-group `AT` (spec §5.2).
+/// Distinct `MATCH ... AT <ref>` clauses in one query may address distinct
+/// versions, so `at` yields an owned source the caller holds for the
+/// clause's duration.
+pub trait VersionResolver {
+    /// The base version — the graph a `MATCH` with no `AT` queries.
+    fn base(&self) -> &dyn GraphSource;
+
+    /// The graph at `refspec`. Errs (message only) if the ref cannot be
+    /// resolved or this resolver has no repository behind it.
+    fn at(&self, refspec: &str) -> Result<Box<dyn GraphSource>, String>;
+}
+
+/// Wraps a single graph as a resolver: `AT` is unsupported (no repository
+/// behind it). Keeps pure-executor callers (tests, TCK backend) working
+/// without ref-resolution plumbing.
+pub struct SingleVersion<'a> {
+    graph: &'a dyn GraphSource,
+}
+
+impl<'a> SingleVersion<'a> {
+    pub fn new(graph: &'a dyn GraphSource) -> Self {
+        SingleVersion { graph }
+    }
+}
+
+impl VersionResolver for SingleVersion<'_> {
+    fn base(&self) -> &dyn GraphSource {
+        self.graph
+    }
+
+    fn at(&self, refspec: &str) -> Result<Box<dyn GraphSource>, String> {
+        Err(format!(
+            "AT '{refspec}' needs a repository-backed resolver; this query has a single fixed graph"
+        ))
+    }
+}
+
 /// A simple in-memory property graph.
 #[derive(Debug, Default)]
 pub struct MemoryGraph {
