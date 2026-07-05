@@ -417,3 +417,55 @@ fn get_node_escapes_hostile_secondary_labels() {
     );
     assert!(text.contains("\\u{1b}"), "escaped form must be visible");
 }
+
+/// Regression for acetone-8ng: when the stdout consumer exits early
+/// (`acetone log | grep -q`, `| head -1`), the CLI must terminate
+/// cleanly instead of panicking with "failed printing to stdout:
+/// Broken pipe". We reproduce the pipe close directly: spawn `log` with
+/// piped stdout and drop the read end before the child writes.
+#[test]
+fn closed_stdout_pipe_is_a_clean_exit_not_a_panic() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let out = init(&repo);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // A commit so `log` has something to print.
+    let out = acetone(&repo, &["put-node", "Host", "web1", "--prop", "os=debian"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = acetone(&repo, &["commit", "-m", "seed commit for pipe test"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = std::process::Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "log"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn acetone log");
+
+    // Close the read end immediately: every subsequent write in the
+    // child gets EPIPE.
+    drop(child.stdout.take());
+
+    let status = child.wait().expect("wait");
+    let mut errtext = String::new();
+    use std::io::Read;
+    child
+        .stderr
+        .take()
+        .expect("stderr piped")
+        .read_to_string(&mut errtext)
+        .expect("read stderr");
+
+    assert!(
+        !errtext.contains("panicked") && !errtext.contains("Broken pipe"),
+        "CLI panicked on closed stdout: {errtext}"
+    );
+    assert!(
+        status.success(),
+        "expected clean exit, got {status}: {errtext}"
+    );
+}

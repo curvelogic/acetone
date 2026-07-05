@@ -35,8 +35,10 @@ step() { printf '\n== %s\n' "$*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # Assertion style: `cmd | grep -q X || fail` composes correctly with
-# pipefail (and outputs here are far below the pipe buffer, so grep -q
-# closing early cannot SIGPIPE the writer). Do NOT assert with
+# pipefail. grep -q closing the pipe early sends the writer EPIPE
+# regardless of output volume (buffer capacity only prevents blocking,
+# not EPIPE) — that panicked the CLI until acetone-8ng; the CLI now
+# treats a closed stdout as clean exit 0. Do NOT assert with
 # `cmd | grep X && fail || true` — a non-zero cmd skips the && branch
 # and the failure is swallowed.
 
