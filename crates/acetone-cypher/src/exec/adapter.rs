@@ -43,10 +43,42 @@ impl GraphSnapshot {
     /// Build from a version's node and edge records (e.g. from a
     /// `Repository`/`Snapshot`'s `nodes()` and `edges()`), constructing
     /// the id/label/adjacency indexes.
+    ///
+    /// Key properties are not exposed (there is no schema to name them) —
+    /// suitable for schema-free graphs (the TCK backend, tests). For a
+    /// stored graph with a declared schema, use
+    /// [`Self::from_records_with_schema`] so key values become queryable.
     pub fn from_records(nodes: &[(NodeKey, NodeRecord)], edges: &[(EdgeKey, EdgeRecord)]) -> Self {
+        Self::build(nodes, edges, &HashMap::new())
+    }
+
+    /// Build with the schema's key-property names, so a node's key values
+    /// are re-exposed as queryable properties — `MATCH (h:Host {hostname:
+    /// 'web-01'})` and `RETURN h.hostname` work. A node's key IS part of
+    /// its data (spec §2/§3); the stored record holds only the non-key
+    /// properties, so the key names come from the schema.
+    pub fn from_records_with_schema(
+        nodes: &[(NodeKey, NodeRecord)],
+        edges: &[(EdgeKey, EdgeRecord)],
+        schema: &[SchemaEntry],
+    ) -> Self {
+        let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
+        for entry in schema {
+            if let SchemaEntry::Label { name, def } = entry {
+                key_names.insert(name.clone(), def.key().to_vec());
+            }
+        }
+        Self::build(nodes, edges, &key_names)
+    }
+
+    fn build(
+        nodes: &[(NodeKey, NodeRecord)],
+        edges: &[(EdgeKey, EdgeRecord)],
+        key_names: &HashMap<String, Vec<String>>,
+    ) -> Self {
         let node_values: Vec<NodeValue> = nodes
             .iter()
-            .map(|(key, record)| node_value(key, record))
+            .map(|(key, record)| node_value(key, record, key_names))
             .collect();
         let rel_values: Vec<RelValue> = edges
             .iter()
@@ -126,17 +158,32 @@ fn node_entity_id(key: &NodeKey) -> EntityId {
     EntityId::from_bytes(render_key_bytes(&logical))
 }
 
-fn node_value(key: &NodeKey, record: &NodeRecord) -> NodeValue {
+fn node_value(
+    key: &NodeKey,
+    record: &NodeRecord,
+    key_names: &HashMap<String, Vec<String>>,
+) -> NodeValue {
     let mut labels = Vec::with_capacity(1 + record.secondary_labels().len());
     labels.push(key.label().to_string());
     labels.extend(record.secondary_labels().iter().cloned());
-    // Key properties are part of identity but also queryable as named
-    // properties would be in a real schema; the record carries the
-    // non-key properties, which is what property access sees.
+
+    let mut properties = convert_map(record.properties());
+    // Re-expose the key values under their schema-declared property names
+    // so they are filterable and returnable (the record stores only the
+    // non-key properties). Non-key properties win a name collision — they
+    // should never disagree, but the record is authoritative for those.
+    if let Some(names) = key_names.get(key.label()) {
+        for (name, value) in names.iter().zip(key.key()) {
+            properties
+                .entry(name.clone())
+                .or_insert_with(|| convert_value(value));
+        }
+    }
+
     NodeValue {
         id: node_entity_id(key),
         labels,
-        properties: convert_map(record.properties()),
+        properties,
     }
 }
 
@@ -288,6 +335,33 @@ mod tests {
         .unwrap();
         let edges = vec![(edge, EdgeRecord::new(BTreeMap::new()))];
         GraphSnapshot::from_records(&nodes, &edges)
+    }
+
+    #[test]
+    fn key_properties_are_re_exposed_with_schema() {
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+
+        let nodes = vec![(
+            node_key("Host", "web-01"),
+            NodeRecord::new([], BTreeMap::new()),
+        )];
+        let schema = vec![SchemaEntry::Label {
+            name: "Host".into(),
+            def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+
+        // Without schema: the key value is not a queryable property.
+        let plain = GraphSnapshot::from_records(&nodes, &[]);
+        assert!(!plain.all_nodes()[0].properties.contains_key("hostname"));
+
+        // With schema: the key value is re-exposed under its declared
+        // property name, so `{hostname: 'web-01'}` and `RETURN h.hostname`
+        // work.
+        let with_schema = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        assert!(
+            matches!(with_schema.all_nodes()[0].properties.get("hostname"),
+                Some(Value::String(s)) if s == "web-01")
+        );
     }
 
     #[test]

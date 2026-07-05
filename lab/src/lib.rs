@@ -47,22 +47,34 @@ pub struct Shape {
     pub software: usize,
     pub suppliers: usize,
     pub certificates: usize,
+    /// The last `orphans` software indices are never `RUNS`-targeted, so
+    /// the "orphaned software" query has a real, non-empty answer.
+    pub orphans: usize,
 }
 
 impl Shape {
     /// `scale` is the host count; the rest scale proportionally. `scale =
-    /// 50_000` gives roughly the roadmap's 50k-node / 200k-edge target.
+    /// 50_000` gives ~110k nodes / ~220k edges (the node total is >50k
+    /// because `scale` counts hosts, and hosts+software+suppliers+certs
+    /// all contribute; the edge total is ~the roadmap's 200k).
     pub fn from_scale(scale: usize) -> Self {
+        let software = (scale / 5).max(2);
         Shape {
             hosts: scale,
-            software: (scale / 5).max(1),
+            software,
             suppliers: (scale / 250).max(1),
             certificates: scale, // one cert per host
+            orphans: (software / 20).max(1),
         }
     }
 
     pub fn nodes(&self) -> usize {
         self.hosts + self.software + self.suppliers + self.certificates
+    }
+
+    /// Software indices hosts may run (the orphan tail is excluded).
+    fn runnable_software(&self) -> usize {
+        self.software.saturating_sub(self.orphans).max(1)
     }
 }
 
@@ -133,9 +145,10 @@ pub fn build(
 
         // RUNS: up to 3 distinct software packages (distinct so the edge
         // count is exact — a repeated key would collapse to one edge).
+        // Picks exclude the orphan tail, so those stay unreferenced.
         let mut runs = Vec::new();
         for _ in 0..3 {
-            let target = rng.below(shape.software);
+            let target = rng.below(shape.runnable_software());
             if !runs.contains(&target) {
                 runs.push(target);
             }

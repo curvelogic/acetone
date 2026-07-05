@@ -69,7 +69,10 @@ impl acetone_cypher::exec::VersionResolver for RepoResolver<'_> {
         let snapshot = self.repo.snapshot(refspec).map_err(|e| e.to_string())?;
         let nodes = snapshot.nodes().map_err(|e| e.to_string())?;
         let edges = snapshot.edges().map_err(|e| e.to_string())?;
-        Ok(Box::new(GraphSnapshot::from_records(&nodes, &edges)))
+        let schema = snapshot.schema_entries().map_err(|e| e.to_string())?;
+        Ok(Box::new(GraphSnapshot::from_records_with_schema(
+            &nodes, &edges, &schema,
+        )))
     }
 }
 
@@ -84,6 +87,7 @@ fn execute_query(
     let edges = snapshot.edges().context("reading edges")?;
     let schema = snapshot.schema_entries().context("reading schema")?;
 
+    let base = GraphSnapshot::from_records_with_schema(&nodes, &edges, &schema);
     let catalogue = catalogue_from_schema(schema);
     // Strict binding when the schema declares structure; a schema-free
     // repository (raw Phase 1 data) stays queryable under openCypher's
@@ -97,10 +101,7 @@ fn execute_query(
     let parsed = acetone_cypher::parse(cypher).map_err(|e| anyhow!("{}", e.render(cypher)))?;
     let bound = acetone_cypher::bind::bind(cypher, &parsed, &catalogue, mode)
         .map_err(|e| anyhow!("{}", e.render(cypher)))?;
-    let resolver = RepoResolver {
-        repo,
-        base: GraphSnapshot::from_records(&nodes, &edges),
-    };
+    let resolver = RepoResolver { repo, base };
     let result = acetone_cypher::exec::execute_versioned(&bound, &resolver, &BTreeMap::new())
         .map_err(|e| anyhow!("{e}"))?;
     Ok(result)

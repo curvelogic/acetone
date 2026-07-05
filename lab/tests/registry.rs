@@ -16,8 +16,9 @@ fn build_lab(scale: usize) -> (tempfile::TempDir, GraphSnapshot, Catalogue, (usi
     let snapshot = repo.workspace_snapshot().expect("snapshot");
     let nodes = snapshot.nodes().expect("nodes");
     let edges = snapshot.edges().expect("edges");
-    let graph = GraphSnapshot::from_records(&nodes, &edges);
-    let catalogue = catalogue_from_schema(snapshot.schema_entries().expect("schema"));
+    let schema = snapshot.schema_entries().expect("schema");
+    let graph = GraphSnapshot::from_records_with_schema(&nodes, &edges, &schema);
+    let catalogue = catalogue_from_schema(schema);
     (dir, graph, catalogue, counts)
 }
 
@@ -84,6 +85,66 @@ fn indexed_host_count_matches_the_generator() {
     assert!(
         matches!(rows[0][0], Value::Int(n) if n == expected),
         "debian host count"
+    );
+}
+
+#[test]
+fn orphaned_software_finds_the_seeded_orphans() {
+    let (_dir, graph, catalogue, _) = build_lab(300);
+    let rows = run(
+        &graph,
+        &catalogue,
+        "MATCH (s:Software) WHERE NOT (s)<-[:RUNS]-(:Host) RETURN count(*) AS n",
+    );
+    // The generator reserves an orphan tail of software (never RUNS-
+    // targeted), so this query has a real non-empty answer.
+    assert!(
+        matches!(rows[0][0], Value::Int(n) if n > 0),
+        "expected some orphans, got {:?}",
+        rows[0][0]
+    );
+}
+
+#[test]
+fn supply_chain_blast_radius_traverses_variable_length_deps() {
+    let (_dir, graph, catalogue, _) = build_lab(300);
+    // Anchoring on a KEY property (Supplier.name) works only because the
+    // adapter re-exposes key values as queryable properties.
+    let rows = run(
+        &graph,
+        &catalogue,
+        "MATCH (v:Supplier {name: 'supplier-0'})<-[:SUPPLIED_BY]-(s:Software) \
+         OPTIONAL MATCH (s)<-[:DEPENDS_ON*0..3]-(top:Software)<-[:RUNS]-(h:Host) \
+         RETURN count(DISTINCT h) AS exposed_hosts",
+    );
+    assert_eq!(rows.len(), 1);
+    // supplier-0 supplies software real hosts run (transitively), so the
+    // blast radius is non-empty — the var-length traversal did work.
+    assert!(
+        matches!(rows[0][0], Value::Int(n) if n > 0),
+        "blast radius should be non-empty, got {:?}",
+        rows[0][0]
+    );
+}
+
+#[test]
+fn key_properties_are_filterable_and_returnable() {
+    let (_dir, graph, catalogue, _) = build_lab(300);
+    // Host's key is `hostname`; the generator stores host keys as
+    // "host-<i>". Filtering and returning the key must work.
+    let rows = run(
+        &graph,
+        &catalogue,
+        "MATCH (h:Host {hostname: 'host-7'}) RETURN h.hostname AS hn, h.os AS os",
+    );
+    assert_eq!(rows.len(), 1, "exactly one host has that key");
+    assert!(
+        matches!(&rows[0][0], Value::String(s) if s == "host-7"),
+        "key returnable"
+    );
+    assert!(
+        matches!(&rows[0][1], Value::String(_)),
+        "non-key property still returnable"
     );
 }
 

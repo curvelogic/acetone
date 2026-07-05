@@ -20,28 +20,32 @@ query results.
 cargo run --release -p acetone-lab --bin lab -- /tmp/lab --scale 50000
 ```
 
-`--scale` is the host count; the rest scale proportionally
-(`--scale 50000` → ~110k nodes / ~220k edges, the roadmap's target).
+`--scale` is the host count; the rest scale proportionally. `--scale
+50000` → ~110k nodes / ~220k edges: the edge total matches the roadmap's
+~200k, and the node total exceeds 50k because `scale` counts hosts while
+software, suppliers and certificates also contribute nodes.
 
 ## Interactive latency (evidence for the Phase 2 report)
 
-At `--scale 50000` (110,200 nodes / 219,991 edges), all five registry
+At `--scale 50000` (110,200 nodes / 219,985 edges), all five registry
 queries run at interactive latency once the graph is indexed:
 
 | query                                             | rows | latency |
 |---------------------------------------------------|-----:|--------:|
-| certificate expiry sweep                          |  100 |  ~210 ms |
-| orphaned software                                 |    0 |  ~145 ms |
-| supply-chain blast radius (var-length deps)       |    1 |  ~0.1 ms |
-| hosts by OS (indexed property)                    |    1 |   ~36 ms |
-| critical hosts running a DE-supplier package      |    1 |  ~1.0 s |
+| certificate expiry sweep                          |  100 |  ~220 ms |
+| orphaned software                                 |  500 |  ~160 ms |
+| supply-chain blast radius (var-length deps)       |    1 |  ~130 ms |
+| hosts by OS (indexed property)                    |    1 |   ~35 ms |
+| critical hosts running a DE-supplier package      |    1 |  ~1.1 s |
 
 (Wall-clock on the developer machine; not asserted as a hard CI threshold
 — machine-dependent. The correctness of each query is asserted in
 `tests/registry.rs` at a small deterministic scale.)
 
-The heaviest query — a full-graph two-hop join over every host — is ~1 s;
-the point, scan, expiry and expansion queries are all well under 250 ms.
+The heaviest query — a full-graph two-hop join over every host — is ~1 s
+(at the edge of interactive; a candidate for the streaming/planner work
+beyond 0.1); the point, scan, expiry and expansion queries are all well
+under 250 ms.
 
 **This drove a real fix.** The first full-scale run took 30 s, 21 s and
 **147 s** on the three multi-hop queries: the executor's graph adapter

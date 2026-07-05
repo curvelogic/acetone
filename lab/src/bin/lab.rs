@@ -67,7 +67,7 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
     let node_records = snapshot.nodes()?;
     let edge_records = snapshot.edges()?;
     let schema = snapshot.schema_entries()?;
-    let graph = GraphSnapshot::from_records(&node_records, &edge_records);
+    let graph = GraphSnapshot::from_records_with_schema(&node_records, &edge_records, &schema);
     let catalogue = catalogue_from_schema(schema);
     println!(
         "Loaded {} nodes / {} edges into the query engine in {:.2}s.\n",
