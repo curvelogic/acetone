@@ -13,7 +13,9 @@
 //! - Everything else is **Unsupported**, split by the missing capability.
 
 use acetone_cypher::bind::{BindError, BindMode, Catalogue, bind};
+use acetone_cypher::exec::{self, EmptyGraph, ExecError};
 
+use crate::expected;
 use crate::scenario::{Expectation, ScenarioPlan};
 use crate::vocabulary::ErrorPhase;
 
@@ -211,22 +213,94 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
             }
             FrontEnd::Accepted => Verdict::Unsupported(UnsupportedReason::Executor),
         },
-        Expectation::Rows | Expectation::EmptyResult | Expectation::None => match &front_end {
-            FrontEnd::ParseRejected(e) if !uses_deferred_syntax(query) => Verdict::Failed {
-                reason: format!("TCK requires this query to be valid, parser rejected it: {e}"),
-            },
-            FrontEnd::BindRejected(e)
-                if !uses_deferred_syntax(query) && !is_deferred_bind_error(e) =>
-            {
+        expectation @ (Expectation::Rows { .. } | Expectation::EmptyResult | Expectation::None) => {
+            match &front_end {
+                FrontEnd::ParseRejected(e) if !uses_deferred_syntax(query) => Verdict::Failed {
+                    reason: format!("TCK requires this query to be valid, parser rejected it: {e}"),
+                },
+                FrontEnd::BindRejected(e)
+                    if !uses_deferred_syntax(query) && !is_deferred_bind_error(e) =>
+                {
+                    Verdict::Failed {
+                        reason: format!(
+                            "TCK requires this query to be valid, binder rejected it: {e}"
+                        ),
+                    }
+                }
+                FrontEnd::ParseRejected(_) | FrontEnd::BindRejected(_) => {
+                    Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+                }
+                FrontEnd::Accepted => execute_and_verify(plan, query, expectation),
+            }
+        }
+    }
+}
+
+/// Execute a front-end-accepted scenario when its fixtures need nothing
+/// the executor lacks (graph setup needs the Phase 3 write path; named
+/// fixture graphs, parameter tables and stub procedures need harness
+/// plumbing), and verify the result against the expected table.
+fn execute_and_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectation) -> Verdict {
+    let executable = plan.setup_queries.is_empty()
+        && plan.named_graph.is_none()
+        && !plan.has_parameters
+        && !plan.needs_procedures;
+    if !executable {
+        return Verdict::Unsupported(UnsupportedReason::Executor);
+    }
+    let outcome = exec::run_query(query, &EmptyGraph, &std::collections::BTreeMap::new());
+    let result = match outcome {
+        // Feature gaps stay Unsupported; genuine runtime failures on a
+        // scenario the TCK requires to succeed are defects.
+        Err(exec::QueryError::Exec(ExecError::Unsupported { .. })) => {
+            return Verdict::Unsupported(UnsupportedReason::Executor);
+        }
+        Err(e) => {
+            return Verdict::Failed {
+                reason: format!("TCK requires this query to succeed, execution failed: {e}"),
+            };
+        }
+        Ok(result) => result,
+    };
+    match expectation {
+        Expectation::EmptyResult => {
+            if result.rows.is_empty() {
+                Verdict::Passed
+            } else {
                 Verdict::Failed {
-                    reason: format!("TCK requires this query to be valid, binder rejected it: {e}"),
+                    reason: format!("expected an empty result, got {} rows", result.rows.len()),
                 }
             }
-            FrontEnd::ParseRejected(_) | FrontEnd::BindRejected(_) => {
-                Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+        }
+        Expectation::Rows {
+            header,
+            rows,
+            ordered,
+            lists_unordered,
+        } => {
+            if *lists_unordered {
+                // List-order-insensitive comparison is not modelled yet.
+                return Verdict::Unsupported(UnsupportedReason::Executor);
             }
-            FrontEnd::Accepted => Verdict::Unsupported(UnsupportedReason::Executor),
-        },
+            match expected::parse_table(header, rows, *ordered) {
+                Err(expected::ExpectedError::UnsupportedNotation(_)) => {
+                    Verdict::Unsupported(UnsupportedReason::Executor)
+                }
+                Err(expected::ExpectedError::Malformed(cell)) => Verdict::Failed {
+                    reason: format!("harness cannot parse expected cell {cell:?}"),
+                },
+                Ok(table) => match expected::compare(&table, &result) {
+                    None => Verdict::Passed,
+                    Some(mismatch) => Verdict::Failed {
+                        reason: format!("result mismatch: {mismatch}"),
+                    },
+                },
+            }
+        }
+        // No modelled outcome: executing without error is all we can
+        // check, which is not verification.
+        Expectation::None => Verdict::Unsupported(UnsupportedReason::Executor),
+        Expectation::Error { .. } => unreachable!("handled by caller"),
     }
 }
 
@@ -306,29 +380,60 @@ mod tests {
         );
     }
 
+    fn rows(header: &[&str], cells: &[&[&str]], ordered: bool) -> Expectation {
+        Expectation::Rows {
+            header: header.iter().map(|s| s.to_string()).collect(),
+            rows: cells
+                .iter()
+                .map(|row| row.iter().map(|s| s.to_string()).collect())
+                .collect(),
+            ordered,
+            lists_unordered: false,
+        }
+    }
+
     #[test]
     fn valid_query_that_fails_to_parse_is_a_failure() {
         // A read query the TCK expects to succeed; if the parser rejected
         // it, that must surface as Failed, not vanish into Unsupported.
-        let verdict = classify(&plan("MATCH (n) RETURN n", Expectation::Rows));
-        assert_eq!(verdict, Verdict::Unsupported(UnsupportedReason::Executor));
+        // (An empty graph makes MATCH yield no rows: expected table empty.)
+        let verdict = classify(&plan("MATCH (n) RETURN n", rows(&["n"], &[], false)));
+        assert_eq!(verdict, Verdict::Passed);
 
-        let verdict = classify(&plan("MATCH (n) RETURN n AS", Expectation::Rows));
+        let verdict = classify(&plan("MATCH (n) RETURN n AS", rows(&["n"], &[], false)));
         assert!(matches!(verdict, Verdict::Failed { .. }));
     }
 
     #[test]
     fn deferred_syntax_is_unsupported_not_failed() {
-        let verdict = classify(&plan("CREATE (n) RETURN n", Expectation::Rows));
+        let verdict = classify(&plan("CREATE (n) RETURN n", rows(&["n"], &[], false)));
         assert_eq!(
             verdict,
             Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
         );
-        let verdict = classify(&plan("FOREACH (x IN [1] | SET n.p = x)", Expectation::Rows));
+        let verdict = classify(&plan(
+            "FOREACH (x IN [1] | SET n.p = x)",
+            rows(&["n"], &[], false),
+        ));
         assert_eq!(
             verdict,
             Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
         );
+    }
+
+    #[test]
+    fn execution_verifies_results() {
+        // A pure-expression scenario is executed and verified for real.
+        let verdict = classify(&plan("RETURN 1 + 2 AS x", rows(&["x"], &[&["3"]], false)));
+        assert_eq!(verdict, Verdict::Passed);
+        // A wrong expectation is a failure, not an accident.
+        let verdict = classify(&plan("RETURN 1 + 2 AS x", rows(&["x"], &[&["4"]], false)));
+        assert!(matches!(verdict, Verdict::Failed { .. }));
+        // Integer vs float expectations are distinct.
+        let verdict = classify(&plan("RETURN 2 ^ 2 AS x", rows(&["x"], &[&["4"]], false)));
+        assert!(matches!(verdict, Verdict::Failed { .. }));
+        let verdict = classify(&plan("RETURN 2 ^ 2 AS x", rows(&["x"], &[&["4.0"]], false)));
+        assert_eq!(verdict, Verdict::Passed);
     }
 
     #[test]

@@ -263,6 +263,28 @@ impl Expr {
         }
     }
 
+    /// Overwrite this node's span (parenthesised expressions cover their
+    /// parentheses for faithful source rendering).
+    pub fn set_span(&mut self, new_span: Span) {
+        match self {
+            Expr::Literal { span, .. }
+            | Expr::Parameter { span, .. }
+            | Expr::Variable { span, .. }
+            | Expr::Property { span, .. }
+            | Expr::Unary { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::IsNull { span, .. }
+            | Expr::FunctionCall { span, .. }
+            | Expr::Case { span, .. }
+            | Expr::ListLiteral { span, .. }
+            | Expr::ListComprehension { span, .. }
+            | Expr::MapLiteral { span, .. }
+            | Expr::Index { span, .. }
+            | Expr::Slice { span, .. }
+            | Expr::PatternPredicate { span, .. } => *span = new_span,
+        }
+    }
+
     /// Borrow every direct child expression, including those buried in an
     /// embedded pattern's property maps. Keep in step with
     /// [`Expr::take_children`].

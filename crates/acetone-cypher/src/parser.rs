@@ -723,7 +723,7 @@ impl Parser {
     }
 
     fn expr_comparison(&mut self) -> Result<Expr, ParseError> {
-        let mut lhs = self.expr_additive()?;
+        let mut lhs = self.expr_string_list()?;
         loop {
             let op = if self.eat(&TokenKind::Eq) {
                 BinaryOp::Eq
@@ -737,7 +737,29 @@ impl Parser {
                 BinaryOp::Lt
             } else if self.eat(&TokenKind::Gt) {
                 BinaryOp::Gt
-            } else if self.eat(&TokenKind::RegexEq) {
+            } else {
+                break;
+            };
+            let rhs = self.expr_string_list()?;
+            let span = lhs.span().to(rhs.span());
+            lhs = Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                span,
+            };
+        }
+        Ok(lhs)
+    }
+
+    /// String/list operators (`IN`, `STARTS WITH`, `ENDS WITH`,
+    /// `CONTAINS`, `=~`) bind tighter than comparison, per openCypher
+    /// (TCK Precedence1 [11], Precedence3 [6]: `false = true IN [...]`
+    /// is `false = (true IN [...])`).
+    fn expr_string_list(&mut self) -> Result<Expr, ParseError> {
+        let mut lhs = self.expr_additive()?;
+        loop {
+            let op = if self.eat(&TokenKind::RegexEq) {
                 BinaryOp::RegexMatch
             } else if self.at_kw("IN") {
                 self.bump();
@@ -814,20 +836,17 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// Right-associative `^`, folded iteratively so `1^1^1^...` cannot
-    /// recurse.
+    /// Left-associative `^` (openCypher/Neo4j semantics, pinned by TCK
+    /// Precedence2: `4 ^ (3 * 2) ^ 3` is `(4^6)^3`), folded in a loop.
     fn expr_power(&mut self) -> Result<Expr, ParseError> {
-        let mut operands = vec![self.expr_unary()?];
+        let mut expr = self.expr_unary()?;
         while self.eat(&TokenKind::Caret) {
-            operands.push(self.expr_unary()?);
-        }
-        let mut expr = operands.pop().expect("at least one operand");
-        while let Some(lhs) = operands.pop() {
-            let span = lhs.span().to(expr.span());
+            let rhs = self.expr_unary()?;
+            let span = expr.span().to(rhs.span());
             expr = Expr::Binary {
                 op: BinaryOp::Pow,
-                lhs: Box::new(lhs),
-                rhs: Box::new(expr),
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
                 span,
             };
         }
@@ -1194,9 +1213,12 @@ impl Parser {
                 span,
             });
         }
-        self.expect(&TokenKind::LParen, "'('")?;
-        let inner = self.expression()?;
-        self.expect(&TokenKind::RParen, "')' to close the expression")?;
+        let open = self.expect(&TokenKind::LParen, "'('")?;
+        let mut inner = self.expression()?;
+        let close = self.expect(&TokenKind::RParen, "')' to close the expression")?;
+        // The expression's span covers the parentheses, so derived
+        // column names (`RETURN (x)`) render faithfully.
+        inner.set_span(open.span.to(close.span));
         Ok(inner)
     }
 
@@ -1356,17 +1378,18 @@ mod tests {
             }
         ));
 
+        // Left-associative per openCypher (TCK Precedence2).
         let q = parse_ok("RETURN 2 ^ 3 ^ 4");
         let Expr::Binary {
             op: BinaryOp::Pow,
-            rhs,
+            lhs: pow_lhs,
             ..
         } = only_return_expr(&q)
         else {
             panic!("expected ^ at the top");
         };
         assert!(matches!(
-            **rhs,
+            **pow_lhs,
             Expr::Binary {
                 op: BinaryOp::Pow,
                 ..

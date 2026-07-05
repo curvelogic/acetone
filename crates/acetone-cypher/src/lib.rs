@@ -14,6 +14,7 @@
 pub mod ast;
 pub mod bind;
 pub mod error;
+pub mod exec;
 pub mod lex;
 pub mod parser;
 pub mod span;
