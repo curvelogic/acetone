@@ -8,7 +8,7 @@
 //! which stored version's records to hand in (the CLI reads at a resolved
 //! ref); clause-group `AT` inside a query stays with acetone-yzc.7.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use acetone_model::Value as ModelValue;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
@@ -21,29 +21,61 @@ use crate::exec::source::GraphSource;
 use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
 /// A materialised snapshot of a stored graph version, ready to execute
-/// against.
+/// against. Indexed at construction — node lookup, label scan and edge
+/// expansion must be sub-linear or realistic graphs are unqueryable
+/// (a linear scan per expand is O(nodes·edges) over a whole MATCH).
 #[derive(Debug, Default)]
 pub struct GraphSnapshot {
     nodes: Vec<NodeValue>,
     rels: Vec<RelValue>,
+    /// Node id → index into `nodes` (point lookup / neighbour resolve).
+    by_id: HashMap<EntityId, usize>,
+    /// Label → node indices (LabelScan; the empty-label "all" case reads
+    /// `nodes` directly).
+    by_label: HashMap<String, Vec<usize>>,
+    /// Node id → indices into `rels` of edges leaving it (ExpandOut).
+    out_edges: HashMap<EntityId, Vec<usize>>,
+    /// Node id → indices into `rels` of edges entering it (ExpandIn).
+    in_edges: HashMap<EntityId, Vec<usize>>,
 }
 
 impl GraphSnapshot {
     /// Build from a version's node and edge records (e.g. from a
-    /// `Repository`/`Snapshot`'s `nodes()` and `edges()`).
+    /// `Repository`/`Snapshot`'s `nodes()` and `edges()`), constructing
+    /// the id/label/adjacency indexes.
     pub fn from_records(nodes: &[(NodeKey, NodeRecord)], edges: &[(EdgeKey, EdgeRecord)]) -> Self {
-        let node_values = nodes
+        let node_values: Vec<NodeValue> = nodes
             .iter()
             .map(|(key, record)| node_value(key, record))
             .collect();
-        let rel_values = edges
+        let rel_values: Vec<RelValue> = edges
             .iter()
             .enumerate()
             .map(|(index, (key, record))| rel_value(index, key, record))
             .collect();
+
+        let mut by_id = HashMap::with_capacity(node_values.len());
+        let mut by_label: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, node) in node_values.iter().enumerate() {
+            by_id.insert(node.id.clone(), index);
+            for label in &node.labels {
+                by_label.entry(label.clone()).or_default().push(index);
+            }
+        }
+        let mut out_edges: HashMap<EntityId, Vec<usize>> = HashMap::new();
+        let mut in_edges: HashMap<EntityId, Vec<usize>> = HashMap::new();
+        for (index, rel) in rel_values.iter().enumerate() {
+            out_edges.entry(rel.start.clone()).or_default().push(index);
+            in_edges.entry(rel.end.clone()).or_default().push(index);
+        }
+
         GraphSnapshot {
             nodes: node_values,
             rels: rel_values,
+            by_id,
+            by_label,
+            out_edges,
+            in_edges,
         }
     }
 
@@ -53,6 +85,32 @@ impl GraphSnapshot {
 
     pub fn rel_count(&self) -> usize {
         self.rels.len()
+    }
+
+    /// Resolve a rel index's neighbour in `direction` from `node`, if this
+    /// rel is incident the right way and its type matches.
+    fn incident(
+        &self,
+        rel_index: usize,
+        node: &EntityId,
+        types: &[String],
+    ) -> Option<(RelValue, NodeValue)> {
+        let rel = &self.rels[rel_index];
+        if !types.is_empty() && !types.contains(&rel.rel_type) {
+            return None;
+        }
+        let neighbour_id = if rel.start == *node {
+            &rel.end
+        } else if rel.end == *node {
+            &rel.start
+        } else {
+            return None;
+        };
+        let neighbour = self
+            .by_id
+            .get(neighbour_id)
+            .map(|&i| self.nodes[i].clone())?;
+        Some((rel.clone(), neighbour))
     }
 }
 
@@ -143,33 +201,58 @@ impl GraphSource for GraphSnapshot {
         self.nodes.clone()
     }
 
+    fn nodes_by_labels(&self, labels: &[String]) -> Vec<NodeValue> {
+        let Some((first, rest)) = labels.split_first() else {
+            return self.nodes.clone();
+        };
+        // LabelScan on the (typically most selective) first label via the
+        // index, then filter by any remaining labels.
+        match self.by_label.get(first) {
+            None => Vec::new(),
+            Some(indices) => indices
+                .iter()
+                .map(|&i| &self.nodes[i])
+                .filter(|node| rest.iter().all(|l| node.labels.contains(l)))
+                .cloned()
+                .collect(),
+        }
+    }
+
     fn expand(
         &self,
         node: &EntityId,
         direction: Direction,
         types: &[String],
     ) -> Vec<(RelValue, NodeValue)> {
+        // Walk only the edges incident to `node` (O(degree)), via the
+        // adjacency indexes, not the whole edge set.
         let mut out = Vec::new();
-        for rel in &self.rels {
-            if !types.is_empty() && !types.contains(&rel.rel_type) {
-                continue;
-            }
-            let neighbour = match direction {
-                Direction::Out if rel.start == *node => &rel.end,
-                Direction::In if rel.end == *node => &rel.start,
-                Direction::Undirected if rel.start == *node => &rel.end,
-                Direction::Undirected if rel.end == *node => &rel.start,
-                _ => continue,
-            };
-            if let Some(neighbour) = self.node(neighbour) {
-                out.push((rel.clone(), neighbour));
+        if matches!(direction, Direction::Out | Direction::Undirected)
+            && let Some(indices) = self.out_edges.get(node)
+        {
+            out.extend(
+                indices
+                    .iter()
+                    .filter_map(|&i| self.incident(i, node, types)),
+            );
+        }
+        if matches!(direction, Direction::In | Direction::Undirected)
+            && let Some(indices) = self.in_edges.get(node)
+        {
+            // A self-loop appears in both out_edges and in_edges; skip the
+            // second sighting under Undirected so it is not double-counted.
+            for &i in indices {
+                if direction == Direction::Undirected && self.rels[i].start == *node {
+                    continue;
+                }
+                out.extend(self.incident(i, node, types));
             }
         }
         out
     }
 
     fn node(&self, id: &EntityId) -> Option<NodeValue> {
-        self.nodes.iter().find(|n| n.id == *id).cloned()
+        self.by_id.get(id).map(|&i| self.nodes[i].clone())
     }
 }
 
@@ -254,5 +337,73 @@ mod tests {
         .unwrap();
         let result = execute(&bound, &snapshot, &BTreeMap::new()).unwrap();
         assert!(matches!(result.rows[0][0], ExecValue::Int(0)));
+    }
+
+    /// The adjacency index must match the old linear scan's semantics:
+    /// direction filtering, self-loops counted once under an undirected
+    /// match, and parallel edges each surfaced.
+    #[test]
+    fn indexed_expand_handles_self_loops_and_parallel_edges() {
+        use crate::exec::source::GraphSource;
+
+        let nodes = vec![
+            (node_key("N", "a"), NodeRecord::new([], BTreeMap::new())),
+            (node_key("N", "b"), NodeRecord::new([], BTreeMap::new())),
+        ];
+        // A self-loop on a, and two parallel a->b edges of different types.
+        let edges = vec![
+            (
+                EdgeKey::new(
+                    node_key("N", "a"),
+                    "LOOP",
+                    node_key("N", "a"),
+                    ModelValue::Null,
+                )
+                .unwrap(),
+                EdgeRecord::new(BTreeMap::new()),
+            ),
+            (
+                EdgeKey::new(
+                    node_key("N", "a"),
+                    "R",
+                    node_key("N", "b"),
+                    ModelValue::Null,
+                )
+                .unwrap(),
+                EdgeRecord::new(BTreeMap::new()),
+            ),
+            (
+                EdgeKey::new(
+                    node_key("N", "a"),
+                    "S",
+                    node_key("N", "b"),
+                    ModelValue::Null,
+                )
+                .unwrap(),
+                EdgeRecord::new(BTreeMap::new()),
+            ),
+        ];
+        let snapshot = GraphSnapshot::from_records(&nodes, &edges);
+        let a = node_entity_id(&node_key("N", "a"));
+
+        // Outgoing from a: the loop + both parallel edges = 3.
+        assert_eq!(snapshot.expand(&a, Direction::Out, &[]).len(), 3);
+        // Undirected from a: the self-loop counts once (not twice), plus
+        // the two parallel edges = 3.
+        assert_eq!(snapshot.expand(&a, Direction::Undirected, &[]).len(), 3);
+        // Incoming to a: only the self-loop.
+        assert_eq!(snapshot.expand(&a, Direction::In, &[]).len(), 1);
+        // Type filter selects one parallel edge.
+        assert_eq!(
+            snapshot
+                .expand(&a, Direction::Out, &["R".to_string()])
+                .len(),
+            1
+        );
+
+        // The label index resolves the same nodes as a full scan.
+        assert_eq!(snapshot.nodes_by_labels(&["N".to_string()]).len(), 2);
+        assert_eq!(snapshot.nodes_by_labels(&["Missing".to_string()]).len(), 0);
+        assert!(snapshot.node(&a).is_some());
     }
 }

@@ -13,6 +13,7 @@ members = [
     "crates/acetone-cli",
     "benches",
     "tck",
+    "lab",
 ]
 
 [workspace.package]
