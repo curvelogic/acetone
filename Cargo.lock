@@ -47,6 +47,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "acetone-lab"
+version = "0.0.1"
+dependencies = [
+ "acetone-cypher",
+ "acetone-graph",
+ "acetone-model",
+ "tempfile",
+]
+
+[[package]]
 name = "acetone-model"
 version = "0.0.1"
 dependencies = [

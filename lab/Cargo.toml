@@ -1,0 +1,21 @@
+[package]
+name = "acetone-lab"
+description = "Lab asset-registry graph generator and registry query suite (Phase 2 exit evidence)"
+version.workspace = true
+publish.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+acetone-graph.workspace = true
+acetone-model.workspace = true
+acetone-cypher.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "lab"
+path = "src/bin/lab.rs"
