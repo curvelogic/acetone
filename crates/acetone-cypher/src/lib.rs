@@ -6,10 +6,13 @@
 //! and the pass rate is published per release.
 //!
 //! Current surface: the parser (spec §5.1 Level R read subset plus the
-//! `AT <ref>` extension and `CALL ... YIELD` of §5.2). Binder, planner and
-//! executor follow under Phase 2.
+//! `AT <ref>` extension and `CALL ... YIELD` of §5.2) and the binder
+//! (name resolution, scoping and aggregation validation against a schema
+//! catalogue, lowering to the bound IR). Planner and executor follow
+//! under Phase 2.
 
 pub mod ast;
+pub mod bind;
 pub mod error;
 pub mod lex;
 pub mod parser;
