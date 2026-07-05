@@ -665,6 +665,55 @@ fn query_output_sanitises_hostile_strings() {
     let text = stdout(&out);
     assert!(!text.contains('\u{1b}'), "raw ESC reached JSON output");
     assert!(text.contains("\\u001b"), "JSON must \\u-escape the ESC");
+    // JSON must also escape DEL and C1 controls (Phase 2 security review
+    // MINOR-1: align json_string with sanitise_line's coverage).
+    assert!(!text.contains('\u{7}'), "raw BEL reached JSON output");
+}
+
+/// The shell `:log` command must sanitise commit subjects (Phase 2
+/// security review MAJOR-3: a hostile clone's escape-bearing commit
+/// subject must not reach the terminal raw through the REPL).
+#[test]
+fn shell_log_sanitises_hostile_commit_subjects() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    let out = acetone(&repo, &["commit", "-m", "seed\u{1b}[31mHACK\u{7}"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "shell"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn shell");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b":log\n:quit\n")
+        .expect("write");
+    let out = child.wait_with_output().expect("wait");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains('\u{1b}'),
+        "raw ESC reached shell :log output"
+    );
+    assert!(!text.contains('\u{7}'), "raw BEL reached shell :log output");
+    assert!(
+        text.contains("\\u{1b}"),
+        "escaped form must be visible: {text}"
+    );
 }
 
 /// The shell REPL runs queries and meta-commands from stdin.
