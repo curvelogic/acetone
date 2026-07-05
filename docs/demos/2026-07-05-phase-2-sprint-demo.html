@@ -1,0 +1,370 @@
+<title>acetone — sprint demo: Phase 2</title>
+<style>
+  :root {
+    --paper: #fbfbf9;
+    --ink: #1a2321;
+    --muted: #5c6b66;
+    --accent: #0f6f5c;
+    --accent-soft: #e7f1ee;
+    --amber: #b0700a;
+    --amber-soft: #f8efe0;
+    --hairline: #e3e7e4;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #121613;
+      --ink: #e7ece9;
+      --muted: #93a29c;
+      --accent: #4fd0b3;
+      --accent-soft: #17352d;
+      --amber: #e2a24a;
+      --amber-soft: #35280f;
+      --hairline: #26302b;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #fbfbf9; --ink: #1a2321; --muted: #5c6b66; --accent: #0f6f5c;
+    --accent-soft: #e7f1ee; --amber: #b0700a; --amber-soft: #f8efe0; --hairline: #e3e7e4;
+  }
+  :root[data-theme="dark"] {
+    --paper: #121613; --ink: #e7ece9; --muted: #93a29c; --accent: #4fd0b3;
+    --accent-soft: #17352d; --amber: #e2a24a; --amber-soft: #35280f; --hairline: #26302b;
+  }
+  html { scroll-snap-type: y proximity; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    margin: 0;
+  }
+  .slide {
+    min-height: 100vh; box-sizing: border-box;
+    scroll-snap-align: start;
+    display: flex; flex-direction: column; justify-content: center;
+    max-width: 900px; margin: 0 auto;
+    padding: 56px 32px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+  }
+  .eyebrow .n { color: var(--muted); }
+  h1, h2 {
+    font-family: var(--mono); font-weight: 600; text-wrap: balance;
+    margin: 0 0 20px; line-height: 1.2;
+  }
+  h1 { font-size: 40px; }
+  h2 { font-size: 28px; }
+  h3 { font-size: 16px; font-family: var(--mono); margin: 28px 0 8px; }
+  p, li { max-width: 64ch; }
+  p.lead { font-size: 19px; color: var(--ink); }
+  .muted { color: var(--muted); }
+  ul { padding-left: 1.2em; margin: 10px 0; }
+  li { margin: 6px 0; }
+  li::marker { color: var(--accent); }
+  code, .k {
+    font-family: var(--mono); font-size: 0.92em;
+    background: var(--accent-soft); border-radius: 3px; padding: 1px 5px;
+  }
+  table {
+    border-collapse: collapse; font-size: 14.5px; margin: 14px 0;
+    font-variant-numeric: tabular-nums; width: 100%;
+  }
+  .tablewrap { overflow-x: auto; }
+  th { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
+       text-transform: uppercase; color: var(--muted); text-align: left; }
+  th, td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  td.num { font-family: var(--mono); white-space: nowrap; text-align: right; }
+  .good { color: var(--accent); font-weight: 600; }
+  .warn { color: var(--amber); font-weight: 600; }
+  .callout {
+    border-left: 3px solid var(--amber); background: var(--amber-soft);
+    padding: 14px 18px; margin: 18px 0; max-width: 64ch;
+  }
+  .callout.ok { border-left-color: var(--accent); background: var(--accent-soft); }
+  .callout p { margin: 4px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 40px; }
+  @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  .bignum { font-family: var(--mono); font-size: 44px; font-weight: 700; line-height: 1; }
+  .bignum small { font-size: 15px; font-weight: 400; color: var(--muted); display: block; margin-top: 6px; }
+  .stats { display: flex; gap: 48px; flex-wrap: wrap; margin: 24px 0; }
+  .footer-hint { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 32px; }
+  a { color: var(--accent); }
+  figure { margin: 22px 0; }
+  figure svg { width: 100%; height: auto; max-width: 720px; display: block; }
+  figcaption { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 10px; max-width: 60ch; }
+  .dgm-label { font-family: var(--mono); font-size: 12px; fill: var(--muted); }
+  .dgm-box { font-family: var(--mono); font-size: 12.5px; fill: var(--ink); }
+  pre {
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+    background: var(--accent-soft); border-radius: 6px; padding: 14px 18px;
+    overflow-x: auto; max-width: 100%;
+  }
+</style>
+
+<!-- ─── Slide 1 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">1/12</span> · sprint demo · 5 July 2026</p>
+  <h1>acetone — Phase 2</h1>
+  <p class="lead">The openCypher read path. You can now ask a version-controlled
+  property graph real questions — parse, bind, plan, execute, and travel through
+  history — from a CLI, at interactive latency on a 50k-host graph.</p>
+  <p>Phase 1 made the format real: bytes, maps, manifest, commits, a CLI. Phase 2
+  puts a query language on top of it — a hand-built Cypher front end, a binder, an
+  iterator-model executor, TCK conformance tracking, and <code>AT &lt;ref&gt;</code>
+  time travel — all through the adversarial review gate.</p>
+  <p class="muted">This deck: where we are, what shipped, the decisions taken, what
+  review and the security pass caught, and what's open. Then a live demo, step by
+  step; then the docs are yours.</p>
+  <p class="footer-hint">scroll ↓ · 12 slides</p>
+</section>
+
+<!-- ─── Slide 2 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">2/12</span> · where we are</p>
+  <h2>Phase 2 complete bar your gate review</h2>
+  <div class="stats">
+    <div class="bignum">11<small>PRs merged this phase (#29–#39),<br>every one reviewer-signed</small></div>
+    <div class="bignum">8<small>of 9 yzc exit beads closed<br>(exit bead yzc.9 awaiting you)</small></div>
+    <div class="bignum">1<small>ADR taken<br>(0013 — Gate B)</small></div>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th>Layer</th><th>State</th></tr>
+    <tr><td><code>acetone-cypher</code> — lexer, parser, spanned AST (+ quantifiers/reduce)</td><td class="good">shipped (#30, #36)</td></tr>
+    <tr><td>&nbsp;&nbsp;· binder — scoping, aggregation, Strict/Lenient modes</td><td class="good">shipped (#33)</td></tr>
+    <tr><td>&nbsp;&nbsp;· executor — value semantics, pattern matcher, clause pipeline</td><td class="good">shipped (#34)</td></tr>
+    <tr><td>&nbsp;&nbsp;· <code>AT &lt;ref&gt;</code> clause-group time travel</td><td class="good">shipped (#37)</td></tr>
+    <tr><td><code>acetone-cli</code> — <code>query</code> (table/JSON/CSV) + <code>shell</code> REPL</td><td class="good">shipped (#35)</td></tr>
+    <tr><td><code>tck</code> — openCypher conformance harness + published report</td><td class="good">shipped (#32)</td></tr>
+    <tr><td><code>acetone-lab</code> — 50k-host registry + realistic queries</td><td class="good">shipped (#38)</td></tr>
+  </table></div>
+  <p class="footer-hint">plus a CLI broken-pipe fix (#31) and the security follow-up (#39).</p>
+</section>
+
+<!-- ─── Slide 3 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">3/12</span> · the read pipeline</p>
+  <h2>Query text → answer, in five stages</h2>
+  <figure>
+    <svg viewBox="0 0 720 200" role="img" aria-label="The read pipeline: parse, bind, plan, execute over a graph snapshot, render; with AT ref time travel feeding the snapshot.">
+      <defs>
+        <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)"/>
+        </marker>
+      </defs>
+      <g>
+        <rect x="2" y="40" width="104" height="44" rx="5" fill="var(--accent-soft)" stroke="var(--hairline)"/>
+        <text x="54" y="66" text-anchor="middle" class="dgm-box">parse</text>
+        <rect x="146" y="40" width="104" height="44" rx="5" fill="var(--accent-soft)" stroke="var(--hairline)"/>
+        <text x="198" y="66" text-anchor="middle" class="dgm-box">bind</text>
+        <rect x="290" y="40" width="104" height="44" rx="5" fill="var(--accent-soft)" stroke="var(--hairline)"/>
+        <text x="342" y="66" text-anchor="middle" class="dgm-box">plan</text>
+        <rect x="434" y="40" width="120" height="44" rx="5" fill="var(--accent-soft)" stroke="var(--hairline)"/>
+        <text x="494" y="66" text-anchor="middle" class="dgm-box">execute</text>
+        <rect x="594" y="40" width="120" height="44" rx="5" fill="var(--accent-soft)" stroke="var(--hairline)"/>
+        <text x="654" y="66" text-anchor="middle" class="dgm-box">render</text>
+        <line x1="106" y1="62" x2="142" y2="62" stroke="var(--muted)" marker-end="url(#ar)"/>
+        <line x1="250" y1="62" x2="286" y2="62" stroke="var(--muted)" marker-end="url(#ar)"/>
+        <line x1="394" y1="62" x2="430" y2="62" stroke="var(--muted)" marker-end="url(#ar)"/>
+        <line x1="554" y1="62" x2="590" y2="62" stroke="var(--muted)" marker-end="url(#ar)"/>
+        <text x="54" y="30" text-anchor="middle" class="dgm-label">spanned AST</text>
+        <text x="198" y="30" text-anchor="middle" class="dgm-label">names + schema</text>
+        <text x="342" y="30" text-anchor="middle" class="dgm-label">operators</text>
+        <text x="494" y="30" text-anchor="middle" class="dgm-label">rows</text>
+        <text x="654" y="30" text-anchor="middle" class="dgm-label">table/json/csv</text>
+        <rect x="380" y="130" width="228" height="40" rx="5" fill="var(--amber-soft)" stroke="var(--hairline)"/>
+        <text x="494" y="155" text-anchor="middle" class="dgm-box">GraphSnapshot @ AT &lt;ref&gt;</text>
+        <line x1="494" y1="130" x2="494" y2="86" stroke="var(--muted)" marker-end="url(#ar)"/>
+        <text x="612" y="154" class="dgm-label">version-addressed</text>
+      </g>
+    </svg>
+    <figcaption>A Volcano-style iterator model over a provider-pluggable
+    GraphSource. The executor is decoupled from storage — the CLI hands it a
+    snapshot read at a resolved commit, so time travel is a data choice, not an
+    engine change.</figcaption>
+  </figure>
+</section>
+
+<!-- ─── Slide 4 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">4/12</span> · decision · Gate B</p>
+  <h2>Build the parser, don't adopt one</h2>
+  <p>Gate B is a mid-phase gate, so it was settled by ADR (0013) with running-code
+  evidence — the same adopt-vs-build discipline as Gate A's prollytree call.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Representative query set</th><th class="num">parsed</th></tr>
+    <tr><td><code>decypher</code> 0.2.0-alpha.6 (candidate dependency)</td><td class="num warn">26 / 31</td></tr>
+    <tr><td>hand-built slice in <code>acetone-cypher</code></td><td class="num good">31 / 31</td></tr>
+  </table></div>
+  <p>decypher couldn't express pattern predicates or list comprehensions, and had
+  no way to carry <code>AT &lt;ref&gt;</code> without a fork. The parse boundary is
+  kept deliberately narrow, so the choice stays revisitable if we track GQL.</p>
+  <p class="muted">One dependency considered and declined, on evidence — recorded,
+  not deferred.</p>
+</section>
+
+<!-- ─── Slide 5 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">5/12</span> · gate evidence · exit criterion 1</p>
+  <h2>TCK conformance, told honestly</h2>
+  <div class="stats">
+    <div class="bignum">96.3%<small>of the 1,424 scenarios the front end<br>fully processes (1,372 / 1,424)</small></div>
+    <div class="bignum">0<small>execution result mismatches —<br>every pass verified cell-by-cell</small></div>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th>Bucket</th><th class="num">scenarios</th><th>meaning</th></tr>
+    <tr><td class="good">passed</td><td class="num">1,372</td><td>parsed, bound, executed, verified against expected</td></tr>
+    <tr><td class="warn">failed</td><td class="num">52</td><td>named parser gaps (tracked, acetone-15e)</td></tr>
+    <tr><td class="muted">unsupported</td><td class="num">2,473</td><td>1,423 write/deferred syntax · 752 need CREATE fixtures (Phase 3) · 298 static type-checking</td></tr>
+  </table></div>
+  <div class="callout">
+    <p><strong>Gate C is yours.</strong> 96.3% of what we can execute, or 35.2% of
+    the whole corpus — the gap is dominated by scenarios that need the Phase 3
+    write path to build their fixtures, not read features we failed. The choice of
+    the published MVP bar is the decision for this boundary.</p>
+  </div>
+</section>
+
+<!-- ─── Slide 6 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">6/12</span> · gate evidence · exit criterion 2</p>
+  <h2>A 50k-host registry, queried live</h2>
+  <p><code>acetone-lab</code> generates a deterministic security-asset registry —
+  <strong>110,200 nodes / 219,985 edges</strong> — with a declared schema and a
+  secondary index, then runs the realistic queries the roadmap names.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Registry query</th><th class="num">latency</th></tr>
+    <tr><td>hosts by OS (indexed property)</td><td class="num good">~35 ms</td></tr>
+    <tr><td>supply-chain blast radius (var-length deps)</td><td class="num good">~130 ms</td></tr>
+    <tr><td>orphaned software (500 rows)</td><td class="num good">~160 ms</td></tr>
+    <tr><td>certificate expiry sweep</td><td class="num good">~220 ms</td></tr>
+    <tr><td>critical hosts via a DE supplier (full-graph 2-hop)</td><td class="num warn">~1.1 s</td></tr>
+  </table></div>
+  <p class="muted">Interactive across the board bar the heaviest full-graph join,
+  which is flagged honestly — a candidate for the costed planner beyond v0.1.</p>
+</section>
+
+<!-- ─── Slide 7 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">7/12</span> · the lab earned its keep</p>
+  <h2>Two real bugs the small tests couldn't see</h2>
+  <h3>1 · The executor didn't scale</h3>
+  <p>The first full-scale run took <span class="warn">30 s, 21 s and 147 s</span> on
+  the multi-hop queries — the graph adapter scanned the whole edge set on every
+  expansion, O(nodes·edges) over a MATCH. Indexing node/label/adjacency at
+  construction dropped the worst case from <strong>147 s to ~1 s</strong>; the
+  reviewer proved result-equivalence by a TCK A/B (identical 1,372, zero
+  mismatches).</p>
+  <h3>2 · A node's identity wasn't queryable</h3>
+  <p>The flagship var-length query silently matched nothing: it filtered on a
+  <em>key</em> property, and the adapter never re-exposed key values. That was a
+  latent bug in the <em>already-merged</em> CLI too. Fixed at the root — keys are
+  now filterable and returnable under their schema names.</p>
+  <div class="callout ok"><p>A realistic graph is a test the unit suite can't
+  write. Both fixes came out of running one.</p></div>
+</section>
+
+<!-- ─── Slide 8 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">8/12</span> · gate evidence · exit criterion 3</p>
+  <h2><code>AT &lt;ref&gt;</code> — history is queryable</h2>
+  <p>Whole-query <code>--at &lt;ref&gt;</code> and clause-group
+  <code>MATCH … AT &lt;ref&gt;</code> both work over the Phase 1 commit graph. A
+  single query can address several versions at once.</p>
+  <pre>MATCH (h:Host) AT main~5
+MATCH (h)-[:HAS_CERT]-&gt;(c) AT main
+RETURN h.hostname, c.not_after</pre>
+  <div class="callout ok">
+    <p><strong>Cross-version identity is sound</strong> — and it's a free
+    consequence of Load-Bearing Invariant #3. A node's identity is its
+    <em>(label, key)</em>, which is version-stable; only its property values are a
+    snapshot. So re-anchoring an old node in a later clause walks the later
+    topology deterministically. The reviewer verified this directly.</p>
+  </div>
+</section>
+
+<!-- ─── Slide 9 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">9/12</span> · what review caught</p>
+  <h2>The gate did its job</h2>
+  <p>Every PR was reviewed by a fresh subagent with no implementation context.
+  Real defects the implementation and its own tests had missed:</p>
+  <div class="tablewrap"><table>
+    <tr><th>PR</th><th>What the reviewer found</th></tr>
+    <tr><td class="num">#30</td><td>Two untrusted-input <span class="warn">DoS blockers</span> — exponential backtracking (176 bytes → 10 s) and an AST that parsed <code>Ok</code> then stack-overflowed on <code>Drop</code></td></tr>
+    <tr><td class="num">#34</td><td><code>^</code> was right-associative; the TCK pins it left — plus three other TCK-pinned semantics bugs (IN precedence, NaN, parens)</td></tr>
+    <tr><td class="num">#35</td><td>Table/CSV output <span class="warn">leaked raw terminal escapes</span> from hostile-clone data — a regression of the PR #25 bar</td></tr>
+    <tr><td class="num">#38</td><td>The flagship query was silently vacuous — surfacing the key-property root-cause bug</td></tr>
+  </table></div>
+  <p class="muted">No PR merged over an unresolved objection. Several took multiple
+  rounds; #30 took three.</p>
+</section>
+
+<!-- ─── Slide 10 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">10/12</span> · milestone security review</p>
+  <h2>No blocker-class findings — gate security-ready</h2>
+  <p>A dedicated security pass (strongest tier, 30+ adversarial probes,
+  <code>cargo deny</code>) over the whole phase diff. Verified clean:</p>
+  <ul>
+    <li><strong>Parser</strong> — bounded (depth 64 parse / 256 AST) and panic-free
+    under 100k-deep nesting, 5 MB literals, adversarial UTF-8, on a 2 MiB stack.</li>
+    <li><strong>Arithmetic</strong> — overflow, <code>/0</code>, <code>%0</code>,
+    <code>i64::MIN / -1</code>, slice bounds all return errors, not panics.</li>
+    <li><strong>Ref/path injection</strong> — refspecs validated through gix; no
+    filesystem escape, no process spawn; the REPL never shells out.</li>
+    <li><strong>Dependencies</strong> — clean; the spike's <code>decypher</code> is
+    genuinely workspace-excluded.</li>
+  </ul>
+  <div class="callout">
+    <p><strong>One open risk carried forward:</strong> the query engine has no
+    resource governor — an unbounded <code>MATCH (a)-[*]-&gt;(b)</code> or
+    <code>range(0, 1e10)</code> can exhaust CPU/memory. Self-inflicted for the CLI;
+    the real risk is the library-embedding case. Filed as <code>acetone-iq6</code>,
+    the top hardening priority. Two cheap escape-sanitisation gaps were fixed in
+    #39 with mutation-proven tests.</p>
+  </div>
+</section>
+
+<!-- ─── Slide 11 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">11/12</span> · open · decisions for you</p>
+  <h2>Queued for the boundary</h2>
+  <h3>Decisions to rule on</h3>
+  <ul>
+    <li><strong>Gate C</strong> — the published TCK bar for MVP honesty (slide 5).</li>
+    <li><strong>UNION / EXISTS</strong> — treated as outside the v0.1 read subset;
+    this shapes the published number.</li>
+    <li><strong>CLI Strict vs Lenient</strong> — Strict when a schema is declared,
+    Lenient for schema-free Phase 1 data.</li>
+    <li><strong>Two executor deviations</strong> — scan/expand live inside the
+    pattern matcher rather than as reified operators; <code>IndexSeek</code> is
+    deferred to Phase 5. Both behaviour-neutral.</li>
+  </ul>
+  <h3>Tracked open work (none blocker-class)</h3>
+  <ul>
+    <li><code>acetone-iq6</code> — query-engine resource governor <span class="muted">(security, top priority)</span></li>
+    <li><code>acetone-15e</code> — the 52 remaining parser gaps <span class="muted">(the tracked climb)</span></li>
+    <li><code>acetone-1qj</code>, <code>18z</code>, <code>75o</code>, <code>3w5</code>, <code>0ds</code>, <code>5xp</code> — binder, var-length, AT caching, and defence-in-depth refinements</li>
+  </ul>
+</section>
+
+<!-- ─── Slide 12 ─────────────────────────────────────────── -->
+<section class="slide">
+  <p class="eyebrow"><span class="n">12/12</span> · next</p>
+  <h2>Then we drive it, step by step</h2>
+  <p class="lead">The deck is the context. Next is the live demo — the real CLI,
+  one step per turn: build the lab graph, query it, travel through history, watch
+  the sanitisation and the bounds hold.</p>
+  <p>After that, the docs are yours to read at your pace — <code>docs/reports/phase-2.md</code>
+  for the full gate evidence, ADR-0013 for Gate B, and the beads for every open
+  thread. Then you rule on the queued decisions and close <code>acetone-yzc.9</code>;
+  Phase 3 (the write path) unblocks from there.</p>
+  <div class="callout ok">
+    <p>Phase 2 shipped the read path: a graph you can question, across its whole
+    history, honestly measured and adversarially checked.</p>
+  </div>
+  <p class="footer-hint">acetone · Phase 2 · 5 July 2026</p>
+</section>
