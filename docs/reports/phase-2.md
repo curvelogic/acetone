@@ -83,9 +83,9 @@ After the graph-adapter indexing fix (below), latencies at 50k/220k:
 |---|--:|--:|
 | certificate expiry sweep | 100 | ~220 ms |
 | orphaned software | 500 | ~160 ms |
-| supply-chain blast radius (var-length deps) | — | ~130 ms |
-| hosts by OS (indexed property) | — | ~35 ms |
-| critical hosts running a DE-supplier package | — | ~1.1 s |
+| supply-chain blast radius (var-length deps) | 1 (count) | ~130 ms |
+| hosts by OS (indexed property) | 1 (count) | ~35 ms |
+| critical hosts running a DE-supplier package | 1 (count) | ~1.1 s |
 
 All interactive except the heaviest full-graph two-hop join (~1.1 s,
 honestly flagged; a candidate for the streaming/costed-planner work
