@@ -980,6 +980,134 @@ fn cypher_write_handles_composite_keys_and_value_types() {
 }
 
 #[test]
+fn cypher_writes_enforce_schema_constraints() {
+    // mex.3: identity, existence and UNIQUE constraints (spec §2,
+    // Invariant #3) are enforced on the write path.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let out = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Host",
+            "--key",
+            "name",
+            "--require",
+            "os",
+            "--unique",
+            "ip",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // A well-formed node persists.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (:Host {name: 'a', os: 'debian', ip: '10.0.0.1'})",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // CREATE of an existing key is a conflict (Invariant #3); MERGE upserts.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (:Host {name: 'a', os: 'x', ip: '10.0.0.9'})",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("conflicts with an existing node"),
+        "{}",
+        stderr(&out)
+    );
+    let out = acetone(&repo, &["query", "MERGE (h:Host {name: 'a'})"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Missing a required property.
+    let out = acetone(
+        &repo,
+        &["query", "CREATE (:Host {name: 'b', ip: '10.0.0.2'})"],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("missing required property"),
+        "{}",
+        stderr(&out)
+    );
+
+    // UNIQUE violation on a non-key property.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (:Host {name: 'c', os: 'y', ip: '10.0.0.1'})",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("UNIQUE constraint"),
+        "{}",
+        stderr(&out)
+    );
+
+    // Key immutability, caught at persist even when the bind-time gate
+    // cannot (an unlabelled MATCH target).
+    let out = acetone(&repo, &["query", "MATCH (n) SET n.name = 'renamed'"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("must not change the key property"),
+        "{}",
+        stderr(&out)
+    );
+
+    // None of the failed writes touched the graph: still one host.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(h) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "n\n1");
+    assert!(acetone(&repo, &["fsck"]).status.success());
+
+    // Delete-plus-create in one statement (the sanctioned rekey path): the
+    // deleted node's key and UNIQUE value are freed within the transaction,
+    // so re-using them is not a false conflict.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (n:Host {name:'a'}) DELETE n \
+             CREATE (:Host {name:'a', os:'x', ip:'10.0.0.1'})",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "delete-plus-create must not false-conflict: {}",
+        stderr(&out)
+    );
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN h.os AS os",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "os\nx");
+    assert!(acetone(&repo, &["fsck"]).status.success());
+}
+
+#[test]
 fn a_write_that_cannot_persist_leaves_the_workspace_untouched() {
     // A CREATE whose node identity cannot be derived (no declared key)
     // fails, and the workspace is not partially advanced (atomicity).

@@ -90,7 +90,7 @@ fn run_write(repo: &Repository, cypher: &str, format: Format) -> Result<()> {
         acetone_cypher::exec::execute_write(&bound, &resolver, &BTreeMap::new())
             .map_err(|e| anyhow!("{e}"))?;
 
-    acetone_cypher::persist::persist_changes(&changes, &mut txn, &catalogue)
+    acetone_cypher::persist::persist_changes(&changes, &mut txn, &catalogue, &snapshot)
         .map_err(|e| anyhow!("{e}"))?;
     txn.save().context("saving the workspace")?;
 

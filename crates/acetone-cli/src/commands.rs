@@ -28,7 +28,12 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         Command::Log => log(repo_path),
         Command::Branch { name } => branch(repo_path, name.as_deref()),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
-        Command::DeclareLabel { label, key } => declare_label(repo_path, &label, &key),
+        Command::DeclareLabel {
+            label,
+            key,
+            require,
+            unique,
+        } => declare_label(repo_path, &label, &key, &require, &unique),
         Command::DeclareRelType { rtype } => declare_rel_type(repo_path, &rtype),
         Command::PutNode { label, key, prop } => put_node(repo_path, &label, &key, &prop),
         Command::GetNode { label, key } => get_node(repo_path, &label, &key),
@@ -204,10 +209,21 @@ fn single_key(label: &str, key: &str) -> Result<NodeKey> {
         .with_context(|| format!("building key for label {label:?}"))
 }
 
-fn declare_label(repo_path: &Path, label: &str, key: &[String]) -> Result<()> {
+fn declare_label(
+    repo_path: &Path,
+    label: &str,
+    key: &[String],
+    require: &[String],
+    unique: &[String],
+) -> Result<()> {
     use acetone_model::schema::{LabelDef, SchemaEntry};
-    let def = LabelDef::new(key.to_vec(), BTreeMap::new(), [], [])
-        .with_context(|| format!("declaring key for label {label:?}"))?;
+    let def = LabelDef::new(
+        key.to_vec(),
+        BTreeMap::new(),
+        require.to_vec(),
+        unique.to_vec(),
+    )
+    .with_context(|| format!("declaring schema for label {label:?}"))?;
     let entry = SchemaEntry::Label {
         name: label.to_owned(),
         def,
