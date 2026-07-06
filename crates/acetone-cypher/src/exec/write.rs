@@ -22,6 +22,11 @@ use crate::ast::Direction;
 use crate::exec::source::GraphSource;
 use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
+/// Reserved first byte for synthesised overlay identities. Chosen to sit
+/// above the memcomparable key encoder's whole type-tag space (0x00..=0x0c),
+/// so an overlay id can never equal a storage-derived key (acetone-j5m).
+const OVERLAY_ID_TAG: u8 = 0xFF;
+
 /// One graph change, recorded in application order. The variants beyond
 /// create arrive with the SET/REMOVE (acetone-eah) and DELETE
 /// (acetone-921) beads. A `value` of `None` on a property mutation is a
@@ -128,9 +133,18 @@ impl<'a> MutableGraph<'a> {
     }
 
     fn fresh_id(&mut self) -> EntityId {
-        let id = EntityId::from_bytes(format!("w{}", self.next_id).into_bytes());
+        // A reserved sentinel first byte makes overlay identities
+        // structurally disjoint from any storage-derived node key: the
+        // memcomparable key encoder (acetone-model `keys.rs`) begins every
+        // key with a type tag in 0x01..=0x0c, so nothing it produces can
+        // start with `OVERLAY_ID_TAG`. This holds whatever base graph backs
+        // the overlay — an in-memory `MemoryGraph` or a storage snapshot —
+        // so a created node can never alias an existing one (acetone-j5m).
+        let mut bytes = Vec::with_capacity(1 + std::mem::size_of::<u64>());
+        bytes.push(OVERLAY_ID_TAG);
+        bytes.extend_from_slice(&self.next_id.to_be_bytes());
         self.next_id += 1;
-        id
+        EntityId::from_bytes(bytes)
     }
 
     /// Create a node with `labels` and `properties`; returns the new node
@@ -502,6 +516,37 @@ impl GraphSource for MutableGraph<'_> {
 mod tests {
     use super::*;
     use crate::exec::source::{EmptyGraph, MemoryGraph};
+
+    #[test]
+    fn overlay_ids_cannot_collide_with_storage_keys() {
+        // Overlay ids start with the reserved sentinel...
+        let empty = EmptyGraph;
+        let mut graph = MutableGraph::new(&empty);
+        let a = graph.create_node(vec!["A".into()], BTreeMap::new());
+        let b = graph.create_node(vec!["A".into()], BTreeMap::new());
+        assert_eq!(a.id.0[0], OVERLAY_ID_TAG);
+        assert_ne!(a.id, b.id, "overlay ids must be unique");
+
+        // ...and the memcomparable key encoder never emits that first byte,
+        // so no storage-derived node key can equal an overlay id. Exercise
+        // a spread of key shapes a real node identity might take.
+        use acetone_model::Value as MValue;
+        for tuple in [
+            vec![
+                MValue::String("Host".into()),
+                MValue::String("web-01".into()),
+            ],
+            vec![MValue::String("N".into()), MValue::Int(0)],
+            vec![MValue::Int(i64::MAX)],
+            vec![MValue::List(vec![MValue::String("x".into())])],
+        ] {
+            let encoded = acetone_model::keys::encode_key(&tuple).unwrap();
+            assert_ne!(
+                encoded[0], OVERLAY_ID_TAG,
+                "encoder must never start a key with the overlay sentinel"
+            );
+        }
+    }
 
     #[test]
     fn overlay_merges_reads_over_the_base() {
