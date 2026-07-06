@@ -377,6 +377,57 @@ impl Repository {
         Ok(())
     }
 
+    /// Rekey a node: change its identity from `old` to `new`. A key change
+    /// is modelled as delete-plus-create (Invariant #3, spec §5.9): in one
+    /// transaction the old node and its incident edges are removed and
+    /// recreated under the new key with the same records, then committed —
+    /// a single commit whose diff shows the transition. Errors if `old` is
+    /// absent, if `new` already exists, or if `old == new`.
+    pub fn rekey(&self, old: &NodeKey, new: &NodeKey, message: &str) -> Result<Hash, GraphError> {
+        if old == new {
+            return Err(GraphError::RekeyConflict {
+                label: new.label().to_string(),
+                key: render_node_key(new),
+            });
+        }
+        let mut txn = self.begin_write()?;
+        // Read the workspace this transaction locked.
+        let snapshot = self.workspace_snapshot()?;
+        let record = snapshot
+            .get_node(old)?
+            .ok_or_else(|| GraphError::NoSuchNode {
+                label: old.label().to_string(),
+                key: render_node_key(old),
+            })?;
+        if snapshot.get_node(new)?.is_some() {
+            return Err(GraphError::RekeyConflict {
+                label: new.label().to_string(),
+                key: render_node_key(new),
+            });
+        }
+        // Rewrite every incident edge onto the new endpoint (delete old,
+        // put new) so no edge is left dangling.
+        for (edge, edge_record) in snapshot.edges()? {
+            let touches_src = edge.src() == old;
+            let touches_dst = edge.dst() == old;
+            if !touches_src && !touches_dst {
+                continue;
+            }
+            let src = if touches_src { new } else { edge.src() };
+            let dst = if touches_dst { new } else { edge.dst() };
+            let rekeyed =
+                EdgeKey::new(src.clone(), edge.rtype(), dst.clone(), edge.disc().clone())?;
+            txn.delete_edge(&edge)?;
+            txn.put_edge(&rekeyed, &edge_record)?;
+        }
+        // Delete the old node before creating the new one (ordering per
+        // map): a same-label rekey shares neither key, so this is a plain
+        // move, but the delete-before-put discipline keeps it robust.
+        txn.delete_node(old)?;
+        txn.put_node(new, &record)?;
+        txn.commit(message, &[], None)
+    }
+
     /// A read-only view pinned to `refspec` — a branch short name, a full
     /// ref name, or a commit hash in hex.
     pub fn snapshot(&self, refspec: &str) -> Result<Snapshot<'_>, GraphError> {
@@ -497,6 +548,12 @@ impl Repository {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+/// Render a node key's values for an error message (`[a, 1]`-style).
+fn render_node_key(key: &NodeKey) -> String {
+    let parts: Vec<String> = key.key().iter().map(|v| format!("{v:?}")).collect();
+    format!("[{}]", parts.join(", "))
 }
 
 fn workspace_ref(name: &str) -> String {

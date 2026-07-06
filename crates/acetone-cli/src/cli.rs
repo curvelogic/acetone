@@ -93,6 +93,20 @@ pub enum Command {
         #[arg(long = "prop")]
         prop: Vec<String>,
     },
+    /// Change a node's key (single-column keys). A key change is modelled
+    /// as delete-plus-create in one commit (Invariant #3); incident edges
+    /// are rewritten onto the new key. `SET` cannot change a key.
+    Rekey {
+        /// The node's primary label.
+        label: String,
+        /// The current key value.
+        old_key: String,
+        /// The new key value.
+        new_key: String,
+        /// Commit message.
+        #[arg(short = 'm', long)]
+        message: String,
+    },
     /// Look up a node by label and key.
     GetNode {
         /// Primary label.

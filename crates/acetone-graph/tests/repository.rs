@@ -350,6 +350,61 @@ fn uncommitted_workspace_survives_git_gc() {
 }
 
 #[test]
+fn rekey_moves_a_node_and_its_edges_in_one_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+
+    let old = node("Host", "old-01");
+    let sw = node("Software", "nginx");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&old, &record(&[("cores", 8)])).expect("node");
+    tx.put_node(&sw, &record(&[])).expect("node");
+    tx.put_edge(&edge(&old, "RUNS", &sw), &EdgeRecord::default())
+        .expect("edge");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let new = node("Host", "web-01");
+    let commit = repo.rekey(&old, &new, "rename host").expect("rekey");
+    assert_eq!(repo.head_commit().expect("head"), Some(commit));
+
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    // Old identity gone, new identity present with the same record.
+    assert!(snapshot.get_node(&old).expect("get").is_none());
+    assert_eq!(
+        snapshot.get_node(&new).expect("get"),
+        Some(record(&[("cores", 8)]))
+    );
+    // The edge was rewritten onto the new key (and edges_rev with it).
+    let edges = snapshot.edges().expect("edges");
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].0.src(), &new);
+    assert_eq!(snapshot.reverse_edge_keys().expect("rev").len(), 1);
+
+    // fsck stays clean (no dangling edge, edges_rev consistent).
+    let report = acetone_graph::fsck::check(&repo).expect("fsck");
+    assert!(report.is_clean(), "fsck: {report:?}");
+
+    // Rekey to an existing key, to the same key, or of an absent node all
+    // error cleanly.
+    let other = node("Host", "other");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&other, &record(&[])).expect("node");
+    tx.save().expect("save");
+    assert!(matches!(
+        repo.rekey(&new, &other, "clash"),
+        Err(GraphError::RekeyConflict { .. })
+    ));
+    assert!(matches!(
+        repo.rekey(&new, &new, "self"),
+        Err(GraphError::RekeyConflict { .. })
+    ));
+    assert!(matches!(
+        repo.rekey(&node("Host", "ghost"), &node("Host", "z"), "absent"),
+        Err(GraphError::NoSuchNode { .. })
+    ));
+}
+
+#[test]
 fn branch_and_checkout_move_the_workspace() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
