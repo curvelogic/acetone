@@ -41,6 +41,17 @@ pub fn run(
     format: Format,
 ) -> Result<()> {
     let repo = Repository::open(repo_path).context("opening repository")?;
+    // A write query mutates the workspace inside a transaction; a read query
+    // runs against an immutable snapshot.
+    let parsed = acetone_cypher::parse(cypher).map_err(|e| anyhow!("{}", e.render(cypher)))?;
+    if parsed.clauses.iter().any(|clause| clause.is_write()) {
+        if at.is_some() {
+            return Err(anyhow!(
+                "cannot write with --at: writes target the workspace, not a past version"
+            ));
+        }
+        return run_write(&repo, cypher, format);
+    }
     let snapshot = match at {
         Some(refspec) => repo
             .snapshot(refspec)
@@ -50,6 +61,72 @@ pub fn run(
     let result = execute_query(&repo, &snapshot, cypher)?;
     render(&result, format);
     Ok(())
+}
+
+/// Execute a write query: run it inside a single-writer transaction over the
+/// workspace, replay its net changes into the workspace and save (the user
+/// commits separately with `acetone commit`). The workspace advance is
+/// atomic — a failure leaves it untouched.
+fn run_write(repo: &Repository, cypher: &str, format: Format) -> Result<()> {
+    let mut txn = repo.begin_write().context("starting a write transaction")?;
+    // Read the workspace the transaction locked, and run the query over it.
+    let snapshot = repo.workspace_snapshot().context("reading the workspace")?;
+    let nodes = snapshot.nodes().context("reading nodes")?;
+    let edges = snapshot.edges().context("reading edges")?;
+    let schema = snapshot.schema_entries().context("reading schema")?;
+
+    let base = GraphSnapshot::from_records_with_schema(&nodes, &edges, &schema);
+    let catalogue = catalogue_from_schema(schema);
+    let mode = if catalogue.is_empty() {
+        BindMode::Lenient
+    } else {
+        BindMode::Strict
+    };
+    let parsed = acetone_cypher::parse(cypher).map_err(|e| anyhow!("{}", e.render(cypher)))?;
+    let bound = acetone_cypher::bind::bind(cypher, &parsed, &catalogue, mode)
+        .map_err(|e| anyhow!("{}", e.render(cypher)))?;
+    let resolver = RepoResolver { repo, base };
+    let (result, changes) =
+        acetone_cypher::exec::execute_write(&bound, &resolver, &BTreeMap::new())
+            .map_err(|e| anyhow!("{e}"))?;
+
+    acetone_cypher::persist::persist_changes(&changes, &mut txn, &catalogue)
+        .map_err(|e| anyhow!("{e}"))?;
+    txn.save().context("saving the workspace")?;
+
+    render(&result, format);
+    render_write_summary(&result.stats);
+    Ok(())
+}
+
+/// A one-line summary of a write's side effects (openCypher counts).
+fn render_write_summary(stats: &acetone_cypher::exec::WriteSummary) {
+    if stats.is_empty() {
+        outln!("(no changes)");
+        return;
+    }
+    let mut parts = Vec::new();
+    let mut add = |n: u64, singular: &str, plural: &str| {
+        if n > 0 {
+            parts.push(format!("{n} {}", if n == 1 { singular } else { plural }));
+        }
+    };
+    add(stats.nodes_created, "node created", "nodes created");
+    add(
+        stats.relationships_created,
+        "relationship created",
+        "relationships created",
+    );
+    add(stats.properties_set, "property set", "properties set");
+    add(stats.labels_added, "label added", "labels added");
+    add(stats.labels_removed, "label removed", "labels removed");
+    add(stats.nodes_deleted, "node deleted", "nodes deleted");
+    add(
+        stats.relationships_deleted,
+        "relationship deleted",
+        "relationships deleted",
+    );
+    outln!("{}", parts.join(", "));
 }
 
 /// A version resolver backed by the open repository: clause-group

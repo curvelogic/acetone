@@ -19,7 +19,7 @@ use crate::bind::bound::*;
 use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
 use crate::exec::source::{GraphSource, SingleVersion, VersionResolver};
 use crate::exec::value::{EntityId, NodeValue, PathValue, RelValue, Value};
-use crate::exec::write::{MutableGraph, WriteSummary};
+use crate::exec::write::{MutableGraph, WriteChanges, WriteSummary};
 
 /// A completed query's output.
 #[derive(Debug, Clone)]
@@ -58,6 +58,25 @@ pub fn execute_versioned(
     resolver: &dyn VersionResolver,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<QueryResult, ExecError> {
+    Ok(run_versioned(query, resolver, parameters)?.0)
+}
+
+/// Execute and also return the net [`WriteChanges`] a persistence layer
+/// (acetone-mex.2) replays into the graph store. For a read-only query the
+/// changes are empty.
+pub fn execute_write(
+    query: &BoundQuery,
+    resolver: &dyn VersionResolver,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<(QueryResult, WriteChanges), ExecError> {
+    run_versioned(query, resolver, parameters)
+}
+
+fn run_versioned(
+    query: &BoundQuery,
+    resolver: &dyn VersionResolver,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<(QueryResult, WriteChanges), ExecError> {
     let base = resolver.base();
     // Write clauses mutate an overlay over the base version; reads in later
     // clauses see it. `AT` clauses resolve their own read-only sources.
@@ -186,7 +205,8 @@ pub fn execute_versioned(
         stats: WriteSummary::default(),
     });
     result.stats = stats;
-    Ok(result)
+    let changes = graph.changes();
+    Ok((result, changes))
 }
 
 // --- CREATE -----------------------------------------------------------------
@@ -567,7 +587,7 @@ fn delete_clause(
 ) -> Result<Vec<Row>, ExecError> {
     // Phase 1 (read-only): resolve every target of every row to identities.
     let mut node_ids = Vec::new();
-    let mut rel_ids = Vec::new();
+    let mut rels = Vec::new();
     {
         let ctx = EvalCtx::new(&*graph, parameters);
         for row in &rows {
@@ -576,14 +596,14 @@ fn delete_clause(
                     eval(target, row, &ctx)?,
                     target.span(),
                     &mut node_ids,
-                    &mut rel_ids,
+                    &mut rels,
                 )?;
             }
         }
     }
     // Phase 2: relationships first, across the whole clause...
-    for id in &rel_ids {
-        graph.delete_rel(id);
+    for rel in &rels {
+        graph.delete_rel(rel);
     }
     // ...then nodes. DETACH removes remaining incident edges; a plain
     // DELETE of a still-connected node is an error (checked only now that
@@ -610,15 +630,15 @@ fn collect_delete_target(
     value: Value,
     span: crate::span::Span,
     node_ids: &mut Vec<EntityId>,
-    rel_ids: &mut Vec<EntityId>,
+    rels: &mut Vec<RelValue>,
 ) -> Result<(), ExecError> {
     match value {
         Value::Null => {}
         Value::Node(node) => node_ids.push(node.id),
-        Value::Relationship(rel) => rel_ids.push(rel.id),
+        Value::Relationship(rel) => rels.push(rel),
         Value::Path(path) => {
             for rel in path.rels {
-                rel_ids.push(rel.id);
+                rels.push(rel);
             }
             for node in path.nodes {
                 node_ids.push(node.id);

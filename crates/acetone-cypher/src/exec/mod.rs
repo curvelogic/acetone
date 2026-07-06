@@ -12,10 +12,10 @@ pub mod write;
 
 pub use adapter::{GraphSnapshot, catalogue_from_schema};
 pub use eval::{ExecError, Row};
-pub use run::{QueryResult, execute, execute_versioned};
+pub use run::{QueryResult, execute, execute_versioned, execute_write};
 pub use source::{EmptyGraph, GraphSource, MemoryGraph, SingleVersion, VersionResolver};
 pub use value::Value;
-pub use write::{MutableGraph, Mutation, WriteSummary};
+pub use write::{MutableGraph, Mutation, WriteChanges, WriteSummary};
 
 /// Parse, bind (lenient) and execute a query against a graph — the
 /// convenience path used by tests and the TCK backend.

@@ -7,14 +7,14 @@
 //! pending changes and itself implements [`GraphSource`], so a `MATCH`
 //! after a `CREATE` sees the created elements.
 //!
-//! Every applied change is also appended to an ordered [`Mutation`] log.
-//! mex.1 proves the semantics against the in-memory overlay; mex.2 replays
-//! the log into acetone-graph `put_node`/`put_edge` to persist into
-//! workspace roots. A deterministic log order gives deterministic
-//! last-write-wins semantics within a query; history independence itself
+//! Every applied change is also appended to an ordered [`Mutation`] log
+//! (kept for audit/determinism). For persistence, [`MutableGraph::changes`]
+//! summarises the query's *net effect* as final entity states — the shape
+//! `crate::persist` replays into acetone-graph `put_node`/`put_edge`/
+//! `delete_*` (mex.2); persisting final states, not each granular op,
+//! sidesteps read-modify-write for `SET`. History independence itself
 //! (Load-Bearing Invariant #1 — identical final contents yield identical
-//! roots regardless of order) is provided by the prolly-tree layer, not by
-//! this log.
+//! roots regardless of order) is provided by the prolly-tree layer.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -90,6 +90,25 @@ impl WriteSummary {
     }
 }
 
+/// The net effect of a write query on the base graph, as final entity
+/// states rather than a granular operation log — the shape a persistence
+/// layer (acetone-mex.2) replays into `put_node`/`put_edge`/`delete_*`.
+/// Persisting final states sidesteps read-modify-write for `SET` (the
+/// upserted node already carries its final properties).
+#[derive(Debug, Default)]
+pub struct WriteChanges {
+    /// Created or modified nodes, in their final state (deletions excluded).
+    pub upserted_nodes: Vec<NodeValue>,
+    /// Base nodes to delete. Created-then-deleted nodes are a net no-op and
+    /// are omitted (their overlay id encodes no persistent identity).
+    pub deleted_nodes: Vec<EntityId>,
+    /// Created or modified relationships, in their final state.
+    pub upserted_rels: Vec<RelValue>,
+    /// Relationships to delete, carrying endpoints and type so the edge key
+    /// can be rebuilt.
+    pub deleted_rels: Vec<RelValue>,
+}
+
 /// A read-only base graph plus an overlay of pending creates. Reads merge
 /// the two; writes append to the overlay and the mutation log.
 ///
@@ -106,9 +125,11 @@ pub struct MutableGraph<'a> {
     node_overrides: HashMap<EntityId, NodeValue>,
     rel_overrides: HashMap<EntityId, RelValue>,
     /// Entities deleted this query. All reads exclude them, so a deleted
-    /// node/relationship is invisible to later clauses.
+    /// node/relationship is invisible to later clauses. Deleted
+    /// relationships keep their value so persistence can rebuild the edge
+    /// key (the id alone does not encode the endpoints).
     deleted_nodes: HashSet<EntityId>,
-    deleted_rels: HashSet<EntityId>,
+    deleted_rels: HashMap<EntityId, RelValue>,
     log: Vec<Mutation>,
     summary: WriteSummary,
     /// Monotonic counter for synthesising overlay identities. Shared
@@ -125,7 +146,7 @@ impl<'a> MutableGraph<'a> {
             node_overrides: HashMap::new(),
             rel_overrides: HashMap::new(),
             deleted_nodes: HashSet::new(),
-            deleted_rels: HashSet::new(),
+            deleted_rels: HashMap::new(),
             log: Vec::new(),
             summary: WriteSummary::default(),
             next_id: 0,
@@ -389,10 +410,12 @@ impl<'a> MutableGraph<'a> {
         !self.expand(id, Direction::Undirected, &[]).is_empty()
     }
 
-    /// Delete a relationship (idempotent). Excluded from all later reads.
-    pub fn delete_rel(&mut self, id: &EntityId) {
-        if self.deleted_rels.insert(id.clone()) {
-            self.log.push(Mutation::DeleteRel { id: id.clone() });
+    /// Delete a relationship (idempotent). Excluded from all later reads;
+    /// its value is retained so persistence can rebuild the edge key.
+    pub fn delete_rel(&mut self, rel: &RelValue) {
+        if !self.deleted_rels.contains_key(&rel.id) {
+            self.deleted_rels.insert(rel.id.clone(), rel.clone());
+            self.log.push(Mutation::DeleteRel { id: rel.id.clone() });
             self.summary.relationships_deleted += 1;
         }
     }
@@ -409,13 +432,13 @@ impl<'a> MutableGraph<'a> {
     /// Remove every relationship incident to `id`, then the node itself
     /// (DETACH DELETE).
     pub fn detach_delete_node(&mut self, id: &EntityId) {
-        let incident: Vec<EntityId> = self
+        let incident: Vec<RelValue> = self
             .expand(id, Direction::Undirected, &[])
             .into_iter()
-            .map(|(rel, _)| rel.id)
+            .map(|(rel, _)| rel)
             .collect();
-        for rel in incident {
-            self.delete_rel(&rel);
+        for rel in &incident {
+            self.delete_rel(rel);
         }
         self.delete_node(id);
     }
@@ -424,10 +447,83 @@ impl<'a> MutableGraph<'a> {
         &self.summary
     }
 
-    /// Consume the graph, yielding the ordered mutation log and the summary
-    /// for persistence (mex.2).
+    /// Consume the graph, yielding the ordered mutation log and the summary.
     pub fn into_log(self) -> (Vec<Mutation>, WriteSummary) {
         (self.log, self.summary)
+    }
+
+    /// The net effect of this query as final entity states (acetone-mex.2).
+    /// A created node that was also deleted, or a base node/relationship
+    /// only read, contributes nothing.
+    pub fn changes(&self) -> WriteChanges {
+        let created_node_ids: HashSet<&EntityId> =
+            self.created_nodes.iter().map(|n| &n.id).collect();
+        let created_rel_ids: HashSet<&EntityId> = self.created_rels.iter().map(|r| &r.id).collect();
+
+        let mut seen = HashSet::new();
+        let mut upserted_nodes = Vec::new();
+        // Created nodes first (final state via any later override)...
+        for node in &self.created_nodes {
+            if self.deleted_nodes.contains(&node.id) {
+                continue;
+            }
+            if seen.insert(node.id.clone())
+                && let Some(current) = self.current_node(&node.id)
+            {
+                upserted_nodes.push(current);
+            }
+        }
+        // ...then modified base nodes (overrides not already covered).
+        for (id, node) in &self.node_overrides {
+            if self.deleted_nodes.contains(id) {
+                continue;
+            }
+            if seen.insert(id.clone()) {
+                upserted_nodes.push(node.clone());
+            }
+        }
+
+        // A deleted base node has a decodable storage identity; a deleted
+        // created node never persisted, so omit it.
+        let deleted_nodes = self
+            .deleted_nodes
+            .iter()
+            .filter(|id| !created_node_ids.contains(id))
+            .cloned()
+            .collect();
+
+        let mut seen_rels = HashSet::new();
+        let mut upserted_rels = Vec::new();
+        for rel in &self.created_rels {
+            if self.deleted_rels.contains_key(&rel.id) {
+                continue;
+            }
+            if seen_rels.insert(rel.id.clone()) {
+                upserted_rels.push(self.overlay_rel(rel.clone()));
+            }
+        }
+        for (id, rel) in &self.rel_overrides {
+            if self.deleted_rels.contains_key(id) {
+                continue;
+            }
+            if seen_rels.insert(id.clone()) {
+                upserted_rels.push(rel.clone());
+            }
+        }
+
+        let deleted_rels = self
+            .deleted_rels
+            .iter()
+            .filter(|(id, _)| !created_rel_ids.contains(id))
+            .map(|(_, rel)| rel.clone())
+            .collect();
+
+        WriteChanges {
+            upserted_nodes,
+            deleted_nodes,
+            upserted_rels,
+            deleted_rels,
+        }
     }
 }
 
@@ -480,12 +576,13 @@ impl GraphSource for MutableGraph<'_> {
             .expand(node, direction, types)
             .into_iter()
             .filter(|(rel, neighbour)| {
-                !self.deleted_rels.contains(&rel.id) && !self.deleted_nodes.contains(&neighbour.id)
+                !self.deleted_rels.contains_key(&rel.id)
+                    && !self.deleted_nodes.contains(&neighbour.id)
             })
             .map(|(rel, neighbour)| (self.overlay_rel(rel), self.overlay_node(neighbour)))
             .collect();
         for rel in &self.created_rels {
-            if self.deleted_rels.contains(&rel.id) {
+            if self.deleted_rels.contains_key(&rel.id) {
                 continue;
             }
             let rel = self.overlay_rel(rel.clone());

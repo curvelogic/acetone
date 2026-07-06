@@ -17,6 +17,7 @@ pub mod error;
 pub mod exec;
 pub mod lex;
 pub mod parser;
+pub mod persist;
 pub mod span;
 
 pub use error::ParseError;

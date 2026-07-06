@@ -59,6 +59,22 @@ pub enum Command {
         /// Branch to switch to.
         branch: String,
     },
+    /// Declare a primary label's key (schema): the ordered key property
+    /// names that give nodes of this label their identity. Required before
+    /// Cypher `CREATE`/`MERGE` can persist nodes of the label (Invariant #3).
+    DeclareLabel {
+        /// The primary label.
+        label: String,
+        /// A key property name; repeat for a composite key, in order.
+        #[arg(long = "key", required = true)]
+        key: Vec<String>,
+    },
+    /// Declare a relationship type (schema). Required before Cypher can
+    /// create relationships of this type under a declared schema.
+    DeclareRelType {
+        /// The relationship type.
+        rtype: String,
+    },
     /// Insert or replace a node (plumbing; single-column keys only).
     PutNode {
         /// Primary label.

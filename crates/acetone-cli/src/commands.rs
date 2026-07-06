@@ -28,6 +28,8 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         Command::Log => log(repo_path),
         Command::Branch { name } => branch(repo_path, name.as_deref()),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
+        Command::DeclareLabel { label, key } => declare_label(repo_path, &label, &key),
+        Command::DeclareRelType { rtype } => declare_rel_type(repo_path, &rtype),
         Command::PutNode { label, key, prop } => put_node(repo_path, &label, &key, &prop),
         Command::GetNode { label, key } => get_node(repo_path, &label, &key),
         Command::PutEdge {
@@ -200,6 +202,42 @@ fn checkout(repo_path: &Path, name: &str) -> Result<()> {
 fn single_key(label: &str, key: &str) -> Result<NodeKey> {
     NodeKey::new(label, vec![parse_value(key)])
         .with_context(|| format!("building key for label {label:?}"))
+}
+
+fn declare_label(repo_path: &Path, label: &str, key: &[String]) -> Result<()> {
+    use acetone_model::schema::{LabelDef, SchemaEntry};
+    let def = LabelDef::new(key.to_vec(), BTreeMap::new(), [], [])
+        .with_context(|| format!("declaring key for label {label:?}"))?;
+    let entry = SchemaEntry::Label {
+        name: label.to_owned(),
+        def,
+    };
+    let repo = open(repo_path)?;
+    let mut txn = repo.begin_write()?;
+    txn.put_schema(&entry)?;
+    txn.save().context("saving workspace")?;
+    outln!(
+        "declared label {} key [{}]",
+        format_label(label),
+        key.join(", ")
+    );
+    Ok(())
+}
+
+fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
+    use acetone_model::schema::{RelTypeDef, SchemaEntry};
+    let def = RelTypeDef::new(None, BTreeMap::new(), [])
+        .with_context(|| format!("declaring relationship type {rtype:?}"))?;
+    let entry = SchemaEntry::RelType {
+        name: rtype.to_owned(),
+        def,
+    };
+    let repo = open(repo_path)?;
+    let mut txn = repo.begin_write()?;
+    txn.put_schema(&entry)?;
+    txn.save().context("saving workspace")?;
+    outln!("declared relationship type {}", format_label(rtype));
+    Ok(())
 }
 
 fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Result<()> {
