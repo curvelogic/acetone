@@ -1,0 +1,396 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck {
+    height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .cols-4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3, .cols-4 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+
+  .card.lead { border-left: 3px solid var(--accent); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  .term {
+    background: var(--ink); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65;
+  }
+  :root[data-theme="dark"] .term, :root:not([data-theme="light"]) .term { border: 1px solid var(--line); }
+  @media (prefers-color-scheme: dark) { .term { border: 1px solid var(--line); } }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term .p { color: #2dd4bf; } /* prompt */
+  .term .c { color: #e8eef0; } /* command */
+  .term .o { color: #8b9aa2; } /* output */
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px;
+    position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+</style>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Context"></a>
+  <a href="#s3" aria-label="What shipped"></a>
+  <a href="#s4" aria-label="The loop closes"></a>
+  <a href="#s5" aria-label="Decisions"></a>
+  <a href="#s6" aria-label="What review caught"></a>
+  <a href="#s7" aria-label="Gate evidence"></a>
+  <a href="#s8" aria-label="Risks & next"></a>
+  <a href="#s9" aria-label="Live demo"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · Phase 3 boundary</p>
+      <h1>The Cypher write path,<br>and the commit discipline.</h1>
+      <p class="lede">The phase where the workbench loop closes: <strong>checkout → edit via Cypher → status/diff → commit</strong>. A write query now mutates the persisted, version-controlled graph — atomically, under natural-key identity, with schema constraints enforced.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>10 beads merged · 10 PRs</span>
+        <span class="chip good"><span class="dot"></span>Idempotence · met</span>
+        <span class="chip good"><span class="dot"></span>Interactive session · met</span>
+        <span class="chip warn"><span class="dot"></span>TCK write scenarios · partial</span>
+        <span class="chip good"><span class="dot"></span>Security gate · ready</span>
+      </div>
+    </div>
+    <div class="foot">epic acetone-mex · 2026-07-06</div>
+    <div class="num">01 / 09</div>
+  </section>
+
+  <!-- 2 · Context -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>Read, then write.</h2>
+      <p>Phase 0 de-risked the git-as-chunk-store bet; Phase 1 built the storage &amp; model core; Phase 2 shipped the openCypher <em>read</em> path over it. Phase 3 makes the graph <em>editable</em> — and everything an edit touches (identity, atomicity, durability, the schema) had to be settled to do it honestly.</p>
+      <div class="flow" style="margin-top:24px">
+        <div class="step"><div class="k">PHASE 0</div><div class="v">Chunk store</div><div class="d">git ODB, prolly trees</div></div>
+        <div class="step"><div class="k">PHASE 1</div><div class="v">Storage core</div><div class="d">keys, records, manifest</div></div>
+        <div class="step"><div class="k">PHASE 2</div><div class="v">Read path</div><div class="d">parser · binder · executor</div></div>
+        <div class="step" style="background:var(--accent-soft); border-color:var(--accent)"><div class="k" style="color:var(--accent)">PHASE 3</div><div class="v">Write path</div><div class="d">the loop closes</div></div>
+      </div>
+    </div>
+    <div class="num">02 / 09</div>
+  </section>
+
+  <!-- 3 · What shipped -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">What shipped</p>
+      <h2>Four moving parts, ten beads.</h2>
+      <div class="grid cols-4" style="margin-bottom:18px">
+        <div class="card lead"><div class="tag">WRITE CLAUSES</div><h3>The language</h3><p>CREATE · SET/REMOVE · DELETE/DETACH · MERGE — over an in-memory overlay that later clauses read.</p></div>
+        <div class="card lead"><div class="tag">STORAGE</div><h3>The substrate</h3><p>Per-worktree workspace &amp; lock; workspaces anchored against foreign <code>git gc</code>; collision-proof overlay ids.</p></div>
+        <div class="card lead"><div class="tag">PERSISTENCE</div><h3>The bridge</h3><p>Cypher writes replayed into an atomic transaction; identity derived from the key; constraints enforced.</p></div>
+        <div class="card lead"><div class="tag">IDENTITY</div><h3>The discipline</h3><p><code>rekey</code>: a key change as delete-plus-create in one commit, edges following.</p></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Bead</th><th>Deliverable</th><th>PR</th></tr></thead>
+          <tbody>
+            <tr><td><code>mex.1</code></td><td>Write-execution model (overlay + mutation log + summary) &amp; CREATE</td><td class="pr">#41</td></tr>
+            <tr><td><code>eah</code></td><td>SET / REMOVE with the key-immutability gate</td><td class="pr">#42</td></tr>
+            <tr><td><code>921</code></td><td>DELETE / DETACH DELETE</td><td class="pr">#43</td></tr>
+            <tr><td><code>k0i</code></td><td>MERGE with ON CREATE / ON MATCH SET — idempotent</td><td class="pr">#44</td></tr>
+            <tr><td><code>j5m</code></td><td>Overlay ids given a reserved sentinel byte</td><td class="pr">#45</td></tr>
+            <tr><td><code>rjf</code></td><td>Per-worktree workspace ref &amp; writer lock · ADR-0014</td><td class="pr">#46</td></tr>
+            <tr><td><code>huo</code></td><td>Workspace chunk anchoring vs foreign gc · ADR-0015</td><td class="pr">#47</td></tr>
+            <tr><td><code>mex.2</code></td><td>Persist Cypher writes — the storage bridge</td><td class="pr">#48</td></tr>
+            <tr><td><code>mex.3</code></td><td>Constraint enforcement (identity, existence, UNIQUE)</td><td class="pr">#49</td></tr>
+            <tr><td><code>mex.4</code></td><td>rekey utility</td><td class="pr">#50</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="num">03 / 09</div>
+  </section>
+
+  <!-- 4 · The loop closes -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">The workbench loop</p>
+      <h2>Edit a version-controlled graph<br>the way you edit code.</h2>
+      <div class="grid cols-2" style="align-items:center; gap:28px">
+        <div>
+          <ul class="clean">
+            <li><b>Schema first.</b> Natural-key identity is mandatory (Invariant #3), so a label declares its key before Cypher can create it.</li>
+            <li><b>Write, then read back.</b> A fresh process reads what the write persisted — it's on disk, in the workspace, not in memory.</li>
+            <li><b>Atomic.</b> The workspace advances by compare-and-swap; a failed write leaves it untouched.</li>
+            <li><b>Commit.</b> The workspace manifest becomes a real git commit — <code>git log</code>, clone and push all work natively.</li>
+          </ul>
+        </div>
+        <div class="term">
+          <div class="term-bar"><i></i><i></i><i></i></div>
+          <div class="term-body">
+<div class="l"><span class="p">$</span> <span class="c">acetone declare-label Host --key name --require os</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query "CREATE (:Host {name:'web-01', os:'debian'})</span></div>
+<div class="l">                        <span class="c">-[:RUNS]-&gt;(:Software {name:'nginx'})"</span></div>
+<div class="l"><span class="o">  2 nodes created, 1 relationship created</span></div>
+<div class="l"> </div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query "MATCH (h:Host)-[:RUNS]-&gt;(s) RETURN h.os, s.name"</span></div>
+<div class="l"><span class="o">  debian  |  nginx</span>          <span class="ok"># fresh process — persisted</span></div>
+<div class="l"> </div>
+<div class="l"><span class="p">$</span> <span class="c">acetone commit -m "seed the estate"</span></div>
+<div class="l"><span class="o">  committed 35dbe32…</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="num">04 / 09</div>
+  </section>
+
+  <!-- 5 · Decisions -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions · for your retrospective</p>
+      <h2>Two ADRs, both about the workspace.</h2>
+      <p>Building <code>save</code> on the workspace forced two storage decisions — made by ADR so work proceeded, flagged here.</p>
+      <div class="grid cols-2" style="margin-top:8px">
+        <div class="card">
+          <div class="tag">ADR-0014 · amends 0010</div>
+          <h3 style="margin-top:6px">Worktrees are first-class</h3>
+          <p style="margin-top:8px">The writer lock and the workspace move to a per-worktree ref (<code>refs/worktree/acetone/workspace</code>). Two git worktrees of one clone now edit different branches independently — the git-native way to have two branches open at once. <em>A probe confirmed gix 0.85 resolves the namespace per-worktree; a pre-rjf repo migrates on first write.</em></p>
+        </div>
+        <div class="card">
+          <div class="tag">ADR-0015 · amends 0010/0014</div>
+          <h3 style="margin-top:6px">Uncommitted state is gc-durable</h3>
+          <p style="margin-top:8px">The workspace ref points at a <code>{manifest, chunks/}</code> tree, so git's reachability keeps the workspace's chunks. An uncommitted workspace now survives <code>git gc --prune=now</code> — closing the "commit before gc" caveat. <em>Local-only ref plumbing; no format bump. Incremental anchoring deferred.</em></p>
+        </div>
+      </div>
+    </div>
+    <div class="num">05 / 09</div>
+  </section>
+
+  <!-- 6 · What review caught -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">The review gate, working</p>
+      <h2>Every PR met a fresh adversarial reviewer.<br>Four had blockers. All fixed.</h2>
+      <p>Each merge gate was a fresh subagent with no implementation context, strongest model tier. The blockers it caught were real correctness bugs a test hadn't yet reached:</p>
+      <div class="grid cols-2" style="margin-top:8px">
+        <div class="card"><div class="tag">#41 · CREATE</div><p style="margin-top:6px">Attaching labels/props to an <em>already-bound</em> node was silently dropped — now a bind-time error.</p></div>
+        <div class="card"><div class="tag">#42 · SET</div><p style="margin-top:6px">A later write clobbered an <code>AT &lt;ref&gt;</code> time-travel snapshot — fixed with an override-only refresh.</p></div>
+        <div class="card"><div class="tag">#43 · DELETE</div><p style="margin-top:6px">The standard <code>DELETE r, a</code> idiom was spuriously rejected — connectivity check deferred to clause end.</p></div>
+        <div class="card"><div class="tag">#49 · constraints</div><p style="margin-top:6px">Constraints ignored same-transaction deletes, false-rejecting the rekey path — <em>and the fix surfaced a deeper delete-before-put ordering bug.</em></p></div>
+      </div>
+      <p style="margin-top:16px; font-size:13.5px">The other six PRs were accepted with no blockers — each verified by targeted experiments (independent MERGE execution, encoder tracing, live worktree/gc probes, self-loop &amp; parallel-edge rekey).</p>
+    </div>
+    <div class="num">06 / 09</div>
+  </section>
+
+  <!-- 7 · Gate evidence -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">Gate evidence · roadmap exit criteria</p>
+      <h2>Two of three met; one partial, honestly.</h2>
+      <div class="grid cols-3" style="margin-top:8px">
+        <div class="card">
+          <span class="chip good" style="margin-bottom:10px"><span class="dot"></span>MET</span>
+          <h3>MERGE idempotence</h3>
+          <p style="margin-top:6px">A second identical MERGE load reports <code>(no changes)</code>; the root is unchanged and <code>commit</code> refuses. Tested &amp; demoable.</p>
+        </div>
+        <div class="card">
+          <span class="chip good" style="margin-bottom:10px"><span class="dot"></span>MET</span>
+          <h3>Interactive session</h3>
+          <p style="margin-top:6px">The full checkout→edit→commit loop is captured in end-to-end CLI tests and driven live in this demo.</p>
+        </div>
+        <div class="card" style="border-color:var(--warn)">
+          <span class="chip warn" style="margin-bottom:10px"><span class="dot"></span>PARTIAL</span>
+          <h3>TCK write scenarios</h3>
+          <p style="margin-top:6px">Semantics verified by 134 unit + end-to-end tests, but the TCK harness doesn't yet model side effects or setup graphs. Filed as <code>acetone-1h7</code> — <b>your ruling at the gate.</b></p>
+        </div>
+      </div>
+      <div class="card" style="margin-top:18px; border-left:3px solid var(--good)">
+        <h3>Milestone security review — <span style="color:var(--good)">GATE READY</span></h3>
+        <p style="margin-top:6px">A dedicated review over the whole phase diff: no panics on untrusted bytes (the <code>0xFF</code> overlay sentinel can't alias a real key), size-capped decode, stack-depth guards intact, reduced-trust posture preserved. One LOW terminal-escaping bug <b>fixed in the report PR</b>; the resource-governor gap (<code>acetone-iq6</code>) is pre-existing and un-widened.</p>
+      </div>
+    </div>
+    <div class="num">07 / 09</div>
+  </section>
+
+  <!-- 8 · Risks & next -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">Open risks · what's next</p>
+      <h2>Named, tracked, none a shipped-subset blocker.</h2>
+      <div class="grid cols-2" style="gap:26px">
+        <div>
+          <div class="risk">
+            <div class="r"><span class="id">1h7</span><span class="t">TCK write-scenario harness (the partial exit criterion)</span></div>
+            <div class="r"><span class="id">ryg</span><span class="t">UNIQUE misses two new colliding rows in one statement — a real gap until Phase 5 indexes</span></div>
+            <div class="r"><span class="id">cm9</span><span class="t">A detached-HEAD worktree is currently unusable</span></div>
+            <div class="r"><span class="id">iq6</span><span class="t">Query resource governor (pre-existing DoS surface)</span></div>
+            <div class="r"><span class="id">taf</span><span class="t">Incremental workspace anchoring (naive is O(total chunks)/save)</span></div>
+          </div>
+        </div>
+        <div>
+          <h3 style="font-size:15px; margin-bottom:12px">Ahead — Phase 4</h3>
+          <p style="font-size:14.5px"><strong>Diff, merge and conflicts.</strong> The commit graph is now genuinely branchable and editable, so the next phase can three-way-merge map states, surface conflicts as data, and render the <code>_Added</code>/<code>_Removed</code>/<code>_Modified</code> virtual graph — including the delete-plus-create transition a <code>rekey</code> commit already records.</p>
+          <p style="font-size:14.5px; margin-top:14px">Gate D (format freeze) is where the on-disk decisions get locked. Nothing in Phase 3 bumped <code>format_version</code>.</p>
+        </div>
+      </div>
+    </div>
+    <div class="num">08 / 09</div>
+  </section>
+
+  <!-- 9 · Live demo -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo · one step per turn</p>
+      <h2>Driving the real CLI.</h2>
+      <p>Each step below is backed by a passing test, so the demo can't drift from the code. We'll run them one at a time and stop to discuss.</p>
+      <div class="grid cols-2" style="gap:14px; margin-top:6px">
+        <div class="card"><div class="tag">STEP 1 · 2</div><p style="margin-top:6px"><b>init &amp; declare</b> a schema, then <b>CREATE</b> a host→software graph and read it back in a fresh process.</p></div>
+        <div class="card"><div class="tag">STEP 3</div><p style="margin-top:6px"><b>Idempotent MERGE load:</b> run it twice — the second is <code>(no changes)</code> and <code>commit</code> refuses.</p></div>
+        <div class="card"><div class="tag">STEP 4</div><p style="margin-top:6px"><b>Edit &amp; rekey:</b> SET a property, commit, then <code>rekey</code> a node and watch its edges follow — in one commit, fsck clean.</p></div>
+        <div class="card"><div class="tag">STEP 5</div><p style="margin-top:6px"><b>Constraints bite:</b> an existing-key CREATE, a UNIQUE clash, a missing required property, a key-property SET — each refused, workspace untouched.</p></div>
+        <div class="card"><div class="tag">STEP 6</div><p style="margin-top:6px"><b>Worktrees &amp; durability:</b> two worktrees edit independently; an uncommitted workspace survives <code>git gc --prune=now</code>.</p></div>
+        <div class="card" style="background:var(--accent-soft); border-color:var(--accent)"><div class="tag" style="color:var(--accent)">THEN</div><p style="margin-top:6px"><b>Your call:</b> rule on <code>acetone-1h7</code> (TCK write harness) and close the Phase 3 gate bead <code>acetone-mex.5</code>.</p></div>
+      </div>
+    </div>
+    <div class="num">09 / 09</div>
+  </section>
+
+</main>
