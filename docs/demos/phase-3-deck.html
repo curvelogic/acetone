@@ -191,7 +191,7 @@
         <span class="chip accent"><span class="dot"></span>10 beads merged · 10 PRs</span>
         <span class="chip good"><span class="dot"></span>Idempotence · met</span>
         <span class="chip good"><span class="dot"></span>Interactive session · met</span>
-        <span class="chip warn"><span class="dot"></span>TCK write scenarios · partial</span>
+        <span class="chip good"><span class="dot"></span>TCK write scenarios · +225 verified</span>
         <span class="chip good"><span class="dot"></span>Security gate · ready</span>
       </div>
     </div>
@@ -324,7 +324,7 @@
   <section class="slide" id="s7">
     <div class="slide-inner">
       <p class="eyebrow">Gate evidence · roadmap exit criteria</p>
-      <h2>Two of three met; one partial, honestly.</h2>
+      <h2>All three exit criteria met.</h2>
       <div class="grid cols-3" style="margin-top:8px">
         <div class="card">
           <span class="chip good" style="margin-bottom:10px"><span class="dot"></span>MET</span>
@@ -336,10 +336,10 @@
           <h3>Interactive session</h3>
           <p style="margin-top:6px">The full checkout→edit→commit loop is captured in end-to-end CLI tests and driven live in this demo.</p>
         </div>
-        <div class="card" style="border-color:var(--warn)">
-          <span class="chip warn" style="margin-bottom:10px"><span class="dot"></span>PARTIAL</span>
+        <div class="card">
+          <span class="chip good" style="margin-bottom:10px"><span class="dot"></span>MET</span>
           <h3>TCK write scenarios</h3>
-          <p style="margin-top:6px">Semantics verified by 134 unit + end-to-end tests, but the TCK harness doesn't yet model side effects or setup graphs. Filed as <code>acetone-1h7</code> — <b>your ruling at the gate.</b></p>
+          <p style="margin-top:6px">The harness now runs each scenario's setup graph and query, verifying rows <em>and</em> side effects (as a graph-state delta). Conformance <b>1371 → 1596</b> (+225 write scenarios); 4 honest MERGE-rel gaps filed as <code>acetone-q9m</code>.</p>
         </div>
       </div>
       <div class="card" style="margin-top:18px; border-left:3px solid var(--good)">
@@ -358,7 +358,7 @@
       <div class="grid cols-2" style="gap:26px">
         <div>
           <div class="risk">
-            <div class="r"><span class="id">1h7</span><span class="t">TCK write-scenario harness (the partial exit criterion)</span></div>
+            <div class="r"><span class="id">q9m</span><span class="t">4 MERGE-relationship gaps the new TCK write verification surfaced</span></div>
             <div class="r"><span class="id">ryg</span><span class="t">UNIQUE misses two new colliding rows in one statement — a real gap until Phase 5 indexes</span></div>
             <div class="r"><span class="id">cm9</span><span class="t">A detached-HEAD worktree is currently unusable</span></div>
             <div class="r"><span class="id">iq6</span><span class="t">Query resource governor (pre-existing DoS surface)</span></div>
@@ -387,7 +387,7 @@
         <div class="card"><div class="tag">STEP 4</div><p style="margin-top:6px"><b>Edit &amp; rekey:</b> SET a property, commit, then <code>rekey</code> a node and watch its edges follow — in one commit, fsck clean.</p></div>
         <div class="card"><div class="tag">STEP 5</div><p style="margin-top:6px"><b>Constraints bite:</b> an existing-key CREATE, a UNIQUE clash, a missing required property, a key-property SET — each refused, workspace untouched.</p></div>
         <div class="card"><div class="tag">STEP 6</div><p style="margin-top:6px"><b>Worktrees &amp; durability:</b> two worktrees edit independently; an uncommitted workspace survives <code>git gc --prune=now</code>.</p></div>
-        <div class="card" style="background:var(--accent-soft); border-color:var(--accent)"><div class="tag" style="color:var(--accent)">THEN</div><p style="margin-top:6px"><b>Your call:</b> rule on <code>acetone-1h7</code> (TCK write harness) and close the Phase 3 gate bead <code>acetone-mex.5</code>.</p></div>
+        <div class="card" style="background:var(--accent-soft); border-color:var(--accent)"><div class="tag" style="color:var(--accent)">THEN</div><p style="margin-top:6px"><b>Your call:</b> close the Phase 3 gate bead <code>acetone-mex.5</code> — the TCK write harness ruling (<code>acetone-1h7</code>) is done, +225 scenarios verified.</p></div>
       </div>
     </div>
     <div class="num">09 / 09</div>

@@ -80,11 +80,76 @@ impl VersionResolver for SingleVersion<'_> {
 pub struct MemoryGraph {
     nodes: Vec<NodeValue>,
     rels: Vec<RelValue>,
+    /// Monotonic source of stable ids for elements folded in by [`apply`]
+    /// (see there); never reused, so successive applies cannot collide.
+    next_id: u64,
 }
 
 impl MemoryGraph {
     pub fn new() -> Self {
         MemoryGraph::default()
+    }
+
+    /// Fold a query's net [`WriteChanges`](crate::exec::write::WriteChanges)
+    /// into this graph, so a following query sees them. This is the TCK
+    /// harness's setup-graph accumulator (acetone-1h7): a scenario's setup
+    /// queries build the base graph one statement at a time.
+    ///
+    /// Created elements carry overlay ids (first byte `0xFF`) whose counter
+    /// restarts each query, so they are remapped to fresh stable ids before
+    /// being stored; base ids (matched-and-modified elements, deletions)
+    /// pass through unchanged. Deletions apply before upserts, matching the
+    /// persistence layer's ordering.
+    pub fn apply(&mut self, changes: &crate::exec::write::WriteChanges) {
+        use std::collections::{HashMap, HashSet};
+
+        let deleted: HashSet<EntityId> = changes.deleted_nodes.iter().cloned().collect();
+        self.nodes.retain(|n| !deleted.contains(&n.id));
+        let deleted_rels: HashSet<EntityId> =
+            changes.deleted_rels.iter().map(|r| r.id.clone()).collect();
+        self.rels.retain(|r| !deleted_rels.contains(&r.id));
+
+        let mut remap: HashMap<EntityId, EntityId> = HashMap::new();
+        let mut stable = |old: &EntityId, next: &mut u64| -> EntityId {
+            if !is_overlay(old) {
+                return old.clone();
+            }
+            remap
+                .entry(old.clone())
+                .or_insert_with(|| {
+                    let id = EntityId::from_bytes(format!("s{next}").into_bytes());
+                    *next += 1;
+                    id
+                })
+                .clone()
+        };
+
+        for node in &changes.upserted_nodes {
+            let id = stable(&node.id, &mut self.next_id);
+            let value = NodeValue {
+                id: id.clone(),
+                labels: node.labels.clone(),
+                properties: node.properties.clone(),
+            };
+            match self.nodes.iter_mut().find(|n| n.id == id) {
+                Some(slot) => *slot = value,
+                None => self.nodes.push(value),
+            }
+        }
+        for rel in &changes.upserted_rels {
+            let id = stable(&rel.id, &mut self.next_id);
+            let value = RelValue {
+                id: id.clone(),
+                rel_type: rel.rel_type.clone(),
+                start: stable(&rel.start, &mut self.next_id),
+                end: stable(&rel.end, &mut self.next_id),
+                properties: rel.properties.clone(),
+            };
+            match self.rels.iter_mut().find(|r| r.id == id) {
+                Some(slot) => *slot = value,
+                None => self.rels.push(value),
+            }
+        }
     }
 
     pub fn add_node(
@@ -117,6 +182,15 @@ impl MemoryGraph {
             properties,
         });
         id
+    }
+}
+
+impl MemoryGraph {
+    /// Every relationship, in a stable order. The [`GraphSource`] trait
+    /// exposes relationships only by expansion; the TCK side-effect diff
+    /// (acetone-1h7) needs the whole set.
+    pub fn all_rels(&self) -> Vec<RelValue> {
+        self.rels.clone()
     }
 }
 
@@ -153,6 +227,13 @@ impl GraphSource for MemoryGraph {
     fn node(&self, id: &EntityId) -> Option<NodeValue> {
         self.nodes.iter().find(|n| n.id == *id).cloned()
     }
+}
+
+/// True when `id` is an executor overlay id — a created element's id,
+/// carrying the `0xFF` tag byte reserved from the memcomparable key space
+/// (acetone-j5m). Base-graph ids never start with it.
+fn is_overlay(id: &EntityId) -> bool {
+    id.0.first() == Some(&0xFF)
 }
 
 /// The empty graph — the TCK's most common fixture.

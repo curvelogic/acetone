@@ -81,6 +81,11 @@ pub struct ScenarioPlan {
     /// The query under test.
     pub query: Option<String>,
     pub expectation: Expectation,
+    /// The expected openCypher side effects (`And the side effects should
+    /// be:`), keyed by effect name (`+nodes`, `-relationships`, …).
+    /// `Some(empty)` for an explicit "no side effects"; `None` when the
+    /// scenario declares none (a pure read).
+    pub side_effects: Option<std::collections::BTreeMap<String, u64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -297,6 +302,7 @@ fn reduce_scenario(
         needs_procedures: false,
         query: None,
         expectation: Expectation::None,
+        side_effects: None,
     };
 
     for step in steps {
@@ -345,7 +351,35 @@ fn reduce_scenario(
                     detail,
                 };
             }
-            StepKind::NoSideEffects | StepKind::SideEffects => {}
+            StepKind::NoSideEffects => plan.side_effects = Some(std::collections::BTreeMap::new()),
+            StepKind::SideEffects => {
+                let mut effects = std::collections::BTreeMap::new();
+                if let Some(table) = &step.table {
+                    for row in &table.rows {
+                        // Each row is `| <effect> | <count> |`. A row that
+                        // does not parse is a malformed fixture, not a
+                        // silent skip.
+                        let (Some(name), Some(count)) = (row.first(), row.get(1)) else {
+                            return Err(HarnessError::UnknownStep {
+                                path: path.to_path_buf(),
+                                scenario: name.to_string(),
+                                step: format!("side-effect row {row:?}"),
+                            });
+                        };
+                        let count: u64 =
+                            count
+                                .trim()
+                                .parse()
+                                .map_err(|_| HarnessError::UnknownStep {
+                                    path: path.to_path_buf(),
+                                    scenario: name.to_string(),
+                                    step: format!("side-effect count {count:?}"),
+                                })?;
+                        effects.insert(name.trim().to_string(), count);
+                    }
+                }
+                plan.side_effects = Some(effects);
+            }
         }
     }
     Ok(plan)
