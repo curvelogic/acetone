@@ -59,6 +59,22 @@ pub enum Command {
         /// Branch to switch to.
         branch: String,
     },
+    /// Merge another version into the current branch, creating a merge
+    /// commit on a clean three-way merge (spec §7). The workspace must be
+    /// clean and a branch checked out. Fast-forwards when possible; on
+    /// conflicts it reports them and makes no commit (resolution is not yet
+    /// available). A clean merge is map-clean but not yet graph-validated
+    /// (dangling-edge/constraint checks arrive later); run `fsck` if that
+    /// matters.
+    Merge {
+        /// The version to merge in (branch short name, full ref name or
+        /// commit hash).
+        #[arg(value_name = "REF")]
+        refspec: String,
+        /// Commit message for the merge commit (default: `Merge <ref>`).
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+    },
     /// Declare a primary label's key (schema): the ordered key property
     /// names that give nodes of this label their identity. Required before
     /// Cypher `CREATE`/`MERGE` can persist nodes of the label (Invariant #3).

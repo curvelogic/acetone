@@ -39,6 +39,7 @@
 use crate::diff::{EdgeChange, GraphDiff, NodeChange};
 use crate::error::GraphError;
 use crate::lock::WriteLock;
+use crate::merge::{ManifestMerge, MergeOutcome, merge_manifests};
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
@@ -448,6 +449,104 @@ impl Repository {
         self.snapshot(from)?.diff(&self.snapshot(to)?)
     }
 
+    /// Merge the version named by `theirs` into the current branch (spec §7,
+    /// shaping Decision 4; acetone-14c.2).
+    ///
+    /// Preconditions: the workspace has no uncommitted changes
+    /// ([`GraphError::DirtyWorkspace`]) and the checked-out ref is a branch
+    /// ([`GraphError::NoCurrentBranch`]) — merging advances that branch.
+    ///
+    /// The four outcomes ([`MergeOutcome`]): **AlreadyUpToDate** when
+    /// `theirs` is already an ancestor of our head; **FastForward** when our
+    /// head is an ancestor of `theirs` (the branch simply advances, no merge
+    /// commit); **Merged** when a genuine three-way merge over the merge base
+    /// resolves cleanly (a two-parent merge commit `[ours, theirs]` is
+    /// written and the branch advanced); **Conflicts** when it does not (no
+    /// commit written, the repository unchanged — persisting and resolving
+    /// the conflicts is acetone-14c.4).
+    ///
+    /// The merge is a pure function of the three commit manifests (Invariant
+    /// #4): `merge_manifests` depends only on their contents, and `edges_rev`
+    /// is rebuilt from the merged forward map (Invariant #5). The merge
+    /// commit's own hash is *not* reproducible (its author/committer
+    /// timestamp is wall-clock), but its tree — the merged manifest — is.
+    ///
+    /// **A `Merged` result is map-clean, not graph-validated.** Each map is
+    /// three-way-merged independently, so a clean merge can still produce a
+    /// referentially-invalid graph — e.g. `ours` adds an edge to a node that
+    /// `theirs` deletes, with no key-level conflict in either map. Post-merge
+    /// graph validation (dangling-edge detection and constraint re-check over
+    /// the changed key set, spec §7) is **not yet applied here**; it arrives
+    /// with acetone-14c.3. Until then, run `fsck` if referential integrity
+    /// after a merge matters.
+    pub fn merge(&self, theirs: &str, message: &str) -> Result<MergeOutcome, GraphError> {
+        let _lock = WriteLock::acquire(self.store.git_dir())?;
+        if self.is_dirty()? {
+            return Err(GraphError::DirtyWorkspace);
+        }
+        let branch = self.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
+        let theirs = self.resolve_commit(theirs)?;
+
+        // An unborn branch has no head to merge against; adopt `theirs`
+        // wholesale (a degenerate fast-forward that creates the branch ref).
+        let Some(ours) = self.head_commit()? else {
+            return self
+                .fast_forward(&branch, None, &theirs)
+                .map(MergeOutcome::FastForward);
+        };
+
+        // `theirs` already in our history (including equal): nothing to do.
+        if ours == theirs || self.is_ancestor(&theirs, &ours)? {
+            return Ok(MergeOutcome::AlreadyUpToDate);
+        }
+        // Our head is an ancestor of `theirs`: fast-forward, no merge commit.
+        if self.is_ancestor(&ours, &theirs)? {
+            return self
+                .fast_forward(&branch, Some(&ours), &theirs)
+                .map(MergeOutcome::FastForward);
+        }
+
+        // Genuine divergence: three-way merge over the merge base.
+        let base = self
+            .merge_base(&ours, &theirs)?
+            .ok_or_else(|| GraphError::NoMergeBase {
+                ours: ours.to_hex(),
+                theirs: theirs.to_hex(),
+            })?;
+        let base_manifest = self.manifest_at_commit(&base)?;
+        let ours_manifest = self.manifest_at_commit(&ours)?;
+        let theirs_manifest = self.manifest_at_commit(&theirs)?;
+
+        match merge_manifests(
+            &self.store,
+            &base_manifest,
+            &ours_manifest,
+            &theirs_manifest,
+        )? {
+            // No commit is written for a conflicted merge, so the workspace
+            // is untouched — the repository stays exactly on `ours`.
+            ManifestMerge::Conflicts(conflicts) => Ok(MergeOutcome::Conflicts(conflicts)),
+            ManifestMerge::Clean(manifest) => {
+                // Reset the workspace to the merged manifest, then write the
+                // two-parent merge commit and advance the branch — the same
+                // workspace-then-branch order as `Transaction::commit`.
+                let manifest_hash = self.store.put(&manifest.encode())?;
+                let tree = self.workspace_tree_for(&manifest_hash)?;
+                let expected = self.workspace_ref_value()?;
+                self.cas_workspace(expected.as_ref(), &tree)?;
+
+                let commit = self.write_merge_commit(&manifest, &[ours, theirs], message)?;
+                match self.store.write_ref(&branch, Some(&ours), &commit) {
+                    Ok(()) => Ok(MergeOutcome::Merged(commit)),
+                    Err(StoreError::CasFailed { .. }) => Err(GraphError::BranchConflict {
+                        name: branch.clone(),
+                    }),
+                    Err(e) => Err(e.into()),
+                }
+            }
+        }
+    }
+
     /// The commit history from `refspec` (default: the current branch),
     /// following first parents, newest first.
     pub fn log(&self, refspec: Option<&str>) -> Result<Vec<LogEntry>, GraphError> {
@@ -543,6 +642,135 @@ impl Repository {
                 name: commit.to_hex(),
             })?;
         Ok(self.store.put(&commit.manifest)?)
+    }
+
+    /// The manifest of the version at `commit` (its manifest blob, decoded).
+    fn manifest_at_commit(&self, commit: &Hash) -> Result<Manifest, GraphError> {
+        read_manifest_chunk(&self.store, &self.commit_manifest_hash(commit)?)
+    }
+
+    /// Advance `branch` to `target` and reset the workspace to match — the
+    /// fast-forward path (and the unborn-branch adoption, with
+    /// `expected = None`). No merge commit is created; `target` already
+    /// contains our history.
+    fn fast_forward(
+        &self,
+        branch: &str,
+        expected: Option<&Hash>,
+        target: &Hash,
+    ) -> Result<Hash, GraphError> {
+        let manifest_hash = self.commit_manifest_hash(target)?;
+        let tree = self.workspace_tree_for(&manifest_hash)?;
+        let ws_expected = self.workspace_ref_value()?;
+        self.cas_workspace(ws_expected.as_ref(), &tree)?;
+        match self.store.write_ref(branch, expected, target) {
+            Ok(()) => Ok(*target),
+            Err(StoreError::CasFailed { .. }) => Err(GraphError::BranchConflict {
+                name: branch.to_owned(),
+            }),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Write a merge commit over `manifest` with the given `parents`,
+    /// anchoring the manifest's complete chunk set (like
+    /// `Transaction::commit`, but with an explicit manifest and parent list
+    /// rather than the workspace manifest and the single branch tip). Does
+    /// not touch any ref — the caller advances the branch.
+    fn write_merge_commit(
+        &self,
+        manifest: &Manifest,
+        parents: &[Hash],
+        message: &str,
+    ) -> Result<Hash, GraphError> {
+        let manifest_bytes = manifest.encode();
+        let anchors = manifest_chunk_set(&self.store, manifest)?;
+        let summary = summarise(&self.store, manifest)?;
+        let mut new_commit = NewCommit::new(&manifest_bytes, &summary, message);
+        new_commit.parents = parents;
+        new_commit.anchors = &anchors;
+        Ok(self.store.create_commit(&new_commit)?)
+    }
+
+    /// Every commit reachable from `start` by following parents, `start`
+    /// included. Bounded by history size; valid git data has no cycles, and
+    /// the visited set makes a corrupt one terminate rather than loop.
+    fn ancestors(&self, start: &Hash) -> Result<BTreeSet<Hash>, GraphError> {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![*start];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let commit = self
+                .store
+                .read_commit(&id)?
+                .ok_or_else(|| GraphError::NotACommit { name: id.to_hex() })?;
+            stack.extend(commit.parents);
+        }
+        Ok(seen)
+    }
+
+    /// Whether `anc` is an ancestor of `desc` (reflexive: true when equal).
+    /// Walks `desc`'s ancestry, short-circuiting when `anc` is reached.
+    fn is_ancestor(&self, anc: &Hash, desc: &Hash) -> Result<bool, GraphError> {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![*desc];
+        while let Some(id) = stack.pop() {
+            if &id == anc {
+                return Ok(true);
+            }
+            if !seen.insert(id) {
+                continue;
+            }
+            let commit = self
+                .store
+                .read_commit(&id)?
+                .ok_or_else(|| GraphError::NotACommit { name: id.to_hex() })?;
+            stack.extend(commit.parents);
+        }
+        Ok(false)
+    }
+
+    /// A merge base (lowest common ancestor) of `a` and `b` over the commit
+    /// DAG, or `None` when they share no ancestor (unrelated histories).
+    ///
+    /// Computed as the maximal elements of the common-ancestor set: a common
+    /// ancestor that is itself a proper ancestor of another common ancestor
+    /// is not lowest and is dropped. For the ordinary (non-criss-cross)
+    /// topology this leaves exactly one commit. On a criss-cross history
+    /// several maximal common ancestors can remain; any is a valid base and
+    /// the three-way merge over it is deterministic, so the smallest by hash
+    /// is chosen for a stable choice. This keeps the merge reproducible
+    /// *within a repository* (which is all Invariant #4 requires — merge is a
+    /// pure function of the chosen base); note the tie-break is over the
+    /// commit hash, which embeds a wall-clock timestamp, so two repositories
+    /// built from the same logical criss-cross history could pick different
+    /// bases. This is not git's recursive-merge "virtual base" — a documented
+    /// simplification for v0.1 (spec §7).
+    fn merge_base(&self, a: &Hash, b: &Hash) -> Result<Option<Hash>, GraphError> {
+        let anc_a = self.ancestors(a)?;
+        let anc_b = self.ancestors(b)?;
+        let common: Vec<Hash> = anc_a.intersection(&anc_b).copied().collect();
+        if common.is_empty() {
+            return Ok(None);
+        }
+        let mut bases: Vec<Hash> = Vec::new();
+        for c in &common {
+            let mut dominated = false;
+            for d in &common {
+                if d != c && self.is_ancestor(c, d)? {
+                    dominated = true;
+                    break;
+                }
+            }
+            if !dominated {
+                bases.push(*c);
+            }
+        }
+        // A finite non-empty DAG always has a maximal element, so `bases` is
+        // non-empty here; `min` is a total, deterministic tie-break.
+        Ok(bases.into_iter().min())
     }
 
     /// Compare-and-swap the per-worktree workspace ref. `expected` is its

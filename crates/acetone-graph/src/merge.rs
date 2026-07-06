@@ -20,9 +20,30 @@
 use acetone_model::graph_keys::EdgeKey;
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_prolly::{BatchOp, ChunkParams, Root, apply_batch, empty, merge as prolly_merge, scan};
-use acetone_store::ChunkStore;
+use acetone_store::{ChunkStore, Hash};
 
 use crate::error::GraphError;
+
+/// The outcome of the commit-graph merge wrapper
+/// ([`crate::repo::Repository::merge`]) — the four ways merging one version
+/// into the current branch can resolve.
+#[derive(Debug)]
+pub enum MergeOutcome {
+    /// The version to merge was already an ancestor of the current branch
+    /// (including equal): nothing changed.
+    AlreadyUpToDate,
+    /// The current branch was an ancestor of the version to merge, so it
+    /// fast-forwarded — no merge commit was created. Carries the new head.
+    FastForward(Hash),
+    /// A genuine three-way merge that resolved cleanly: a two-parent merge
+    /// commit was written and the branch advanced to it. Carries the merge
+    /// commit's address.
+    Merged(Hash),
+    /// The merge conflicted: no commit was written and the repository is
+    /// unchanged (persisting the conflicts map and resolving it is
+    /// acetone-14c.4). Carries the conflicts in `(map, key)` order.
+    Conflicts(Vec<MergeConflict>),
+}
 
 /// Which graph map a conflict arose in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
