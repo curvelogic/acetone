@@ -29,6 +29,7 @@ pub mod diff;
 pub mod error;
 pub mod fsck;
 pub mod lock;
+pub mod merge;
 pub mod repo;
 
 pub use error::GraphError;
