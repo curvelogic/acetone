@@ -355,9 +355,32 @@ impl Parser {
                 span: start.to(self.prev_span()),
             }));
         }
+        if self.at_kw2("DETACH", "DELETE") {
+            let start = self.bump().span;
+            self.bump();
+            return self.delete_clause(true, start);
+        }
+        if self.at_kw("DELETE") {
+            let start = self.bump().span;
+            return self.delete_clause(false, start);
+        }
         Err(self.unexpected(
-            "a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL, CREATE, SET or REMOVE)",
+            "a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL, CREATE, SET, REMOVE, DELETE or DETACH DELETE)",
         ))
+    }
+
+    /// `DELETE e1, e2, ...` — the targets are ordinary expressions that must
+    /// evaluate to nodes, relationships or paths.
+    fn delete_clause(&mut self, detach: bool, start: Span) -> Result<Clause, ParseError> {
+        let mut targets = vec![self.expression()?];
+        while self.eat(&TokenKind::Comma) {
+            targets.push(self.expression()?);
+        }
+        Ok(Clause::Delete(DeleteClause {
+            detach,
+            targets,
+            span: start.to(self.prev_span()),
+        }))
     }
 
     /// One `SET` assignment: `x.key = v`, `x = map`, `x += map`, or `x:A:B`.
@@ -1573,6 +1596,23 @@ mod tests {
         assert_eq!(c.items.len(), 2);
         assert!(matches!(c.items[0], RemoveItem::Property { .. }));
         assert!(matches!(c.items[1], RemoveItem::Labels { .. }));
+    }
+
+    #[test]
+    fn delete_clauses_parse() {
+        let q = parse_ok("MATCH (n) DELETE n");
+        let Some(Clause::Delete(c)) = q.clauses.last() else {
+            panic!("expected DELETE");
+        };
+        assert!(!c.detach);
+        assert_eq!(c.targets.len(), 1);
+
+        let q = parse_ok("MATCH (a)-[r]->(b) DETACH DELETE a, b");
+        let Some(Clause::Delete(c)) = q.clauses.last() else {
+            panic!("expected DETACH DELETE");
+        };
+        assert!(c.detach);
+        assert_eq!(c.targets.len(), 2);
     }
 
     #[test]

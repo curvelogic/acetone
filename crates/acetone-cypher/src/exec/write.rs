@@ -16,7 +16,7 @@
 //! roots regardless of order) is provided by the prolly-tree layer, not by
 //! this log.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::Direction;
 use crate::exec::source::GraphSource;
@@ -56,6 +56,12 @@ pub enum Mutation {
         id: EntityId,
         properties: BTreeMap<String, Value>,
     },
+    DeleteNode {
+        id: EntityId,
+    },
+    DeleteRel {
+        id: EntityId,
+    },
 }
 
 /// The cumulative side effects of a write query — the openCypher
@@ -94,6 +100,10 @@ pub struct MutableGraph<'a> {
     /// consult these first.
     node_overrides: HashMap<EntityId, NodeValue>,
     rel_overrides: HashMap<EntityId, RelValue>,
+    /// Entities deleted this query. All reads exclude them, so a deleted
+    /// node/relationship is invisible to later clauses.
+    deleted_nodes: HashSet<EntityId>,
+    deleted_rels: HashSet<EntityId>,
     log: Vec<Mutation>,
     summary: WriteSummary,
     /// Monotonic counter for synthesising overlay identities. Shared
@@ -109,6 +119,8 @@ impl<'a> MutableGraph<'a> {
             created_rels: Vec::new(),
             node_overrides: HashMap::new(),
             rel_overrides: HashMap::new(),
+            deleted_nodes: HashSet::new(),
+            deleted_rels: HashSet::new(),
             log: Vec::new(),
             summary: WriteSummary::default(),
             next_id: 0,
@@ -163,8 +175,11 @@ impl<'a> MutableGraph<'a> {
     // --- SET / REMOVE (acetone-eah) -------------------------------------
 
     /// Current value of node `id`, overlay-aware: an override wins, then a
-    /// created node, then the base graph.
+    /// created node, then the base graph. A deleted node is gone.
     pub fn current_node(&self, id: &EntityId) -> Option<NodeValue> {
+        if self.deleted_nodes.contains(id) {
+            return None;
+        }
         self.node_overrides
             .get(id)
             .cloned()
@@ -351,6 +366,46 @@ impl<'a> MutableGraph<'a> {
         self.rel_overrides.get(id).cloned()
     }
 
+    // --- DELETE / DETACH DELETE (acetone-921) ---------------------------
+
+    /// Whether `id` currently has any incident relationship (either
+    /// direction, any type), overlay- and deletion-aware. Drives the
+    /// "cannot delete a connected node without DETACH" rule.
+    pub fn has_incident_rels(&self, id: &EntityId) -> bool {
+        !self.expand(id, Direction::Undirected, &[]).is_empty()
+    }
+
+    /// Delete a relationship (idempotent). Excluded from all later reads.
+    pub fn delete_rel(&mut self, id: &EntityId) {
+        if self.deleted_rels.insert(id.clone()) {
+            self.log.push(Mutation::DeleteRel { id: id.clone() });
+            self.summary.relationships_deleted += 1;
+        }
+    }
+
+    /// Delete a node (idempotent). The caller guarantees it has no incident
+    /// relationships (plain DELETE) or has already detached them.
+    pub fn delete_node(&mut self, id: &EntityId) {
+        if self.deleted_nodes.insert(id.clone()) {
+            self.log.push(Mutation::DeleteNode { id: id.clone() });
+            self.summary.nodes_deleted += 1;
+        }
+    }
+
+    /// Remove every relationship incident to `id`, then the node itself
+    /// (DETACH DELETE).
+    pub fn detach_delete_node(&mut self, id: &EntityId) {
+        let incident: Vec<EntityId> = self
+            .expand(id, Direction::Undirected, &[])
+            .into_iter()
+            .map(|(rel, _)| rel.id)
+            .collect();
+        for rel in incident {
+            self.delete_rel(&rel);
+        }
+        self.delete_node(id);
+    }
+
     pub fn summary(&self) -> &WriteSummary {
         &self.summary
     }
@@ -381,11 +436,13 @@ impl GraphSource for MutableGraph<'_> {
             .base
             .all_nodes()
             .into_iter()
+            .filter(|n| !self.deleted_nodes.contains(&n.id))
             .map(|n| self.overlay_node(n))
             .collect();
         nodes.extend(
             self.created_nodes
                 .iter()
+                .filter(|n| !self.deleted_nodes.contains(&n.id))
                 .map(|n| self.overlay_node(n.clone())),
         );
         nodes
@@ -397,15 +454,26 @@ impl GraphSource for MutableGraph<'_> {
         direction: Direction,
         types: &[String],
     ) -> Vec<(RelValue, NodeValue)> {
+        // A deleted anchor has no edges.
+        if self.deleted_nodes.contains(node) {
+            return Vec::new();
+        }
         // Base edges, with any property/label overrides applied to both the
-        // relationship and its neighbour.
+        // relationship and its neighbour; deleted edges and edges to deleted
+        // neighbours are excluded.
         let mut out: Vec<(RelValue, NodeValue)> = self
             .base
             .expand(node, direction, types)
             .into_iter()
+            .filter(|(rel, neighbour)| {
+                !self.deleted_rels.contains(&rel.id) && !self.deleted_nodes.contains(&neighbour.id)
+            })
             .map(|(rel, neighbour)| (self.overlay_rel(rel), self.overlay_node(neighbour)))
             .collect();
         for rel in &self.created_rels {
+            if self.deleted_rels.contains(&rel.id) {
+                continue;
+            }
             let rel = self.overlay_rel(rel.clone());
             if !types.is_empty() && !types.contains(&rel.rel_type) {
                 continue;
@@ -417,6 +485,7 @@ impl GraphSource for MutableGraph<'_> {
                 Direction::Undirected if rel.end == *node => &rel.start,
                 _ => continue,
             };
+            // `node()` already excludes deleted neighbours.
             if let Some(neighbour) = self.node(neighbour) {
                 out.push((rel.clone(), neighbour));
             }

@@ -158,6 +158,11 @@ pub fn execute_versioned(
             BoundClause::Remove { items, .. } => {
                 rows = remove_clause(rows, items, &mut graph)?;
             }
+            BoundClause::Delete {
+                detach, targets, ..
+            } => {
+                rows = delete_clause(rows, *detach, targets, &mut graph, parameters)?;
+            }
             BoundClause::Call { span, .. } => {
                 return Err(ExecError::Unsupported {
                     feature: "procedures (arrive with acetone-yzc.7)",
@@ -476,6 +481,96 @@ fn remove_clause(
         out.push(row);
     }
     Ok(out)
+}
+
+/// Execute a DELETE / DETACH DELETE clause.
+///
+/// openCypher validates node connectivity against *every* deletion the
+/// clause schedules, not row by row, so this is two-phase across the whole
+/// row set: first collect all target node/relationship identities and
+/// delete the relationships; then delete the nodes — DETACH removing any
+/// remaining incident edges, while a plain DELETE of a node still connected
+/// after all the clause's edge deletions is an error. This makes the
+/// canonical `MATCH (a)-[r]->(x) DELETE r, a` (delete a node and all its
+/// relationships) succeed even when `a` has several relationships spread
+/// across rows.
+fn delete_clause(
+    rows: Vec<Row>,
+    detach: bool,
+    targets: &[BoundExpr],
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<Vec<Row>, ExecError> {
+    // Phase 1 (read-only): resolve every target of every row to identities.
+    let mut node_ids = Vec::new();
+    let mut rel_ids = Vec::new();
+    {
+        let ctx = EvalCtx::new(&*graph, parameters);
+        for row in &rows {
+            for target in targets {
+                collect_delete_target(
+                    eval(target, row, &ctx)?,
+                    target.span(),
+                    &mut node_ids,
+                    &mut rel_ids,
+                )?;
+            }
+        }
+    }
+    // Phase 2: relationships first, across the whole clause...
+    for id in &rel_ids {
+        graph.delete_rel(id);
+    }
+    // ...then nodes. DETACH removes remaining incident edges; a plain
+    // DELETE of a still-connected node is an error (checked only now that
+    // all the clause's edge deletions have been applied).
+    for id in &node_ids {
+        if detach {
+            graph.detach_delete_node(id);
+        } else {
+            if graph.has_incident_rels(id) {
+                return Err(ExecError::InvalidArgument {
+                    message: "cannot delete a node with relationships; use DETACH DELETE".into(),
+                    span: targets[0].span(),
+                });
+            }
+            graph.delete_node(id);
+        }
+    }
+    Ok(rows)
+}
+
+/// Classify a DELETE target value into node/relationship identities. A path
+/// deletes all its elements; null is a no-op.
+fn collect_delete_target(
+    value: Value,
+    span: crate::span::Span,
+    node_ids: &mut Vec<EntityId>,
+    rel_ids: &mut Vec<EntityId>,
+) -> Result<(), ExecError> {
+    match value {
+        Value::Null => {}
+        Value::Node(node) => node_ids.push(node.id),
+        Value::Relationship(rel) => rel_ids.push(rel.id),
+        Value::Path(path) => {
+            for rel in path.rels {
+                rel_ids.push(rel.id);
+            }
+            for node in path.nodes {
+                node_ids.push(node.id);
+            }
+        }
+        other => {
+            return Err(ExecError::Type {
+                message: format!(
+                    "DELETE needs a node, relationship or path, got {}",
+                    other.type_name()
+                ),
+                span,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn not_an_entity(value: &Value, span: crate::span::Span) -> ExecError {

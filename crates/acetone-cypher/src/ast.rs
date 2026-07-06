@@ -30,6 +30,8 @@ pub enum Clause {
     Set(SetClause),
     /// Level W: `REMOVE` property/label removals.
     Remove(RemoveClause),
+    /// Level W: `DELETE` / `DETACH DELETE`.
+    Delete(DeleteClause),
 }
 
 impl Clause {
@@ -42,13 +44,17 @@ impl Clause {
             Clause::Create(c) => c.span,
             Clause::Set(c) => c.span,
             Clause::Remove(c) => c.span,
+            Clause::Delete(c) => c.span,
         }
     }
 
     /// Whether this clause writes to the graph (Level W). A query may end
     /// on a write clause with no trailing `RETURN`.
     pub fn is_write(&self) -> bool {
-        matches!(self, Clause::Create(_) | Clause::Set(_) | Clause::Remove(_))
+        matches!(
+            self,
+            Clause::Create(_) | Clause::Set(_) | Clause::Remove(_) | Clause::Delete(_)
+        )
     }
 }
 
@@ -131,6 +137,16 @@ impl SetItem {
             | SetItem::AddLabels { span, .. } => *span,
         }
     }
+}
+
+/// `DELETE` / `DETACH DELETE` (spec §5.1 Level W): delete the entities the
+/// listed expressions evaluate to. `DETACH` first removes a node's incident
+/// relationships; plain `DELETE` of a connected node is an error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeleteClause {
+    pub detach: bool,
+    pub targets: Vec<Expr>,
+    pub span: Span,
 }
 
 /// `REMOVE` (spec §5.1 Level W): property or label removals.
@@ -629,6 +645,7 @@ impl Query {
                     }
                 }
                 Clause::Remove(_) => {}
+                Clause::Delete(c) => roots.extend(c.targets.iter()),
                 Clause::Unwind(u) => roots.push(&u.expr),
                 Clause::With(p) | Clause::Return(p) => {
                     for item in &p.items {
