@@ -468,6 +468,66 @@ mod tests {
     }
 
     #[test]
+    fn merge_null_is_a_noop() {
+        let result = run("CREATE (a:N {v: 1}) SET a += null RETURN a.v AS v");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+    }
+
+    #[test]
+    fn at_snapshot_survives_a_later_write() {
+        // A node bound from an AT <ref> version must keep its historical
+        // values after an unrelated SET, even though it shares identity with
+        // a base node (Invariant #3). Regression for the refresh_entities
+        // override-only fix.
+        use crate::bind::{BindMode, Catalogue, bind};
+        use crate::exec::source::VersionResolver;
+
+        // Base: a Host (n0, v="new") and a Marker (n1). Old: a Host (n0,
+        // v="old"). The AT Host and base Host share id "n0"; the Marker
+        // (n1), which the query mutates, is distinct.
+        fn base_graph() -> MemoryGraph {
+            let mut g = MemoryGraph::new();
+            let mut p = BTreeMap::new();
+            p.insert("v".to_string(), Value::String("new".into()));
+            g.add_node(["Host"], p); // n0
+            g.add_node(["Marker"], BTreeMap::new()); // n1
+            g
+        }
+        fn old_graph() -> MemoryGraph {
+            let mut g = MemoryGraph::new();
+            let mut p = BTreeMap::new();
+            p.insert("v".to_string(), Value::String("old".into()));
+            g.add_node(["Host"], p); // n0
+            g
+        }
+        struct R {
+            base: MemoryGraph,
+        }
+        impl VersionResolver for R {
+            fn base(&self) -> &dyn GraphSource {
+                &self.base
+            }
+            fn at(&self, refspec: &str) -> Result<Box<dyn GraphSource>, String> {
+                match refspec {
+                    "old" => Ok(Box::new(old_graph())),
+                    other => Err(format!("no such version '{other}'")),
+                }
+            }
+        }
+        let resolver = R { base: base_graph() };
+        let q = "MATCH (h:Host) AT 'old' MATCH (c:Marker) SET c.x = 1 RETURN h.v AS v";
+        let parsed = crate::parse(q).unwrap();
+        let bound = bind(q, &parsed, &Catalogue::empty(), BindMode::Lenient).unwrap();
+        let result = execute_versioned(&bound, &resolver, &BTreeMap::new()).unwrap();
+        // Must be the AT-version value, not the base's "new".
+        assert!(
+            matches!(&result.rows[0][0], Value::String(s) if s == "old"),
+            "AT snapshot was clobbered by the later write: {:?}",
+            result.rows[0][0]
+        );
+    }
+
+    #[test]
     fn clause_group_at_queries_another_version() {
         use crate::bind::{BindMode, Catalogue, bind};
         use crate::exec::source::VersionResolver;

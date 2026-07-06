@@ -337,6 +337,15 @@ impl<'a> MutableGraph<'a> {
         rel
     }
 
+    /// A node's overriding value *only if it was mutated this query* — no
+    /// fallback to the created set or base. Used to refresh row bindings
+    /// after a write without disturbing values that were never mutated,
+    /// notably `AT <ref>` snapshots that share a base node's identity but
+    /// carry a different version's properties (Invariant #3).
+    pub fn node_override(&self, id: &EntityId) -> Option<NodeValue> {
+        self.node_overrides.get(id).cloned()
+    }
+
     /// A relationship's current value if it has been mutated this query.
     pub fn rel_override(&self, id: &EntityId) -> Option<RelValue> {
         self.rel_overrides.get(id).cloned()

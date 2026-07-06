@@ -392,8 +392,10 @@ fn apply_set_map(
         let ctx = EvalCtx::new(&*graph, parameters);
         match eval(value, row, &ctx)? {
             Value::Map(map) => map,
-            // `SET x = null` clears all properties (openCypher).
-            Value::Null if !merge => BTreeMap::new(),
+            // openCypher: `SET x = null` clears all properties; `SET x +=
+            // null` is a no-op.
+            Value::Null if merge => return Ok(()),
+            Value::Null => BTreeMap::new(),
             other => {
                 return Err(ExecError::Type {
                     message: format!(
@@ -488,10 +490,16 @@ fn not_an_entity(value: &Value, span: crate::span::Span) -> ExecError {
 
 /// Re-resolve every entity value in a row from the graph overlay, so
 /// aliased variables and path values reflect writes made this clause.
+///
+/// Override-only (never a fallback to base): a value that was not mutated
+/// this query is left exactly as it was bound — critical for `AT <ref>`
+/// node snapshots, which share a base node's identity (Invariant #3) but
+/// carry a different version's properties and must not be rewritten to the
+/// base version by a later write clause.
 fn refresh_entities(row: &mut Row, graph: &MutableGraph) {
     row.update_all(|value| match value {
         Value::Node(node) => {
-            if let Some(current) = graph.current_node(&node.id) {
+            if let Some(current) = graph.node_override(&node.id) {
                 *node = current;
             }
         }
@@ -502,7 +510,7 @@ fn refresh_entities(row: &mut Row, graph: &MutableGraph) {
         }
         Value::Path(path) => {
             for node in &mut path.nodes {
-                if let Some(current) = graph.current_node(&node.id) {
+                if let Some(current) = graph.node_override(&node.id) {
                     *node = current;
                 }
             }
