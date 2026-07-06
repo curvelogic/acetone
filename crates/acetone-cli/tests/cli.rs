@@ -252,7 +252,7 @@ fn fsck_reports_clean_and_detects_damage() {
     // runs): fsck must report error findings, exit non-zero, no Debug
     // dump. (A random victim won't do — a fresh repo also holds
     // unreachable superseded manifests whose loss fsck rightly ignores.)
-    let manifest_oid = git_rev_parse(&repo, "refs/acetone/workspaces/default");
+    let manifest_oid = git_rev_parse(&repo, "refs/worktree/acetone/workspace");
     let spared = repo
         .join("objects")
         .join(&manifest_oid[..2])

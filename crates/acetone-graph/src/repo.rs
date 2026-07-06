@@ -45,7 +45,13 @@ use acetone_store::{
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// Namespace of workspace refs.
+/// The per-worktree workspace ref (ADR-0014). Under git's `refs/worktree/*`
+/// namespace, so git and gix resolve it per-worktree: each worktree has its
+/// own working state, like its own index.
+pub const WORKTREE_WORKSPACE_REF: &str = "refs/worktree/acetone/workspace";
+/// Legacy (pre-ADR-0014) shared workspace-ref namespace. Read as a
+/// fallback so an existing repository keeps its workspace across the
+/// upgrade; the first write migrates to [`WORKTREE_WORKSPACE_REF`].
 pub const WORKSPACE_REF_PREFIX: &str = "refs/acetone/workspaces/";
 /// Namespace of branches (git-native).
 pub const BRANCH_REF_PREFIX: &str = "refs/heads/";
@@ -122,7 +128,7 @@ impl Repository {
             conflicts: None,
         };
         let manifest_hash = store.put(&manifest.encode())?;
-        store.write_ref(&workspace_ref(DEFAULT_WORKSPACE), None, &manifest_hash)?;
+        store.write_ref(WORKTREE_WORKSPACE_REF, None, &manifest_hash)?;
         store.set_head(&format!("{BRANCH_REF_PREFIX}{DEFAULT_BRANCH}"))?;
         Ok(Repository {
             store,
@@ -139,11 +145,39 @@ impl Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
         };
-        // Fail fast: the workspace ref must exist AND its manifest must
-        // decode, so a damaged repository is reported at open, not on
-        // first use.
+        repo.ensure_workspace()?;
+        // Fail fast: the workspace manifest must decode, so a damaged
+        // repository is reported at open, not on first use.
         repo.workspace_manifest()?;
         Ok(repo)
+    }
+
+    /// Ensure the current worktree has a workspace. If it already has one
+    /// (per-worktree or legacy ref), do nothing. Otherwise — a freshly
+    /// `git worktree add`ed worktree that acetone has not seen — bootstrap
+    /// its per-worktree workspace from the checked-out branch's committed
+    /// manifest, so opening a new worktree "just works" (ADR-0014). The
+    /// bootstrap takes the writer lock only in that first-time case; an
+    /// already-provisioned worktree opens lock-free.
+    fn ensure_workspace(&self) -> Result<(), GraphError> {
+        if self.workspace_ref_value()?.is_some() || self.legacy_ref_value()?.is_some() {
+            return Ok(());
+        }
+        let _lock = WriteLock::acquire(self.store.git_dir())?;
+        // Re-check under the lock: another process may have bootstrapped.
+        if self.workspace_ref_value()?.is_some() {
+            return Ok(());
+        }
+        match self.head_commit()? {
+            Some(commit) => {
+                let manifest_hash = self.commit_manifest_hash(&commit)?;
+                self.cas_workspace(None, &manifest_hash)
+            }
+            // No workspace and an unborn branch: nothing to bootstrap from.
+            None => Err(GraphError::NoWorkspace {
+                name: self.workspace.clone(),
+            }),
+        }
     }
 
     /// The underlying store (for layers building on the plumbing, e.g.
@@ -157,9 +191,24 @@ impl Repository {
         &self.workspace
     }
 
+    /// The current value of the per-worktree workspace ref, if present.
+    fn workspace_ref_value(&self) -> Result<Option<Hash>, GraphError> {
+        Ok(self.store.read_ref(WORKTREE_WORKSPACE_REF)?)
+    }
+
+    /// The current value of the legacy shared workspace ref (migration
+    /// fallback), if present.
+    fn legacy_ref_value(&self) -> Result<Option<Hash>, GraphError> {
+        Ok(self.store.read_ref(&workspace_ref(&self.workspace))?)
+    }
+
+    /// The manifest hash of the current workspace: the per-worktree ref, or
+    /// — for a repository created before ADR-0014 — the legacy shared ref.
     fn workspace_manifest_hash(&self) -> Result<Hash, GraphError> {
-        self.store
-            .read_ref(&workspace_ref(&self.workspace))?
+        if let Some(hash) = self.workspace_ref_value()? {
+            return Ok(hash);
+        }
+        self.legacy_ref_value()?
             .ok_or_else(|| GraphError::NoWorkspace {
                 name: self.workspace.clone(),
             })
@@ -267,7 +316,7 @@ impl Repository {
     /// uncommitted changes ([`GraphError::DirtyWorkspace`]). Takes the
     /// single-writer lock (the workspace moves).
     pub fn checkout_branch(&self, name: &str) -> Result<(), GraphError> {
-        let _lock = WriteLock::acquire(self.store.common_dir())?;
+        let _lock = WriteLock::acquire(self.store.git_dir())?;
         if self.is_dirty()? {
             return Err(GraphError::DirtyWorkspace);
         }
@@ -279,9 +328,13 @@ impl Repository {
                 name: name.to_owned(),
             })?;
         let manifest_hash = self.commit_manifest_hash(&target)?;
-        let old = self.workspace_manifest_hash()?;
-        if old != manifest_hash {
-            self.cas_workspace(&old, &manifest_hash)?;
+        // CAS the per-worktree ref against its own current value (None when
+        // this is the first workspace write after an ADR-0014 migration, in
+        // which case the CAS creates it). Skip only when it already points
+        // at the branch's manifest.
+        let expected = self.workspace_ref_value()?;
+        if expected.as_ref() != Some(&manifest_hash) {
+            self.cas_workspace(expected.as_ref(), &manifest_hash)?;
         }
         self.store.set_head(&full)?;
         Ok(())
@@ -330,12 +383,18 @@ impl Repository {
     /// loads the workspace manifest. All mutation and committing happens
     /// through the returned [`Transaction`].
     pub fn begin_write(&self) -> Result<Transaction<'_>, GraphError> {
-        let lock = WriteLock::acquire(self.store.common_dir())?;
+        let lock = WriteLock::acquire(self.store.git_dir())?;
+        // `base_ref_value` is the per-worktree ref's value now (None while
+        // migrating from the legacy ref); the CAS on save expects exactly
+        // this. `base_hash` is the effective manifest, legacy fallback and
+        // all, so reads see the current workspace.
+        let base_ref_value = self.workspace_ref_value()?;
         let base_hash = self.workspace_manifest_hash()?;
         let manifest = read_manifest_chunk(&self.store, &base_hash)?;
         Ok(Transaction {
             repo: self,
             _lock: lock,
+            base_ref_value,
             base_hash,
             manifest,
             schema: Vec::new(),
@@ -389,11 +448,11 @@ impl Repository {
         Ok(self.store.put(&commit.manifest)?)
     }
 
-    fn cas_workspace(&self, old: &Hash, new: &Hash) -> Result<(), GraphError> {
-        match self
-            .store
-            .write_ref(&workspace_ref(&self.workspace), Some(old), new)
-        {
+    /// Compare-and-swap the per-worktree workspace ref. `expected` is its
+    /// value at transaction begin — `None` creates it (first write after an
+    /// ADR-0014 migration, or a fresh transaction whose ref was absent).
+    fn cas_workspace(&self, expected: Option<&Hash>, new: &Hash) -> Result<(), GraphError> {
+        match self.store.write_ref(WORKTREE_WORKSPACE_REF, expected, new) {
             Ok(()) => Ok(()),
             Err(StoreError::CasFailed { .. }) => Err(GraphError::WorkspaceConflict {
                 name: self.workspace.clone(),
@@ -438,6 +497,9 @@ fn read_manifest_chunk(store: &GitStore, hash: &Hash) -> Result<Manifest, GraphE
 pub struct Transaction<'r> {
     repo: &'r Repository,
     _lock: WriteLock,
+    /// The per-worktree workspace ref's value at begin (the CAS expected;
+    /// `None` while migrating from the legacy ref).
+    base_ref_value: Option<Hash>,
     base_hash: Hash,
     manifest: Manifest,
     schema: Vec<BatchOp>,
@@ -551,8 +613,13 @@ impl<'r> Transaction<'r> {
             conflicts: self.manifest.conflicts,
         };
         let new_hash = store.put(&manifest.encode())?;
-        if new_hash != self.base_hash {
-            self.repo.cas_workspace(&self.base_hash, &new_hash)?;
+        // Advance the per-worktree ref unless the manifest is unchanged
+        // *and* the ref already exists (i.e. not a pending migration that
+        // still needs to write the per-worktree ref forward).
+        if new_hash != self.base_hash || self.base_ref_value.is_none() {
+            self.repo
+                .cas_workspace(self.base_ref_value.as_ref(), &new_hash)?;
+            self.base_ref_value = Some(new_hash);
         }
         self.base_hash = new_hash;
         self.manifest = manifest;

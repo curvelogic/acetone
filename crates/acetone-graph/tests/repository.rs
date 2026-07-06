@@ -363,9 +363,134 @@ fn branch_and_checkout_move_the_workspace() {
 }
 
 #[test]
-fn lock_file_lives_in_the_common_dir() {
+fn lock_file_lives_in_the_per_worktree_git_dir() {
+    // ADR-0014: the writer lock is per-worktree. For a repository with no
+    // linked worktrees, git_dir coincides with common_dir.
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
-    let lock = WriteLock::acquire(repo.store().common_dir()).expect("acquire");
-    assert!(lock.path().starts_with(repo.store().common_dir()));
+    let lock = WriteLock::acquire(repo.store().git_dir()).expect("acquire");
+    assert!(lock.path().starts_with(repo.store().git_dir()));
+}
+
+/// Run a git command in `dir`; return whether it succeeded (worktree tests
+/// skip gracefully where `git worktree` is unavailable).
+fn git_ok(dir: &Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("git");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn worktrees_are_first_class() {
+    // Two git worktrees of one repository get independent writers and
+    // independent workspaces (ADR-0014).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git_path = dir.path().join("graph.git");
+    let repo = init_repo(dir.path());
+
+    // Commit some content on main, then branch it.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[("cores", 8)]))
+        .expect("node");
+    tx.commit("seed", &[], None).expect("commit");
+    repo.create_branch("feature", None).expect("branch");
+
+    // Add a linked worktree checked out on `feature`. Skip if the platform
+    // git cannot (older git, sandbox).
+    let wt = dir.path().join("wt");
+    if !git_ok(
+        &git_path,
+        &["worktree", "add", wt.to_str().unwrap(), "feature"],
+    ) {
+        eprintln!("SKIP worktrees_are_first_class: `git worktree add` unavailable");
+        return;
+    }
+
+    // Opening the fresh worktree bootstraps its workspace from `feature`.
+    let wt_repo = Repository::open(&wt).expect("open worktree");
+    let snap = wt_repo.workspace_snapshot().expect("workspace");
+    assert!(
+        snap.get_node(&node("Host", "web1")).expect("get").is_some(),
+        "worktree workspace should carry the committed node"
+    );
+
+    // Independent writers: hold main's writer while the worktree's writer
+    // also starts — different git dirs, different locks.
+    let main_tx = repo.begin_write().expect("main writer");
+    let mut wt_tx = wt_repo
+        .begin_write()
+        .expect("worktree writer runs concurrently with main's");
+    wt_tx
+        .put_node(&node("Host", "web2"), &record(&[("cores", 4)]))
+        .expect("node");
+    wt_tx.save().expect("save");
+    drop(main_tx);
+
+    // Independent workspaces: the worktree's new node is invisible to main.
+    let main_snap = repo.workspace_snapshot().expect("main workspace");
+    assert!(
+        main_snap
+            .get_node(&node("Host", "web2"))
+            .expect("get")
+            .is_none(),
+        "main workspace must not see the worktree's write"
+    );
+    // The per-worktree workspace refs are distinct git refs.
+    assert!(git_ok(
+        &git_path,
+        &["rev-parse", "refs/worktree/acetone/workspace"]
+    ));
+}
+
+#[test]
+fn legacy_workspace_ref_is_adopted_and_migrated() {
+    // A pre-ADR-0014 repository has only the shared legacy workspace ref.
+    // acetone reads it on open and migrates it to the per-worktree ref on
+    // the first write.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let git_path = dir.path().join("graph.git");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("node");
+    tx.save().expect("save");
+
+    // Simulate a legacy repo: move the per-worktree ref's value to the
+    // legacy shared ref and delete the per-worktree one.
+    let manifest = git_out(&git_path, &["rev-parse", "refs/worktree/acetone/workspace"]);
+    assert!(git_ok(
+        &git_path,
+        &["update-ref", "refs/acetone/workspaces/default", &manifest],
+    ));
+    assert!(git_ok(
+        &git_path,
+        &["update-ref", "-d", "refs/worktree/acetone/workspace"]
+    ));
+
+    // Open reads the workspace via the legacy fallback.
+    let reopened = Repository::open(&git_path).expect("open legacy");
+    let snap = reopened.workspace_snapshot().expect("workspace");
+    assert!(snap.get_node(&node("Host", "web1")).expect("get").is_some());
+
+    // The first write migrates forward: the per-worktree ref now exists.
+    let mut tx = reopened.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web2"), &record(&[]))
+        .expect("node");
+    tx.save().expect("save");
+    assert!(
+        git_ok(&git_path, &["rev-parse", "refs/worktree/acetone/workspace"]),
+        "per-worktree ref should exist after the migrating write"
+    );
 }

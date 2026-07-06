@@ -41,7 +41,9 @@ use acetone_prolly::{ChunkFaultKind, verify_reachable};
 use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore, StoreError};
 
 use crate::error::GraphError;
-use crate::repo::{BRANCH_REF_PREFIX, Repository, Snapshot, WORKSPACE_REF_PREFIX};
+use crate::repo::{
+    BRANCH_REF_PREFIX, Repository, Snapshot, WORKSPACE_REF_PREFIX, WORKTREE_WORKSPACE_REF,
+};
 
 /// How serious a [`Finding`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,12 +273,21 @@ pub fn check(repo: &Repository) -> Result<FsckReport, GraphError> {
 /// Verify every workspace manifest. Workspace refs point straight at a
 /// manifest blob (ADR-0010), so this reads the blob and checks the
 /// manifest directly.
+///
+/// Post-ADR-0014 the current worktree's workspace is a single per-worktree
+/// ref (`refs/worktree/acetone/workspace`), checked by name; any legacy
+/// shared `refs/acetone/workspaces/*` refs (a not-yet-migrated repository)
+/// are still enumerated and checked.
 fn check_workspaces(
     store: &GitStore,
     verified: &mut Verified,
     report: &mut FsckReport,
 ) -> Result<(), GraphError> {
-    for (reference, hash) in store.list_refs(WORKSPACE_REF_PREFIX)? {
+    let mut refs: Vec<(String, Hash)> = store.list_refs(WORKSPACE_REF_PREFIX)?;
+    if let Some(hash) = store.read_ref(WORKTREE_WORKSPACE_REF)? {
+        refs.push((WORKTREE_WORKSPACE_REF.to_owned(), hash));
+    }
+    for (reference, hash) in refs {
         let origin = Origin::Workspace { reference };
         match store.get(&hash) {
             Ok(Some(bytes)) => check_manifest(store, &origin, hash, &bytes, verified, report),
