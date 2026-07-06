@@ -152,6 +152,12 @@ pub fn execute_versioned(
             BoundClause::Create { patterns, .. } => {
                 rows = create_clause(rows, patterns, &mut graph, parameters)?;
             }
+            BoundClause::Set { items, .. } => {
+                rows = set_clause(rows, items, &mut graph, parameters)?;
+            }
+            BoundClause::Remove { items, .. } => {
+                rows = remove_clause(rows, items, &mut graph)?;
+            }
             BoundClause::Call { span, .. } => {
                 return Err(ExecError::Unsupported {
                     feature: "procedures (arrive with acetone-yzc.7)",
@@ -273,6 +279,249 @@ fn resolve_or_create_node(
         row.set(var, Value::Node(created.clone()));
     }
     Ok(created)
+}
+
+// --- SET / REMOVE -----------------------------------------------------------
+
+/// Execute a SET clause: apply each assignment to every row, in order.
+/// Items in one clause see each other's effects (`SET n.a = 1, n.b = n.a`),
+/// so the target is rebound after each item; a final refresh re-resolves
+/// every entity binding from the overlay so aliases converge.
+fn set_clause(
+    rows: Vec<Row>,
+    items: &[BoundSetItem],
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<Vec<Row>, ExecError> {
+    let mut out = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        for item in items {
+            apply_set_item(item, &mut row, graph, parameters)?;
+        }
+        refresh_entities(&mut row, graph);
+        out.push(row);
+    }
+    Ok(out)
+}
+
+fn apply_set_item(
+    item: &BoundSetItem,
+    row: &mut Row,
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<(), ExecError> {
+    match item {
+        BoundSetItem::Property {
+            target,
+            key,
+            value,
+            span,
+        } => {
+            let new_value = {
+                let ctx = EvalCtx::new(&*graph, parameters);
+                eval(value, row, &ctx)?
+            };
+            // openCypher: `SET x.p = null` removes the property.
+            let value = if new_value.is_null() {
+                None
+            } else {
+                Some(new_value)
+            };
+            match row.get(*target) {
+                Value::Null => {} // SET on a null entity is a no-op
+                Value::Node(node) => {
+                    if let Some(updated) = graph.set_node_property(&node.id, key.clone(), value) {
+                        row.set(*target, Value::Node(updated));
+                    }
+                }
+                Value::Relationship(rel) => {
+                    let updated = graph.set_rel_property(&rel, key.clone(), value);
+                    row.set(*target, Value::Relationship(updated));
+                }
+                other => return Err(not_an_entity(&other, *span)),
+            }
+        }
+        BoundSetItem::Replace {
+            target,
+            value,
+            span,
+        } => apply_set_map(*target, value, false, row, graph, parameters, *span)?,
+        BoundSetItem::Merge {
+            target,
+            value,
+            span,
+        } => apply_set_map(*target, value, true, row, graph, parameters, *span)?,
+        BoundSetItem::AddLabels {
+            target,
+            labels,
+            span,
+        } => match row.get(*target) {
+            Value::Null => {}
+            Value::Node(node) => {
+                let mut current = node;
+                for label in labels {
+                    if let Some(updated) = graph.add_node_label(&current.id, label.clone()) {
+                        current = updated;
+                    }
+                }
+                row.set(*target, Value::Node(current));
+            }
+            other => {
+                return Err(ExecError::Type {
+                    message: format!("only nodes carry labels, got {}", other.type_name()),
+                    span: *span,
+                });
+            }
+        },
+    }
+    Ok(())
+}
+
+/// `SET x = {..}` (replace) or `SET x += {..}` (merge).
+#[allow(clippy::too_many_arguments)]
+fn apply_set_map(
+    target: VarId,
+    value: &BoundExpr,
+    merge: bool,
+    row: &mut Row,
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+    span: crate::span::Span,
+) -> Result<(), ExecError> {
+    let map = {
+        let ctx = EvalCtx::new(&*graph, parameters);
+        match eval(value, row, &ctx)? {
+            Value::Map(map) => map,
+            // openCypher: `SET x = null` clears all properties; `SET x +=
+            // null` is a no-op.
+            Value::Null if merge => return Ok(()),
+            Value::Null => BTreeMap::new(),
+            other => {
+                return Err(ExecError::Type {
+                    message: format!(
+                        "SET {} needs a map, got {}",
+                        if merge { "+=" } else { "=" },
+                        other.type_name()
+                    ),
+                    span,
+                });
+            }
+        }
+    };
+    match row.get(target) {
+        Value::Null => {}
+        Value::Node(node) => {
+            if let Some(updated) = graph.set_node_properties(&node.id, map, merge) {
+                row.set(target, Value::Node(updated));
+            }
+        }
+        Value::Relationship(rel) => {
+            let updated = graph.set_rel_properties(&rel, map, merge);
+            row.set(target, Value::Relationship(updated));
+        }
+        other => return Err(not_an_entity(&other, span)),
+    }
+    Ok(())
+}
+
+/// Execute a REMOVE clause.
+fn remove_clause(
+    rows: Vec<Row>,
+    items: &[BoundRemoveItem],
+    graph: &mut MutableGraph,
+) -> Result<Vec<Row>, ExecError> {
+    let mut out = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        for item in items {
+            match item {
+                BoundRemoveItem::Property { target, key, span } => match row.get(*target) {
+                    Value::Null => {}
+                    Value::Node(node) => {
+                        if let Some(updated) = graph.set_node_property(&node.id, key.clone(), None)
+                        {
+                            row.set(*target, Value::Node(updated));
+                        }
+                    }
+                    Value::Relationship(rel) => {
+                        let updated = graph.set_rel_property(&rel, key.clone(), None);
+                        row.set(*target, Value::Relationship(updated));
+                    }
+                    other => return Err(not_an_entity(&other, *span)),
+                },
+                BoundRemoveItem::Labels {
+                    target,
+                    labels,
+                    span,
+                } => match row.get(*target) {
+                    Value::Null => {}
+                    Value::Node(node) => {
+                        let mut current = node;
+                        for label in labels {
+                            if let Some(updated) = graph.remove_node_label(&current.id, label) {
+                                current = updated;
+                            }
+                        }
+                        row.set(*target, Value::Node(current));
+                    }
+                    other => {
+                        return Err(ExecError::Type {
+                            message: format!("only nodes carry labels, got {}", other.type_name()),
+                            span: *span,
+                        });
+                    }
+                },
+            }
+        }
+        refresh_entities(&mut row, graph);
+        out.push(row);
+    }
+    Ok(out)
+}
+
+fn not_an_entity(value: &Value, span: crate::span::Span) -> ExecError {
+    ExecError::Type {
+        message: format!(
+            "SET/REMOVE needs a node or relationship, got {}",
+            value.type_name()
+        ),
+        span,
+    }
+}
+
+/// Re-resolve every entity value in a row from the graph overlay, so
+/// aliased variables and path values reflect writes made this clause.
+///
+/// Override-only (never a fallback to base): a value that was not mutated
+/// this query is left exactly as it was bound — critical for `AT <ref>`
+/// node snapshots, which share a base node's identity (Invariant #3) but
+/// carry a different version's properties and must not be rewritten to the
+/// base version by a later write clause.
+fn refresh_entities(row: &mut Row, graph: &MutableGraph) {
+    row.update_all(|value| match value {
+        Value::Node(node) => {
+            if let Some(current) = graph.node_override(&node.id) {
+                *node = current;
+            }
+        }
+        Value::Relationship(rel) => {
+            if let Some(current) = graph.rel_override(&rel.id) {
+                *rel = current;
+            }
+        }
+        Value::Path(path) => {
+            for node in &mut path.nodes {
+                if let Some(current) = graph.node_override(&node.id) {
+                    *node = current;
+                }
+            }
+            for rel in &mut path.rels {
+                if let Some(current) = graph.rel_override(&rel.id) {
+                    *rel = current;
+                }
+            }
+        }
+        _ => {}
+    });
 }
 
 /// Evaluate a pattern property map (a map literal or a parameter) to a

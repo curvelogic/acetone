@@ -378,6 +378,155 @@ mod tests {
         assert!(matches!(result.rows[0][0], Value::Int(1)));
     }
 
+    // --- SET / REMOVE (write path, acetone-eah) -----------------------------
+
+    #[test]
+    fn set_property_then_read_it() {
+        let result = run("CREATE (a:N {v: 1}) SET a.v = 42 MATCH (n:N) RETURN n.v AS v");
+        assert!(matches!(result.rows[0][0], Value::Int(42)));
+        assert!(result.stats.properties_set >= 1);
+    }
+
+    #[test]
+    fn set_property_on_a_base_node() {
+        let graph = host_graph();
+        let result = run_query(
+            "MATCH (h:Host {name: 'a'}) SET h.os = 'debian' \
+             MATCH (x:Host {name: 'a'}) RETURN x.os AS os",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "debian"));
+    }
+
+    #[test]
+    fn set_null_removes_a_property() {
+        let result = run("CREATE (a:N {v: 1, w: 2}) SET a.v = null RETURN a.v AS v, a.w AS w");
+        assert!(result.rows[0][0].is_null());
+        assert!(matches!(result.rows[0][1], Value::Int(2)));
+    }
+
+    #[test]
+    fn set_replace_and_merge_maps() {
+        // Replace drops unlisted properties.
+        let result = run("CREATE (a:N {x: 1, y: 2}) SET a = {z: 9} RETURN a.x AS x, a.z AS z");
+        assert!(result.rows[0][0].is_null());
+        assert!(matches!(result.rows[0][1], Value::Int(9)));
+        // Merge keeps them.
+        let result = run("CREATE (a:N {x: 1, y: 2}) SET a += {y: 5, z: 9} \
+             RETURN a.x AS x, a.y AS y, a.z AS z");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        assert!(matches!(result.rows[0][1], Value::Int(5)));
+        assert!(matches!(result.rows[0][2], Value::Int(9)));
+    }
+
+    #[test]
+    fn set_and_remove_labels() {
+        let result = run("CREATE (a:N) SET a:Extra:More RETURN labels(a) AS ls");
+        let Value::List(labels) = &result.rows[0][0] else {
+            panic!("expected a list");
+        };
+        assert_eq!(labels.len(), 3);
+        assert!(result.stats.labels_added >= 2);
+
+        let result = run("CREATE (a:N:Extra) REMOVE a:Extra RETURN labels(a) AS ls");
+        let Value::List(labels) = &result.rows[0][0] else {
+            panic!("expected a list");
+        };
+        assert_eq!(labels.len(), 1);
+        assert_eq!(result.stats.labels_removed, 1);
+    }
+
+    #[test]
+    fn remove_property() {
+        let result = run("CREATE (a:N {v: 1}) REMOVE a.v RETURN a.v AS v");
+        assert!(result.rows[0][0].is_null());
+    }
+
+    #[test]
+    fn set_items_see_earlier_effects_in_the_same_clause() {
+        let result = run("CREATE (a:N {v: 1}) SET a.v = 10, a.w = a.v RETURN a.v AS v, a.w AS w");
+        assert!(matches!(result.rows[0][0], Value::Int(10)));
+        assert!(matches!(result.rows[0][1], Value::Int(10)));
+    }
+
+    #[test]
+    fn set_a_relationship_property() {
+        let result = run("CREATE (a:A)-[r:R]->(b:B) SET r.w = 7 \
+             MATCH (:A)-[e:R]->(:B) RETURN e.w AS w");
+        assert!(matches!(result.rows[0][0], Value::Int(7)));
+    }
+
+    #[test]
+    fn set_on_optional_miss_is_a_noop() {
+        // n is null (no Missing node); SET must not error.
+        let result = run("OPTIONAL MATCH (n:Nope) SET n.x = 1 RETURN n");
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows[0][0].is_null());
+        assert_eq!(result.stats.properties_set, 0);
+    }
+
+    #[test]
+    fn merge_null_is_a_noop() {
+        let result = run("CREATE (a:N {v: 1}) SET a += null RETURN a.v AS v");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+    }
+
+    #[test]
+    fn at_snapshot_survives_a_later_write() {
+        // A node bound from an AT <ref> version must keep its historical
+        // values after an unrelated SET, even though it shares identity with
+        // a base node (Invariant #3). Regression for the refresh_entities
+        // override-only fix.
+        use crate::bind::{BindMode, Catalogue, bind};
+        use crate::exec::source::VersionResolver;
+
+        // Base: a Host (n0, v="new") and a Marker (n1). Old: a Host (n0,
+        // v="old"). The AT Host and base Host share id "n0"; the Marker
+        // (n1), which the query mutates, is distinct.
+        fn base_graph() -> MemoryGraph {
+            let mut g = MemoryGraph::new();
+            let mut p = BTreeMap::new();
+            p.insert("v".to_string(), Value::String("new".into()));
+            g.add_node(["Host"], p); // n0
+            g.add_node(["Marker"], BTreeMap::new()); // n1
+            g
+        }
+        fn old_graph() -> MemoryGraph {
+            let mut g = MemoryGraph::new();
+            let mut p = BTreeMap::new();
+            p.insert("v".to_string(), Value::String("old".into()));
+            g.add_node(["Host"], p); // n0
+            g
+        }
+        struct R {
+            base: MemoryGraph,
+        }
+        impl VersionResolver for R {
+            fn base(&self) -> &dyn GraphSource {
+                &self.base
+            }
+            fn at(&self, refspec: &str) -> Result<Box<dyn GraphSource>, String> {
+                match refspec {
+                    "old" => Ok(Box::new(old_graph())),
+                    other => Err(format!("no such version '{other}'")),
+                }
+            }
+        }
+        let resolver = R { base: base_graph() };
+        let q = "MATCH (h:Host) AT 'old' MATCH (c:Marker) SET c.x = 1 RETURN h.v AS v";
+        let parsed = crate::parse(q).unwrap();
+        let bound = bind(q, &parsed, &Catalogue::empty(), BindMode::Lenient).unwrap();
+        let result = execute_versioned(&bound, &resolver, &BTreeMap::new()).unwrap();
+        // Must be the AT-version value, not the base's "new".
+        assert!(
+            matches!(&result.rows[0][0], Value::String(s) if s == "old"),
+            "AT snapshot was clobbered by the later write: {:?}",
+            result.rows[0][0]
+        );
+    }
+
     #[test]
     fn clause_group_at_queries_another_version() {
         use crate::bind::{BindMode, Catalogue, bind};

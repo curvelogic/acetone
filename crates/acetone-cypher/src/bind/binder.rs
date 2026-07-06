@@ -138,7 +138,188 @@ impl<'a> Binder<'a> {
             }
             ast::Clause::Call(c) => self.call_clause(c),
             ast::Clause::Create(c) => self.create_clause(c),
+            ast::Clause::Set(s) => self.set_clause(s),
+            ast::Clause::Remove(r) => self.remove_clause(r),
         }
+    }
+
+    fn set_clause(&mut self, s: &ast::SetClause) -> Result<BoundClause, BindError> {
+        let mut items = Vec::new();
+        for item in &s.items {
+            items.push(self.set_item(item)?);
+        }
+        Ok(BoundClause::Set {
+            items,
+            span: s.span,
+        })
+    }
+
+    fn set_item(&mut self, item: &ast::SetItem) -> Result<BoundSetItem, BindError> {
+        match item {
+            ast::SetItem::Property {
+                var,
+                key,
+                value,
+                span,
+            } => {
+                let target = self.entity_target(var, *span, true)?;
+                self.reject_key_property(target, key, *span)?;
+                let value = self.expr(value, NO_AGG)?;
+                Ok(BoundSetItem::Property {
+                    target,
+                    key: key.clone(),
+                    value,
+                    span: *span,
+                })
+            }
+            ast::SetItem::Replace { var, value, span } => {
+                let target = self.entity_target(var, *span, true)?;
+                // Replacing the whole map would wipe key properties.
+                if let Some((label, property)) = self.keyed_label(target) {
+                    return Err(BindError::SetKeyProperty {
+                        label,
+                        property,
+                        span: *span,
+                    });
+                }
+                let value = self.expr(value, NO_AGG)?;
+                Ok(BoundSetItem::Replace {
+                    target,
+                    value,
+                    span: *span,
+                })
+            }
+            ast::SetItem::Merge { var, value, span } => {
+                let target = self.entity_target(var, *span, true)?;
+                // A `+=` map literal that names a key property is rejected;
+                // a parameter map is checked at run time (mex.3).
+                if let ast::Expr::MapLiteral { entries, .. } = value {
+                    for (property, _) in entries {
+                        self.reject_key_property(target, property, *span)?;
+                    }
+                }
+                let value = self.expr(value, NO_AGG)?;
+                Ok(BoundSetItem::Merge {
+                    target,
+                    value,
+                    span: *span,
+                })
+            }
+            ast::SetItem::AddLabels { var, labels, span } => {
+                let target = self.entity_target(var, *span, false)?;
+                if self.mode == BindMode::Strict {
+                    for label in labels {
+                        if self.catalogue.label(label).is_none() {
+                            return Err(BindError::UnknownLabel {
+                                name: label.clone(),
+                                span: *span,
+                            });
+                        }
+                    }
+                }
+                Ok(BoundSetItem::AddLabels {
+                    target,
+                    labels: labels.clone(),
+                    span: *span,
+                })
+            }
+        }
+    }
+
+    fn remove_clause(&mut self, r: &ast::RemoveClause) -> Result<BoundClause, BindError> {
+        let mut items = Vec::new();
+        for item in &r.items {
+            items.push(match item {
+                ast::RemoveItem::Property { var, key, span } => {
+                    let target = self.entity_target(var, *span, true)?;
+                    self.reject_key_property(target, key, *span)?;
+                    BoundRemoveItem::Property {
+                        target,
+                        key: key.clone(),
+                        span: *span,
+                    }
+                }
+                ast::RemoveItem::Labels { var, labels, span } => {
+                    let target = self.entity_target(var, *span, false)?;
+                    BoundRemoveItem::Labels {
+                        target,
+                        labels: labels.clone(),
+                        span: *span,
+                    }
+                }
+            });
+        }
+        Ok(BoundClause::Remove {
+            items,
+            span: r.span,
+        })
+    }
+
+    /// Resolve a SET/REMOVE target variable. It must be in scope and denote
+    /// an entity: a node, a relationship (only when `allow_rel`), or a
+    /// dynamically-typed value (the executor re-checks). Label operations
+    /// pass `allow_rel = false` — a relationship carries no labels.
+    fn entity_target(&self, name: &str, span: Span, allow_rel: bool) -> Result<VarId, BindError> {
+        let Some(&id) = self.scope.get(name) else {
+            return Err(BindError::UndefinedVariable {
+                name: name.to_string(),
+                span,
+            });
+        };
+        match self.kind_of(id) {
+            EntityKind::Node | EntityKind::Value => Ok(id),
+            EntityKind::Relationship if allow_rel => Ok(id),
+            kind => Err(BindError::VariableTypeConflict {
+                name: name.to_string(),
+                expected: if allow_rel {
+                    "node or relationship"
+                } else {
+                    EntityKind::Node.describe()
+                },
+                actual: kind.describe(),
+                span,
+            }),
+        }
+    }
+
+    /// In Strict mode, reject touching a key property of a statically-known
+    /// label (Invariant #3; the runtime case where the label is unknown is
+    /// enforced later, mex.3).
+    fn reject_key_property(
+        &self,
+        target: VarId,
+        property: &str,
+        span: Span,
+    ) -> Result<(), BindError> {
+        if self.mode != BindMode::Strict {
+            return Ok(());
+        }
+        for label in &self.variables[target.0 as usize].labels {
+            if self.catalogue.is_key_property(label, property) {
+                return Err(BindError::SetKeyProperty {
+                    label: label.clone(),
+                    property: property.to_string(),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The first (label, key-property) of a statically-known keyed label on
+    /// `target`, in Strict mode — used to reject whole-map replacement.
+    fn keyed_label(&self, target: VarId) -> Option<(String, String)> {
+        if self.mode != BindMode::Strict {
+            return None;
+        }
+        for label in &self.variables[target.0 as usize].labels {
+            if let Some(def) = self.catalogue.label(label)
+                && let Some(key) = def.key().first()
+            {
+                return Some((label.clone(), key.clone()));
+            }
+        }
+        None
     }
 
     fn create_clause(&mut self, c: &ast::CreateClause) -> Result<BoundClause, BindError> {

@@ -333,8 +333,105 @@ impl Parser {
                 span: start.to(self.prev_span()),
             }));
         }
-        Err(self
-            .unexpected("a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL or CREATE)"))
+        if self.at_kw("SET") {
+            let start = self.bump().span;
+            let mut items = vec![self.set_item()?];
+            while self.eat(&TokenKind::Comma) {
+                items.push(self.set_item()?);
+            }
+            return Ok(Clause::Set(SetClause {
+                items,
+                span: start.to(self.prev_span()),
+            }));
+        }
+        if self.at_kw("REMOVE") {
+            let start = self.bump().span;
+            let mut items = vec![self.remove_item()?];
+            while self.eat(&TokenKind::Comma) {
+                items.push(self.remove_item()?);
+            }
+            return Ok(Clause::Remove(RemoveClause {
+                items,
+                span: start.to(self.prev_span()),
+            }));
+        }
+        Err(self.unexpected(
+            "a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL, CREATE, SET or REMOVE)",
+        ))
+    }
+
+    /// One `SET` assignment: `x.key = v`, `x = map`, `x += map`, or `x:A:B`.
+    fn set_item(&mut self) -> Result<SetItem, ParseError> {
+        let (var, var_span) = self.binding_name("a variable", "a SET target")?;
+        if self.at(&TokenKind::Colon) {
+            let mut labels = Vec::new();
+            while self.eat(&TokenKind::Colon) {
+                labels.push(self.any_name("a label")?.0);
+            }
+            return Ok(SetItem::AddLabels {
+                var,
+                labels,
+                span: var_span.to(self.prev_span()),
+            });
+        }
+        if self.eat(&TokenKind::Dot) {
+            let (key, _) = self.any_name("a property name after '.'")?;
+            self.expect(&TokenKind::Eq, "'=' in a SET assignment")?;
+            let value = self.expression()?;
+            return Ok(SetItem::Property {
+                var,
+                key,
+                value,
+                span: var_span.to(self.prev_span()),
+            });
+        }
+        // `+=` lexes as Plus then Eq (there is no combined token).
+        if self.at(&TokenKind::Plus) && self.peek_at(1).kind == TokenKind::Eq {
+            self.bump();
+            self.bump();
+            let value = self.expression()?;
+            return Ok(SetItem::Merge {
+                var,
+                value,
+                span: var_span.to(self.prev_span()),
+            });
+        }
+        self.expect(
+            &TokenKind::Eq,
+            "'.property', ':Label', '=' or '+=' after a SET target",
+        )?;
+        let value = self.expression()?;
+        Ok(SetItem::Replace {
+            var,
+            value,
+            span: var_span.to(self.prev_span()),
+        })
+    }
+
+    /// One `REMOVE` item: `x.key` or `x:A:B`.
+    fn remove_item(&mut self) -> Result<RemoveItem, ParseError> {
+        let (var, var_span) = self.binding_name("a variable", "a REMOVE target")?;
+        if self.at(&TokenKind::Colon) {
+            let mut labels = Vec::new();
+            while self.eat(&TokenKind::Colon) {
+                labels.push(self.any_name("a label")?.0);
+            }
+            return Ok(RemoveItem::Labels {
+                var,
+                labels,
+                span: var_span.to(self.prev_span()),
+            });
+        }
+        self.expect(
+            &TokenKind::Dot,
+            "'.property' or ':Label' after a REMOVE target",
+        )?;
+        let (key, _) = self.any_name("a property name after '.'")?;
+        Ok(RemoveItem::Property {
+            var,
+            key,
+            span: var_span.to(self.prev_span()),
+        })
     }
 
     fn match_clause(&mut self, optional: bool, start: Span) -> Result<Clause, ParseError> {
@@ -1455,6 +1552,27 @@ mod tests {
         assert_eq!(pattern.start.labels, vec!["A"]);
         assert_eq!(pattern.steps.len(), 1);
         assert_eq!(pattern.steps[0].0.direction, Direction::Out);
+    }
+
+    #[test]
+    fn set_and_remove_clauses_parse() {
+        let q = parse_ok("MATCH (n) SET n.x = 1, n = {a: 1}, n += {b: 2}, n:Label");
+        let Some(Clause::Set(c)) = q.clauses.last() else {
+            panic!("expected SET");
+        };
+        assert_eq!(c.items.len(), 4);
+        assert!(matches!(c.items[0], SetItem::Property { .. }));
+        assert!(matches!(c.items[1], SetItem::Replace { .. }));
+        assert!(matches!(c.items[2], SetItem::Merge { .. }));
+        assert!(matches!(c.items[3], SetItem::AddLabels { .. }));
+
+        let q = parse_ok("MATCH (n) REMOVE n.x, n:Label");
+        let Some(Clause::Remove(c)) = q.clauses.last() else {
+            panic!("expected REMOVE");
+        };
+        assert_eq!(c.items.len(), 2);
+        assert!(matches!(c.items[0], RemoveItem::Property { .. }));
+        assert!(matches!(c.items[1], RemoveItem::Labels { .. }));
     }
 
     #[test]

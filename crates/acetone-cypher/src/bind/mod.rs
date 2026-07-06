@@ -358,6 +358,40 @@ mod tests {
     }
 
     #[test]
+    fn set_and_remove_bind() {
+        assert!(bind_lenient("MATCH (n) SET n.x = 1 RETURN n").is_ok());
+        assert!(bind_lenient("MATCH (n) SET n = {a: 1}, n += {b: 2} RETURN n").is_ok());
+        assert!(bind_lenient("MATCH (n) SET n:Label RETURN n").is_ok());
+        assert!(bind_lenient("MATCH (n) REMOVE n.x, n:Label RETURN n").is_ok());
+        assert!(bind_lenient("MATCH ()-[r]->() SET r.w = 1 RETURN r").is_ok());
+        // SET target must be in scope.
+        let err = bind_lenient("SET x.p = 1").unwrap_err();
+        assert!(matches!(err, BindError::UndefinedVariable { .. }));
+        // A relationship carries no labels.
+        let err = bind_lenient("MATCH ()-[r]->() SET r:Label RETURN r").unwrap_err();
+        assert!(matches!(err, BindError::VariableTypeConflict { .. }));
+    }
+
+    #[test]
+    fn set_rejects_key_property_modification_in_strict_mode() {
+        // Host's key is [hostname]; SET/REMOVE of it is rejected (Invariant #3).
+        let err = bind_strict("MATCH (h:Host) SET h.hostname = 'x' RETURN h").unwrap_err();
+        assert!(matches!(err, BindError::SetKeyProperty { .. }));
+        let err = bind_strict("MATCH (h:Host) REMOVE h.hostname RETURN h").unwrap_err();
+        assert!(matches!(err, BindError::SetKeyProperty { .. }));
+        // Replacing the whole map would wipe the key: also rejected.
+        let err = bind_strict("MATCH (h:Host) SET h = {os: 'x'} RETURN h").unwrap_err();
+        assert!(matches!(err, BindError::SetKeyProperty { .. }));
+        // A `+=` naming the key is rejected; one that does not is fine.
+        let err = bind_strict("MATCH (h:Host) SET h += {hostname: 'x'} RETURN h").unwrap_err();
+        assert!(matches!(err, BindError::SetKeyProperty { .. }));
+        assert!(bind_strict("MATCH (h:Host) SET h.os = 'debian' RETURN h").is_ok());
+        assert!(bind_strict("MATCH (h:Host) SET h += {os: 'debian'} RETURN h").is_ok());
+        // Lenient mode (schema-free) has no keys, so nothing is rejected.
+        assert!(bind_lenient("MATCH (h:Host) SET h.hostname = 'x' RETURN h").is_ok());
+    }
+
+    #[test]
     fn gate_b_corpus_binds_lenient() {
         // Every read query from the Gate B representative set must bind
         // under a lenient empty catalogue.

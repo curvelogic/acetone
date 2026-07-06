@@ -56,6 +56,15 @@ impl Row {
     pub fn set(&mut self, var: VarId, value: Value) {
         self.slots.insert(var.0, value);
     }
+
+    /// Apply `f` to every bound value in place — used after a write clause
+    /// to re-resolve entity values (nodes/relationships) from the graph
+    /// overlay so aliases and downstream clauses observe the update.
+    pub fn update_all(&mut self, mut f: impl FnMut(&mut Value)) {
+        for value in self.slots.values_mut() {
+            f(value);
+        }
+    }
 }
 
 pub struct EvalCtx<'a> {

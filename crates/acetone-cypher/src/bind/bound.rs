@@ -75,6 +75,16 @@ pub enum BoundClause {
         patterns: Vec<BoundPathPattern>,
         span: Span,
     },
+    /// Level W: `SET` property/label assignments.
+    Set {
+        items: Vec<BoundSetItem>,
+        span: Span,
+    },
+    /// Level W: `REMOVE` property/label removals.
+    Remove {
+        items: Vec<BoundRemoveItem>,
+        span: Span,
+    },
     Call {
         /// Index into the procedure registry.
         procedure: &'static ProcedureDef,
@@ -82,6 +92,48 @@ pub enum BoundClause {
         /// Yielded columns bound as fresh Value variables.
         yields: Vec<(String, VarId)>,
         where_clause: Option<BoundExpr>,
+        span: Span,
+    },
+}
+
+/// A resolved `SET` assignment. `target` is the bound entity variable
+/// (node or relationship, resolved dynamically at execution).
+#[derive(Debug)]
+pub enum BoundSetItem {
+    Property {
+        target: VarId,
+        key: String,
+        value: BoundExpr,
+        span: Span,
+    },
+    Replace {
+        target: VarId,
+        value: BoundExpr,
+        span: Span,
+    },
+    Merge {
+        target: VarId,
+        value: BoundExpr,
+        span: Span,
+    },
+    AddLabels {
+        target: VarId,
+        labels: Vec<String>,
+        span: Span,
+    },
+}
+
+/// A resolved `REMOVE` item.
+#[derive(Debug)]
+pub enum BoundRemoveItem {
+    Property {
+        target: VarId,
+        key: String,
+        span: Span,
+    },
+    Labels {
+        target: VarId,
+        labels: Vec<String>,
         span: Span,
     },
 }
