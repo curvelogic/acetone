@@ -1245,3 +1245,62 @@ fn a_write_that_cannot_persist_leaves_the_workspace_untouched() {
     assert!(stdout(&out).contains("workspace: clean"));
     assert!(stdout(&out).contains("nodes: 0, edges: 0"));
 }
+
+/// The "committed <hex>" line's hash.
+fn commit_hex(output: &Output) -> String {
+    stdout(output)
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("committed ")
+        .expect("commit line")
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn call_history_procedures_run_through_the_query_path() {
+    // acetone-8c3: CALL acetone.log/diff execute via the shared provider
+    // seam, reading the same Repository history the CLI commands do.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["put-node", "N", "1"]).status.success());
+    let c1 = commit_hex(&acetone(&repo, &["commit", "-m", "first"]));
+    assert!(acetone(&repo, &["put-node", "N", "2"]).status.success());
+    let c2 = commit_hex(&acetone(&repo, &["commit", "-m", "second"]));
+
+    // Standalone CALL with no YIELD projects the declared columns.
+    let out = acetone(&repo, &["query", "CALL acetone.log()", "--format", "csv"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("commit,subject"), "{text}");
+    assert!(text.contains("second") && text.contains("first"), "{text}");
+
+    // CALL acetone.diff reads the same Repository::diff as `acetone diff`:
+    // node 2 was added between the two commits.
+    let query =
+        format!("CALL acetone.diff('{c1}', '{c2}') YIELD kind, key RETURN kind, key ORDER BY key");
+    let out = acetone(&repo, &["query", &query, "--format", "csv"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("added"), "{text}");
+    assert!(text.contains("[2]"), "{text}");
+
+    // A procedure whose data is not built yet fails cleanly (no panic).
+    let out = acetone(
+        &repo,
+        &["query", "CALL acetone.conflicts() YIELD key RETURN key"],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("not yet available"),
+        "{}",
+        stderr(&out)
+    );
+}

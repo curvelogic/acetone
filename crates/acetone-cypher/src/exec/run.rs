@@ -17,7 +17,9 @@ use std::collections::{BTreeMap, HashSet};
 use crate::ast::{AtRef, Direction};
 use crate::bind::bound::*;
 use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
-use crate::exec::source::{GraphSource, SingleVersion, VersionResolver};
+use crate::exec::source::{
+    GraphSource, NoProcedures, ProcedureProvider, SingleVersion, VersionResolver,
+};
 use crate::exec::value::{EntityId, NodeValue, PathValue, RelValue, Value};
 use crate::exec::write::{MutableGraph, WriteChanges, WriteSummary};
 
@@ -58,7 +60,20 @@ pub fn execute_versioned(
     resolver: &dyn VersionResolver,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<QueryResult, ExecError> {
-    Ok(run_versioned(query, resolver, parameters)?.0)
+    Ok(run_versioned(query, resolver, &NoProcedures, parameters)?.0)
+}
+
+/// Execute against a version resolver and a procedure provider, so
+/// `CALL acetone.*` clauses (spec §5.2) run against the repository. The
+/// workbench read path uses this; pure-executor callers use the simpler
+/// [`execute_versioned`], whose procedures are unavailable.
+pub fn execute_versioned_with(
+    query: &BoundQuery,
+    resolver: &dyn VersionResolver,
+    procedures: &dyn ProcedureProvider,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<QueryResult, ExecError> {
+    Ok(run_versioned(query, resolver, procedures, parameters)?.0)
 }
 
 /// Execute and also return the net [`WriteChanges`] a persistence layer
@@ -69,12 +84,13 @@ pub fn execute_write(
     resolver: &dyn VersionResolver,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<(QueryResult, WriteChanges), ExecError> {
-    run_versioned(query, resolver, parameters)
+    run_versioned(query, resolver, &NoProcedures, parameters)
 }
 
 fn run_versioned(
     query: &BoundQuery,
     resolver: &dyn VersionResolver,
+    procedures: &dyn ProcedureProvider,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<(QueryResult, WriteChanges), ExecError> {
     let base = resolver.base();
@@ -190,13 +206,81 @@ fn run_versioned(
             } => {
                 rows = merge_clause(rows, pattern, on_create, on_match, &mut graph, parameters)?;
             }
-            BoundClause::Call { span, .. } => {
-                return Err(ExecError::Unsupported {
-                    feature: "procedures (arrive with acetone-yzc.7)",
-                    span: *span,
-                });
+            BoundClause::Call {
+                procedure,
+                args,
+                yields,
+                where_clause,
+                span,
+            } => {
+                // For each incoming row, evaluate the arguments in its
+                // context, run the procedure, and emit one row per result
+                // tuple with the requested YIELD columns bound.
+                let mut produced = Vec::new();
+                for row in &rows {
+                    let ctx = EvalCtx::new(&graph, parameters);
+                    let arg_values = args
+                        .iter()
+                        .map(|arg| eval(arg, row, &ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let result_rows =
+                        procedures
+                            .call(procedure.name, &arg_values)
+                            .map_err(|message| ExecError::InvalidArgument {
+                                message,
+                                span: *span,
+                            })?;
+                    for tuple in result_rows {
+                        let mut next = row.clone();
+                        for (name, var) in yields {
+                            // The binder validated every YIELD column against
+                            // the procedure's declared yields, so the position
+                            // is always found.
+                            let index = procedure
+                                .yields
+                                .iter()
+                                .position(|column| *column == name.as_str())
+                                .expect("bound yield column is declared");
+                            next.set(*var, tuple.get(index).cloned().unwrap_or(Value::Null));
+                        }
+                        if let Some(pred) = where_clause {
+                            let pred_ctx = EvalCtx::new(&graph, parameters);
+                            if truth(&eval(pred, &next, &pred_ctx)?, pred.span())? != Some(true) {
+                                continue;
+                            }
+                        }
+                        produced.push((next, tuple));
+                    }
+                }
+                if yields.is_empty() {
+                    // A standalone `CALL p(args)` with no YIELD: the
+                    // procedure's declared columns are the query result.
+                    result = Some(QueryResult {
+                        columns: procedure.yields.iter().map(|c| c.to_string()).collect(),
+                        rows: produced.into_iter().map(|(_, tuple)| tuple).collect(),
+                        stats: WriteSummary::default(),
+                    });
+                    rows = Vec::new();
+                } else {
+                    rows = produced.into_iter().map(|(row, _)| row).collect();
+                }
             }
         }
+    }
+    // A trailing `CALL p YIELD cols` with no RETURN projects its yielded
+    // columns as the result (openCypher's implicit projection).
+    if result.is_none()
+        && let Some(BoundClause::Call { yields, .. }) = query.clauses.last()
+        && !yields.is_empty()
+    {
+        result = Some(QueryResult {
+            columns: yields.iter().map(|(name, _)| name.clone()).collect(),
+            rows: rows
+                .iter()
+                .map(|row| yields.iter().map(|(_, var)| row.get(*var)).collect())
+                .collect(),
+            stats: WriteSummary::default(),
+        });
     }
     let stats = graph.summary().clone();
     let mut result = result.unwrap_or(QueryResult {

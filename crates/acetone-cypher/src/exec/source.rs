@@ -36,6 +36,34 @@ pub trait GraphSource {
     fn node(&self, id: &EntityId) -> Option<NodeValue>;
 }
 
+/// Runs `CALL acetone.*` procedures (spec §5.2). The executor knows the
+/// procedure catalogue (arity, yield columns) but not how to compute the
+/// results — those need the repository (history, diff, blame, conflicts),
+/// which lives above this crate. The workbench path (acetone-cli) supplies
+/// a provider over `Repository`; pure-executor callers (tests, TCK) use
+/// [`NoProcedures`].
+pub trait ProcedureProvider {
+    /// Run procedure `name` (already existence- and arity-checked by the
+    /// binder) with evaluated `args`. Returns one row per result, each a
+    /// full tuple aligned to the procedure's declared yield columns (in
+    /// declaration order). `Err(message)` for a bad argument or a procedure
+    /// this provider cannot serve.
+    fn call(&self, name: &str, args: &[Value]) -> Result<Vec<Vec<Value>>, String>;
+}
+
+/// A provider that serves no procedures — every `CALL` is an error. Keeps
+/// pure-executor callers (tests, the TCK backend) working without a
+/// repository behind them.
+pub struct NoProcedures;
+
+impl ProcedureProvider for NoProcedures {
+    fn call(&self, name: &str, _args: &[Value]) -> Result<Vec<Vec<Value>>, String> {
+        Err(format!(
+            "procedure {name} needs a repository-backed provider; this query has none"
+        ))
+    }
+}
+
 /// Resolves the graph a clause queries: the base (checked-out) version,
 /// or the version at a refspec for a clause-group `AT` (spec §5.2).
 /// Distinct `MATCH ... AT <ref>` clauses in one query may address distinct

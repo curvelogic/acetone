@@ -153,8 +153,91 @@ impl acetone_cypher::exec::VersionResolver for RepoResolver<'_> {
     }
 }
 
+/// Serves `CALL acetone.*` history procedures (spec §5.2) from the open
+/// repository, so the query executor and the CLI history commands share one
+/// implementation (the efficient prolly diff / commit walk). `acetone.diff`
+/// and `acetone.log` are backed by `Repository::diff`/`log`; `acetone.blame`
+/// and `acetone.conflicts` await their data (acetone-14c.6 / acetone-14c.4).
+struct RepoProcedures<'r> {
+    repo: &'r Repository,
+}
+
+impl acetone_cypher::exec::ProcedureProvider for RepoProcedures<'_> {
+    fn call(&self, name: &str, args: &[Value]) -> Result<Vec<Vec<Value>>, String> {
+        match name {
+            "acetone.log" => {
+                let refspec = match args.first() {
+                    None => None,
+                    Some(v) => Some(as_string(v, "acetone.log", "ref")?),
+                };
+                let entries = self
+                    .repo
+                    .log(refspec.as_deref())
+                    .map_err(|e| e.to_string())?;
+                Ok(entries
+                    .into_iter()
+                    .map(|entry| {
+                        let subject = entry.message.lines().next().unwrap_or("").to_string();
+                        vec![Value::String(entry.id.to_hex()), Value::String(subject)]
+                    })
+                    .collect())
+            }
+            "acetone.diff" => {
+                let from = as_string(&args[0], "acetone.diff", "from")?;
+                let to = as_string(&args[1], "acetone.diff", "to")?;
+                let diff = self.repo.diff(&from, &to).map_err(|e| e.to_string())?;
+                let mut rows = Vec::new();
+                for change in &diff.nodes {
+                    rows.push(vec![
+                        Value::String(change_kind(change.kind).to_string()),
+                        Value::String(change.key.label().to_string()),
+                        Value::String(crate::commands::format_node_key(&change.key)),
+                    ]);
+                }
+                for change in &diff.edges {
+                    rows.push(vec![
+                        Value::String(change_kind(change.kind).to_string()),
+                        Value::String(change.key.rtype().to_string()),
+                        Value::String(crate::commands::format_edge_key(&change.key)),
+                    ]);
+                }
+                Ok(rows)
+            }
+            "acetone.blame" => {
+                Err("acetone.blame is not yet available (arrives with acetone-14c.6)".to_string())
+            }
+            "acetone.conflicts" => Err(
+                "acetone.conflicts is not yet available (arrives with acetone-14c.4)".to_string(),
+            ),
+            other => Err(format!("unknown procedure {other}")),
+        }
+    }
+}
+
+/// A procedure string argument, or a typed error naming the argument.
+fn as_string(value: &Value, procedure: &str, arg: &str) -> Result<String, String> {
+    match value {
+        Value::String(s) => Ok(s.clone()),
+        other => Err(format!(
+            "{procedure} argument {arg} must be a string, got {}",
+            other.type_name()
+        )),
+    }
+}
+
+/// The `kind` yield column for a diff change.
+fn change_kind(kind: acetone_graph::diff::ChangeKind) -> &'static str {
+    use acetone_graph::diff::ChangeKind;
+    match kind {
+        ChangeKind::Added => "added",
+        ChangeKind::Removed => "removed",
+        ChangeKind::Modified => "modified",
+    }
+}
+
 /// Parse, bind and execute a query against a stored snapshot, resolving
-/// any clause-group `AT <ref>` against the repository.
+/// any clause-group `AT <ref>` and any `CALL acetone.*` against the
+/// repository.
 fn execute_query(
     repo: &Repository,
     snapshot: &acetone_graph::Snapshot<'_>,
@@ -179,8 +262,14 @@ fn execute_query(
     let bound = acetone_cypher::bind::bind(cypher, &parsed, &catalogue, mode)
         .map_err(|e| anyhow!("{}", e.render(cypher)))?;
     let resolver = RepoResolver { repo, base };
-    let result = acetone_cypher::exec::execute_versioned(&bound, &resolver, &BTreeMap::new())
-        .map_err(|e| anyhow!("{e}"))?;
+    let procedures = RepoProcedures { repo };
+    let result = acetone_cypher::exec::execute_versioned_with(
+        &bound,
+        &resolver,
+        &procedures,
+        &BTreeMap::new(),
+    )
+    .map_err(|e| anyhow!("{e}"))?;
     Ok(result)
 }
 

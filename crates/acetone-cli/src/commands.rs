@@ -406,12 +406,12 @@ fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Resul
 
 /// `Label [key, ...]`, escaped — the one place a node key is rendered, used
 /// by every command that echoes one.
-fn format_node_key(key: &NodeKey) -> String {
+pub(crate) fn format_node_key(key: &NodeKey) -> String {
     let key_repr: Vec<String> = key.key().iter().map(format_value).collect();
     format!("{} [{}]", format_label(key.label()), key_repr.join(", "))
 }
 
-fn format_edge_key(key: &EdgeKey) -> String {
+pub(crate) fn format_edge_key(key: &EdgeKey) -> String {
     format!(
         "{} -{}-> {}",
         format_node_key(key.src()),
