@@ -844,3 +844,158 @@ fn query_clause_group_at_reads_a_past_version() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("cannot resolve"), "{}", stderr(&out));
 }
+
+#[test]
+fn cypher_write_path_persists_and_stays_consistent() {
+    // The Phase 3 loop: declare schema, edit via Cypher, read back in fresh
+    // processes (persistence), commit, and fsck (edges_rev/index
+    // consistency — the mex.2 acceptance).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    for args in [
+        &["declare-label", "Host", "--key", "name"][..],
+        &["declare-label", "Software", "--key", "name"][..],
+        &["declare-rel-type", "RUNS"][..],
+    ] {
+        let out = acetone(&repo, args);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+
+    // CREATE a node graph.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (a:Host {name: 'web-01', os: 'debian'})-[:RUNS]->(s:Software {name: 'nginx'})",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("2 nodes created, 1 relationship created"));
+
+    // Read it back in a fresh process — proof it persisted.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host)-[:RUNS]->(x:Software) RETURN h.os AS os, x.name AS sw",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "os,sw\ndebian,nginx");
+
+    // MERGE is idempotent: the existing node matches, none created.
+    let out = acetone(&repo, &["query", "MERGE (h:Host {name: 'web-01'})"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("(no changes)"));
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(h) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "n\n1");
+
+    // SET then commit; the change survives and the branch advances.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host {name: 'web-01'}) SET h.os = 'ubuntu'",
+        ],
+    );
+    assert!(stdout(&out).contains("1 property set"));
+    assert!(
+        acetone(&repo, &["commit", "-m", "seed via cypher"])
+            .status
+            .success()
+    );
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN h.os AS os",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "os\nubuntu");
+
+    // DETACH DELETE the whole graph (every node and its edges).
+    let out = acetone(&repo, &["query", "MATCH (n) DETACH DELETE n"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("2 nodes deleted"));
+    assert!(stdout(&out).contains("1 relationship deleted"));
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (n) RETURN count(n) AS n", "--format", "csv"],
+    );
+    assert_eq!(stdout(&out).trim(), "n\n0");
+    // The relationship went too — edges_rev must stay consistent.
+    let out = acetone(&repo, &["fsck"]);
+    assert!(out.status.success(), "fsck after writes: {}", stderr(&out));
+    assert!(stdout(&out).contains("fsck: clean"));
+}
+
+#[test]
+fn cypher_write_handles_composite_keys_and_value_types() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    // A composite (two-column) key and varied property types.
+    let out = acetone(
+        &repo,
+        &["declare-label", "Reading", "--key", "sensor", "--key", "at"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (:Reading {sensor: 'temp', at: 1720000000, celsius: 21.5, ok: true, tags: ['a', 'b']})",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("1 node created"));
+
+    // Read back by matching on the composite key, in a fresh process.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (r:Reading {sensor: 'temp', at: 1720000000}) \
+             RETURN r.celsius AS c, r.ok AS ok, size(r.tags) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "c,ok,n\n21.5,true,2");
+    assert!(acetone(&repo, &["fsck"]).status.success());
+}
+
+#[test]
+fn a_write_that_cannot_persist_leaves_the_workspace_untouched() {
+    // A CREATE whose node identity cannot be derived (no declared key)
+    // fails, and the workspace is not partially advanced (atomicity).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    // Schemaless repo: CREATE cannot derive identity.
+    let out = acetone(&repo, &["query", "CREATE (a:Host {name: 'x'})"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("no label declaring a key"),
+        "{}",
+        stderr(&out)
+    );
+    // Workspace unchanged: still empty and clean.
+    let out = acetone(&repo, &["status"]);
+    assert!(stdout(&out).contains("workspace: clean"));
+    assert!(stdout(&out).contains("nodes: 0, edges: 0"));
+}
