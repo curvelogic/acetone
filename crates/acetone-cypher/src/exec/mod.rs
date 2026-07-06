@@ -585,6 +585,20 @@ mod tests {
     }
 
     #[test]
+    fn plain_delete_of_a_node_and_all_its_relationships() {
+        // `a` has two outgoing edges, matched over two rows. Deleting the
+        // relationship and `a` in one clause must succeed without DETACH —
+        // the connectivity check is deferred to clause end (regression for
+        // the per-row eager-check bug).
+        let result = run("CREATE (a:A)-[:R]->(b:B) CREATE (a)-[:R]->(c:B) \
+             WITH a MATCH (a)-[r:R]->(x) DELETE r, a \
+             MATCH (n:A) RETURN count(n) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(0)));
+        assert_eq!(result.stats.nodes_deleted, 1);
+        assert_eq!(result.stats.relationships_deleted, 2);
+    }
+
+    #[test]
     fn delete_on_null_is_a_noop() {
         let result = run("OPTIONAL MATCH (n:Nope) DELETE n RETURN 1 AS x");
         assert!(matches!(result.rows[0][0], Value::Int(1)));
