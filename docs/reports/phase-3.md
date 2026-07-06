@@ -37,28 +37,30 @@ every non-trivial fix commit was re-reviewed.
 
 The roadmap sets three exit criteria. Assessed honestly:
 
-**1. Write-feature TCK scenarios passing for the supported subset — PARTIAL
-(flagged for your ruling).** The write semantics are verified exhaustively,
-but *not yet through the TCK harness*:
+**1. Write-feature TCK scenarios passing for the supported subset — MET**
+(acetone-1h7, done at the gate on Greg's ruling that the harness verification
+was required). The write subset is now verified *through the TCK harness*,
+not only by unit tests:
 
-- **Verified:** the `acetone-cypher` crate's 134 unit tests include full
-  coverage of every write clause and its edge cases (CREATE
-  identity/visibility/rels/paths; SET
-  property/replace/merge/labels/null-removal/aliasing; REMOVE; DELETE and
-  DETACH with the connectivity rule; MERGE match-vs-create and idempotence;
-  key-immutability). End-to-end CLI tests drive the real binary through
-  create → read-back-in-a-fresh-process → MERGE → SET → composite keys →
-  DELETE → commit → `fsck` clean, plus every constraint rejection and
-  transactional atomicity.
-- **Not done:** the TCK classifier still buckets the write keywords as
-  `DeferredSyntax`, and `execute_and_verify` models neither openCypher
-  *side effects* (`And the side effects should be:`) nor a scenario's
-  *setup graph*. So the published TCK numbers are unchanged and do not yet
-  credit the write subset. The write path (`execute_write` → `WriteSummary`)
-  now makes side-effect verification feasible; wiring it is filed as
-  **acetone-1h7**. This is the one exit criterion not met via its named
-  mechanism — your call at the gate whether the unit/e2e evidence suffices
-  or acetone-1h7 blocks the close.
+- The harness runs each write scenario's **setup graph** (one statement at a
+  time, in memory) and the query under test, then verifies both the returned
+  **rows** and the openCypher **side effects** (`And the side effects should
+  be:`). Side effects are read as a **graph-state delta** — distinct label
+  tokens (`CREATE (:L),(:L)` is `+labels 1`), net node/relationship
+  identities (`CREATE (n) DELETE n` is `+nodes 0`) and per-operation property
+  counts (an overwrite is `+properties 1` *and* `-properties 1`; a null value
+  is no property) — which is what openCypher actually counts.
+- **Result: TCK conformance rose from 1371 to 1596 passing scenarios of
+  3897** (35.2% → 41.0%), i.e. **+225 write scenarios verified**, with only
+  **4 new failures** (56 total) — all genuine MERGE-relationship gaps (`SET
+  r = <entity>`; a MERGE-rel `RETURN` column), filed as **acetone-q9m**.
+  Write syntax beyond the v0.1 Level W subset (undirected `MERGE`, `SET
+  (n).p`) is classed Unsupported, like read deferrals, not failed.
+- This is *in addition to* the 134 `acetone-cypher` unit tests (full
+  per-clause coverage) and the end-to-end CLI tests (create →
+  read-back-in-a-fresh-process → MERGE → SET → composite keys → DELETE →
+  commit → `fsck` clean, plus every constraint rejection and transactional
+  atomicity).
 
 **2. Idempotence demonstrated — MET.** Re-running a `MERGE`-based load of
 identical data produces an unchanged root and `commit` reports nothing to
@@ -161,8 +163,8 @@ Findings, triaged:
 All filed as beads; none is a correctness blocker for the shipped subset,
 but several are honest gaps to weigh:
 
-- **acetone-1h7** — TCK write-scenario harness (the partial exit criterion
-  above).
+- **acetone-q9m** — 4 genuine MERGE-relationship gaps the new TCK write
+  verification surfaced (`SET r = <entity>`; a MERGE-rel `RETURN` column).
 - **acetone-ryg** — UNIQUE is a base scan; it does not catch two *new*
   colliding nodes in one statement, so an unindexed UNIQUE can still admit a
   violating graph. Index-backed enforcement is Phase 5. *A real correctness

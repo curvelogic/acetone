@@ -12,8 +12,13 @@
 //!   write clauses), which is Unsupported instead.
 //! - Everything else is **Unsupported**, split by the missing capability.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
 use acetone_cypher::bind::{BindError, BindMode, Catalogue, bind};
-use acetone_cypher::exec::{self, EmptyGraph, ExecError};
+use acetone_cypher::exec::value::{EntityId, Value};
+use acetone_cypher::exec::{
+    self, EmptyGraph, ExecError, GraphSource, MemoryGraph, SingleVersion, execute_write,
+};
 
 use crate::expected;
 use crate::scenario::{Expectation, ScenarioPlan};
@@ -37,8 +42,9 @@ pub enum UnsupportedReason {
     /// The front end rejects at compile time, but the TCK's expected
     /// error class/detail could not be verified against the rejection.
     CompileClassification,
-    /// Uses syntax acetone defers: spec §5.1 deferrals or Phase 3 write
-    /// clauses (acetone-mex.1).
+    /// Uses syntax acetone defers: spec §5.1 deferrals, or write syntax
+    /// beyond the v0.1 Level W subset (the supported write clauses now
+    /// route to write-verify instead — acetone-1h7).
     DeferredSyntax,
 }
 
@@ -50,13 +56,9 @@ pub enum UnsupportedReason {
 /// nothing about the specific flaw a scenario tests.
 fn uses_deferred_syntax(query: &str) -> bool {
     const DEFERRED: &[&str] = &[
-        // Level W — Phase 3 (acetone-mex.1).
-        "CREATE",
-        "MERGE",
-        "SET",
-        "REMOVE",
-        "DELETE",
-        "DETACH",
+        // The Level W write clauses (CREATE/MERGE/SET/REMOVE/DELETE/DETACH)
+        // now parse, bind, execute and verify (acetone-1h7), so they are no
+        // longer deferred — write scenarios route to the write-verify path.
         // spec §5.1 explicit deferrals that are keyword-detectable
         // (FOREACH; shortest-path functions). CALL {} subqueries, map
         // projections and temporal arithmetic are also deferred by §5.1
@@ -215,11 +217,23 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
         },
         expectation @ (Expectation::Rows { .. } | Expectation::EmptyResult | Expectation::None) => {
             match &front_end {
-                FrontEnd::ParseRejected(e) if !uses_deferred_syntax(query) => Verdict::Failed {
-                    reason: format!("TCK requires this query to be valid, parser rejected it: {e}"),
-                },
+                // A write query the front end rejects uses write syntax
+                // beyond the v0.1 Level W subset (undirected MERGE, `SET
+                // (n).p`, `WITH *` after a write, …) — deferred, like a read
+                // deferral, not a defect.
+                FrontEnd::ParseRejected(e)
+                    if !uses_deferred_syntax(query) && !is_write_query(query) =>
+                {
+                    Verdict::Failed {
+                        reason: format!(
+                            "TCK requires this query to be valid, parser rejected it: {e}"
+                        ),
+                    }
+                }
                 FrontEnd::BindRejected(e)
-                    if !uses_deferred_syntax(query) && !is_deferred_bind_error(e) =>
+                    if !uses_deferred_syntax(query)
+                        && !is_write_query(query)
+                        && !is_deferred_bind_error(e) =>
                 {
                     Verdict::Failed {
                         reason: format!(
@@ -230,15 +244,14 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
                 FrontEnd::ParseRejected(_) | FrontEnd::BindRejected(_) => {
                     Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
                 }
-                // Write clauses (acetone-mex.1 onward) now parse, bind and
-                // execute, but the harness does not yet model openCypher
-                // side effects (`And the side effects should be:`) or run a
-                // scenario's setup graph. Verifying a write scenario on
-                // returned rows alone would give a false verdict, so write
-                // queries stay DeferredSyntax until the side-effect harness
-                // lands (tracked follow-up bead).
                 FrontEnd::Accepted if uses_deferred_syntax(query) => {
                     Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+                }
+                // Write scenarios (acetone-1h7) run their setup graph and
+                // the query under test in memory, then verify both the
+                // returned rows and the openCypher side effects.
+                FrontEnd::Accepted if is_write_query(query) => {
+                    write_verify(plan, query, expectation)
                 }
                 FrontEnd::Accepted => execute_and_verify(plan, query, expectation),
             }
@@ -272,6 +285,210 @@ fn execute_and_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectatio
         }
         Ok(result) => result,
     };
+    verify_rows(expectation, &result)
+}
+
+/// Token heuristic: does the query contain a write clause? (`DETACH` only
+/// ever accompanies `DELETE`, so `DELETE` covers it.)
+fn is_write_query(query: &str) -> bool {
+    const WRITE: &[&str] = &["CREATE", "MERGE", "SET", "REMOVE", "DELETE"];
+    query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|token| WRITE.iter().any(|kw| token.eq_ignore_ascii_case(kw)))
+}
+
+/// A write query's execution failure, distinguishing a front-end rejection
+/// (only reachable for setup statements) from an executor error.
+enum WriteRunError {
+    Front,
+    Exec(ExecError),
+}
+
+/// Parse, bind (leniently, schema-free like the rest of the TCK backend)
+/// and execute one write statement against `graph`, returning its result
+/// and net changes.
+fn run_write_once(
+    query: &str,
+    graph: &MemoryGraph,
+    params: &std::collections::BTreeMap<String, acetone_cypher::exec::Value>,
+) -> Result<(exec::QueryResult, exec::WriteChanges), WriteRunError> {
+    let parsed = acetone_cypher::parse(query).map_err(|_| WriteRunError::Front)?;
+    let bound = bind(query, &parsed, &Catalogue::empty(), BindMode::Lenient)
+        .map_err(|_| WriteRunError::Front)?;
+    let resolver = SingleVersion::new(graph);
+    execute_write(&bound, &resolver, params).map_err(WriteRunError::Exec)
+}
+
+/// Run a write scenario end to end in memory (acetone-1h7): build the setup
+/// graph one statement at a time, execute the query under test, and verify
+/// both its rows and its openCypher side effects. Fixtures needing a named
+/// graph, parameters or stub procedures remain beyond the harness.
+///
+/// Side effects are read from the *graph delta* (state before the query vs
+/// state after its changes are applied), not from the executor's per-op
+/// counters, because openCypher counts graph-state changes: distinct label
+/// tokens (`CREATE (:L),(:L)` is `+labels 1`), net node identities
+/// (`CREATE (n) DELETE n` is `+nodes 0`) and net property values.
+fn write_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectation) -> Verdict {
+    if plan.named_graph.is_some() || plan.has_parameters || plan.needs_procedures {
+        return Verdict::Unsupported(UnsupportedReason::Executor);
+    }
+    let params = BTreeMap::new();
+    let mut graph = MemoryGraph::new();
+    // A setup statement the front end or executor cannot handle means the
+    // fixture cannot be built — Unsupported, not a defect in the query.
+    for setup in &plan.setup_queries {
+        match run_write_once(setup, &graph, &params) {
+            Ok((_, changes)) => graph.apply(&changes),
+            Err(_) => return Verdict::Unsupported(UnsupportedReason::Executor),
+        }
+    }
+    let before = GraphMetrics::of(&graph);
+    let (result, changes) = match run_write_once(query, &graph, &params) {
+        Ok(pair) => pair,
+        Err(WriteRunError::Exec(ExecError::Unsupported { .. })) | Err(WriteRunError::Front) => {
+            return Verdict::Unsupported(UnsupportedReason::Executor);
+        }
+        Err(WriteRunError::Exec(e)) => {
+            return Verdict::Failed {
+                reason: format!("TCK requires this write to succeed, execution failed: {e}"),
+            };
+        }
+    };
+    // A write scenario asserts its side effects even when it returns no
+    // rows, so check them first (against the graph delta).
+    if let Some(expected) = &plan.side_effects {
+        graph.apply(&changes);
+        let actual = GraphMetrics::of(&graph).delta_from(&before);
+        if let Some(reason) = compare_side_effects(expected, &actual) {
+            return Verdict::Failed { reason };
+        }
+    }
+    verify_rows(expectation, &result)
+}
+
+/// A snapshot of the graph properties openCypher side effects are counted
+/// against: node and relationship identities, the set of distinct label
+/// tokens, and every element property keyed by `(element id, key)`.
+struct GraphMetrics {
+    node_ids: HashSet<EntityId>,
+    rel_ids: HashSet<EntityId>,
+    labels: HashSet<String>,
+    props: HashMap<(EntityId, String), Value>,
+}
+
+impl GraphMetrics {
+    fn of(graph: &MemoryGraph) -> Self {
+        let mut m = GraphMetrics {
+            node_ids: HashSet::new(),
+            rel_ids: HashSet::new(),
+            labels: HashSet::new(),
+            props: HashMap::new(),
+        };
+        // A null-valued property does not exist in openCypher (`{p: null}`
+        // stores nothing), so it must not count towards `±properties`.
+        for node in graph.all_nodes() {
+            m.node_ids.insert(node.id.clone());
+            for label in &node.labels {
+                m.labels.insert(label.clone());
+            }
+            for (key, value) in &node.properties {
+                if !value.is_null() {
+                    m.props
+                        .insert((node.id.clone(), key.clone()), value.clone());
+                }
+            }
+        }
+        for rel in graph.all_rels() {
+            m.rel_ids.insert(rel.id.clone());
+            for (key, value) in &rel.properties {
+                if !value.is_null() {
+                    m.props.insert((rel.id.clone(), key.clone()), value.clone());
+                }
+            }
+        }
+        m
+    }
+
+    /// The openCypher side effects that turn `before` into `self`, named as
+    /// the TCK does (`+nodes`, `-properties`, …); zero effects are omitted.
+    fn delta_from(&self, before: &GraphMetrics) -> BTreeMap<String, u64> {
+        let mut effects = BTreeMap::new();
+        let mut put = |name: &str, count: usize| {
+            if count > 0 {
+                effects.insert(name.to_string(), count as u64);
+            }
+        };
+        put("+nodes", self.node_ids.difference(&before.node_ids).count());
+        put("-nodes", before.node_ids.difference(&self.node_ids).count());
+        put(
+            "+relationships",
+            self.rel_ids.difference(&before.rel_ids).count(),
+        );
+        put(
+            "-relationships",
+            before.rel_ids.difference(&self.rel_ids).count(),
+        );
+        put("+labels", self.labels.difference(&before.labels).count());
+        put("-labels", before.labels.difference(&self.labels).count());
+        // openCypher counts properties per operation, not by net state:
+        // overwriting an existing value both removes the old (`-1`) and sets
+        // the new (`+1`). So a *changed* value counts on both sides; a newly
+        // present one only on `+`, and a vanished one only on `-`.
+        let changed = self
+            .props
+            .iter()
+            .filter(|(k, v)| {
+                before
+                    .props
+                    .get(*k)
+                    .is_some_and(|old| !values_equal(old, v))
+            })
+            .count();
+        let newly_present = self
+            .props
+            .iter()
+            .filter(|(k, _)| !before.props.contains_key(*k))
+            .count();
+        let gone = before
+            .props
+            .keys()
+            .filter(|k| !self.props.contains_key(*k))
+            .count();
+        put("+properties", newly_present + changed);
+        put("-properties", gone + changed);
+        effects
+    }
+}
+
+/// Structural equality of two property values. `Value` has no `PartialEq`
+/// (three-valued comparison; `Float`), so compare canonical debug forms —
+/// exact for the property value types (primitives and lists thereof), and
+/// type-distinct (`1` ≠ `1.0`).
+fn values_equal(a: &Value, b: &Value) -> bool {
+    format!("{a:?}") == format!("{b:?}")
+}
+
+/// Compare expected against actual side effects: every named effect must
+/// match, and any effect not named must be zero. Returns a mismatch
+/// description, or `None` on an exact match.
+fn compare_side_effects(
+    expected: &BTreeMap<String, u64>,
+    actual: &BTreeMap<String, u64>,
+) -> Option<String> {
+    let names: BTreeSet<&String> = expected.keys().chain(actual.keys()).collect();
+    for name in names {
+        let want = expected.get(name).copied().unwrap_or(0);
+        let got = actual.get(name).copied().unwrap_or(0);
+        if want != got {
+            return Some(format!("side effect {name}: expected {want}, got {got}"));
+        }
+    }
+    None
+}
+
+/// Verify a query's result rows against the scenario's expected table.
+fn verify_rows(expectation: &Expectation, result: &exec::QueryResult) -> Verdict {
     match expectation {
         Expectation::EmptyResult => {
             if result.rows.is_empty() {
@@ -299,7 +516,7 @@ fn execute_and_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectatio
                 Err(expected::ExpectedError::Malformed(cell)) => Verdict::Failed {
                     reason: format!("harness cannot parse expected cell {cell:?}"),
                 },
-                Ok(table) => match expected::compare(&table, &result) {
+                Ok(table) => match expected::compare(&table, result) {
                     None => Verdict::Passed,
                     Some(mismatch) => Verdict::Failed {
                         reason: format!("result mismatch: {mismatch}"),
@@ -361,6 +578,7 @@ mod tests {
             needs_procedures: false,
             query: Some(query.into()),
             expectation,
+            side_effects: None,
         }
     }
 
@@ -370,6 +588,110 @@ mod tests {
             phase: ErrorPhase::CompileTime,
             detail: "whatever".into(),
         }
+    }
+
+    /// A write scenario: optional setup graph, the query under test, its
+    /// expected rows and side effects.
+    fn write_plan(
+        setup: &[&str],
+        query: &str,
+        expectation: Expectation,
+        effects: &[(&str, u64)],
+    ) -> ScenarioPlan {
+        let mut p = plan(query, expectation);
+        p.setup_queries = setup.iter().map(|s| s.to_string()).collect();
+        p.side_effects = Some(effects.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+        p
+    }
+
+    fn empty_rows(cols: &[&str]) -> Expectation {
+        Expectation::Rows {
+            header: cols.iter().map(|c| c.to_string()).collect(),
+            rows: vec![],
+            ordered: false,
+            lists_unordered: false,
+        }
+    }
+
+    #[test]
+    fn create_side_effects_are_verified() {
+        // +nodes, +labels (one distinct token per label name), +properties.
+        let v = classify(&write_plan(
+            &[],
+            "CREATE (:A:B {x: 1, y: 2})",
+            Expectation::EmptyResult,
+            &[("+nodes", 1), ("+labels", 2), ("+properties", 2)],
+        ));
+        assert_eq!(v, Verdict::Passed);
+    }
+
+    #[test]
+    fn duplicate_label_token_counts_once() {
+        // openCypher counts distinct label tokens, not per-node labels.
+        let v = classify(&write_plan(
+            &[],
+            "CREATE (:L), (:L)",
+            Expectation::EmptyResult,
+            &[("+nodes", 2), ("+labels", 1)],
+        ));
+        assert_eq!(v, Verdict::Passed);
+    }
+
+    #[test]
+    fn created_then_deleted_node_nets_out() {
+        let v = classify(&write_plan(
+            &[],
+            "CREATE (n) DELETE n",
+            Expectation::EmptyResult,
+            &[],
+        ));
+        assert_eq!(v, Verdict::Passed);
+    }
+
+    #[test]
+    fn null_valued_property_is_not_counted() {
+        let v = classify(&write_plan(
+            &[],
+            "CREATE ({id: 12, name: null})",
+            Expectation::EmptyResult,
+            &[("+nodes", 1), ("+properties", 1)],
+        ));
+        assert_eq!(v, Verdict::Passed);
+    }
+
+    #[test]
+    fn setup_graph_and_overwrite_counts_both_sides() {
+        // Overwriting an existing value is `+properties 1` and
+        // `-properties 1`; the setup graph is built first.
+        let v = classify(&write_plan(
+            &["CREATE (:N {num: 42})"],
+            "MATCH (n:N) SET n.num = 43 RETURN n LIMIT 0",
+            empty_rows(&["n"]),
+            &[("+properties", 1), ("-properties", 1)],
+        ));
+        assert_eq!(v, Verdict::Passed);
+    }
+
+    #[test]
+    fn delete_of_a_node_with_a_property_removes_it() {
+        let v = classify(&write_plan(
+            &["CREATE (:N {num: 42})"],
+            "MATCH (n:N) DELETE n",
+            Expectation::EmptyResult,
+            &[("-nodes", 1), ("-labels", 1), ("-properties", 1)],
+        ));
+        assert_eq!(v, Verdict::Passed);
+    }
+
+    #[test]
+    fn a_wrong_side_effect_count_fails() {
+        let v = classify(&write_plan(
+            &[],
+            "CREATE (:A)",
+            Expectation::EmptyResult,
+            &[("+nodes", 2)],
+        ));
+        assert!(matches!(v, Verdict::Failed { .. }));
     }
 
     #[test]
@@ -416,11 +738,7 @@ mod tests {
 
     #[test]
     fn deferred_syntax_is_unsupported_not_failed() {
-        let verdict = classify(&plan("CREATE (n) RETURN n", rows(&["n"], &[], false)));
-        assert_eq!(
-            verdict,
-            Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
-        );
+        // FOREACH remains deferred syntax.
         let verdict = classify(&plan(
             "FOREACH (x IN [1] | SET n.p = x)",
             rows(&["n"], &[], false),
@@ -429,6 +747,25 @@ mod tests {
             verdict,
             Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
         );
+        // A write query whose syntax is beyond the v0.1 subset (undirected
+        // MERGE) is Unsupported, not Failed.
+        let verdict = classify(&plan(
+            "MATCH (a), (b) MERGE (a)-[r:R]-(b) RETURN r",
+            rows(&["r"], &[], false),
+        ));
+        assert_eq!(
+            verdict,
+            Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+        );
+        // But a write clause we support is verified, not bucketed
+        // (acetone-1h7).
+        let verdict = classify(&write_plan(
+            &[],
+            "CREATE (:A)",
+            Expectation::EmptyResult,
+            &[("+nodes", 1), ("+labels", 1)],
+        ));
+        assert_eq!(verdict, Verdict::Passed);
     }
 
     #[test]
@@ -451,6 +788,10 @@ mod tests {
         assert!(!uses_deferred_syntax(
             "MATCH (n) RETURN n.offset, n.created"
         ));
-        assert!(uses_deferred_syntax("MATCH (n) SET n.p = 1"));
+        // A still-deferred construct is detected by token.
+        assert!(uses_deferred_syntax("FOREACH (x IN [1] | SET n.p = x)"));
+        // The now-supported write clauses are no longer deferred (they route
+        // to write-verify instead).
+        assert!(!uses_deferred_syntax("MATCH (n) SET n.p = 1"));
     }
 }
