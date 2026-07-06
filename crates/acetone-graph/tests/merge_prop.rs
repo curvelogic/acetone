@@ -3,7 +3,7 @@
 //! deterministic and — for a clean merge — symmetric: swapping `ours` and
 //! `theirs` yields byte-identical merged roots (acetone-14c.2).
 
-use acetone_graph::merge::{ManifestMerge, merge_manifests};
+use acetone_graph::merge::{ManifestMerge, MergeConflict, merge_manifests};
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::NodeKey;
@@ -126,7 +126,10 @@ fn concurrent_edits_to_the_same_key_conflict() {
     match merged {
         ManifestMerge::Conflicts(conflicts) => {
             assert_eq!(conflicts.len(), 1);
-            assert_eq!(conflicts[0].key, node(1).encode().expect("encode"));
+            let MergeConflict::Cell(cell) = &conflicts[0] else {
+                panic!("expected a cell conflict, got {:?}", conflicts[0]);
+            };
+            assert_eq!(cell.key, node(1).encode().expect("encode"));
         }
         ManifestMerge::Clean(_) => panic!("expected a conflict"),
     }
@@ -257,19 +260,23 @@ proptest! {
                 prop_assert_eq!(enc(&f), enc(&a), "clean merge must be deterministic");
             }
             (ManifestMerge::Conflicts(f), ManifestMerge::Conflicts(r), ManifestMerge::Conflicts(a)) => {
-                use acetone_graph::merge::MergeConflict;
+                use acetone_graph::merge::CellConflict;
                 // Deterministic: repeating the merge gives identical conflicts.
                 prop_assert_eq!(&f, &a, "conflict detection is deterministic");
-                // Symmetric with the side labels swapped: forward's `ours` is
-                // reverse's `theirs` (14c.4's resolver relies on this).
+                // This scenario only edits nodes, so every conflict is a cell
+                // conflict. Symmetric with the side labels swapped: forward's
+                // `ours` is reverse's `theirs` (14c.4's resolver relies on it).
                 let forward_swapped: Vec<MergeConflict> = f
                     .iter()
-                    .map(|c| MergeConflict {
-                        map: c.map,
-                        key: c.key.clone(),
-                        base: c.base.clone(),
-                        ours: c.theirs.clone(),
-                        theirs: c.ours.clone(),
+                    .map(|c| match c {
+                        MergeConflict::Cell(cell) => MergeConflict::Cell(CellConflict {
+                            map: cell.map,
+                            key: cell.key.clone(),
+                            base: cell.base.clone(),
+                            ours: cell.theirs.clone(),
+                            theirs: cell.ours.clone(),
+                        }),
+                        other => other.clone(),
                     })
                     .collect();
                 prop_assert_eq!(forward_swapped, r, "conflict side labelling swaps with direction");
