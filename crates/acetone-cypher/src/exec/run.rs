@@ -14,17 +14,20 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 
-use crate::ast::AtRef;
+use crate::ast::{AtRef, Direction};
 use crate::bind::bound::*;
 use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
 use crate::exec::source::{GraphSource, SingleVersion, VersionResolver};
 use crate::exec::value::{EntityId, NodeValue, PathValue, RelValue, Value};
+use crate::exec::write::{MutableGraph, WriteSummary};
 
 /// A completed query's output.
 #[derive(Debug, Clone)]
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Value>>,
+    /// Side effects of any write clauses (all zero for a read query).
+    pub stats: WriteSummary,
 }
 
 /// Execute against a single fixed graph. `AT <ref>` clauses are
@@ -56,7 +59,9 @@ pub fn execute_versioned(
     parameters: &BTreeMap<String, Value>,
 ) -> Result<QueryResult, ExecError> {
     let base = resolver.base();
-    let ctx = EvalCtx::new(base, parameters);
+    // Write clauses mutate an overlay over the base version; reads in later
+    // clauses see it. `AT` clauses resolve their own read-only sources.
+    let mut graph = MutableGraph::new(base);
     let mut rows = vec![Row::default()];
     let mut result = None;
 
@@ -75,18 +80,18 @@ pub fn execute_versioned(
                     None => None,
                     Some(at) => {
                         let refspec = resolve_at_ref(at, parameters)?;
-                        let graph = resolver.at(&refspec).map_err(|message| {
+                        let at = resolver.at(&refspec).map_err(|message| {
                             ExecError::InvalidArgument {
                                 message,
                                 span: *span,
                             }
                         })?;
-                        Some(graph)
+                        Some(at)
                     }
                 };
                 let clause_ctx = match &at_graph {
-                    Some(graph) => EvalCtx::new(graph.as_ref(), parameters),
-                    None => EvalCtx::new(base, parameters),
+                    Some(at) => EvalCtx::new(at.as_ref(), parameters),
+                    None => EvalCtx::new(&graph, parameters),
                 };
                 rows = match_clause(
                     rows,
@@ -97,6 +102,7 @@ pub fn execute_versioned(
                 )?;
             }
             BoundClause::Unwind { expr, alias, span } => {
+                let ctx = EvalCtx::new(&graph, parameters);
                 let mut out = Vec::new();
                 for row in rows {
                     let list = eval(expr, &row, &ctx)?;
@@ -120,9 +126,11 @@ pub fn execute_versioned(
                 rows = out;
             }
             BoundClause::With(projection) => {
+                let ctx = EvalCtx::new(&graph, parameters);
                 rows = project(rows, projection, &ctx, true)?.1;
             }
             BoundClause::Return(projection) => {
+                let ctx = EvalCtx::new(&graph, parameters);
                 let (columns, projected) = project(rows, projection, &ctx, false)?;
                 let output = projected
                     .into_iter()
@@ -137,8 +145,12 @@ pub fn execute_versioned(
                 result = Some(QueryResult {
                     columns,
                     rows: output,
+                    stats: WriteSummary::default(),
                 });
                 rows = Vec::new();
+            }
+            BoundClause::Create { patterns, .. } => {
+                rows = create_clause(rows, patterns, &mut graph, parameters)?;
             }
             BoundClause::Call { span, .. } => {
                 return Err(ExecError::Unsupported {
@@ -148,10 +160,140 @@ pub fn execute_versioned(
             }
         }
     }
-    Ok(result.unwrap_or(QueryResult {
+    let stats = graph.summary().clone();
+    let mut result = result.unwrap_or(QueryResult {
         columns: Vec::new(),
         rows: Vec::new(),
-    }))
+        stats: WriteSummary::default(),
+    });
+    result.stats = stats;
+    Ok(result)
+}
+
+// --- CREATE -----------------------------------------------------------------
+
+/// Execute a CREATE clause: for each incoming row, create the unbound
+/// elements of every pattern and bind the new variables (openCypher: each
+/// row drives one instantiation; created elements are visible to later
+/// clauses through the [`MutableGraph`] overlay).
+fn create_clause(
+    rows: Vec<Row>,
+    patterns: &[BoundPathPattern],
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<Vec<Row>, ExecError> {
+    let mut out = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        for pattern in patterns {
+            create_path(pattern, &mut row, graph, parameters)?;
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
+fn create_path(
+    pattern: &BoundPathPattern,
+    row: &mut Row,
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<(), ExecError> {
+    let start = resolve_or_create_node(&pattern.start, row, graph, parameters)?;
+    let mut path_nodes = vec![start.clone()];
+    let mut path_rels = Vec::new();
+    let mut prev = start;
+
+    for (rel_pattern, node_pattern) in &pattern.steps {
+        let target = resolve_or_create_node(node_pattern, row, graph, parameters)?;
+        // The binder guarantees exactly one type and a concrete direction.
+        let rel_type = rel_pattern.types[0].clone();
+        let props = {
+            let ctx = EvalCtx::new(&*graph, parameters);
+            eval_property_map(rel_pattern.properties.as_ref(), row, &ctx, rel_pattern.span)?
+        };
+        let (start_id, end_id) = match rel_pattern.direction {
+            Direction::Out => (prev.id.clone(), target.id.clone()),
+            Direction::In => (target.id.clone(), prev.id.clone()),
+            Direction::Undirected => {
+                return Err(ExecError::InvalidArgument {
+                    message: "CREATE requires a directed relationship".into(),
+                    span: rel_pattern.span,
+                });
+            }
+        };
+        let rel = graph.create_rel(start_id, rel_type, end_id, props);
+        if let Some(var) = rel_pattern.var {
+            row.set(var, Value::Relationship(rel.clone()));
+        }
+        path_rels.push(rel);
+        path_nodes.push(target.clone());
+        prev = target;
+    }
+
+    if let Some(var) = pattern.path_var {
+        row.set(
+            var,
+            Value::Path(PathValue {
+                nodes: path_nodes,
+                rels: path_rels,
+            }),
+        );
+    }
+    Ok(())
+}
+
+/// A CREATE node position: an already-bound variable references an
+/// existing node; a fresh (or anonymous) position creates one.
+fn resolve_or_create_node(
+    node: &BoundNodePattern,
+    row: &mut Row,
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<NodeValue, ExecError> {
+    if let Some(var) = node.var
+        && row.contains(var)
+    {
+        return match row.get(var) {
+            Value::Node(existing) => Ok(existing),
+            other => Err(ExecError::Type {
+                message: format!(
+                    "CREATE cannot reference a bound {} as a node",
+                    other.type_name()
+                ),
+                span: node.span,
+            }),
+        };
+    }
+    let props = {
+        let ctx = EvalCtx::new(&*graph, parameters);
+        eval_property_map(node.properties.as_ref(), row, &ctx, node.span)?
+    };
+    let created = graph.create_node(node.labels.clone(), props);
+    if let Some(var) = node.var {
+        row.set(var, Value::Node(created.clone()));
+    }
+    Ok(created)
+}
+
+/// Evaluate a pattern property map (a map literal or a parameter) to a
+/// concrete property map. An absent map is empty; a non-map value is an
+/// error.
+fn eval_property_map(
+    properties: Option<&BoundExpr>,
+    row: &Row,
+    ctx: &EvalCtx,
+    span: crate::span::Span,
+) -> Result<BTreeMap<String, Value>, ExecError> {
+    match properties {
+        None => Ok(BTreeMap::new()),
+        Some(expr) => match eval(expr, row, ctx)? {
+            Value::Map(map) => Ok(map),
+            other => Err(ExecError::Type {
+                message: format!("a property map must be a map, got {}", other.type_name()),
+                span,
+            }),
+        },
+    }
 }
 
 /// Resolve a clause-group `AT` reference to a refspec string. A

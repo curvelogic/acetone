@@ -307,6 +307,57 @@ mod tests {
     }
 
     #[test]
+    fn create_binds_and_introduces_variables() {
+        let bound = bind_lenient("CREATE (a:N {v: 1})-[r:R]->(b:N) RETURN a, r, b").unwrap();
+        let BoundClause::Create { patterns, .. } = &bound.clauses[0] else {
+            panic!("expected CREATE clause");
+        };
+        assert_eq!(patterns[0].start.labels, vec!["N"]);
+        // a is a node, r a relationship, b a node.
+        let a = bound.variables.iter().find(|v| v.name == "a").unwrap();
+        let r = bound.variables.iter().find(|v| v.name == "r").unwrap();
+        assert_eq!(a.kind, EntityKind::Node);
+        assert_eq!(r.kind, EntityKind::Relationship);
+    }
+
+    #[test]
+    fn create_may_reference_a_bound_node() {
+        // A bare reference to a bound node is fine...
+        assert!(bind_lenient("MATCH (a:A) CREATE (a)-[:R]->(b:B) RETURN b").is_ok());
+        // ...but attaching labels or properties to it is not (openCypher:
+        // that is a SET, not a CREATE) — it must not silently vanish.
+        let err = bind_lenient("MATCH (a:A) CREATE (a:Extra) RETURN a").unwrap_err();
+        assert!(matches!(
+            err,
+            BindError::CreateBoundNodeWithProperties { .. }
+        ));
+        assert_eq!(err.tck_detail(), Some("VariableAlreadyBound"));
+        let err = bind_lenient("MATCH (a:A) CREATE (a {x: 1}) RETURN a").unwrap_err();
+        assert!(matches!(
+            err,
+            BindError::CreateBoundNodeWithProperties { .. }
+        ));
+    }
+
+    #[test]
+    fn create_relationship_rules_are_enforced() {
+        // Undirected relationship in CREATE.
+        let err = bind_lenient("CREATE (a)-[:R]-(b)").unwrap_err();
+        assert_eq!(err.tck_detail(), Some("RequiresDirectedRelationship"));
+        // No / multiple types.
+        let err = bind_lenient("CREATE (a)-[:R|S]->(b)").unwrap_err();
+        assert_eq!(err.tck_detail(), Some("NoSingleRelationshipType"));
+        let err = bind_lenient("CREATE (a)-[]->(b)").unwrap_err();
+        assert_eq!(err.tck_detail(), Some("NoSingleRelationshipType"));
+        // Variable-length in CREATE.
+        let err = bind_lenient("CREATE (a)-[:R*2]->(b)").unwrap_err();
+        assert_eq!(err.tck_detail(), Some("CreatingVarLength"));
+        // Reusing a bound relationship variable to create is an error.
+        let err = bind_lenient("MATCH ()-[r]->() CREATE (a)-[r:R]->(b) RETURN a").unwrap_err();
+        assert!(matches!(err, BindError::VariableAlreadyBound { .. }));
+    }
+
+    #[test]
     fn gate_b_corpus_binds_lenient() {
         // Every read query from the Gate B representative set must bind
         // under a lenient empty catalogue.

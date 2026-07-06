@@ -230,6 +230,16 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
                 FrontEnd::ParseRejected(_) | FrontEnd::BindRejected(_) => {
                     Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
                 }
+                // Write clauses (acetone-mex.1 onward) now parse, bind and
+                // execute, but the harness does not yet model openCypher
+                // side effects (`And the side effects should be:`) or run a
+                // scenario's setup graph. Verifying a write scenario on
+                // returned rows alone would give a false verdict, so write
+                // queries stay DeferredSyntax until the side-effect harness
+                // lands (tracked follow-up bead).
+                FrontEnd::Accepted if uses_deferred_syntax(query) => {
+                    Verdict::Unsupported(UnsupportedReason::DeferredSyntax)
+                }
                 FrontEnd::Accepted => execute_and_verify(plan, query, expectation),
             }
         }

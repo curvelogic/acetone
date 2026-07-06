@@ -68,6 +68,13 @@ pub enum BoundClause {
     },
     With(BoundProjection),
     Return(BoundProjection),
+    /// Level W (Phase 3): create the unbound elements of each pattern.
+    /// Already-bound node variables are referenced, not recreated;
+    /// relationship variables must be fresh.
+    Create {
+        patterns: Vec<BoundPathPattern>,
+        span: Span,
+    },
     Call {
         /// Index into the procedure registry.
         procedure: &'static ProcedureDef,

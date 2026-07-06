@@ -73,6 +73,18 @@ pub enum BindError {
 
     #[error("pattern predicates cannot introduce new variables ('{name}') at bytes {}..{}", span.start, span.end)]
     NewVariableInPatternPredicate { name: String, span: Span },
+
+    #[error("CREATE requires a directed relationship at bytes {}..{}", span.start, span.end)]
+    CreateRequiresDirectedRelationship { span: Span },
+
+    #[error("CREATE requires exactly one relationship type at bytes {}..{}", span.start, span.end)]
+    CreateRequiresSingleRelType { span: Span },
+
+    #[error("variable-length relationships cannot be created at bytes {}..{}", span.start, span.end)]
+    CreateVarLengthRelationship { span: Span },
+
+    #[error("cannot create node '{name}' with labels or properties here; it is already bound at bytes {}..{}", span.start, span.end)]
+    CreateBoundNodeWithProperties { name: String, span: Span },
 }
 
 impl BindError {
@@ -93,7 +105,11 @@ impl BindError {
             | BindError::UnknownProperty { span, .. }
             | BindError::ProcedureNotFound { span, .. }
             | BindError::UnknownYieldColumn { span, .. }
-            | BindError::NewVariableInPatternPredicate { span, .. } => *span,
+            | BindError::NewVariableInPatternPredicate { span, .. }
+            | BindError::CreateRequiresDirectedRelationship { span }
+            | BindError::CreateRequiresSingleRelType { span }
+            | BindError::CreateVarLengthRelationship { span }
+            | BindError::CreateBoundNodeWithProperties { span, .. } => *span,
         }
     }
 
@@ -115,6 +131,14 @@ impl BindError {
             BindError::NoVariablesInScope { .. } => Some("NoVariablesInScope"),
             BindError::NoExpressionAlias { .. } => Some("NoExpressionAlias"),
             BindError::ProcedureNotFound { .. } => Some("ProcedureNotFound"),
+            BindError::CreateRequiresDirectedRelationship { .. } => {
+                Some("RequiresDirectedRelationship")
+            }
+            BindError::CreateRequiresSingleRelType { .. } => Some("NoSingleRelationshipType"),
+            BindError::CreateVarLengthRelationship { .. } => Some("CreatingVarLength"),
+            // openCypher reports attaching labels/properties to an
+            // already-bound variable in CREATE as VariableAlreadyBound.
+            BindError::CreateBoundNodeWithProperties { .. } => Some("VariableAlreadyBound"),
             BindError::UnknownLabel { .. }
             | BindError::UnknownRelType { .. }
             | BindError::UnknownProperty { .. }

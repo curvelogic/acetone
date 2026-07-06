@@ -137,7 +137,123 @@ impl<'a> Binder<'a> {
                 Ok(BoundClause::Return(projection))
             }
             ast::Clause::Call(c) => self.call_clause(c),
+            ast::Clause::Create(c) => self.create_clause(c),
         }
+    }
+
+    fn create_clause(&mut self, c: &ast::CreateClause) -> Result<BoundClause, BindError> {
+        let mut patterns = Vec::new();
+        for pattern in &c.patterns {
+            patterns.push(self.create_pattern(pattern)?);
+        }
+        Ok(BoundClause::Create {
+            patterns,
+            span: c.span,
+        })
+    }
+
+    /// Bind a CREATE path pattern. Node variables follow ordinary
+    /// introduce-rules (bound → referenced, fresh → created); relationship
+    /// variables must be fresh and directed, with exactly one type and no
+    /// var-length (openCypher CREATE restrictions).
+    fn create_pattern(
+        &mut self,
+        pattern: &ast::PathPattern,
+    ) -> Result<BoundPathPattern, BindError> {
+        let path_var = match &pattern.variable {
+            Some(name) => {
+                if self.scope.contains_key(name) {
+                    return Err(BindError::VariableAlreadyBound {
+                        name: name.clone(),
+                        span: pattern.span,
+                    });
+                }
+                Some(self.declare(name, EntityKind::Path, vec![]))
+            }
+            None => None,
+        };
+        let start = self.create_node_pattern(&pattern.start)?;
+        let mut steps = Vec::new();
+        for (rel, node) in &pattern.steps {
+            let rel = self.create_rel_pattern(rel)?;
+            let node = self.create_node_pattern(node)?;
+            steps.push((rel, node));
+        }
+        Ok(BoundPathPattern {
+            path_var,
+            start,
+            steps,
+            span: pattern.span,
+        })
+    }
+
+    /// Bind a CREATE node position. A fresh (or anonymous) position is
+    /// created; an already-bound variable is *referenced*, but openCypher
+    /// forbids attaching labels or properties to that reference (that is a
+    /// SET, not a CREATE) — silently dropping them would be a conformance
+    /// gap, so it is a bind-time error.
+    fn create_node_pattern(
+        &mut self,
+        node: &ast::NodePattern,
+    ) -> Result<BoundNodePattern, BindError> {
+        if let Some(name) = &node.variable
+            && self.scope.contains_key(name)
+            && (!node.labels.is_empty() || node.properties.is_some())
+        {
+            return Err(BindError::CreateBoundNodeWithProperties {
+                name: name.clone(),
+                span: node.span,
+            });
+        }
+        self.node_pattern(node, true)
+    }
+
+    fn create_rel_pattern(&mut self, rel: &ast::RelPattern) -> Result<BoundRelPattern, BindError> {
+        if rel.var_length.is_some() {
+            return Err(BindError::CreateVarLengthRelationship { span: rel.span });
+        }
+        if rel.direction == ast::Direction::Undirected {
+            return Err(BindError::CreateRequiresDirectedRelationship { span: rel.span });
+        }
+        if rel.types.len() != 1 {
+            return Err(BindError::CreateRequiresSingleRelType { span: rel.span });
+        }
+        if self.mode == BindMode::Strict {
+            for rel_type in &rel.types {
+                if self.catalogue.rel_type(rel_type).is_none() {
+                    return Err(BindError::UnknownRelType {
+                        name: rel_type.clone(),
+                        span: rel.span,
+                    });
+                }
+            }
+        }
+        // A created relationship needs a fresh variable — reusing a bound
+        // one would be an equality constraint, which CREATE cannot express.
+        let var = match &rel.variable {
+            Some(name) => {
+                if self.scope.contains_key(name) {
+                    return Err(BindError::VariableAlreadyBound {
+                        name: name.clone(),
+                        span: rel.span,
+                    });
+                }
+                Some(self.declare(name, EntityKind::Relationship, vec![]))
+            }
+            None => None,
+        };
+        let properties = match &rel.properties {
+            Some(expr) => Some(self.expr(expr, NO_AGG)?),
+            None => None,
+        };
+        Ok(BoundRelPattern {
+            var,
+            types: rel.types.clone(),
+            direction: rel.direction,
+            var_length: rel.var_length,
+            properties,
+            span: rel.span,
+        })
     }
 
     fn match_clause(&mut self, m: &ast::MatchClause) -> Result<BoundClause, BindError> {

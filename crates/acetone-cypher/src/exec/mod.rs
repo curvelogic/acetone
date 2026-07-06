@@ -8,12 +8,14 @@ pub mod functions;
 pub mod run;
 pub mod source;
 pub mod value;
+pub mod write;
 
 pub use adapter::{GraphSnapshot, catalogue_from_schema};
 pub use eval::{ExecError, Row};
 pub use run::{QueryResult, execute, execute_versioned};
 pub use source::{EmptyGraph, GraphSource, MemoryGraph, SingleVersion, VersionResolver};
 pub use value::Value;
+pub use write::{MutableGraph, Mutation, WriteSummary};
 
 /// Parse, bind (lenient) and execute a query against a graph — the
 /// convenience path used by tests and the TCK backend.
@@ -306,6 +308,74 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, QueryError::Exec(ExecError::Overflow { .. })));
+    }
+
+    // --- CREATE (write path, acetone-mex.1) ---------------------------------
+
+    #[test]
+    fn create_then_match_sees_the_new_node() {
+        // Writes are visible to later clauses in the same query.
+        let result = run("CREATE (a:N {v: 1}) MATCH (n:N) RETURN n.v AS v");
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        assert_eq!(result.stats.nodes_created, 1);
+        assert_eq!(result.stats.relationships_created, 0);
+    }
+
+    #[test]
+    fn create_overlays_the_base_graph() {
+        // Two hosts in the base; CREATE adds a third, all visible.
+        let graph = host_graph();
+        let result = run_query(
+            "CREATE (:Host {name: 'c'}) MATCH (h:Host) RETURN count(h) AS n",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(result.rows[0][0], Value::Int(3)));
+        assert_eq!(result.stats.nodes_created, 1);
+    }
+
+    #[test]
+    fn create_relationship_is_traversable() {
+        let result = run("CREATE (a:A)-[:R]->(b:B) \
+             MATCH (x:A)-[:R]->(y:B) RETURN count(*) AS n");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        assert_eq!(result.stats.nodes_created, 2);
+        assert_eq!(result.stats.relationships_created, 1);
+    }
+
+    #[test]
+    fn create_reuses_a_bound_node_variable() {
+        // The second CREATE references `a` rather than making a new node.
+        let result = run("CREATE (a:A) CREATE (a)-[:R]->(b:B) \
+             MATCH (x:A)-[:R]->(y:B) RETURN count(*) AS n");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        // Two nodes total (a, b), one relationship — a is not recreated.
+        assert_eq!(result.stats.nodes_created, 2);
+        assert_eq!(result.stats.relationships_created, 1);
+    }
+
+    #[test]
+    fn create_binds_a_path_variable() {
+        let result = run("CREATE p = (a:A)-[:R]->(b:B) RETURN length(p) AS len");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+    }
+
+    #[test]
+    fn create_over_unwind_makes_one_node_per_row() {
+        let result = run("UNWIND [1, 2, 3] AS x CREATE (:N {v: x})");
+        // No RETURN: an empty result, but three nodes created.
+        assert!(result.rows.is_empty());
+        assert_eq!(result.stats.nodes_created, 3);
+    }
+
+    #[test]
+    fn create_incoming_direction_orients_the_edge() {
+        // `(a)<-[:R]-(b)` creates b-[:R]->a.
+        let result = run("CREATE (a:A)<-[:R]-(b:B) \
+             MATCH (x:B)-[:R]->(y:A) RETURN count(*) AS n");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
     }
 
     #[test]
