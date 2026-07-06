@@ -91,6 +91,14 @@ pub enum BoundClause {
         targets: Vec<BoundExpr>,
         span: Span,
     },
+    /// Level W: `MERGE` — match the pattern or create it whole, with
+    /// conditional `ON CREATE SET`/`ON MATCH SET`.
+    Merge {
+        pattern: BoundPathPattern,
+        on_create: Vec<BoundSetItem>,
+        on_match: Vec<BoundSetItem>,
+        span: Span,
+    },
     Call {
         /// Index into the procedure registry.
         procedure: &'static ProcedureDef,

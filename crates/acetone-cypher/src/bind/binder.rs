@@ -151,7 +151,29 @@ impl<'a> Binder<'a> {
                     span: d.span,
                 })
             }
+            ast::Clause::Merge(m) => self.merge_clause(m),
         }
+    }
+
+    fn merge_clause(&mut self, m: &ast::MergeClause) -> Result<BoundClause, BindError> {
+        // The MERGE pattern may be created, so it obeys the CREATE rules
+        // (directed single-typed relationships, fresh relationship
+        // variables); its variables are then in scope for ON CREATE/MATCH.
+        let pattern = self.create_pattern(&m.pattern)?;
+        let mut on_create = Vec::new();
+        for item in &m.on_create {
+            on_create.push(self.set_item(item)?);
+        }
+        let mut on_match = Vec::new();
+        for item in &m.on_match {
+            on_match.push(self.set_item(item)?);
+        }
+        Ok(BoundClause::Merge {
+            pattern,
+            on_create,
+            on_match,
+            span: m.span,
+        })
     }
 
     fn set_clause(&mut self, s: &ast::SetClause) -> Result<BoundClause, BindError> {

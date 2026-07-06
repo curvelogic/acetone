@@ -364,9 +364,47 @@ impl Parser {
             let start = self.bump().span;
             return self.delete_clause(false, start);
         }
+        if self.at_kw("MERGE") {
+            return self.merge_clause();
+        }
         Err(self.unexpected(
             "a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL, CREATE, SET, REMOVE, DELETE or DETACH DELETE)",
         ))
+    }
+
+    /// `MERGE <pattern> (ON CREATE SET ... | ON MATCH SET ...)*`.
+    fn merge_clause(&mut self) -> Result<Clause, ParseError> {
+        let start = self.expect_kw("MERGE")?.span;
+        let pattern = self.path_pattern()?;
+        let mut on_create = Vec::new();
+        let mut on_match = Vec::new();
+        loop {
+            if self.at_kw2("ON", "CREATE") {
+                self.bump();
+                self.bump();
+                self.expect_kw("SET")?;
+                on_create.push(self.set_item()?);
+                while self.eat(&TokenKind::Comma) {
+                    on_create.push(self.set_item()?);
+                }
+            } else if self.at_kw2("ON", "MATCH") {
+                self.bump();
+                self.bump();
+                self.expect_kw("SET")?;
+                on_match.push(self.set_item()?);
+                while self.eat(&TokenKind::Comma) {
+                    on_match.push(self.set_item()?);
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(Clause::Merge(MergeClause {
+            pattern,
+            on_create,
+            on_match,
+            span: start.to(self.prev_span()),
+        }))
     }
 
     /// `DELETE e1, e2, ...` — the targets are ordinary expressions that must
@@ -1596,6 +1634,21 @@ mod tests {
         assert_eq!(c.items.len(), 2);
         assert!(matches!(c.items[0], RemoveItem::Property { .. }));
         assert!(matches!(c.items[1], RemoveItem::Labels { .. }));
+    }
+
+    #[test]
+    fn merge_clause_parses_with_on_actions() {
+        let q = parse_ok("MERGE (a:N {k: 1}) ON CREATE SET a.x = 1 ON MATCH SET a.y = 2, a.z = 3");
+        let Some(Clause::Merge(c)) = q.clauses.last() else {
+            panic!("expected MERGE");
+        };
+        assert!(c.pattern.start.labels == vec!["N"]);
+        assert_eq!(c.on_create.len(), 1);
+        assert_eq!(c.on_match.len(), 2);
+
+        // A bare MERGE terminates a query.
+        let q = parse_ok("MERGE (a:N {k: 1})");
+        assert!(matches!(q.clauses.last(), Some(Clause::Merge(_))));
     }
 
     #[test]

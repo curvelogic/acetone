@@ -392,6 +392,22 @@ mod tests {
     }
 
     #[test]
+    fn merge_binds_pattern_and_on_actions() {
+        assert!(
+            bind_lenient("MERGE (a:N {k: 1}) ON CREATE SET a.x = 1 ON MATCH SET a.y = 2 RETURN a")
+                .is_ok()
+        );
+        // MERGE pattern obeys CREATE relationship rules (directed).
+        let err = bind_lenient("MERGE (a)-[:R]-(b)").unwrap_err();
+        assert_eq!(err.tck_detail(), Some("RequiresDirectedRelationship"));
+        // ON CREATE SET of a key property is rejected in Strict mode.
+        let err =
+            bind_strict("MERGE (h:Host {hostname: 'x'}) ON MATCH SET h.hostname = 'y' RETURN h")
+                .unwrap_err();
+        assert!(matches!(err, BindError::SetKeyProperty { .. }));
+    }
+
+    #[test]
     fn gate_b_corpus_binds_lenient() {
         // Every read query from the Gate B representative set must bind
         // under a lenient empty catalogue.

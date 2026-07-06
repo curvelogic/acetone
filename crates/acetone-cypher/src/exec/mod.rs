@@ -614,6 +614,85 @@ mod tests {
         assert_eq!(result.stats.relationships_deleted, 1);
     }
 
+    // --- MERGE (write path, acetone-k0i) ------------------------------------
+
+    #[test]
+    fn merge_creates_when_absent_matches_when_present() {
+        // First MERGE creates; the second matches it (idempotent within a
+        // query) — one node total.
+        let result = run("MERGE (a:N {k: 1}) MERGE (b:N {k: 1}) \
+             MATCH (n:N) RETURN count(n) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        assert_eq!(result.stats.nodes_created, 1);
+    }
+
+    #[test]
+    fn merge_matches_an_existing_base_node() {
+        let graph = host_graph();
+        // A Host named 'a' already exists: MERGE matches, creates nothing.
+        let result = run_query(
+            "MERGE (h:Host {name: 'a'}) RETURN h.name AS n",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "a"));
+        assert_eq!(result.stats.nodes_created, 0);
+    }
+
+    #[test]
+    fn merge_on_create_and_on_match_set() {
+        // Created: ON CREATE fires.
+        let result = run(
+            "MERGE (a:N {k: 1}) ON CREATE SET a.tag = 'new' ON MATCH SET a.tag = 'old' \
+             RETURN a.tag AS t",
+        );
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "new"));
+
+        // Matched: ON MATCH fires.
+        let result = run("CREATE (:N {k: 1}) \
+             MERGE (a:N {k: 1}) ON CREATE SET a.tag = 'new' ON MATCH SET a.tag = 'old' \
+             RETURN a.tag AS t");
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "old"));
+    }
+
+    #[test]
+    fn merge_a_relationship_reusing_a_bound_node() {
+        // a exists; MERGE (a)-[:R]->(b) creates the missing rel and b.
+        let result = run("CREATE (a:A {k: 1}) \
+             WITH a MERGE (a)-[:R]->(b:B) \
+             MATCH (:A)-[r:R]->(:B) RETURN count(r) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        // Re-MERGE the same relationship: no new one.
+        let result = run("CREATE (a:A {k: 1}) \
+             WITH a MERGE (a)-[:R]->(b:B) \
+             WITH a MERGE (a)-[:R]->(c:B) \
+             MATCH (:A)-[r:R]->(:B) RETURN count(r) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+    }
+
+    #[test]
+    fn merge_is_idempotent_on_reexecution() {
+        // Running the same MERGE against a graph that already has the node
+        // creates nothing — the persistence-level idempotence (mex.5) rests
+        // on this in-memory guarantee.
+        let mut graph = MemoryGraph::new();
+        let mut p = BTreeMap::new();
+        p.insert("k".to_string(), Value::Int(1));
+        graph.add_node(["N"], p);
+        let result = run_query(
+            "MERGE (n:N {k: 1}) RETURN n.k AS k",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        assert!(
+            result.stats.is_empty(),
+            "MERGE of an existing node wrote something"
+        );
+    }
+
     #[test]
     fn clause_group_at_queries_another_version() {
         use crate::bind::{BindMode, Catalogue, bind};

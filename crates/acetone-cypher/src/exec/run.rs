@@ -163,6 +163,14 @@ pub fn execute_versioned(
             } => {
                 rows = delete_clause(rows, *detach, targets, &mut graph, parameters)?;
             }
+            BoundClause::Merge {
+                pattern,
+                on_create,
+                on_match,
+                ..
+            } => {
+                rows = merge_clause(rows, pattern, on_create, on_match, &mut graph, parameters)?;
+            }
             BoundClause::Call { span, .. } => {
                 return Err(ExecError::Unsupported {
                     feature: "procedures (arrive with acetone-yzc.7)",
@@ -284,6 +292,62 @@ fn resolve_or_create_node(
         row.set(var, Value::Node(created.clone()));
     }
     Ok(created)
+}
+
+// --- MERGE ------------------------------------------------------------------
+
+/// Execute a MERGE clause: for each incoming row, try to match the whole
+/// pattern; if it matches (one or more times) apply `ON MATCH SET` to each
+/// match, otherwise create the pattern whole and apply `ON CREATE SET`.
+///
+/// The pattern's property maps serve double duty — as match filters
+/// (`match_path` via `node_satisfies`) and as create values (`create_path`
+/// via `eval_property_map`) — which is exactly openCypher MERGE. Created
+/// elements are visible to later clauses through the overlay, so a second
+/// MERGE of the same key in the same query matches the first (idempotent).
+fn merge_clause(
+    rows: Vec<Row>,
+    pattern: &BoundPathPattern,
+    on_create: &[BoundSetItem],
+    on_match: &[BoundSetItem],
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<Vec<Row>, ExecError> {
+    let mut out = Vec::new();
+    for row in rows {
+        // Try to match the whole pattern against the current graph.
+        let matched: Vec<Row> = {
+            let ctx = EvalCtx::new(&*graph, parameters);
+            let state = MatchState {
+                row: row.clone(),
+                used_rels: HashSet::new(),
+            };
+            match_path(pattern, state, &ctx)?
+                .into_iter()
+                .map(|state| state.row)
+                .collect()
+        };
+        if matched.is_empty() {
+            // Create the pattern whole, then apply ON CREATE SET.
+            let mut created = row;
+            create_path(pattern, &mut created, graph, parameters)?;
+            for item in on_create {
+                apply_set_item(item, &mut created, graph, parameters)?;
+            }
+            refresh_entities(&mut created, graph);
+            out.push(created);
+        } else {
+            // Apply ON MATCH SET to every match.
+            for mut matched_row in matched {
+                for item in on_match {
+                    apply_set_item(item, &mut matched_row, graph, parameters)?;
+                }
+                refresh_entities(&mut matched_row, graph);
+                out.push(matched_row);
+            }
+        }
+    }
+    Ok(out)
 }
 
 // --- SET / REMOVE -----------------------------------------------------------
