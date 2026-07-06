@@ -24,6 +24,8 @@ pub enum Clause {
     With(Projection),
     Return(Projection),
     Call(CallClause),
+    /// Level W (Phase 3): `CREATE` of one or more path patterns.
+    Create(CreateClause),
 }
 
 impl Clause {
@@ -33,7 +35,14 @@ impl Clause {
             Clause::Unwind(c) => c.span,
             Clause::With(p) | Clause::Return(p) => p.span,
             Clause::Call(c) => c.span,
+            Clause::Create(c) => c.span,
         }
+    }
+
+    /// Whether this clause writes to the graph (Level W). A query may end
+    /// on a write clause with no trailing `RETURN`.
+    pub fn is_write(&self) -> bool {
+        matches!(self, Clause::Create(_))
     }
 }
 
@@ -61,6 +70,14 @@ impl AtRef {
             AtRef::Refspec { span, .. } | AtRef::Parameter { span, .. } => *span,
         }
     }
+}
+
+/// `CREATE (a:Label {..})-[:TYPE]->(b)`: one or more path patterns whose
+/// unbound node/relationship variables are created (spec §5.1 Level W).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateClause {
+    pub patterns: Vec<PathPattern>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -507,6 +524,15 @@ impl Query {
                         }
                     }
                     roots.extend(m.where_clause.iter());
+                }
+                Clause::Create(c) => {
+                    for pattern in &c.patterns {
+                        roots.extend(pattern.start.properties.iter());
+                        for (rel, node) in &pattern.steps {
+                            roots.extend(rel.properties.iter());
+                            roots.extend(node.properties.iter());
+                        }
+                    }
                 }
                 Clause::Unwind(u) => roots.push(&u.expr),
                 Clause::With(p) | Clause::Return(p) => {

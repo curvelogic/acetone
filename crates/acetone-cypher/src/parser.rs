@@ -282,9 +282,12 @@ impl Parser {
                 message: "empty query".into(),
                 span: Span::new(0, 0),
             }),
+            // A query ends on RETURN, a standalone CALL, or a write clause
+            // (a bare `CREATE ...` with no trailing projection).
             Some(Clause::Return(_)) | Some(Clause::Call(_)) => Ok(Query { clauses, span }),
+            Some(clause) if clause.is_write() => Ok(Query { clauses, span }),
             Some(other) => Err(ParseError::QueryStructure {
-                message: "query must end with RETURN (or a standalone CALL)".into(),
+                message: "query must end with RETURN, a write clause, or a standalone CALL".into(),
                 span: other.span(),
             }),
         }
@@ -322,7 +325,16 @@ impl Parser {
         if self.at_kw("CALL") {
             return self.call_clause();
         }
-        Err(self.unexpected("a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN or CALL)"))
+        if self.at_kw("CREATE") {
+            let start = self.bump().span;
+            let patterns = self.pattern_list()?;
+            return Ok(Clause::Create(CreateClause {
+                patterns,
+                span: start.to(self.prev_span()),
+            }));
+        }
+        Err(self
+            .unexpected("a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL or CREATE)"))
     }
 
     fn match_clause(&mut self, optional: bool, start: Span) -> Result<Clause, ParseError> {
@@ -1418,6 +1430,38 @@ mod tests {
             panic!("expected an expression item");
         };
         expr
+    }
+
+    #[test]
+    fn create_clause_can_terminate_a_query() {
+        // A bare CREATE with no trailing RETURN is a complete query.
+        let q = parse_ok("CREATE (a:Host {name: 'h1'})");
+        assert!(matches!(q.clauses.last(), Some(Clause::Create(_))));
+
+        // CREATE may precede RETURN and follow MATCH.
+        let q = parse_ok("MATCH (a:Host) CREATE (a)-[:RUNS]->(s:Software) RETURN s");
+        assert!(matches!(q.clauses[0], Clause::Match(_)));
+        assert!(matches!(q.clauses[1], Clause::Create(_)));
+        assert!(matches!(q.clauses[2], Clause::Return(_)));
+    }
+
+    #[test]
+    fn create_relationship_pattern_parses() {
+        let q = parse_ok("CREATE (a:A)-[r:R {w: 2}]->(b:B)");
+        let Some(Clause::Create(c)) = q.clauses.last() else {
+            panic!("expected CREATE");
+        };
+        let pattern = &c.patterns[0];
+        assert_eq!(pattern.start.labels, vec!["A"]);
+        assert_eq!(pattern.steps.len(), 1);
+        assert_eq!(pattern.steps[0].0.direction, Direction::Out);
+    }
+
+    #[test]
+    fn bare_match_is_not_a_complete_query() {
+        // A non-write, non-RETURN terminal clause is still rejected.
+        let err = parse_err("MATCH (n)");
+        assert!(matches!(err, ParseError::QueryStructure { .. }));
     }
 
     #[test]
