@@ -238,10 +238,19 @@ fn declare_label(
     let mut txn = repo.begin_write()?;
     txn.put_schema(&entry)?;
     txn.save().context("saving workspace")?;
+    // Escape every echoed name at the terminal boundary — key/require/unique
+    // property names are user- (or schema-) controlled, like the label.
+    let escaped = |names: &[String]| {
+        names
+            .iter()
+            .map(|n| format_label(n))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     outln!(
         "declared label {} key [{}]",
         format_label(label),
-        key.join(", ")
+        escaped(key)
     );
     Ok(())
 }
