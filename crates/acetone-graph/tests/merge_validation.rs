@@ -330,6 +330,151 @@ fn schema_tightening_flags_a_pre_existing_node_missing_the_new_required_property
 }
 
 #[test]
+fn a_single_merge_can_report_both_a_dangling_edge_and_a_unique_collision() {
+    // Independent breaches in one merge: theirs deletes an edge endpoint while
+    // ours introduces a UNIQUE collision. Both must be reported.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let def = LabelDef::new(
+        vec!["id".to_string()],
+        BTreeMap::new(),
+        [],
+        ["email".to_string()],
+    )
+    .expect("label def");
+    let (b, o, t) = diverge(
+        &repo,
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".to_string(),
+                def: def.clone(),
+            })
+            .expect("schema");
+            for id in [1, 2] {
+                tx.put_node(&node(id), &record(&[])).expect("put");
+            }
+            // A base node holding the email that ours will collide with.
+            tx.put_node(&node(5), &record(&[("email", Value::String("dup".into()))]))
+                .expect("put");
+        },
+        // ours: add edge 1 -> 2, and a node colliding on email with node 5.
+        |tx| {
+            tx.put_edge(&edge(1, 2), &EdgeRecord::default())
+                .expect("edge");
+            tx.put_node(&node(6), &record(&[("email", Value::String("dup".into()))]))
+                .expect("put");
+        },
+        // theirs: delete node 2 (the edge destination).
+        |tx| tx.delete_node(&node(2)).expect("delete"),
+    );
+
+    let vs = violations(merge(&repo, &b, &o, &t));
+    assert_eq!(vs.len(), 2, "one dangling + one unique, got {vs:?}");
+    assert!(
+        vs.iter()
+            .any(|v| matches!(v, GraphViolation::DanglingEdge { .. })),
+        "expected a dangling edge in {vs:?}"
+    );
+    assert!(
+        vs.iter()
+            .any(|v| matches!(v, GraphViolation::UniqueViolation { .. })),
+        "expected a unique violation in {vs:?}"
+    );
+}
+
+#[test]
+fn modifying_a_node_to_drop_a_required_property_is_a_conflict() {
+    // Existence breach driven by a node change (not a schema change): the
+    // schema requires `email`; ours rewrites a node's record to drop it while
+    // theirs edits an unrelated node, so the record merges in cleanly.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let def = LabelDef::new(
+        vec!["id".to_string()],
+        BTreeMap::new(),
+        ["email".to_string()],
+        [],
+    )
+    .expect("label def");
+    let (b, o, t) = diverge(
+        &repo,
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".to_string(),
+                def: def.clone(),
+            })
+            .expect("schema");
+            tx.put_node(&node(1), &record(&[("email", Value::String("a@x".into()))]))
+                .expect("put");
+            tx.put_node(&node(2), &record(&[("email", Value::String("b@x".into()))]))
+                .expect("put");
+        },
+        // ours: overwrite node 1 with a record lacking `email` (plumbing lets
+        // this through; the merge validation is what must catch it).
+        |tx| {
+            tx.put_node(&node(1), &record(&[])).expect("put");
+        },
+        // theirs: touch only node 2.
+        |tx| {
+            tx.put_node(&node(2), &record(&[("email", Value::String("c@x".into()))]))
+                .expect("put");
+        },
+    );
+
+    let vs = violations(merge(&repo, &b, &o, &t));
+    assert_eq!(vs.len(), 1, "one missing-required, got {vs:?}");
+    assert!(matches!(
+        &vs[0],
+        GraphViolation::MissingRequired { property, .. } if property == "email"
+    ));
+}
+
+#[test]
+fn a_pre_existing_unique_collision_is_not_attributed_to_a_disjoint_merge() {
+    // base already violates a UNIQUE constraint (two nodes share the value);
+    // neither side touches those nodes, so a disjoint merge must stay clean.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let def = LabelDef::new(
+        vec!["id".to_string()],
+        BTreeMap::new(),
+        [],
+        ["email".to_string()],
+    )
+    .expect("label def");
+    let (b, o, t) = diverge(
+        &repo,
+        // base: nodes 1 and 2 already share an email (plumbing admits it).
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".to_string(),
+                def: def.clone(),
+            })
+            .expect("schema");
+            tx.put_node(&node(1), &record(&[("email", Value::String("dup".into()))]))
+                .expect("put");
+            tx.put_node(&node(2), &record(&[("email", Value::String("dup".into()))]))
+                .expect("put");
+        },
+        |tx| {
+            tx.put_node(&node(3), &record(&[("email", Value::String("x".into()))]))
+                .expect("put");
+        },
+        |tx| {
+            tx.put_node(&node(4), &record(&[("email", Value::String("y".into()))]))
+                .expect("put");
+        },
+    );
+
+    match merge(&repo, &b, &o, &t) {
+        ManifestMerge::Clean(_) => {}
+        ManifestMerge::Conflicts(c) => {
+            panic!("pre-existing UNIQUE collision must not be a merge conflict: {c:?}")
+        }
+    }
+}
+
+#[test]
 fn validation_is_deterministic() {
     // Repeating the same merge yields byte-identical violations.
     let dir = tempfile::tempdir().expect("tempdir");

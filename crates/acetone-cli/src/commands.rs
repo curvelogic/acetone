@@ -280,8 +280,11 @@ fn render_conflict(c: &MergeConflict) -> String {
                 Endpoint::Src => "source",
                 Endpoint::Dst => "destination",
             };
+            // The endpoint may be absent because a side deleted it, or because
+            // an added edge references a node that is not present — "absent"
+            // covers both.
             format!(
-                "dangling edge {}: {end} node {} was deleted",
+                "dangling edge {}: {end} node {} is absent",
                 render_edge_key(edge),
                 render_node_key(endpoint)
             )
