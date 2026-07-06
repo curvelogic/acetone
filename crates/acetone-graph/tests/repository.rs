@@ -302,6 +302,54 @@ fn committed_versions_survive_git_gc() {
 }
 
 #[test]
+fn uncommitted_workspace_survives_git_gc() {
+    // huo: a saved-but-uncommitted workspace anchors its chunk set in a
+    // workspace tree, so even an aggressive foreign `git gc --prune=now`
+    // keeps every chunk — no `commit before gc` caveat.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_path = dir.path().join("graph.git");
+    let repo = Repository::init(&repo_path, InitOptions::default()).expect("init");
+
+    // Multi-chunk maps, saved to the workspace but NEVER committed.
+    let mut tx = repo.begin_write().expect("begin");
+    for i in 0..500 {
+        tx.put_node(
+            &node("Host", &format!("host-{i:04}")),
+            &record(&[("index", i)]),
+        )
+        .expect("node");
+        if i % 2 == 0 {
+            tx.put_edge(
+                &edge(
+                    &node("Host", &format!("host-{i:04}")),
+                    "PEERS_WITH",
+                    &node("Host", &format!("host-{:04}", (i + 1) % 500)),
+                ),
+                &EdgeRecord::default(),
+            )
+            .expect("edge");
+        }
+    }
+    tx.save().expect("save"); // save, not commit — history is empty
+    assert!(repo.head_commit().expect("head").is_none());
+
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(["gc", "--prune=now", "--aggressive", "--quiet"])
+        .status()
+        .expect("run git gc");
+    assert!(status.success(), "git gc failed");
+
+    // Reopen cold: the uncommitted workspace reads back in full.
+    let repo = Repository::open(&repo_path).expect("open");
+    let snapshot = repo.workspace_snapshot().expect("workspace survives gc");
+    assert_eq!(snapshot.nodes().expect("nodes").len(), 500);
+    assert_eq!(snapshot.edges().expect("edges").len(), 250);
+    assert_eq!(snapshot.reverse_edge_keys().expect("rev").len(), 250);
+}
+
+#[test]
 fn branch_and_checkout_move_the_workspace() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());

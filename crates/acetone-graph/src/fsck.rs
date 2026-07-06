@@ -287,21 +287,38 @@ fn check_workspaces(
     if let Some(hash) = store.read_ref(WORKTREE_WORKSPACE_REF)? {
         refs.push((WORKTREE_WORKSPACE_REF.to_owned(), hash));
     }
-    for (reference, hash) in refs {
+    for (reference, ref_hash) in refs {
         let origin = Origin::Workspace { reference };
-        match store.get(&hash) {
-            Ok(Some(bytes)) => check_manifest(store, &origin, hash, &bytes, verified, report),
+        // The ref points at a workspace tree (huo) whose `manifest` entry is
+        // the blob, or — for a pre-huo workspace — the manifest blob
+        // directly; the store resolves both.
+        let manifest_hash = match store.workspace_manifest_hash(&ref_hash) {
+            Ok(hash) => hash,
+            Err(err) => {
+                report.push(
+                    FindingKind::Manifest,
+                    &origin,
+                    None,
+                    format!("workspace ref {ref_hash} does not resolve to a manifest: {err}"),
+                );
+                continue;
+            }
+        };
+        match store.get(&manifest_hash) {
+            Ok(Some(bytes)) => {
+                check_manifest(store, &origin, manifest_hash, &bytes, verified, report)
+            }
             Ok(None) => report.push(
                 FindingKind::Manifest,
                 &origin,
                 None,
-                format!("workspace manifest blob {hash} is absent from the store"),
+                format!("workspace manifest blob {manifest_hash} is absent from the store"),
             ),
             Err(err) => report.push(
                 FindingKind::Manifest,
                 &origin,
                 None,
-                format!("workspace manifest blob {hash} could not be read: {err}"),
+                format!("workspace manifest blob {manifest_hash} could not be read: {err}"),
             ),
         }
     }
