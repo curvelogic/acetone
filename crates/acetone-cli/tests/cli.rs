@@ -247,18 +247,19 @@ fn fsck_reports_clean_and_detects_damage() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("fsck: clean"));
 
-    // Surgically destroy the repository's objects, sparing only the
-    // workspace manifest blob (so `open` still succeeds and fsck itself
-    // runs): fsck must report error findings, exit non-zero, no Debug
-    // dump. (A random victim won't do — a fresh repo also holds
-    // unreachable superseded manifests whose loss fsck rightly ignores.)
-    let manifest_oid = git_rev_parse(&repo, "refs/worktree/acetone/workspace");
-    let spared = repo
-        .join("objects")
-        .join(&manifest_oid[..2])
-        .join(&manifest_oid[2..]);
+    // Surgically destroy the repository's objects, sparing only what `open`
+    // needs to read the workspace manifest — the workspace tree and the
+    // manifest blob it contains (huo) — so `open` still succeeds and fsck
+    // itself runs: fsck must then report error findings for the missing
+    // chunks, exit non-zero, no Debug dump. (A random victim won't do — a
+    // fresh repo also holds unreachable superseded manifests whose loss fsck
+    // rightly ignores.)
+    let workspace_tree = git_rev_parse(&repo, "refs/worktree/acetone/workspace");
+    let manifest_blob = git_rev_parse(&repo, "refs/worktree/acetone/workspace:manifest");
+    let object_path = |oid: &str| repo.join("objects").join(&oid[..2]).join(&oid[2..]);
+    let spared = [object_path(&workspace_tree), object_path(&manifest_blob)];
     for object in loose_objects(&repo.join("objects")) {
-        if object != spared {
+        if !spared.contains(&object) {
             std::fs::remove_file(&object).expect("remove object");
         }
     }

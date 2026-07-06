@@ -188,6 +188,84 @@ impl GitStore {
         self.repo.path()
     }
 
+    /// Build a workspace tree `{chunks/: <anchor tree>, manifest: <blob>}`
+    /// — the commit-tree shape minus the README — and return its object id.
+    /// The `chunks/` anchor tree makes git's reachability walk keep every
+    /// chunk the manifest references, so uncommitted working state survives
+    /// a foreign `git gc` (acetone-huo, amends ADR-0010). The workspace ref
+    /// then points at this tree instead of the bare manifest blob.
+    pub fn write_workspace_tree(
+        &self,
+        manifest: &[u8],
+        anchors: &[Hash],
+    ) -> Result<Hash, StoreError> {
+        use gix::objs::tree::{Entry, EntryKind};
+
+        let manifest_id = self.write_blob_capped(manifest, "writing workspace manifest")?;
+        // Git tree order: "chunks" < "manifest" byte-wise.
+        let mut entries = Vec::new();
+        if !anchors.is_empty() {
+            entries.push(Entry {
+                mode: EntryKind::Tree.into(),
+                filename: ANCHORS_ENTRY.into(),
+                oid: self.write_anchor_tree(anchors)?,
+            });
+        }
+        entries.push(Entry {
+            mode: EntryKind::Blob.into(),
+            filename: MANIFEST_ENTRY.into(),
+            oid: manifest_id.oid(),
+        });
+        let tree_id = self
+            .repo
+            .write_object(&gix::objs::Tree { entries })
+            .map_err(|e| StoreError::backend("writing workspace tree", e))?
+            .detach();
+        Ok(Hash::from_oid(tree_id))
+    }
+
+    /// Resolve the manifest blob a workspace ref points at. The ref value is
+    /// either a workspace tree (huo) whose `manifest` entry is the blob, or
+    /// — for a pre-huo workspace — the manifest blob directly. Lets the
+    /// graph layer read a workspace uniformly across the migration.
+    pub fn workspace_manifest_hash(&self, ref_value: &Hash) -> Result<Hash, StoreError> {
+        let header = self.find_header(ref_value)?.ok_or_else(|| {
+            StoreError::corrupt(
+                "workspace ref",
+                "referenced object is absent from the store",
+            )
+        })?;
+        match header.kind() {
+            gix::object::Kind::Blob => Ok(*ref_value),
+            gix::object::Kind::Tree => {
+                let data = self.read_object_checked(
+                    ref_value,
+                    &header,
+                    gix::object::Kind::Tree,
+                    "workspace tree",
+                )?;
+                let tree = gix::objs::TreeRef::from_bytes(&data, self.repo.object_hash())
+                    .map_err(|e| StoreError::corrupt("workspace tree", e.to_string()))?;
+                let entry = tree
+                    .entries
+                    .iter()
+                    .find(|entry| entry.filename == MANIFEST_ENTRY)
+                    .ok_or_else(|| StoreError::corrupt("workspace tree", "no `manifest` entry"))?;
+                if !entry.mode.is_blob() {
+                    return Err(StoreError::corrupt(
+                        "workspace tree",
+                        "`manifest` entry is not a blob",
+                    ));
+                }
+                Ok(Hash::from_oid(entry.oid.to_owned()))
+            }
+            other => Err(StoreError::corrupt(
+                "workspace ref",
+                format!("unexpected object kind {other:?}"),
+            )),
+        }
+    }
+
     /// Write one blob, enforcing the size cap; `what` names the blob's
     /// role in error context.
     fn write_blob_capped(&self, data: &[u8], what: &'static str) -> Result<Hash, StoreError> {

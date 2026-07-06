@@ -22,14 +22,19 @@
 //!   complete chunk set** of every map root in the manifest, so `git
 //!   gc`/`clone`/`push` preserve and transfer whole versions.
 //!
-//! # Uncommitted workspaces and git gc (ADR-0010)
+//! # Uncommitted workspaces and git gc (acetone-huo)
 //!
-//! The workspace ref keeps the manifest *blob* alive, but git cannot
-//! parse manifests, so the chunks a workspace manifest references are
-//! **not** reachable from it. An uncommitted workspace therefore does
-//! not survive an aggressive `git gc` by a foreign tool. `acetone gc`
-//! must (and later phases do) protect workspace chunk sets; until then:
-//! commit before running any external gc.
+//! The per-worktree workspace ref points at a **workspace tree**
+//! `{manifest, chunks/}` — the commit-tree shape minus the README — whose
+//! `chunks/` anchor tree references every chunk the manifest needs. Git's
+//! reachability walk follows the tree and keeps those chunks, so even an
+//! aggressive foreign `git gc --prune=now` preserves an uncommitted
+//! workspace in full. This closes ADR-0010's "commit before external gc"
+//! caveat. The anchor tree references existing blobs, so it costs no chunk
+//! storage and unchanged shard trees dedupe across saves; it is a
+//! local-only ref-plumbing change (no `format_version` bump). A workspace
+//! last written before huo (a bare manifest blob) is read transparently
+//! and rewritten as a tree on its next content change.
 
 use crate::error::GraphError;
 use crate::lock::WriteLock;
@@ -127,8 +132,12 @@ impl Repository {
             indexes: Default::default(),
             conflicts: None,
         };
-        let manifest_hash = store.put(&manifest.encode())?;
-        store.write_ref(WORKTREE_WORKSPACE_REF, None, &manifest_hash)?;
+        // The workspace ref points at a workspace tree that anchors the
+        // manifest's chunk set, so uncommitted state survives a foreign gc
+        // (huo). For the empty graph that is just the empty prolly root.
+        let anchors = manifest_chunk_set(&store, &manifest)?;
+        let tree = store.write_workspace_tree(&manifest.encode(), &anchors)?;
+        store.write_ref(WORKTREE_WORKSPACE_REF, None, &tree)?;
         store.set_head(&format!("{BRANCH_REF_PREFIX}{DEFAULT_BRANCH}"))?;
         Ok(Repository {
             store,
@@ -171,13 +180,25 @@ impl Repository {
         match self.head_commit()? {
             Some(commit) => {
                 let manifest_hash = self.commit_manifest_hash(&commit)?;
-                self.cas_workspace(None, &manifest_hash)
+                let tree = self.workspace_tree_for(&manifest_hash)?;
+                self.cas_workspace(None, &tree)
             }
             // No workspace and an unborn branch: nothing to bootstrap from.
             None => Err(GraphError::NoWorkspace {
                 name: self.workspace.clone(),
             }),
         }
+    }
+
+    /// Build the workspace tree (`{manifest, chunks/}`, huo) for the manifest
+    /// blob `manifest_hash`, anchoring its complete chunk set. Returns the
+    /// tree hash the workspace ref should point at.
+    fn workspace_tree_for(&self, manifest_hash: &Hash) -> Result<Hash, GraphError> {
+        let manifest = read_manifest_chunk(&self.store, manifest_hash)?;
+        let anchors = manifest_chunk_set(&self.store, &manifest)?;
+        Ok(self
+            .store
+            .write_workspace_tree(&manifest.encode(), &anchors)?)
     }
 
     /// The underlying store (for layers building on the plumbing, e.g.
@@ -192,26 +213,37 @@ impl Repository {
     }
 
     /// The current value of the per-worktree workspace ref, if present.
+    /// This is a workspace *tree* (huo) — or, for a workspace last written
+    /// before huo, the manifest blob directly.
     fn workspace_ref_value(&self) -> Result<Option<Hash>, GraphError> {
         Ok(self.store.read_ref(WORKTREE_WORKSPACE_REF)?)
     }
 
-    /// The current value of the legacy shared workspace ref (migration
-    /// fallback), if present.
+    /// The current value of the legacy shared workspace ref (pre-ADR-0014
+    /// migration fallback), if present.
     fn legacy_ref_value(&self) -> Result<Option<Hash>, GraphError> {
         Ok(self.store.read_ref(&workspace_ref(&self.workspace))?)
     }
 
-    /// The manifest hash of the current workspace: the per-worktree ref, or
-    /// — for a repository created before ADR-0014 — the legacy shared ref.
-    fn workspace_manifest_hash(&self) -> Result<Hash, GraphError> {
+    /// The effective workspace-ref target: the per-worktree ref, or — for a
+    /// repository created before ADR-0014 — the legacy shared ref.
+    fn workspace_ref_target(&self) -> Result<Option<Hash>, GraphError> {
         if let Some(hash) = self.workspace_ref_value()? {
-            return Ok(hash);
+            return Ok(Some(hash));
         }
-        self.legacy_ref_value()?
+        self.legacy_ref_value()
+    }
+
+    /// The manifest blob hash of the current workspace, resolving the ref
+    /// target (a workspace tree, or a bare manifest blob for a pre-huo
+    /// workspace) to the manifest blob.
+    fn workspace_manifest_hash(&self) -> Result<Hash, GraphError> {
+        let target = self
+            .workspace_ref_target()?
             .ok_or_else(|| GraphError::NoWorkspace {
                 name: self.workspace.clone(),
-            })
+            })?;
+        Ok(self.store.workspace_manifest_hash(&target)?)
     }
 
     /// The current workspace manifest (decoded and validated).
@@ -328,13 +360,18 @@ impl Repository {
                 name: name.to_owned(),
             })?;
         let manifest_hash = self.commit_manifest_hash(&target)?;
-        // CAS the per-worktree ref against its own current value (None when
-        // this is the first workspace write after an ADR-0014 migration, in
-        // which case the CAS creates it). Skip only when it already points
-        // at the branch's manifest.
+        // Reset the workspace to the branch's manifest. CAS the per-worktree
+        // ref against its own current value (None when this is the first
+        // write after an ADR-0014 migration — the CAS then creates it). Skip
+        // only when the per-worktree ref already resolves to that manifest.
         let expected = self.workspace_ref_value()?;
-        if expected.as_ref() != Some(&manifest_hash) {
-            self.cas_workspace(expected.as_ref(), &manifest_hash)?;
+        let current = match &expected {
+            Some(hash) => Some(self.store.workspace_manifest_hash(hash)?),
+            None => None,
+        };
+        if current != Some(manifest_hash) {
+            let tree = self.workspace_tree_for(&manifest_hash)?;
+            self.cas_workspace(expected.as_ref(), &tree)?;
         }
         self.store.set_head(&full)?;
         Ok(())
@@ -612,16 +649,20 @@ impl<'r> Transaction<'r> {
             indexes: self.manifest.indexes.clone(),
             conflicts: self.manifest.conflicts,
         };
-        let new_hash = store.put(&manifest.encode())?;
-        // Advance the per-worktree ref unless the manifest is unchanged
-        // *and* the ref already exists (i.e. not a pending migration that
-        // still needs to write the per-worktree ref forward).
-        if new_hash != self.base_hash || self.base_ref_value.is_none() {
+        let manifest_bytes = manifest.encode();
+        let new_manifest_hash = store.put(&manifest_bytes)?;
+        // Advance the per-worktree ref to a fresh workspace tree that
+        // anchors the new manifest's chunk set (huo). Skip only when the
+        // manifest is unchanged *and* the ref already exists as a tree
+        // (i.e. not a pending pre-huo/migration write).
+        if new_manifest_hash != self.base_hash || self.base_ref_value.is_none() {
+            let anchors = manifest_chunk_set(store, &manifest)?;
+            let tree = store.write_workspace_tree(&manifest_bytes, &anchors)?;
             self.repo
-                .cas_workspace(self.base_ref_value.as_ref(), &new_hash)?;
-            self.base_ref_value = Some(new_hash);
+                .cas_workspace(self.base_ref_value.as_ref(), &tree)?;
+            self.base_ref_value = Some(tree);
         }
-        self.base_hash = new_hash;
+        self.base_hash = new_manifest_hash;
         self.manifest = manifest;
         Ok(())
     }
