@@ -1108,6 +1108,68 @@ fn cypher_writes_enforce_schema_constraints() {
 }
 
 #[test]
+fn diff_command_shows_classified_changes() {
+    // acetone-14c.1: the graph-level diff between two versions.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    for args in [
+        &["declare-label", "Host", "--key", "name"][..],
+        &["declare-rel-type", "RUNS"][..],
+    ] {
+        assert!(acetone(&repo, args).status.success());
+    }
+    assert!(
+        acetone(
+            &repo,
+            &[
+                "query",
+                "CREATE (:Host {name:'a'})-[:RUNS]->(:Host {name:'b'})"
+            ],
+        )
+        .status
+        .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "v1"]).status.success());
+    let log = acetone(&repo, &["log"]);
+    let v1 = stdout(&log)
+        .lines()
+        .next()
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap()
+        .to_string();
+
+    assert!(
+        acetone(
+            &repo,
+            &["query", "MATCH (h:Host {name:'a'}) SET h.os = 'linux'"]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'c'})"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "v2"]).status.success());
+
+    let out = acetone(&repo, &["diff", &v1, "main"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("~ node \"Host\" [\"a\"]"), "modified: {text}");
+    assert!(text.contains("+ node \"Host\" [\"c\"]"), "added: {text}");
+    // The unchanged edge and node b do not appear.
+    assert!(!text.contains("\"b\""), "b unchanged: {text}");
+
+    // A version against itself: no changes.
+    let out = acetone(&repo, &["diff", "main", "main"]);
+    assert_eq!(stdout(&out).trim(), "(no changes)");
+}
+
+#[test]
 fn rekey_command_changes_a_nodes_identity() {
     // mex.4: a key change is a delete-plus-create in one commit; SET cannot
     // change a key, rekey is the sanctioned path.

@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod diff;
 pub mod error;
 pub mod fsck;
 pub mod lock;

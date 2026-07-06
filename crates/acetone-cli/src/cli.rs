@@ -107,6 +107,15 @@ pub enum Command {
         #[arg(short = 'm', long)]
         message: String,
     },
+    /// Show the graph-level difference between two versions (branch short
+    /// names, full ref names or commit hashes): the nodes and relationships
+    /// added (`+`), removed (`-`) or modified (`~`) from `from` to `to`.
+    Diff {
+        /// The base version.
+        from: String,
+        /// The target version.
+        to: String,
+    },
     /// Look up a node by label and key.
     GetNode {
         /// Primary label.

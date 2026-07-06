@@ -350,6 +350,77 @@ fn uncommitted_workspace_survives_git_gc() {
 }
 
 #[test]
+fn diff_classifies_node_and_edge_changes() {
+    use acetone_graph::diff::ChangeKind;
+    use acetone_model::Value;
+    use acetone_model::records::EdgeRecord;
+    use std::collections::BTreeMap;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let (a, b, c, d) = (
+        node("Host", "a"),
+        node("Host", "b"),
+        node("Host", "c"),
+        node("Host", "d"),
+    );
+    let weight = |w: i64| EdgeRecord::new(BTreeMap::from([("weight".to_string(), Value::Int(w))]));
+
+    // v1: a{cores:8}, b, c ; a-RUNS->b {weight:1}, a-RUNS->c
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[("cores", 8)])).expect("a");
+    tx.put_node(&b, &record(&[])).expect("b");
+    tx.put_node(&c, &record(&[])).expect("c");
+    tx.put_edge(&edge(&a, "RUNS", &b), &weight(1)).expect("ab");
+    tx.put_edge(&edge(&a, "RUNS", &c), &EdgeRecord::default())
+        .expect("ac");
+    let v1 = tx.commit("v1", &[], None).expect("commit v1");
+
+    // v2: modify a{cores:16}, remove c, add d ; modify a-RUNS->b {weight:2},
+    //     remove a-RUNS->c, add a-RUNS->d ; b left untouched.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[("cores", 16)])).expect("a'");
+    tx.delete_node(&c).expect("del c");
+    tx.put_node(&d, &record(&[])).expect("d");
+    tx.put_edge(&edge(&a, "RUNS", &b), &weight(2)).expect("ab'");
+    tx.delete_edge(&edge(&a, "RUNS", &c)).expect("del ac");
+    tx.put_edge(&edge(&a, "RUNS", &d), &EdgeRecord::default())
+        .expect("ad");
+    let v2 = tx.commit("v2", &[], None).expect("commit v2");
+
+    let diff = repo.diff(&v1.to_hex(), &v2.to_hex()).expect("diff");
+
+    // Nodes, in key order: a Modified, c Removed, d Added (b unchanged, so
+    // it is absent from the diff).
+    let node_kinds: Vec<_> = diff.nodes.iter().map(|n| (n.key.clone(), n.kind)).collect();
+    assert_eq!(
+        node_kinds,
+        vec![
+            (a.clone(), ChangeKind::Modified),
+            (c.clone(), ChangeKind::Removed),
+            (d.clone(), ChangeKind::Added),
+        ]
+    );
+    let a_change = diff.nodes.iter().find(|n| n.key == a).expect("a change");
+    assert_eq!(a_change.before, Some(record(&[("cores", 8)])));
+    assert_eq!(a_change.after, Some(record(&[("cores", 16)])));
+
+    // Edges, in key order (dst b<c<d): modified, removed, added.
+    let edge_kinds: Vec<_> = diff.edges.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        edge_kinds,
+        vec![ChangeKind::Modified, ChangeKind::Removed, ChangeKind::Added,]
+    );
+
+    // A version differs from itself in nothing.
+    assert!(
+        repo.diff(&v2.to_hex(), &v2.to_hex())
+            .expect("self-diff")
+            .is_empty()
+    );
+}
+
+#[test]
 fn rekey_moves_a_node_and_its_edges_in_one_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());

@@ -36,6 +36,7 @@
 //! last written before huo (a bare manifest blob) is read transparently
 //! and rewritten as a tree on its next content change.
 
+use crate::diff::{EdgeChange, GraphDiff, NodeChange};
 use crate::error::GraphError;
 use crate::lock::WriteLock;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
@@ -437,6 +438,14 @@ impl Repository {
             store: &self.store,
             manifest: read_manifest_chunk(&self.store, &manifest_hash)?,
         })
+    }
+
+    /// The graph-level difference from version `from` to version `to`
+    /// (branch short names, full ref names or commit hashes) — the change
+    /// stream behind `acetone diff` and `CALL acetone.diff()` (spec §7,
+    /// acetone-14c.1). See [`crate::diff`].
+    pub fn diff(&self, from: &str, to: &str) -> Result<GraphDiff, GraphError> {
+        self.snapshot(from)?.diff(&self.snapshot(to)?)
     }
 
     /// The commit history from `refspec` (default: the current branch),
@@ -885,6 +894,62 @@ impl<'s> Snapshot<'s> {
             out.push(EdgeKey::decode_rev(&key)?);
         }
         Ok(out)
+    }
+
+    /// Classify the graph-level difference from `self` (the `from` version)
+    /// to `to`, over the node and forward-edge maps (spec §7). The reverse
+    /// edge map is derived from the forward map and is not diffed. Both
+    /// snapshots must belong to the same repository (they share its store).
+    pub fn diff(&self, to: &Snapshot<'_>) -> Result<GraphDiff, GraphError> {
+        let mut nodes = Vec::new();
+        let (a, b) = (
+            self.root(&self.manifest.nodes)?,
+            to.root(&to.manifest.nodes)?,
+        );
+        for entry in acetone_prolly::diff(self.store, &a, &b)? {
+            let entry = entry?;
+            let before = entry
+                .before
+                .as_ref()
+                .map(|v| NodeRecord::decode(v.as_ref()))
+                .transpose()?;
+            let after = entry
+                .after
+                .as_ref()
+                .map(|v| NodeRecord::decode(v.as_ref()))
+                .transpose()?;
+            nodes.push(NodeChange {
+                kind: crate::diff::classify(before.is_some(), after.is_some()),
+                key: NodeKey::decode(&entry.key)?,
+                before,
+                after,
+            });
+        }
+        let mut edges = Vec::new();
+        let (a, b) = (
+            self.root(&self.manifest.edges_fwd)?,
+            to.root(&to.manifest.edges_fwd)?,
+        );
+        for entry in acetone_prolly::diff(self.store, &a, &b)? {
+            let entry = entry?;
+            let before = entry
+                .before
+                .as_ref()
+                .map(|v| EdgeRecord::decode(v.as_ref()))
+                .transpose()?;
+            let after = entry
+                .after
+                .as_ref()
+                .map(|v| EdgeRecord::decode(v.as_ref()))
+                .transpose()?;
+            edges.push(EdgeChange {
+                kind: crate::diff::classify(before.is_some(), after.is_some()),
+                key: EdgeKey::decode_fwd(&entry.key)?,
+                before,
+                after,
+            });
+        }
+        Ok(GraphDiff { nodes, edges })
     }
 
     /// All schema entries, in key order.
