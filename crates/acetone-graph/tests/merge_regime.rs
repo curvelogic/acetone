@@ -14,7 +14,10 @@
 //!
 //! Cell-conflict side-swap symmetry is proven separately in `merge_prop.rs`;
 //! this regime adds the edge-aware generator and the referential-integrity
-//! property that `merge_prop.rs` (nodes only) cannot exercise.
+//! property that `merge_prop.rs` (nodes only) cannot exercise. The generator
+//! declares no schema, so the *constraint* dimension of merge validation
+//! (existence, UNIQUE) is not exercised here — those branches are unit-tested
+//! in `merge_validation.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -177,6 +180,32 @@ proptest! {
             prop_assert!(!has_dangling(store, m), "a clean merge introduced a dangling edge");
         }
     }
+}
+
+#[test]
+fn has_dangling_detects_a_missing_endpoint() {
+    // Positively self-test the independent oracle: property (3) only ever
+    // calls `has_dangling` on clean merges, where it must return `false`, so
+    // a silently-broken (always-false) detector would make the property pass
+    // vacuously. Pin both answers here.
+    let (_dir, repo) = init();
+    let empty = (BTreeMap::new(), BTreeSet::new());
+    let valid: Graph = (BTreeMap::from([(1, 0), (2, 0)]), BTreeSet::from([(1, 2)]));
+    let (_c, valid_m) = commit_delta(&repo, &empty, &valid, "valid");
+    assert!(
+        !has_dangling(repo.store(), &valid_m),
+        "a graph whose edge endpoints all exist is not dangling"
+    );
+
+    // Delete node 2 via plumbing while leaving edge 1 -> 2 in place: the
+    // workspace manifest now holds an edge to an absent endpoint.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.delete_node(&node(2)).expect("delete");
+    let dangling_m = tx.save().expect("save");
+    assert!(
+        has_dangling(repo.store(), &dangling_m),
+        "edge 1 -> 2 dangles once node 2 is deleted"
+    );
 }
 
 #[test]
