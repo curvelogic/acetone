@@ -140,6 +140,17 @@ impl<'a> Binder<'a> {
             ast::Clause::Create(c) => self.create_clause(c),
             ast::Clause::Set(s) => self.set_clause(s),
             ast::Clause::Remove(r) => self.remove_clause(r),
+            ast::Clause::Delete(d) => {
+                let mut targets = Vec::new();
+                for target in &d.targets {
+                    targets.push(self.expr(target, NO_AGG)?);
+                }
+                Ok(BoundClause::Delete {
+                    detach: d.detach,
+                    targets,
+                    span: d.span,
+                })
+            }
         }
     }
 

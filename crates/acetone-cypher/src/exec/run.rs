@@ -158,6 +158,11 @@ pub fn execute_versioned(
             BoundClause::Remove { items, .. } => {
                 rows = remove_clause(rows, items, &mut graph)?;
             }
+            BoundClause::Delete {
+                detach, targets, ..
+            } => {
+                rows = delete_clause(rows, *detach, targets, &mut graph, parameters)?;
+            }
             BoundClause::Call { span, .. } => {
                 return Err(ExecError::Unsupported {
                     feature: "procedures (arrive with acetone-yzc.7)",
@@ -476,6 +481,92 @@ fn remove_clause(
         out.push(row);
     }
     Ok(out)
+}
+
+/// Execute a DELETE / DETACH DELETE clause. Relationships are removed
+/// before nodes so that `DELETE r, a, b` (delete a node and its incident
+/// edges in one clause) is legal; a plain `DELETE` of a node that still has
+/// incident edges after the clause's own edge deletions is an error.
+fn delete_clause(
+    rows: Vec<Row>,
+    detach: bool,
+    targets: &[BoundExpr],
+    graph: &mut MutableGraph,
+    parameters: &BTreeMap<String, Value>,
+) -> Result<Vec<Row>, ExecError> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        // Resolve every target for this row to entity identities first
+        // (a read-only pass), then apply deletions.
+        let mut node_ids = Vec::new();
+        let mut rel_ids = Vec::new();
+        {
+            let ctx = EvalCtx::new(&*graph, parameters);
+            for target in targets {
+                collect_delete_target(
+                    eval(target, &row, &ctx)?,
+                    target.span(),
+                    &mut node_ids,
+                    &mut rel_ids,
+                )?;
+            }
+        }
+        // Relationships first.
+        for id in &rel_ids {
+            graph.delete_rel(id);
+        }
+        // Then nodes: DETACH removes remaining incident edges; a plain
+        // DELETE of a still-connected node is an error.
+        for id in &node_ids {
+            if detach {
+                graph.detach_delete_node(id);
+            } else {
+                if graph.has_incident_rels(id) {
+                    return Err(ExecError::InvalidArgument {
+                        message: "cannot delete a node with relationships; use DETACH DELETE"
+                            .into(),
+                        span: targets[0].span(),
+                    });
+                }
+                graph.delete_node(id);
+            }
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// Classify a DELETE target value into node/relationship identities. A path
+/// deletes all its elements; null is a no-op.
+fn collect_delete_target(
+    value: Value,
+    span: crate::span::Span,
+    node_ids: &mut Vec<EntityId>,
+    rel_ids: &mut Vec<EntityId>,
+) -> Result<(), ExecError> {
+    match value {
+        Value::Null => {}
+        Value::Node(node) => node_ids.push(node.id),
+        Value::Relationship(rel) => rel_ids.push(rel.id),
+        Value::Path(path) => {
+            for rel in path.rels {
+                rel_ids.push(rel.id);
+            }
+            for node in path.nodes {
+                node_ids.push(node.id);
+            }
+        }
+        other => {
+            return Err(ExecError::Type {
+                message: format!(
+                    "DELETE needs a node, relationship or path, got {}",
+                    other.type_name()
+                ),
+                span,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn not_an_entity(value: &Value, span: crate::span::Span) -> ExecError {

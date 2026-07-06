@@ -85,6 +85,12 @@ pub enum BoundClause {
         items: Vec<BoundRemoveItem>,
         span: Span,
     },
+    /// Level W: `DELETE` / `DETACH DELETE` of the target expressions.
+    Delete {
+        detach: bool,
+        targets: Vec<BoundExpr>,
+        span: Span,
+    },
     Call {
         /// Index into the procedure registry.
         procedure: &'static ProcedureDef,

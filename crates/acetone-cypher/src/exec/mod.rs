@@ -527,6 +527,79 @@ mod tests {
         );
     }
 
+    // --- DELETE / DETACH DELETE (write path, acetone-921) -------------------
+
+    #[test]
+    fn delete_a_node_then_it_is_gone() {
+        let result = run("CREATE (a:N) CREATE (b:N) DELETE a MATCH (n:N) RETURN count(n) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        assert_eq!(result.stats.nodes_deleted, 1);
+    }
+
+    #[test]
+    fn delete_a_base_node() {
+        let graph = host_graph();
+        // Every Host has an outgoing RUNS edge, so DETACH is required.
+        let result = run_query(
+            "MATCH (h:Host {name: 'a'}) DETACH DELETE h \
+             MATCH (n:Host) RETURN count(n) AS c",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+    }
+
+    #[test]
+    fn delete_connected_node_without_detach_errors() {
+        let err = crate::exec::run_query(
+            "CREATE (a:A)-[:R]->(b:B) DELETE a",
+            &EmptyGraph,
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::exec::QueryError::Exec(crate::exec::ExecError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn detach_delete_removes_incident_edges() {
+        let result = run("CREATE (a:A)-[:R]->(b:B) DETACH DELETE a \
+             MATCH (:A)-[r:R]->(:B) RETURN count(r) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(0)));
+        assert_eq!(result.stats.nodes_deleted, 1);
+        assert_eq!(result.stats.relationships_deleted, 1);
+    }
+
+    #[test]
+    fn delete_relationship_then_endpoints_are_free() {
+        // Deleting the relationship first lets a plain DELETE of the node
+        // succeed in the same clause.
+        let result = run("CREATE (a:A)-[r:R]->(b:B) DELETE r, a, b \
+             MATCH (n) RETURN count(n) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(0)));
+        assert_eq!(result.stats.relationships_deleted, 1);
+        assert_eq!(result.stats.nodes_deleted, 2);
+    }
+
+    #[test]
+    fn delete_on_null_is_a_noop() {
+        let result = run("OPTIONAL MATCH (n:Nope) DELETE n RETURN 1 AS x");
+        assert!(matches!(result.rows[0][0], Value::Int(1)));
+        assert_eq!(result.stats.nodes_deleted, 0);
+    }
+
+    #[test]
+    fn delete_a_path_deletes_all_elements() {
+        let result = run("CREATE p = (a:A)-[:R]->(b:B) DETACH DELETE p \
+             MATCH (n) RETURN count(n) AS c");
+        assert!(matches!(result.rows[0][0], Value::Int(0)));
+        assert_eq!(result.stats.nodes_deleted, 2);
+        assert_eq!(result.stats.relationships_deleted, 1);
+    }
+
     #[test]
     fn clause_group_at_queries_another_version() {
         use crate::bind::{BindMode, Catalogue, bind};
