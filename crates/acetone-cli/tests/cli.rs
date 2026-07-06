@@ -1108,6 +1108,62 @@ fn cypher_writes_enforce_schema_constraints() {
 }
 
 #[test]
+fn rekey_command_changes_a_nodes_identity() {
+    // mex.4: a key change is a delete-plus-create in one commit; SET cannot
+    // change a key, rekey is the sanctioned path.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    for args in [
+        &["declare-label", "Host", "--key", "name"][..],
+        &["declare-label", "Software", "--key", "name"][..],
+        &["declare-rel-type", "RUNS"][..],
+    ] {
+        assert!(acetone(&repo, args).status.success());
+    }
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (:Host {name:'old-01', os:'debian'})-[:RUNS]->(:Software {name:'nginx'})",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+
+    // Rekey.
+    let out = acetone(
+        &repo,
+        &["rekey", "Host", "old-01", "web-01", "-m", "rename"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("rekeyed"));
+
+    // Old key gone, new key carries the property and the edge.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN h.name AS n, h.os AS os",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "n,os\nweb-01,debian");
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (:Host {name:'web-01'})-[:RUNS]->(s) RETURN s.name AS s",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "s\nnginx");
+    assert!(acetone(&repo, &["fsck"]).status.success());
+}
+
+#[test]
 fn a_write_that_cannot_persist_leaves_the_workspace_untouched() {
     // A CREATE whose node identity cannot be derived (no declared key)
     // fails, and the workspace is not partially advanced (atomicity).

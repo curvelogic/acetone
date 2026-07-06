@@ -101,6 +101,22 @@ pub enum GraphError {
         /// Branch name.
         name: String,
     },
+    /// A node the operation targets does not exist.
+    #[error("no node {label:?} with key {key}")]
+    NoSuchNode {
+        /// Primary label.
+        label: String,
+        /// Rendered key.
+        key: String,
+    },
+    /// A rekey target key is already taken by another node.
+    #[error("cannot rekey to {label:?} {key}: a node with that key already exists")]
+    RekeyConflict {
+        /// Primary label.
+        label: String,
+        /// Rendered key.
+        key: String,
+    },
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
     #[error("lock file I/O at {path}: {source}")]

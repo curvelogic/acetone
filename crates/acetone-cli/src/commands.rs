@@ -36,6 +36,12 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         } => declare_label(repo_path, &label, &key, &require, &unique),
         Command::DeclareRelType { rtype } => declare_rel_type(repo_path, &rtype),
         Command::PutNode { label, key, prop } => put_node(repo_path, &label, &key, &prop),
+        Command::Rekey {
+            label,
+            old_key,
+            new_key,
+            message,
+        } => rekey(repo_path, &label, &old_key, &new_key, &message),
         Command::GetNode { label, key } => get_node(repo_path, &label, &key),
         Command::PutEdge {
             src_label,
@@ -253,6 +259,22 @@ fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
     txn.put_schema(&entry)?;
     txn.save().context("saving workspace")?;
     outln!("declared relationship type {}", format_label(rtype));
+    Ok(())
+}
+
+fn rekey(repo_path: &Path, label: &str, old_key: &str, new_key: &str, message: &str) -> Result<()> {
+    let repo = open(repo_path)?;
+    let old = single_key(label, old_key)?;
+    let new = single_key(label, new_key)?;
+    let commit = repo
+        .rekey(&old, &new, message)
+        .with_context(|| format!("rekeying {}", format_node_key(&old)))?;
+    outln!(
+        "rekeyed {} -> {} in {}",
+        format_node_key(&old),
+        format_node_key(&new),
+        commit.to_hex()
+    );
     Ok(())
 }
 
