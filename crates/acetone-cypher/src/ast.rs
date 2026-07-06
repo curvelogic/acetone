@@ -32,6 +32,8 @@ pub enum Clause {
     Remove(RemoveClause),
     /// Level W: `DELETE` / `DETACH DELETE`.
     Delete(DeleteClause),
+    /// Level W: `MERGE` (match-or-create) with `ON CREATE SET`/`ON MATCH SET`.
+    Merge(MergeClause),
 }
 
 impl Clause {
@@ -45,6 +47,7 @@ impl Clause {
             Clause::Set(c) => c.span,
             Clause::Remove(c) => c.span,
             Clause::Delete(c) => c.span,
+            Clause::Merge(c) => c.span,
         }
     }
 
@@ -53,7 +56,11 @@ impl Clause {
     pub fn is_write(&self) -> bool {
         matches!(
             self,
-            Clause::Create(_) | Clause::Set(_) | Clause::Remove(_) | Clause::Delete(_)
+            Clause::Create(_)
+                | Clause::Set(_)
+                | Clause::Remove(_)
+                | Clause::Delete(_)
+                | Clause::Merge(_)
         )
     }
 }
@@ -137,6 +144,16 @@ impl SetItem {
             | SetItem::AddLabels { span, .. } => *span,
         }
     }
+}
+
+/// `MERGE` (spec §5.1 Level W): match the pattern, or create it whole if it
+/// does not exist. `ON CREATE SET`/`ON MATCH SET` apply conditionally.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeClause {
+    pub pattern: PathPattern,
+    pub on_create: Vec<SetItem>,
+    pub on_match: Vec<SetItem>,
+    pub span: Span,
 }
 
 /// `DELETE` / `DETACH DELETE` (spec §5.1 Level W): delete the entities the
@@ -646,6 +663,21 @@ impl Query {
                 }
                 Clause::Remove(_) => {}
                 Clause::Delete(c) => roots.extend(c.targets.iter()),
+                Clause::Merge(c) => {
+                    roots.extend(c.pattern.start.properties.iter());
+                    for (rel, node) in &c.pattern.steps {
+                        roots.extend(rel.properties.iter());
+                        roots.extend(node.properties.iter());
+                    }
+                    for item in c.on_create.iter().chain(&c.on_match) {
+                        match item {
+                            SetItem::Property { value, .. }
+                            | SetItem::Replace { value, .. }
+                            | SetItem::Merge { value, .. } => roots.push(value),
+                            SetItem::AddLabels { .. } => {}
+                        }
+                    }
+                }
                 Clause::Unwind(u) => roots.push(&u.expr),
                 Clause::With(p) | Clause::Return(p) => {
                     for item in &p.items {
