@@ -231,6 +231,17 @@ fn run_versioned(
                                 span: *span,
                             })?;
                     for tuple in result_rows {
+                        // The provider contract is one value per declared
+                        // yield column; a mis-sized tuple binds nulls or leaks
+                        // cells, so catch it in debug builds.
+                        debug_assert_eq!(
+                            tuple.len(),
+                            procedure.yields.len(),
+                            "provider returned {} column(s) for {}, expected {}",
+                            tuple.len(),
+                            procedure.name,
+                            procedure.yields.len()
+                        );
                         let mut next = row.clone();
                         for (name, var) in yields {
                             // The binder validated every YIELD column against

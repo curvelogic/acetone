@@ -48,6 +48,13 @@ pub trait ProcedureProvider {
     /// full tuple aligned to the procedure's declared yield columns (in
     /// declaration order). `Err(message)` for a bad argument or a procedure
     /// this provider cannot serve.
+    ///
+    /// **Contract:** every returned tuple must have exactly one value per
+    /// declared yield column, in declaration order. The executor binds
+    /// columns by position; a short tuple would silently yield nulls and a
+    /// long one would leak extra cells, so a provider that cannot honour the
+    /// shape should return `Err` rather than a mis-sized tuple. (Debug builds
+    /// assert the width.)
     fn call(&self, name: &str, args: &[Value]) -> Result<Vec<Vec<Value>>, String>;
 }
 
