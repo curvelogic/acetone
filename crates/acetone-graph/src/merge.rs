@@ -75,6 +75,22 @@ pub fn merge_manifests<S: ChunkStore>(
     theirs: &Manifest,
 ) -> Result<ManifestMerge, GraphError> {
     let params = base.chunk_params;
+    // Chunk parameters are fixed per repository (spec §3.2); all three
+    // manifests must agree. `to_root(params)` below stamps base's params
+    // onto every side, which would defeat the prolly `ParamsMismatch`
+    // guard, so assert the precondition the public API documents.
+    debug_assert!(
+        ours.chunk_params == params && theirs.chunk_params == params,
+        "merge inputs must share chunk parameters (fixed per repository)"
+    );
+    // Secondary indexes are a derived map; merging them would need a rebuild
+    // from the merged nodes. None exist before Phase 5, so rather than
+    // silently drop a populated index map, refuse it explicitly.
+    if !base.indexes.is_empty() || !ours.indexes.is_empty() || !theirs.indexes.is_empty() {
+        return Err(GraphError::MergeUnsupported {
+            feature: "secondary indexes (arrive in Phase 5)",
+        });
+    }
     let mut conflicts = Vec::new();
 
     let schema = merge_one(
@@ -114,10 +130,6 @@ pub fn merge_manifests<S: ChunkStore>(
     // #5). Secondary `indexes` are likewise derived; there are none before
     // Phase 5, and they are rebuilt when they arrive.
     let edges_rev = rebuild_reverse(store, &edges_fwd, params)?;
-    debug_assert!(
-        base.indexes.is_empty() && ours.indexes.is_empty() && theirs.indexes.is_empty(),
-        "merge does not yet rebuild secondary indexes (none exist before Phase 5)"
-    );
 
     Ok(ManifestMerge::Clean(Box::new(Manifest {
         chunk_params: params,

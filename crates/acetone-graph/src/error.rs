@@ -117,6 +117,12 @@ pub enum GraphError {
         /// Rendered key.
         key: String,
     },
+    /// A merge input carries state the merge does not yet handle.
+    #[error("merge is not yet supported for {feature}")]
+    MergeUnsupported {
+        /// The unsupported aspect (e.g. secondary indexes).
+        feature: &'static str,
+    },
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
     #[error("lock file I/O at {path}: {source}")]

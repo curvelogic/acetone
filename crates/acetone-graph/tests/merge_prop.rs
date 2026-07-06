@@ -132,6 +132,87 @@ fn concurrent_edits_to_the_same_key_conflict() {
     }
 }
 
+#[test]
+fn edge_merge_rebuilds_the_reverse_map_to_match_a_direct_build() {
+    // Exercises the derived-map path (Invariant #5): merging divergent edge
+    // additions must rebuild edges_rev to exactly what a direct build gives.
+    use acetone_model::graph_keys::EdgeKey;
+    use acetone_model::records::EdgeRecord;
+    let edge = |s: u8, d: u8| EdgeKey::new(node(s), "R", node(d), Value::Null).expect("edge");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = Repository::init(&dir.path().join("g.git"), InitOptions::default()).expect("init");
+    // base: nodes 1..4 with edge 1->2.
+    let mut tx = repo.begin_write().expect("begin");
+    for id in [1, 2, 3, 4] {
+        tx.put_node(&node(id), &record(0)).expect("put");
+    }
+    tx.put_edge(&edge(1, 2), &EdgeRecord::default())
+        .expect("edge");
+    let base_commit = tx.commit("base", &[], None).expect("commit");
+    let base_m = repo
+        .snapshot(&base_commit.to_hex())
+        .expect("s")
+        .manifest()
+        .clone();
+
+    // ours adds 1->3.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_edge(&edge(1, 3), &EdgeRecord::default())
+        .expect("edge");
+    let ours_commit = tx.commit("ours", &[], None).expect("commit");
+    let ours_m = repo
+        .snapshot(&ours_commit.to_hex())
+        .expect("s")
+        .manifest()
+        .clone();
+
+    // theirs (branch at base) adds 2->4.
+    let base_hex = base_commit.to_hex();
+    repo.create_branch("theirs", Some(&base_hex))
+        .expect("branch");
+    repo.checkout_branch("theirs").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_edge(&edge(2, 4), &EdgeRecord::default())
+        .expect("edge");
+    let theirs_commit = tx.commit("theirs", &[], None).expect("commit");
+    let theirs_m = repo
+        .snapshot(&theirs_commit.to_hex())
+        .expect("s")
+        .manifest()
+        .clone();
+
+    let merged = merge_manifests(repo.store(), &base_m, &ours_m, &theirs_m).expect("merge");
+    let ManifestMerge::Clean(manifest) = merged else {
+        panic!("expected a clean merge");
+    };
+
+    // Oracle: a graph built directly with all three edges. The whole-manifest
+    // encode covers edges_fwd AND the rebuilt edges_rev.
+    let odir = tempfile::tempdir().expect("tempdir");
+    let orepo = Repository::init(&odir.path().join("o.git"), InitOptions::default()).expect("init");
+    let mut tx = orepo.begin_write().expect("begin");
+    for id in [1, 2, 3, 4] {
+        tx.put_node(&node(id), &record(0)).expect("put");
+    }
+    for (s, d) in [(1, 2), (1, 3), (2, 4)] {
+        tx.put_edge(&edge(s, d), &EdgeRecord::default())
+            .expect("edge");
+    }
+    let ocommit = tx.commit("oracle", &[], None).expect("commit");
+    let oracle = orepo
+        .snapshot(&ocommit.to_hex())
+        .expect("s")
+        .manifest()
+        .clone();
+
+    assert_eq!(
+        manifest.encode(),
+        oracle.encode(),
+        "merged manifest (incl. rebuilt edges_rev) must equal a direct build"
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(40))]
     #[test]
@@ -176,13 +257,22 @@ proptest! {
                 prop_assert_eq!(enc(&f), enc(&a), "clean merge must be deterministic");
             }
             (ManifestMerge::Conflicts(f), ManifestMerge::Conflicts(r), ManifestMerge::Conflicts(a)) => {
-                // The same keys conflict either way (base/ours/theirs values
-                // swap sides, but the conflicted key set is symmetric).
-                let keys = |c: &[acetone_graph::merge::MergeConflict]| {
-                    c.iter().map(|x| (x.map, x.key.clone())).collect::<Vec<_>>()
-                };
-                prop_assert_eq!(keys(&f), keys(&r), "the conflicted key set is symmetric");
-                prop_assert_eq!(keys(&f), keys(&a), "conflict detection is deterministic");
+                use acetone_graph::merge::MergeConflict;
+                // Deterministic: repeating the merge gives identical conflicts.
+                prop_assert_eq!(&f, &a, "conflict detection is deterministic");
+                // Symmetric with the side labels swapped: forward's `ours` is
+                // reverse's `theirs` (14c.4's resolver relies on this).
+                let forward_swapped: Vec<MergeConflict> = f
+                    .iter()
+                    .map(|c| MergeConflict {
+                        map: c.map,
+                        key: c.key.clone(),
+                        base: c.base.clone(),
+                        ours: c.theirs.clone(),
+                        theirs: c.ours.clone(),
+                    })
+                    .collect();
+                prop_assert_eq!(forward_swapped, r, "conflict side labelling swaps with direction");
             }
             _ => prop_assert!(false, "the two merge directions disagreed on clean vs conflicted"),
         }
