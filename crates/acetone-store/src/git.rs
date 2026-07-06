@@ -173,11 +173,19 @@ impl GitStore {
     }
 
     /// The repository's common git directory (shared by all worktrees,
-    /// like refs). Repository-scoped coordination files — e.g. the
-    /// single-writer lock of spec §4, owned by the layer above — belong
-    /// here.
+    /// like refs). Repository-wide coordination — e.g. the store's
+    /// millisecond-scale `acetone-refs.lock` — belongs here.
     pub fn common_dir(&self) -> &Path {
         self.repo.common_dir()
+    }
+
+    /// This worktree's own git directory. For a linked worktree this is
+    /// `<common>/worktrees/<id>`; for a repository with no linked
+    /// worktrees it coincides with [`common_dir`](Self::common_dir).
+    /// Per-worktree coordination — the single-writer lock (ADR-0014) —
+    /// belongs here so writers in different worktrees are independent.
+    pub fn git_dir(&self) -> &Path {
+        self.repo.path()
     }
 
     /// Write one blob, enforcing the size cap; `what` names the blob's

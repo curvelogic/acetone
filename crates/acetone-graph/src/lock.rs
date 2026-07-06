@@ -1,12 +1,15 @@
-//! The single-writer lock (spec §4, ADR-0010).
+//! The single-writer lock (spec §4, ADR-0010, ADR-0014).
 //!
-//! One writer per repository, enforced by a lock file in the
-//! repository's common git directory: `acetone-writer.lock`, created
-//! with `O_CREAT | O_EXCL` (atomic on every filesystem git itself
-//! supports) and holding the owner's pid and acquisition time. The lock
-//! is held for the life of a [`WriteLock`] — i.e. a whole write
-//! transaction, unlike the store layer's `acetone-refs.lock`, which
-//! guards single ref updates for milliseconds.
+//! One writer per **worktree**, enforced by a lock file in the worktree's
+//! own git directory: `acetone-writer.lock`, created with
+//! `O_CREAT | O_EXCL` (atomic on every filesystem git itself supports) and
+//! holding the owner's pid and acquisition time. Placing it in the
+//! per-worktree git dir (ADR-0014) rather than the shared common dir makes
+//! writers in different worktrees independent — matching git's
+//! per-worktree `index.lock`. The lock is held for the life of a
+//! [`WriteLock`] — a whole write transaction — unlike the store layer's
+//! `acetone-refs.lock`, which stays common and guards single ref updates
+//! for milliseconds.
 //!
 //! **No automatic stale-lock breaking in v0.1** (ADR-0010): if the
 //! holding process died, the next writer gets a typed
@@ -19,7 +22,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// File name of the single-writer lock within the common git dir.
+/// File name of the single-writer lock within the per-worktree git dir.
 pub const WRITER_LOCK_FILE: &str = "acetone-writer.lock";
 
 /// Held for the duration of one write transaction; releases (removes the
@@ -30,10 +33,11 @@ pub struct WriteLock {
 }
 
 impl WriteLock {
-    /// Acquire the repository's single-writer lock, or fail with
-    /// [`GraphError::Locked`] describing the current holder.
-    pub fn acquire(common_dir: &Path) -> Result<WriteLock, GraphError> {
-        let path = common_dir.join(WRITER_LOCK_FILE);
+    /// Acquire the worktree's single-writer lock (in `git_dir`, the
+    /// per-worktree git directory), or fail with [`GraphError::Locked`]
+    /// describing the current holder.
+    pub fn acquire(git_dir: &Path) -> Result<WriteLock, GraphError> {
+        let path = git_dir.join(WRITER_LOCK_FILE);
         let mut open_options = std::fs::OpenOptions::new();
         open_options.write(true).create_new(true);
         match open_options.open(&path) {
