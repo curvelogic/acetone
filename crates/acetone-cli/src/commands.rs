@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use acetone_graph::merge::{ConflictMap, MergeConflict, MergeOutcome};
+use acetone_graph::merge::{ConflictMap, Endpoint, GraphViolation, MergeConflict, MergeOutcome};
 use acetone_graph::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
@@ -232,7 +232,7 @@ fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
         MergeOutcome::Conflicts(conflicts) => {
             outln!("merge produced {} conflict(s):", conflicts.len());
             for c in &conflicts {
-                outln!("  {} {}", conflict_map_name(c.map), render_conflict_key(c));
+                outln!("  {}", render_conflict(c));
             }
             // No commit was written; nothing to roll back. Conflict
             // resolution (the `conflicts` map and `resolve`) arrives with
@@ -243,26 +243,71 @@ fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn conflict_map_name(map: ConflictMap) -> &'static str {
-    match map {
-        ConflictMap::Schema => "schema",
-        ConflictMap::Nodes => "node",
-        ConflictMap::Edges => "edge",
-    }
+/// Render a hex string for an undecodable key.
+fn hex_key(key: &[u8]) -> String {
+    key.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Render a conflicted key for display: decode nodes and edges to their
-/// human form, falling back to hex for a schema key or an undecodable one.
-fn render_conflict_key(c: &MergeConflict) -> String {
-    let hex = || c.key.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    match c.map {
-        ConflictMap::Nodes => NodeKey::decode(&c.key)
-            .map(|k| format_node_key(&k))
-            .unwrap_or_else(|_| hex()),
-        ConflictMap::Edges => EdgeKey::decode_fwd(&c.key)
-            .map(|k| format_edge_key(&k))
-            .unwrap_or_else(|_| hex()),
-        ConflictMap::Schema => hex(),
+/// Decode a node key for display, falling back to hex.
+fn render_node_key(key: &[u8]) -> String {
+    NodeKey::decode(key)
+        .map(|k| format_node_key(&k))
+        .unwrap_or_else(|_| hex_key(key))
+}
+
+/// Render a forward edge key for display, falling back to hex.
+fn render_edge_key(key: &[u8]) -> String {
+    EdgeKey::decode_fwd(key)
+        .map(|k| format_edge_key(&k))
+        .unwrap_or_else(|_| hex_key(key))
+}
+
+/// Render one merge conflict — cell clash or graph-level violation — as a
+/// single human-readable line.
+fn render_conflict(c: &MergeConflict) -> String {
+    match c {
+        MergeConflict::Cell(cell) => match cell.map {
+            ConflictMap::Nodes => format!("node {}", render_node_key(&cell.key)),
+            ConflictMap::Edges => format!("edge {}", render_edge_key(&cell.key)),
+            ConflictMap::Schema => format!("schema {}", hex_key(&cell.key)),
+        },
+        MergeConflict::Graph(GraphViolation::DanglingEdge {
+            edge,
+            endpoint,
+            role,
+        }) => {
+            let end = match role {
+                Endpoint::Src => "source",
+                Endpoint::Dst => "destination",
+            };
+            // The endpoint may be absent because a side deleted it, or because
+            // an added edge references a node that is not present — "absent"
+            // covers both.
+            format!(
+                "dangling edge {}: {end} node {} is absent",
+                render_edge_key(edge),
+                render_node_key(endpoint)
+            )
+        }
+        MergeConflict::Graph(GraphViolation::MissingRequired { node, property }) => {
+            format!(
+                "node {} is missing required property {property:?}",
+                render_node_key(node)
+            )
+        }
+        MergeConflict::Graph(GraphViolation::UniqueViolation {
+            label,
+            property,
+            nodes,
+            ..
+        }) => {
+            let keys: Vec<String> = nodes.iter().map(|n| render_node_key(n)).collect();
+            format!(
+                "UNIQUE {label}.{property} shared by {} nodes: {}",
+                nodes.len(),
+                keys.join(", ")
+            )
+        }
     }
 }
 

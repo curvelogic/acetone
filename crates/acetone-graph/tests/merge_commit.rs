@@ -6,7 +6,7 @@
 //! merged manifest *content* — git commit timestamps are wall-clock, so the
 //! merge commit's own hash is not reproducible, but its tree is.
 
-use acetone_graph::merge::MergeOutcome;
+use acetone_graph::merge::{MergeConflict, MergeOutcome};
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_graph::{GraphError, fsck};
 use acetone_model::Value;
@@ -179,7 +179,10 @@ fn conflicting_merge_reports_conflicts_and_changes_nothing() {
     match repo.merge("other", "merge other").expect("merge") {
         MergeOutcome::Conflicts(conflicts) => {
             assert_eq!(conflicts.len(), 1);
-            assert_eq!(conflicts[0].key, node(1).encode().expect("encode"));
+            let MergeConflict::Cell(cell) = &conflicts[0] else {
+                panic!("expected a cell conflict, got {:?}", conflicts[0]);
+            };
+            assert_eq!(cell.key, node(1).encode().expect("encode"));
         }
         other => panic!("expected Conflicts, got {other:?}"),
     }
