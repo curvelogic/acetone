@@ -26,6 +26,10 @@ pub enum Clause {
     Call(CallClause),
     /// Level W (Phase 3): `CREATE` of one or more path patterns.
     Create(CreateClause),
+    /// Level W: `SET` property/label assignments.
+    Set(SetClause),
+    /// Level W: `REMOVE` property/label removals.
+    Remove(RemoveClause),
 }
 
 impl Clause {
@@ -36,13 +40,15 @@ impl Clause {
             Clause::With(p) | Clause::Return(p) => p.span,
             Clause::Call(c) => c.span,
             Clause::Create(c) => c.span,
+            Clause::Set(c) => c.span,
+            Clause::Remove(c) => c.span,
         }
     }
 
     /// Whether this clause writes to the graph (Level W). A query may end
     /// on a write clause with no trailing `RETURN`.
     pub fn is_write(&self) -> bool {
-        matches!(self, Clause::Create(_))
+        matches!(self, Clause::Create(_) | Clause::Set(_) | Clause::Remove(_))
     }
 }
 
@@ -78,6 +84,84 @@ impl AtRef {
 pub struct CreateClause {
     pub patterns: Vec<PathPattern>,
     pub span: Span,
+}
+
+/// `SET` (spec §5.1 Level W): one or more assignments, comma-separated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetClause {
+    pub items: Vec<SetItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetItem {
+    /// `x.key = value` (a `null` value removes the property).
+    Property {
+        var: String,
+        key: String,
+        value: Expr,
+        span: Span,
+    },
+    /// `x = {..}` — replace the whole property map.
+    Replace {
+        var: String,
+        value: Expr,
+        span: Span,
+    },
+    /// `x += {..}` — merge into the property map.
+    Merge {
+        var: String,
+        value: Expr,
+        span: Span,
+    },
+    /// `x:A:B` — add labels (nodes only).
+    AddLabels {
+        var: String,
+        labels: Vec<String>,
+        span: Span,
+    },
+}
+
+impl SetItem {
+    pub fn span(&self) -> Span {
+        match self {
+            SetItem::Property { span, .. }
+            | SetItem::Replace { span, .. }
+            | SetItem::Merge { span, .. }
+            | SetItem::AddLabels { span, .. } => *span,
+        }
+    }
+}
+
+/// `REMOVE` (spec §5.1 Level W): property or label removals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveClause {
+    pub items: Vec<RemoveItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoveItem {
+    /// `REMOVE x.key`.
+    Property {
+        var: String,
+        key: String,
+        span: Span,
+    },
+    /// `REMOVE x:A:B` — remove labels (nodes only).
+    Labels {
+        var: String,
+        labels: Vec<String>,
+        span: Span,
+    },
+}
+
+impl RemoveItem {
+    pub fn span(&self) -> Span {
+        match self {
+            RemoveItem::Property { span, .. } | RemoveItem::Labels { span, .. } => *span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -534,6 +618,17 @@ impl Query {
                         }
                     }
                 }
+                Clause::Set(c) => {
+                    for item in &c.items {
+                        match item {
+                            SetItem::Property { value, .. }
+                            | SetItem::Replace { value, .. }
+                            | SetItem::Merge { value, .. } => roots.push(value),
+                            SetItem::AddLabels { .. } => {}
+                        }
+                    }
+                }
+                Clause::Remove(_) => {}
                 Clause::Unwind(u) => roots.push(&u.expr),
                 Clause::With(p) | Clause::Return(p) => {
                     for item in &p.items {

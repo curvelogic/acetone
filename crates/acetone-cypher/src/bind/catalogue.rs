@@ -69,4 +69,12 @@ impl Catalogue {
             .get(label)
             .is_some_and(|def| def.key().first().is_some_and(|k| k == property))
     }
+
+    /// Whether `property` is anywhere in `label`'s key tuple — the
+    /// properties `SET`/`REMOVE` must never touch (spec §5.1, Invariant #3).
+    pub fn is_key_property(&self, label: &str, property: &str) -> bool {
+        self.labels
+            .get(label)
+            .is_some_and(|def| def.key().iter().any(|k| k == property))
+    }
 }

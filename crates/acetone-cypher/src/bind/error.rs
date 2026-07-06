@@ -85,6 +85,13 @@ pub enum BindError {
 
     #[error("cannot create node '{name}' with labels or properties here; it is already bound at bytes {}..{}", span.start, span.end)]
     CreateBoundNodeWithProperties { name: String, span: Span },
+
+    #[error("cannot modify key property '{property}' of label '{label}' (node identity is immutable; SET/REMOVE must not touch key properties) at bytes {}..{}", span.start, span.end)]
+    SetKeyProperty {
+        label: String,
+        property: String,
+        span: Span,
+    },
 }
 
 impl BindError {
@@ -109,7 +116,8 @@ impl BindError {
             | BindError::CreateRequiresDirectedRelationship { span }
             | BindError::CreateRequiresSingleRelType { span }
             | BindError::CreateVarLengthRelationship { span }
-            | BindError::CreateBoundNodeWithProperties { span, .. } => *span,
+            | BindError::CreateBoundNodeWithProperties { span, .. }
+            | BindError::SetKeyProperty { span, .. } => *span,
         }
     }
 
@@ -139,6 +147,9 @@ impl BindError {
             // openCypher reports attaching labels/properties to an
             // already-bound variable in CREATE as VariableAlreadyBound.
             BindError::CreateBoundNodeWithProperties { .. } => Some("VariableAlreadyBound"),
+            // Acetone-specific (openCypher has no key concept), so no TCK
+            // detail term.
+            BindError::SetKeyProperty { .. } => None,
             BindError::UnknownLabel { .. }
             | BindError::UnknownRelType { .. }
             | BindError::UnknownProperty { .. }
