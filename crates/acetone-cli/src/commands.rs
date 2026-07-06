@@ -42,6 +42,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             new_key,
             message,
         } => rekey(repo_path, &label, &old_key, &new_key, &message),
+        Command::Diff { from, to } => diff(repo_path, &from, &to),
         Command::GetNode { label, key } => get_node(repo_path, &label, &key),
         Command::PutEdge {
             src_label,
@@ -308,6 +309,48 @@ fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Resul
 fn format_node_key(key: &NodeKey) -> String {
     let key_repr: Vec<String> = key.key().iter().map(format_value).collect();
     format!("{} [{}]", format_label(key.label()), key_repr.join(", "))
+}
+
+fn format_edge_key(key: &EdgeKey) -> String {
+    format!(
+        "{} -{}-> {}",
+        format_node_key(key.src()),
+        format_label(key.rtype()),
+        format_node_key(key.dst()),
+    )
+}
+
+fn diff(repo_path: &Path, from: &str, to: &str) -> Result<()> {
+    use acetone_graph::diff::ChangeKind;
+    let repo = open(repo_path)?;
+    let diff = repo
+        .diff(from, to)
+        .with_context(|| format!("diffing {from:?}..{to:?}"))?;
+    // `+` added, `-` removed, `~` modified — the sign is the change's own
+    // meaning, so it reads at a glance and matches the diff graph's labels.
+    let sign = |kind: ChangeKind| match kind {
+        ChangeKind::Added => '+',
+        ChangeKind::Removed => '-',
+        ChangeKind::Modified => '~',
+    };
+    for change in &diff.nodes {
+        outln!(
+            "{} node {}",
+            sign(change.kind),
+            format_node_key(&change.key)
+        );
+    }
+    for change in &diff.edges {
+        outln!(
+            "{} edge {}",
+            sign(change.kind),
+            format_edge_key(&change.key)
+        );
+    }
+    if diff.is_empty() {
+        outln!("(no changes)");
+    }
+    Ok(())
 }
 
 fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
