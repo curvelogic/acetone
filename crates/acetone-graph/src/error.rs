@@ -123,6 +123,15 @@ pub enum GraphError {
         /// The unsupported aspect (e.g. secondary indexes).
         feature: &'static str,
     },
+    /// Two versions share no common ancestor, so there is no base for a
+    /// three-way merge (unrelated histories).
+    #[error("cannot merge {theirs} into {ours}: no common ancestor (unrelated histories)")]
+    NoMergeBase {
+        /// The current branch's head, in hex.
+        ours: String,
+        /// The version being merged in, in hex.
+        theirs: String,
+    },
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
     #[error("lock file I/O at {path}: {source}")]

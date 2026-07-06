@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use acetone_graph::merge::{ConflictMap, MergeConflict, MergeOutcome};
 use acetone_graph::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
@@ -28,6 +29,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         Command::Log => log(repo_path),
         Command::Branch { name } => branch(repo_path, name.as_deref()),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
+        Command::Merge { refspec, message } => merge(repo_path, &refspec, message.as_deref()),
         Command::DeclareLabel {
             label,
             key,
@@ -209,6 +211,59 @@ fn checkout(repo_path: &Path, name: &str) -> Result<()> {
         .with_context(|| format!("checking out branch {name:?}"))?;
     outln!("switched to branch {name:?}");
     Ok(())
+}
+
+fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
+    let repo = open(repo_path)?;
+    let message = message
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Merge {refspec}"));
+    match repo
+        .merge(refspec, &message)
+        .with_context(|| format!("merging {refspec:?}"))?
+    {
+        MergeOutcome::AlreadyUpToDate => outln!("already up to date"),
+        MergeOutcome::FastForward(head) => {
+            outln!("fast-forwarded to {}", head.to_hex());
+        }
+        MergeOutcome::Merged(commit) => {
+            outln!("merge commit {}", commit.to_hex());
+        }
+        MergeOutcome::Conflicts(conflicts) => {
+            outln!("merge produced {} conflict(s):", conflicts.len());
+            for c in &conflicts {
+                outln!("  {} {}", conflict_map_name(c.map), render_conflict_key(c));
+            }
+            // No commit was written; nothing to roll back. Conflict
+            // resolution (the `conflicts` map and `resolve`) arrives with
+            // acetone-14c.4.
+            bail!("merge conflicts remain; conflict resolution is not yet available");
+        }
+    }
+    Ok(())
+}
+
+fn conflict_map_name(map: ConflictMap) -> &'static str {
+    match map {
+        ConflictMap::Schema => "schema",
+        ConflictMap::Nodes => "node",
+        ConflictMap::Edges => "edge",
+    }
+}
+
+/// Render a conflicted key for display: decode nodes and edges to their
+/// human form, falling back to hex for a schema key or an undecodable one.
+fn render_conflict_key(c: &MergeConflict) -> String {
+    let hex = || c.key.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    match c.map {
+        ConflictMap::Nodes => NodeKey::decode(&c.key)
+            .map(|k| format_node_key(&k))
+            .unwrap_or_else(|_| hex()),
+        ConflictMap::Edges => EdgeKey::decode_fwd(&c.key)
+            .map(|k| format_edge_key(&k))
+            .unwrap_or_else(|_| hex()),
+        ConflictMap::Schema => hex(),
+    }
 }
 
 fn single_key(label: &str, key: &str) -> Result<NodeKey> {
