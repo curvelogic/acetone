@@ -63,7 +63,9 @@ pub enum Command {
     /// commit on a clean three-way merge (spec §7). The workspace must be
     /// clean and a branch checked out. Fast-forwards when possible; on
     /// conflicts it reports them and makes no commit (resolution is not yet
-    /// available).
+    /// available). A clean merge is map-clean but not yet graph-validated
+    /// (dangling-edge/constraint checks arrive later); run `fsck` if that
+    /// matters.
     Merge {
         /// The version to merge in (branch short name, full ref name or
         /// commit hash).

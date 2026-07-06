@@ -470,6 +470,15 @@ impl Repository {
     /// is rebuilt from the merged forward map (Invariant #5). The merge
     /// commit's own hash is *not* reproducible (its author/committer
     /// timestamp is wall-clock), but its tree — the merged manifest — is.
+    ///
+    /// **A `Merged` result is map-clean, not graph-validated.** Each map is
+    /// three-way-merged independently, so a clean merge can still produce a
+    /// referentially-invalid graph — e.g. `ours` adds an edge to a node that
+    /// `theirs` deletes, with no key-level conflict in either map. Post-merge
+    /// graph validation (dangling-edge detection and constraint re-check over
+    /// the changed key set, spec §7) is **not yet applied here**; it arrives
+    /// with acetone-14c.3. Until then, run `fsck` if referential integrity
+    /// after a merge matters.
     pub fn merge(&self, theirs: &str, message: &str) -> Result<MergeOutcome, GraphError> {
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         if self.is_dirty()? {
@@ -732,8 +741,12 @@ impl Repository {
     /// topology this leaves exactly one commit. On a criss-cross history
     /// several maximal common ancestors can remain; any is a valid base and
     /// the three-way merge over it is deterministic, so the smallest by hash
-    /// is chosen to keep the whole operation reproducible (Invariant #4).
-    /// This is not git's recursive-merge "virtual base" — a documented
+    /// is chosen for a stable choice. This keeps the merge reproducible
+    /// *within a repository* (which is all Invariant #4 requires — merge is a
+    /// pure function of the chosen base); note the tie-break is over the
+    /// commit hash, which embeds a wall-clock timestamp, so two repositories
+    /// built from the same logical criss-cross history could pick different
+    /// bases. This is not git's recursive-merge "virtual base" — a documented
     /// simplification for v0.1 (spec §7).
     fn merge_base(&self, a: &Hash, b: &Hash) -> Result<Option<Hash>, GraphError> {
         let anc_a = self.ancestors(a)?;
