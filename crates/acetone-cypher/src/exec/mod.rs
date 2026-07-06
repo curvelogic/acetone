@@ -12,8 +12,11 @@ pub mod write;
 
 pub use adapter::{GraphSnapshot, catalogue_from_schema};
 pub use eval::{ExecError, Row};
-pub use run::{QueryResult, execute, execute_versioned, execute_write};
-pub use source::{EmptyGraph, GraphSource, MemoryGraph, SingleVersion, VersionResolver};
+pub use run::{QueryResult, execute, execute_versioned, execute_versioned_with, execute_write};
+pub use source::{
+    EmptyGraph, GraphSource, MemoryGraph, NoProcedures, ProcedureProvider, SingleVersion,
+    VersionResolver,
+};
 pub use value::Value;
 pub use write::{MutableGraph, Mutation, WriteChanges, WriteSummary};
 
@@ -767,6 +770,94 @@ mod tests {
         // The single-graph path reports AT as unsupported, not a panic.
         let err =
             run_query("MATCH (h) AT 'x' RETURN h", &EmptyGraph, &BTreeMap::new()).unwrap_err();
+        assert!(matches!(
+            err,
+            QueryError::Exec(ExecError::InvalidArgument { .. })
+        ));
+    }
+
+    // --- CALL procedures (read path, acetone-8c3) ---------------------------
+
+    /// A stand-in provider returning fixed rows, for executor-level CALL tests
+    /// without a repository.
+    struct FixedProcedures(Vec<Vec<Value>>);
+
+    impl crate::exec::ProcedureProvider for FixedProcedures {
+        fn call(&self, _name: &str, _args: &[Value]) -> Result<Vec<Vec<Value>>, String> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn call_with(query: &str, provider: &dyn crate::exec::ProcedureProvider) -> QueryResult {
+        use crate::bind::{BindMode, Catalogue, bind};
+        let parsed = crate::parse(query).expect("parse");
+        let bound = bind(query, &parsed, &Catalogue::empty(), BindMode::Lenient).expect("bind");
+        crate::exec::execute_versioned_with(
+            &bound,
+            &SingleVersion::new(&EmptyGraph),
+            provider,
+            &BTreeMap::new(),
+        )
+        .expect(query)
+    }
+
+    #[test]
+    fn call_binds_yields_and_applies_where() {
+        // acetone.diff yields (kind, label, key); the provider returns two
+        // rows, one added and one removed.
+        let provider = FixedProcedures(vec![
+            vec![
+                Value::String("added".into()),
+                Value::String("N".into()),
+                Value::String("k1".into()),
+            ],
+            vec![
+                Value::String("removed".into()),
+                Value::String("N".into()),
+                Value::String("k2".into()),
+            ],
+        ]);
+        // YIELD a subset in a different order, filter with WHERE, then RETURN.
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD key, kind WHERE kind = 'added' RETURN key, kind",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["key", "kind"]);
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "k1"));
+        assert!(matches!(&result.rows[0][1], Value::String(s) if s == "added"));
+    }
+
+    #[test]
+    fn standalone_call_projects_declared_yield_columns() {
+        // No YIELD, no RETURN: the procedure's declared columns are the result.
+        let provider = FixedProcedures(vec![vec![
+            Value::String("abc123".into()),
+            Value::String("a subject".into()),
+        ]]);
+        let result = call_with("CALL acetone.log('main')", &provider);
+        assert_eq!(result.columns, vec!["commit", "subject"]);
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "abc123"));
+    }
+
+    #[test]
+    fn yield_without_return_projects_the_yielded_columns() {
+        let provider = FixedProcedures(vec![vec![
+            Value::String("added".into()),
+            Value::String("N".into()),
+            Value::String("k1".into()),
+        ]]);
+        let result = call_with("CALL acetone.diff('a', 'b') YIELD kind, key", &provider);
+        assert_eq!(result.columns, vec!["kind", "key"]);
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn call_without_a_provider_is_a_clean_error() {
+        // The default (NoProcedures) path used by tests/TCK errors rather
+        // than panicking.
+        let err = run_query("CALL acetone.log()", &EmptyGraph, &BTreeMap::new()).unwrap_err();
         assert!(matches!(
             err,
             QueryError::Exec(ExecError::InvalidArgument { .. })
