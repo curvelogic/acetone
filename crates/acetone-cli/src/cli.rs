@@ -68,6 +68,13 @@ pub enum Command {
         /// A key property name; repeat for a composite key, in order.
         #[arg(long = "key", required = true)]
         key: Vec<String>,
+        /// A property that must be present (existence constraint); repeat.
+        #[arg(long = "require")]
+        require: Vec<String>,
+        /// A non-key property that must be unique across nodes of this
+        /// label (UNIQUE constraint); repeat.
+        #[arg(long = "unique")]
+        unique: Vec<String>,
     },
     /// Declare a relationship type (schema). Required before Cypher can
     /// create relationships of this type under a declared schema.
