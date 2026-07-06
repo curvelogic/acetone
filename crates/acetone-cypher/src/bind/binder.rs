@@ -172,11 +172,11 @@ impl<'a> Binder<'a> {
             }
             None => None,
         };
-        let start = self.node_pattern(&pattern.start, true)?;
+        let start = self.create_node_pattern(&pattern.start)?;
         let mut steps = Vec::new();
         for (rel, node) in &pattern.steps {
             let rel = self.create_rel_pattern(rel)?;
-            let node = self.node_pattern(node, true)?;
+            let node = self.create_node_pattern(node)?;
             steps.push((rel, node));
         }
         Ok(BoundPathPattern {
@@ -185,6 +185,27 @@ impl<'a> Binder<'a> {
             steps,
             span: pattern.span,
         })
+    }
+
+    /// Bind a CREATE node position. A fresh (or anonymous) position is
+    /// created; an already-bound variable is *referenced*, but openCypher
+    /// forbids attaching labels or properties to that reference (that is a
+    /// SET, not a CREATE) — silently dropping them would be a conformance
+    /// gap, so it is a bind-time error.
+    fn create_node_pattern(
+        &mut self,
+        node: &ast::NodePattern,
+    ) -> Result<BoundNodePattern, BindError> {
+        if let Some(name) = &node.variable
+            && self.scope.contains_key(name)
+            && (!node.labels.is_empty() || node.properties.is_some())
+        {
+            return Err(BindError::CreateBoundNodeWithProperties {
+                name: name.clone(),
+                span: node.span,
+            });
+        }
+        self.node_pattern(node, true)
     }
 
     fn create_rel_pattern(&mut self, rel: &ast::RelPattern) -> Result<BoundRelPattern, BindError> {

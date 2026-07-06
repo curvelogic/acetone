@@ -82,6 +82,9 @@ pub enum BindError {
 
     #[error("variable-length relationships cannot be created at bytes {}..{}", span.start, span.end)]
     CreateVarLengthRelationship { span: Span },
+
+    #[error("cannot create node '{name}' with labels or properties here; it is already bound at bytes {}..{}", span.start, span.end)]
+    CreateBoundNodeWithProperties { name: String, span: Span },
 }
 
 impl BindError {
@@ -105,7 +108,8 @@ impl BindError {
             | BindError::NewVariableInPatternPredicate { span, .. }
             | BindError::CreateRequiresDirectedRelationship { span }
             | BindError::CreateRequiresSingleRelType { span }
-            | BindError::CreateVarLengthRelationship { span } => *span,
+            | BindError::CreateVarLengthRelationship { span }
+            | BindError::CreateBoundNodeWithProperties { span, .. } => *span,
         }
     }
 
@@ -132,6 +136,9 @@ impl BindError {
             }
             BindError::CreateRequiresSingleRelType { .. } => Some("NoSingleRelationshipType"),
             BindError::CreateVarLengthRelationship { .. } => Some("CreatingVarLength"),
+            // openCypher reports attaching labels/properties to an
+            // already-bound variable in CREATE as VariableAlreadyBound.
+            BindError::CreateBoundNodeWithProperties { .. } => Some("VariableAlreadyBound"),
             BindError::UnknownLabel { .. }
             | BindError::UnknownRelType { .. }
             | BindError::UnknownProperty { .. }

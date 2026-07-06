@@ -322,7 +322,21 @@ mod tests {
 
     #[test]
     fn create_may_reference_a_bound_node() {
+        // A bare reference to a bound node is fine...
         assert!(bind_lenient("MATCH (a:A) CREATE (a)-[:R]->(b:B) RETURN b").is_ok());
+        // ...but attaching labels or properties to it is not (openCypher:
+        // that is a SET, not a CREATE) — it must not silently vanish.
+        let err = bind_lenient("MATCH (a:A) CREATE (a:Extra) RETURN a").unwrap_err();
+        assert!(matches!(
+            err,
+            BindError::CreateBoundNodeWithProperties { .. }
+        ));
+        assert_eq!(err.tck_detail(), Some("VariableAlreadyBound"));
+        let err = bind_lenient("MATCH (a:A) CREATE (a {x: 1}) RETURN a").unwrap_err();
+        assert!(matches!(
+            err,
+            BindError::CreateBoundNodeWithProperties { .. }
+        ));
     }
 
     #[test]

@@ -10,9 +10,11 @@
 //! Every applied change is also appended to an ordered [`Mutation`] log.
 //! mex.1 proves the semantics against the in-memory overlay; mex.2 replays
 //! the log into acetone-graph `put_node`/`put_edge` to persist into
-//! workspace roots. Keeping the log ordered and deterministic is what lets
-//! that replay reproduce identical prolly-tree roots (Load-Bearing
-//! Invariant #1).
+//! workspace roots. A deterministic log order gives deterministic
+//! last-write-wins semantics within a query; history independence itself
+//! (Load-Bearing Invariant #1 — identical final contents yield identical
+//! roots regardless of order) is provided by the prolly-tree layer, not by
+//! this log.
 
 use std::collections::BTreeMap;
 
