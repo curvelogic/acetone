@@ -209,6 +209,60 @@ fn resolve_ours_on_a_delete_vs_modify_conflict_deletes_the_node() {
 }
 
 #[test]
+fn an_ordinary_write_to_a_conflicted_key_resolves_it() {
+    // Spec §6: conflicts resolve by ordinary writes too. Writing a custom
+    // merged value for the conflicted node clears its conflict, letting the
+    // merge complete with that value.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let (ours, theirs) = conflicting_merge(&repo);
+
+    // Resolve node 1 by writing a hand-merged value (neither ours nor theirs).
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(99)).expect("put");
+    tx.save().expect("save");
+
+    // The conflict is gone; the write's value stands.
+    assert!(repo.conflicts().expect("conflicts").is_empty());
+    assert_eq!(workspace_v(&repo, 1), Some(99));
+
+    // Commit completes the merge as a two-parent commit.
+    let txn = repo.begin_write().expect("begin");
+    let merge_commit = txn
+        .commit("merge (resolved by write)", &[], None)
+        .expect("commit");
+    let commit = repo
+        .store()
+        .read_commit(&merge_commit)
+        .expect("read")
+        .unwrap();
+    assert_eq!(commit.parents, vec![ours, theirs]);
+    assert!(repo.merge_head().expect("merge head").is_none());
+    assert_eq!(workspace_v(&repo, 1), Some(99));
+}
+
+#[test]
+fn a_write_to_an_unconflicted_key_leaves_conflicts_intact() {
+    // Writing some other node during a merge does not spuriously clear the
+    // conflict on node 1.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    conflicting_merge(&repo);
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(2), &record(20)).expect("put");
+    tx.save().expect("save");
+
+    // Node 1's conflict still stands; the merge is not yet completable.
+    assert_eq!(repo.conflicts().expect("conflicts").len(), 1);
+    let txn = repo.begin_write().expect("begin");
+    assert!(matches!(
+        txn.commit("nope", &[], None),
+        Err(GraphError::MergeState(_))
+    ));
+}
+
+#[test]
 fn resolve_with_no_merge_in_progress_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init(dir.path());

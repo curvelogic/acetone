@@ -1588,3 +1588,58 @@ fn conflicts_node_falls_back_to_theirs_when_ours_deleted() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("theirs"), "{}", stdout(&out));
 }
+
+#[test]
+fn merge_conflict_resolved_by_ordinary_write() {
+    // acetone-14c.4c: a conflict can be resolved by writing a custom merged
+    // value (not just picking a side), then commit completes the merge.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=base"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=ours"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirs"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    let _ = acetone(&repo, &["merge", "other", "-m", "merge"]);
+
+    // Resolve by writing a hand-merged value.
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=merged"])
+            .status
+            .success()
+    );
+    assert!(stdout(&acetone(&repo, &["status"])).contains("all conflicts resolved"));
+    assert!(acetone(&repo, &["commit", "-m", "done"]).status.success());
+    let q = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (n:N) RETURN n.name AS name",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(stdout(&q).contains("merged"), "{}", stdout(&q));
+}

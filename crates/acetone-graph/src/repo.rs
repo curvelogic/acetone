@@ -954,6 +954,14 @@ fn workspace_ref(name: &str) -> String {
     format!("{WORKSPACE_REF_PREFIX}{name}")
 }
 
+/// The key of a staged batch op (present on both `Put` and `Delete`).
+fn batch_op_key(op: &BatchOp) -> &[u8] {
+    match op {
+        BatchOp::Put(key, _) => key,
+        BatchOp::Delete(key) => key,
+    }
+}
+
 /// Read a ref for refspec resolution: a name that is not a valid direct
 /// ref (invalid format, symbolic) reads as absent rather than an error,
 /// so resolution can fall through to the next interpretation.
@@ -1071,6 +1079,32 @@ impl<'r> Transaction<'r> {
         }
         let store = &self.repo.store;
         let params = self.manifest.chunk_params;
+        // By-write conflict resolution (spec §6, acetone-14c.4c): while a merge
+        // is in progress, writing a conflicted key resolves it. Collect the
+        // keys written this save (before the ops are consumed) so the
+        // conflicts map can be reduced by them below.
+        let written: Vec<(ConflictMap, Vec<u8>)> = if self.manifest.conflicts.is_some() {
+            let mut w = Vec::new();
+            for op in &self.schema {
+                w.push((ConflictMap::Schema, batch_op_key(op).to_vec()));
+            }
+            for op in &self.nodes {
+                w.push((ConflictMap::Nodes, batch_op_key(op).to_vec()));
+            }
+            for op in &self.edges_fwd {
+                w.push((ConflictMap::Edges, batch_op_key(op).to_vec()));
+            }
+            w
+        } else {
+            Vec::new()
+        };
+        let conflicts = match self.manifest.conflicts {
+            Some(root) if !written.is_empty() => {
+                crate::conflicts::clear_written(store, &root.to_root(params)?, &written)?
+                    .map(|r| MapRoot::from_root(&r))
+            }
+            other => other,
+        };
         let manifest = Manifest {
             chunk_params: params,
             schema: Self::apply_map(
@@ -1098,7 +1132,7 @@ impl<'r> Transaction<'r> {
                 std::mem::take(&mut self.edges_rev),
             )?,
             indexes: self.manifest.indexes.clone(),
-            conflicts: self.manifest.conflicts,
+            conflicts,
         };
         let manifest_bytes = manifest.encode();
         let new_manifest_hash = store.put(&manifest_bytes)?;
