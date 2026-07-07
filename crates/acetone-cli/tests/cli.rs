@@ -1532,3 +1532,59 @@ fn call_conflicts_exposes_the_merge_conflicts() {
     );
     assert!(stdout(&none).contains("\n0"), "{}", stdout(&none));
 }
+
+#[test]
+fn conflicts_node_falls_back_to_theirs_when_ours_deleted() {
+    // acetone-14c.4b: the _Conflict node shows ours' value, but when ours
+    // deleted the node (delete-vs-modify), it falls back to theirs'.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=base"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+    // theirs modifies the node.
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirs"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    // ours deletes the node.
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    assert!(
+        acetone(&repo, &["query", "MATCH (n:N {id: 1}) DELETE n"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "ours deletes"])
+            .status
+            .success()
+    );
+    let _ = acetone(&repo, &["merge", "other", "-m", "merge"]); // conflicts
+
+    // ours has no node, so the _Conflict node carries theirs' value.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD node \
+             WHERE '_Conflict' IN labels(node) RETURN node.name AS name",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("theirs"), "{}", stdout(&out));
+}

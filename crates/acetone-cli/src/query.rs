@@ -273,8 +273,11 @@ impl acetone_cypher::exec::ProcedureProvider for RepoProcedures<'_> {
                 };
                 let conflicts = self.repo.conflicts().map_err(|e| e.to_string())?;
                 // `ours` is the branch tip during a merge; `theirs` is
-                // MERGE_HEAD. A conflicting node's value comes from ours, or
-                // theirs when ours deleted it.
+                // MERGE_HEAD. The `_Conflict` node shows the **ours-side**
+                // value (the current branch's), falling back to theirs' only
+                // when ours deleted the node. Base/ours/theirs side-by-side is
+                // a later refinement; `CALL acetone.diff` shows the full
+                // three-way detail.
                 let ours = self
                     .repo
                     .head_commit()
