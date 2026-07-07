@@ -569,7 +569,11 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         name: "acetone.conflicts",
         min_args: 0,
         max_args: 0,
-        yields: &["label", "key"],
+        // `node` is the `_Conflict` virtual subgraph (acetone-14c.4b): the
+        // conflicting node as a value labelled `_Conflict`, so
+        // `YIELD node WHERE '_Conflict' IN labels(node)` queries the merge's
+        // conflicts as a graph. Null for a relationship or schema conflict.
+        yields: &["label", "key", "node"],
     },
 ];
 
