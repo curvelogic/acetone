@@ -183,15 +183,44 @@ impl acetone_cypher::exec::ProcedureProvider for RepoProcedures<'_> {
                     .collect())
             }
             "acetone.diff" => {
+                use acetone_graph::diff::ChangeKind;
                 let from = as_string(&args[0], "acetone.diff", "from")?;
                 let to = as_string(&args[1], "acetone.diff", "to")?;
                 let diff = self.repo.diff(&from, &to).map_err(|e| e.to_string())?;
+                // The schema of each side names key properties on the virtual
+                // nodes: added/modified live in `to`, removed in `from`.
+                let from_schema = self
+                    .repo
+                    .snapshot(&from)
+                    .and_then(|s| s.schema_entries())
+                    .map_err(|e| e.to_string())?;
+                let to_schema = self
+                    .repo
+                    .snapshot(&to)
+                    .and_then(|s| s.schema_entries())
+                    .map_err(|e| e.to_string())?;
                 let mut rows = Vec::new();
                 for change in &diff.nodes {
+                    let (record, schema) = match change.kind {
+                        ChangeKind::Removed => (change.before.as_ref(), from_schema.as_slice()),
+                        _ => (change.after.as_ref(), to_schema.as_slice()),
+                    };
+                    // The `node` column: the changed node as a virtual value
+                    // labelled with its change kind (acetone-14c.1).
+                    let node = match record {
+                        Some(rec) => Value::Node(acetone_cypher::exec::virtual_diff_node(
+                            &change.key,
+                            rec,
+                            schema,
+                            change.kind.label(),
+                        )),
+                        None => Value::Null,
+                    };
                     rows.push(vec![
                         Value::String(change_kind(change.kind).to_string()),
                         Value::String(change.key.label().to_string()),
                         Value::String(crate::commands::format_node_key(&change.key)),
+                        node,
                     ]);
                 }
                 for change in &diff.edges {
@@ -199,6 +228,8 @@ impl acetone_cypher::exec::ProcedureProvider for RepoProcedures<'_> {
                         Value::String(change_kind(change.kind).to_string()),
                         Value::String(change.key.rtype().to_string()),
                         Value::String(crate::commands::format_edge_key(&change.key)),
+                        // Virtual relationships for edge changes are a follow-up.
+                        Value::Null,
                     ]);
                 }
                 Ok(rows)

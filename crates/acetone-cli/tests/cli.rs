@@ -1304,3 +1304,43 @@ fn call_history_procedures_run_through_the_query_path() {
         stderr(&out)
     );
 }
+
+#[test]
+fn call_diff_yields_a_queryable_virtual_graph() {
+    // acetone-14c.1: CALL acetone.diff YIELD node returns the changed nodes as
+    // virtual values labelled _Added/_Removed/_Modified, queryable in Cypher.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=alice"])
+            .status
+            .success()
+    );
+    let c1 = commit_hex(&acetone(&repo, &["commit", "-m", "first"]));
+    assert!(
+        acetone(&repo, &["put-node", "N", "2", "--prop", "name=bob"])
+            .status
+            .success()
+    );
+    let c2 = commit_hex(&acetone(&repo, &["commit", "-m", "second"]));
+
+    // The added node is a virtual :_Added node carrying its real label and
+    // both key (id) and record (name) properties.
+    let query = format!(
+        "CALL acetone.diff('{c1}', '{c2}') YIELD node \
+         WHERE '_Added' IN labels(node) RETURN node.id AS id, node.name AS name"
+    );
+    let out = acetone(&repo, &["query", &query, "--format", "csv"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("id,name"), "{text}");
+    assert!(text.contains("2,bob"), "{text}");
+    // The unchanged/added node 1 is not _Added here (only 2 was added).
+    assert!(!text.contains("1,alice"), "{text}");
+}

@@ -412,12 +412,18 @@ pub(crate) fn format_node_key(key: &NodeKey) -> String {
 }
 
 pub(crate) fn format_edge_key(key: &EdgeKey) -> String {
-    format!(
+    let base = format!(
         "{} -{}-> {}",
         format_node_key(key.src()),
         format_label(key.rtype()),
         format_node_key(key.dst()),
-    )
+    );
+    // Parallel edges are distinguished by a discriminator; show it when set so
+    // two edges between the same endpoints render distinctly (14c.1 note).
+    match key.disc() {
+        Value::Null => base,
+        disc => format!("{base} [{}]", format_value(disc)),
+    }
 }
 
 fn diff(repo_path: &Path, from: &str, to: &str) -> Result<()> {
