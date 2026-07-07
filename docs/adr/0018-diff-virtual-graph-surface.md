@@ -52,6 +52,13 @@ acetone.diff` still compute from one `Repository::diff`.
 - **Virtual nodes only.** Relationship changes fill the row's `kind`/`label`/
   `key` columns with a null `node`; virtual *relationships* for edge changes
   are a follow-up.
+- **Key properties need a declared label.** The virtual node re-exposes key
+  values under their schema-declared names, so on a schemaless repo (raw
+  plumbing `put-node`, no `declare-label`) the `node` carries only record
+  properties — `node.id` is null. This matches the normal read path
+  (`GraphSnapshot::from_records` behaves identically) and Invariant #3 makes
+  schema-declared keys mandatory anyway; node *identity* is still derived from
+  the key.
 - **`node:_Added` predicate syntax is unavailable.** The parser accepts
   `n:Label` only in patterns and SET/REMOVE, not as a WHERE expression — a
   pre-existing gap (filed acetone-6gy). So the label test is written
