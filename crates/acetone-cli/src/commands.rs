@@ -355,8 +355,13 @@ fn render_conflict(c: &MergeConflict) -> String {
             ..
         }) => {
             let keys: Vec<String> = nodes.iter().map(|n| render_node_key(n)).collect();
+            // `label` and `property` come from the (attacker-controllable)
+            // schema; route them through format_label so a hostile clone
+            // cannot inject terminal escapes here (the PR #25 bar).
             format!(
-                "UNIQUE {label}.{property} shared by {} nodes: {}",
+                "UNIQUE {}.{} shared by {} nodes: {}",
+                format_label(label),
+                format_label(property),
                 nodes.len(),
                 keys.join(", ")
             )
