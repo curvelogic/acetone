@@ -242,6 +242,52 @@ fn an_ordinary_write_to_a_conflicted_key_resolves_it() {
 }
 
 #[test]
+fn an_edge_conflict_resolves_by_writing_the_edge() {
+    // The riskiest by-write path (edges_rev symmetry): both sides modify an
+    // edge; writing a merged edge record clears the conflict and keeps the
+    // reverse map in sync.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(0)).expect("put");
+    tx.put_node(&node(2), &record(0)).expect("put");
+    tx.put_edge(&edge(1, 2), &edge_record(0)).expect("edge");
+    let base = tx.commit("base", &[], None).expect("commit");
+
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_edge(&edge(1, 2), &edge_record(2)).expect("edge");
+    tx.commit("theirs", &[], None).expect("commit");
+    repo.checkout_branch("main").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_edge(&edge(1, 2), &edge_record(1)).expect("edge");
+    tx.commit("ours", &[], None).expect("commit");
+
+    match repo.merge("other", "merge other").expect("merge") {
+        MergeOutcome::Conflicts(c) => assert_eq!(c.len(), 1),
+        other => panic!("expected Conflicts, got {other:?}"),
+    }
+
+    // Resolve by writing a hand-merged edge record.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_edge(&edge(1, 2), &edge_record(9)).expect("edge");
+    tx.save().expect("save");
+    assert!(repo.conflicts().expect("conflicts").is_empty());
+
+    let txn = repo.begin_write().expect("begin");
+    txn.commit("merge", &[], None).expect("commit");
+    let snap = repo.workspace_snapshot().expect("snapshot");
+    assert_eq!(
+        snap.edges().expect("edges")[0].1.properties().get("w"),
+        Some(&Value::Int(9))
+    );
+    // Reverse map stayed symmetric.
+    assert!(!fsck(&repo).expect("fsck").has_errors());
+}
+
+#[test]
 fn a_write_to_an_unconflicted_key_leaves_conflicts_intact() {
     // Writing some other node during a merge does not spuriously clear the
     // conflict on node 1.

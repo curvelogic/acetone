@@ -1168,8 +1168,11 @@ impl<'r> Transaction<'r> {
         let repo = self.repo;
         // A merge in progress (MERGE_HEAD set) completes here: the commit gets
         // `theirs` as a second parent (spec §6). It may only complete once
-        // every conflict is resolved — an unresolved `conflicts` map refuses.
+        // every conflict is resolved. Apply staged writes first, so a write
+        // that resolves the last conflict in this same transaction is seen
+        // (14c.4c) before the unresolved-conflicts check.
         let merge_head = repo.store.read_ref(WORKTREE_MERGE_HEAD_REF)?;
+        self.save_in_place()?;
         if self.manifest.conflicts.is_some() {
             return Err(match merge_head {
                 Some(_) => GraphError::MergeState(
@@ -1178,7 +1181,6 @@ impl<'r> Transaction<'r> {
                 None => GraphError::MergeInProgress,
             });
         }
-        self.save_in_place()?;
 
         let branch = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
         let parent = repo.store.read_ref(&branch)?;

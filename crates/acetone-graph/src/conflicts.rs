@@ -54,8 +54,9 @@ pub enum PersistedConflict {
         /// The conflicted key (encoded).
         key: Vec<u8>,
     },
-    /// A graph-level violation (dangling edge / constraint). Resolved by
-    /// ordinary writes, not by picking a side (acetone-14c.4c).
+    /// A graph-level violation (dangling edge / constraint). Not persisted or
+    /// resolvable yet — a violating merge leaves the repository unchanged
+    /// (acetone-mws); this variant exists for completeness.
     Graph,
 }
 
