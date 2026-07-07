@@ -54,8 +54,9 @@ pub enum PersistedConflict {
         /// The conflicted key (encoded).
         key: Vec<u8>,
     },
-    /// A graph-level violation (dangling edge / constraint). Resolved by
-    /// ordinary writes, not by picking a side (acetone-14c.4c).
+    /// A graph-level violation (dangling edge / constraint). Not persisted or
+    /// resolvable yet — a violating merge leaves the repository unchanged
+    /// (acetone-mws); this variant exists for completeness.
     Graph,
 }
 
@@ -145,6 +146,34 @@ pub fn build_conflicts_map<S: ChunkStore>(
         .collect();
     let base = empty(store, params)?;
     Ok(apply_batch(store, &base, ops)?)
+}
+
+/// Clear the cell-conflict entries for the `written` `(map, key)` pairs from
+/// the conflicts map — a write to a conflicted key resolves it (spec §6,
+/// acetone-14c.4c). Deleting a key that is not a conflict is a harmless no-op,
+/// so callers can pass every key they wrote. Returns the reduced root, or
+/// `None` when no conflicts remain (the merge is fully resolved).
+pub fn clear_written<S: ChunkStore>(
+    store: &S,
+    root: &Root,
+    written: &[(ConflictMap, Vec<u8>)],
+) -> Result<Option<Root>, GraphError> {
+    let ops: Vec<BatchOp> = written
+        .iter()
+        .map(|(map, key)| {
+            let mut entry = Vec::with_capacity(2 + key.len());
+            entry.push(KIND_CELL);
+            entry.push(map_tag(*map));
+            entry.extend_from_slice(key);
+            BatchOp::Delete(entry)
+        })
+        .collect();
+    let reduced = apply_batch(store, root, ops)?;
+    // Any entries left?
+    match scan(store, &reduced, ..)?.next() {
+        None => Ok(None),
+        Some(_) => Ok(Some(reduced)),
+    }
 }
 
 /// Read the conflicts back from a `conflicts` map root, in the map's key

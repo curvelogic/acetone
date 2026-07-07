@@ -143,7 +143,8 @@ fn status(repo_path: &Path) -> Result<()> {
         } else {
             outln!(
                 "merge: in progress, {remaining} conflict(s) to resolve \
-                 (`acetone resolve --all-ours|--all-theirs`)"
+                 (`acetone resolve --all-ours|--all-theirs`, or write the \
+                 conflicted entities directly)"
             );
         }
     }
