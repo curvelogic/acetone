@@ -574,20 +574,20 @@ impl Repository {
             next = commit.parents.first().copied();
         }
 
+        // Walk oldest → newest carrying the older commit's record forward, so
+        // each commit is probed exactly once. A commit is credited when its
+        // record differs from the older one — introduction (older absent), a
+        // property change, or a deletion.
         let mut touching = Vec::new();
-        for (i, commit) in chain.iter().enumerate() {
+        let mut older = None;
+        for commit in chain.iter().rev() {
             let current = self.record_at(commit, key)?;
-            // The record in the next-older commit on the chain (absent past
-            // the root), so the oldest commit to hold the node is credited
-            // with introducing it.
-            let older = match chain.get(i + 1) {
-                Some(parent) => self.record_at(parent, key)?,
-                None => None,
-            };
             if current != older {
                 touching.push(*commit);
             }
+            older = current;
         }
+        touching.reverse(); // newest first
         Ok(touching)
     }
 

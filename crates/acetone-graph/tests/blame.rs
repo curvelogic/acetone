@@ -46,6 +46,18 @@ fn blame_lists_only_the_commits_that_change_the_node() {
 }
 
 #[test]
+fn oscillating_values_credit_every_commit() {
+    // a -> b -> a: each commit is a real change (the record differs from the
+    // previous), so all three are credited — no collapse against a canonical.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let c1 = put(&repo, 1, 1, "a");
+    let c2 = put(&repo, 1, 2, "b");
+    let c3 = put(&repo, 1, 1, "a again");
+    assert_eq!(repo.blame(&node(1)).expect("blame"), vec![c3, c2, c1]);
+}
+
+#[test]
 fn blame_of_an_absent_node_is_empty() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init(dir.path());
