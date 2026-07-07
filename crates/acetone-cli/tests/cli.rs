@@ -1344,3 +1344,50 @@ fn call_diff_yields_a_queryable_virtual_graph() {
     // The unchanged/added node 1 is not _Added here (only 2 was added).
     assert!(!text.contains("1,alice"), "{text}");
 }
+
+#[test]
+fn call_blame_attributes_node_changes_to_commits() {
+    // acetone-14c.6: CALL acetone.blame(label, key) lists the commits that
+    // changed a node, newest first, skipping unrelated commits.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=alice"])
+            .status
+            .success()
+    );
+    let c1 = commit_hex(&acetone(&repo, &["commit", "-m", "add 1"]));
+    assert!(acetone(&repo, &["put-node", "N", "2"]).status.success());
+    let _c2 = commit_hex(&acetone(&repo, &["commit", "-m", "add 2"]));
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=alice2"])
+            .status
+            .success()
+    );
+    let c3 = commit_hex(&acetone(&repo, &["commit", "-m", "rename 1"]));
+
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.blame('N', 1) YIELD commit RETURN commit",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    // Both the rename (c3) and the add (c1) touched node 1; c2 did not.
+    assert!(text.contains(&c3), "{text}");
+    assert!(text.contains(&c1), "{text}");
+    // c3 (newest) appears before c1.
+    let pos3 = text.find(&c3).unwrap();
+    let pos1 = text.find(&c1).unwrap();
+    assert!(pos3 < pos1, "blame must be newest-first: {text}");
+}
