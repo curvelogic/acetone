@@ -94,6 +94,10 @@ pub trait RefStore {
     /// hold at commit time.
     fn write_ref(&self, name: &str, expected: Option<&Hash>, new: &Hash) -> Result<(), StoreError>;
 
+    /// Delete `name` if it exists. Deleting an absent ref is a no-op success,
+    /// so this is idempotent (used to clear transient refs like `MERGE_HEAD`).
+    fn delete_ref(&self, name: &str) -> Result<(), StoreError>;
+
     /// The full ref name the checked-out-ref pointer (git `HEAD`)
     /// currently designates, e.g. `refs/heads/main` — including when that
     /// branch is still unborn. `None` when the pointer is detached.

@@ -79,7 +79,7 @@ fn merge(repo: &Repository, b: &Manifest, o: &Manifest, t: &Manifest) -> Manifes
 
 fn violations(m: ManifestMerge) -> Vec<GraphViolation> {
     match m {
-        ManifestMerge::Conflicts(conflicts) => conflicts
+        ManifestMerge::Conflicts { conflicts, .. } => conflicts
             .into_iter()
             .map(|c| match c {
                 MergeConflict::Graph(v) => v,
@@ -184,7 +184,7 @@ fn a_pre_existing_dangling_edge_is_not_attributed_to_the_merge() {
 
     match merge(&repo, &b, &o, &t) {
         ManifestMerge::Clean(_) => {}
-        ManifestMerge::Conflicts(c) => {
+        ManifestMerge::Conflicts { conflicts: c, .. } => {
             panic!("pre-existing dangler must not be a merge conflict: {c:?}")
         }
     }
@@ -468,7 +468,7 @@ fn a_pre_existing_unique_collision_is_not_attributed_to_a_disjoint_merge() {
 
     match merge(&repo, &b, &o, &t) {
         ManifestMerge::Clean(_) => {}
-        ManifestMerge::Conflicts(c) => {
+        ManifestMerge::Conflicts { conflicts: c, .. } => {
             panic!("pre-existing UNIQUE collision must not be a merge conflict: {c:?}")
         }
     }
@@ -532,7 +532,9 @@ fn a_dangling_merge_writes_no_commit_at_the_repository_level() {
         }
         other => panic!("expected Conflicts, got {other:?}"),
     }
-    // The merge wrote nothing: main still points at `ours`.
+    // No commit: main still points at `ours`, but the merge is now in
+    // progress (a graph violation persists as a conflict, acetone-14c.4).
     assert_eq!(repo.head_commit().expect("head"), Some(ours));
-    assert!(!repo.is_dirty().expect("dirty"));
+    assert!(repo.merge_head().expect("merge head").is_some());
+    assert_eq!(repo.conflicts().expect("conflicts").len(), 1);
 }

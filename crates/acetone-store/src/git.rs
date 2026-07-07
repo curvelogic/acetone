@@ -556,6 +556,38 @@ impl RefStore for GitStore {
         Ok(())
     }
 
+    fn delete_ref(&self, name: &str) -> Result<(), StoreError> {
+        use gix::refs::Target;
+        use gix::refs::transaction::{Change, PreviousValue, RefEdit, RefLog};
+
+        let full_name = validated_ref_name(name)?;
+        // Nothing to delete: an absent ref is a no-op success (idempotent).
+        let Some(current) = self.read_ref(name)? else {
+            return Ok(());
+        };
+        // Serialise with other ref writers (see `write_ref` for why).
+        let _writer_guard = gix::lock::Marker::acquire_to_hold_resource(
+            self.repo.common_dir().join("acetone-refs"),
+            gix::lock::acquire::Fail::AfterDurationWithBackoff(std::time::Duration::from_secs(5)),
+            None,
+        )
+        .map_err(|e| StoreError::backend("locking refs for delete", e))?;
+        let edit = RefEdit {
+            change: Change::Delete {
+                // Delete only if it still holds the value we just read, so a
+                // concurrent update is not silently discarded.
+                expected: PreviousValue::MustExistAndMatch(Target::Object(current.oid())),
+                log: RefLog::AndReference,
+            },
+            name: full_name,
+            deref: false,
+        };
+        self.repo
+            .edit_reference(edit)
+            .map_err(|e| map_ref_edit_error(name, e))?;
+        Ok(())
+    }
+
     fn read_head(&self) -> Result<Option<String>, StoreError> {
         let head = self
             .repo

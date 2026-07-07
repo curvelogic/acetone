@@ -1391,3 +1391,72 @@ fn call_blame_attributes_node_changes_to_commits() {
     let pos1 = text.find(&c1).unwrap();
     assert!(pos3 < pos1, "blame must be newest-first: {text}");
 }
+
+#[test]
+fn merge_conflict_resolve_and_complete() {
+    // acetone-14c.4a: a conflicted merge enters merge-in-progress; resolve
+    // picks a side; commit completes it as a two-parent merge.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=base"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=ours"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirs"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+
+    // The merge conflicts and exits non-zero, entering merge-in-progress.
+    let out = acetone(&repo, &["merge", "other", "-m", "merge"]);
+    assert!(!out.status.success());
+    assert!(stdout(&out).contains("1 conflict"), "{}", stdout(&out));
+
+    // Status reports the in-progress merge; commit refuses.
+    assert!(stdout(&acetone(&repo, &["status"])).contains("merge: in progress"));
+    let premature = acetone(&repo, &["commit", "-m", "no"]);
+    assert!(!premature.status.success());
+    assert!(stderr(&premature).contains("unresolved conflict"));
+
+    // Resolve to theirs, then commit completes the merge.
+    assert!(
+        acetone(&repo, &["resolve", "--all-theirs"])
+            .status
+            .success()
+    );
+    let done = acetone(&repo, &["commit", "-m", "merge done"]);
+    assert!(done.status.success(), "{}", stderr(&done));
+
+    // The chosen value survived; the workspace is clean and fsck passes.
+    let q = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (n:N) RETURN n.name AS name",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(stdout(&q).contains("theirs"), "{}", stdout(&q));
+    assert!(stdout(&acetone(&repo, &["status"])).contains("workspace: clean"));
+    assert!(acetone(&repo, &["fsck"]).status.success());
+}

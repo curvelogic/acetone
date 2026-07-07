@@ -186,10 +186,12 @@ fn conflicting_merge_reports_conflicts_and_changes_nothing() {
         }
         other => panic!("expected Conflicts, got {other:?}"),
     }
-    // A conflicted merge writes no commit and leaves the workspace clean on
-    // our tip (persisting the conflicts map is acetone-14c.4).
+    // A conflicted merge writes no commit — the branch stays on our tip — but
+    // it now enters merge-in-progress state (acetone-14c.4): MERGE_HEAD names
+    // theirs and the workspace carries the persisted conflict.
     assert_eq!(repo.head_commit().expect("head"), Some(ours));
-    assert!(!repo.is_dirty().expect("dirty"));
+    assert!(repo.merge_head().expect("merge head").is_some());
+    assert_eq!(repo.conflicts().expect("conflicts").len(), 1);
 }
 
 #[test]

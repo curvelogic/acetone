@@ -30,6 +30,10 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         Command::Branch { name } => branch(repo_path, name.as_deref()),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
         Command::Merge { refspec, message } => merge(repo_path, &refspec, message.as_deref()),
+        Command::Resolve {
+            all_ours,
+            all_theirs,
+        } => resolve(repo_path, all_ours, all_theirs),
         Command::DeclareLabel {
             label,
             key,
@@ -131,6 +135,18 @@ fn status(repo_path: &Path) -> Result<()> {
         "workspace: {}",
         if repo.is_dirty()? { "dirty" } else { "clean" }
     );
+    // A merge in progress: show how many conflicts remain to resolve.
+    if repo.merge_head()?.is_some() {
+        let remaining = repo.conflicts()?.len();
+        if remaining == 0 {
+            outln!("merge: in progress, all conflicts resolved — run `acetone commit` to finish");
+        } else {
+            outln!(
+                "merge: in progress, {remaining} conflict(s) to resolve \
+                 (`acetone resolve --all-ours|--all-theirs`)"
+            );
+        }
+    }
     let snapshot = repo.workspace_snapshot()?;
     outln!(
         "nodes: {}, edges: {}, schema entries: {}",
@@ -143,14 +159,22 @@ fn status(repo_path: &Path) -> Result<()> {
 
 fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
     let repo = open(repo_path)?;
-    // Thin-client guard: acetone_graph::Transaction::commit has no
-    // no-change guard of its own yet (library-level fix tracked
-    // separately), so a bare `commit` on an already-committed workspace
-    // would otherwise silently mint a pointless commit every time it is
-    // run. This also refuses an empty root commit on a brand new
-    // repository, which is the CLI's help text for `commit` documents as
-    // accepted Phase-1 behaviour.
-    if !repo.is_dirty()? {
+    // Completing a merge always commits (it records the two-parent history)
+    // even when the resolved result happens to match HEAD, so the no-change
+    // guard is skipped while a merge is in progress. It still refuses if
+    // conflicts remain unresolved (the library errors, but this is friendlier).
+    if repo.merge_head()?.is_some() {
+        let remaining = repo.conflicts()?.len();
+        if remaining > 0 {
+            bail!(
+                "cannot commit: {remaining} unresolved conflict(s) — \
+                 resolve with `acetone resolve --all-ours|--all-theirs`"
+            );
+        }
+    } else if !repo.is_dirty()? {
+        // Thin-client guard: a bare `commit` on an already-committed
+        // workspace (or a brand-new repository's empty root) is refused
+        // rather than minting a pointless commit.
         bail!("nothing to commit (workspace matches HEAD)");
     }
     let trailers: Vec<(String, String)> = trailers
@@ -230,16 +254,36 @@ fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
             outln!("merge commit {}", commit.to_hex());
         }
         MergeOutcome::Conflicts(conflicts) => {
+            // The merge is now in progress: the conflicts are persisted and
+            // MERGE_HEAD is set (spec §6). Report them and how to resolve.
             outln!("merge produced {} conflict(s):", conflicts.len());
             for c in &conflicts {
                 outln!("  {}", render_conflict(c));
             }
-            // No commit was written; nothing to roll back. Conflict
-            // resolution (the `conflicts` map and `resolve`) arrives with
-            // acetone-14c.4.
-            bail!("merge conflicts remain; conflict resolution is not yet available");
+            outln!(
+                "resolve with `acetone resolve --all-ours|--all-theirs`, \
+                 then `acetone commit` to complete the merge"
+            );
+            // Non-zero exit: the merge did not finish.
+            bail!("merge conflicts remain");
         }
     }
+    Ok(())
+}
+
+fn resolve(repo_path: &Path, all_ours: bool, all_theirs: bool) -> Result<()> {
+    let side = match (all_ours, all_theirs) {
+        (true, false) => acetone_graph::repo::ResolveSide::Ours,
+        (false, true) => acetone_graph::repo::ResolveSide::Theirs,
+        (false, false) => bail!(
+            "choose a side: --all-ours or --all-theirs \
+             (per-key resolution arrives with a later change)"
+        ),
+        (true, true) => bail!("--all-ours and --all-theirs are mutually exclusive"),
+    };
+    let repo = open(repo_path)?;
+    let count = repo.resolve_all(side).context("resolving conflicts")?;
+    outln!("resolved {count} conflict(s) — run `acetone commit` to complete the merge");
     Ok(())
 }
 
