@@ -235,7 +235,33 @@ impl acetone_cypher::exec::ProcedureProvider for RepoProcedures<'_> {
                 Ok(rows)
             }
             "acetone.blame" => {
-                Err("acetone.blame is not yet available (arrives with acetone-14c.6)".to_string())
+                use acetone_model::graph_keys::NodeKey;
+                let label = as_string(&args[0], "acetone.blame", "label")?;
+                // The key is a single-column value (like put-node/get-node): a
+                // string (int-or-string heuristic) or an integer literal.
+                let (key_value, key_display) = match &args[1] {
+                    Value::String(s) => (crate::value::parse_value(s), s.clone()),
+                    Value::Int(n) => (acetone_model::Value::Int(*n), n.to_string()),
+                    other => {
+                        return Err(format!(
+                            "acetone.blame key must be a string or integer, got {}",
+                            other.type_name()
+                        ));
+                    }
+                };
+                let node_key =
+                    NodeKey::new(label.as_str(), vec![key_value]).map_err(|e| e.to_string())?;
+                let commits = self.repo.blame(&node_key).map_err(|e| e.to_string())?;
+                Ok(commits
+                    .into_iter()
+                    .map(|commit| {
+                        vec![
+                            Value::String(label.clone()),
+                            Value::String(key_display.clone()),
+                            Value::String(commit.to_hex()),
+                        ]
+                    })
+                    .collect())
             }
             "acetone.conflicts" => Err(
                 "acetone.conflicts is not yet available (arrives with acetone-14c.4)".to_string(),

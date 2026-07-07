@@ -547,6 +547,61 @@ impl Repository {
         }
     }
 
+    /// Blame a node: the commits that changed its record, newest first (spec
+    /// §5.2, `CALL acetone.blame`; acetone-14c.6). Walks the first-parent
+    /// chain from HEAD and probes the node map at `key` in each commit; a
+    /// commit is attributed the change when its record differs from the next
+    /// (older) commit's — an introduction (older absent), a property change,
+    /// or a deletion. The probe is `O(log n)` per commit.
+    ///
+    /// First-parent semantics: a change merged in through a two-parent merge
+    /// commit is attributed to that merge commit (its record differs from its
+    /// first parent's), the same convention `git blame --first-parent` uses.
+    pub fn blame(&self, key: &NodeKey) -> Result<Vec<Hash>, GraphError> {
+        // First-parent chain from HEAD, newest first (as `log` walks it).
+        let mut chain = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut next = self.head_commit()?;
+        while let Some(id) = next {
+            if !seen.insert(id) {
+                break; // defensive: valid git data has no cycles
+            }
+            let commit = self
+                .store
+                .read_commit(&id)?
+                .ok_or_else(|| GraphError::NotACommit { name: id.to_hex() })?;
+            chain.push(id);
+            next = commit.parents.first().copied();
+        }
+
+        // Walk oldest → newest carrying the older commit's record forward, so
+        // each commit is probed exactly once. A commit is credited when its
+        // record differs from the older one — introduction (older absent), a
+        // property change, or a deletion.
+        let mut touching = Vec::new();
+        let mut older = None;
+        for commit in chain.iter().rev() {
+            let current = self.record_at(commit, key)?;
+            if current != older {
+                touching.push(*commit);
+            }
+            older = current;
+        }
+        touching.reverse(); // newest first
+        Ok(touching)
+    }
+
+    /// The node's record at `commit` (its non-key properties and secondary
+    /// labels), or `None` when the node is absent there.
+    fn record_at(&self, commit: &Hash, key: &NodeKey) -> Result<Option<NodeRecord>, GraphError> {
+        let manifest = self.manifest_at_commit(commit)?;
+        let root = manifest.nodes.to_root(manifest.chunk_params)?;
+        match acetone_prolly::get(&self.store, &root, &key.encode()?)? {
+            None => Ok(None),
+            Some(bytes) => Ok(Some(NodeRecord::decode(&bytes)?)),
+        }
+    }
+
     /// The commit history from `refspec` (default: the current branch),
     /// following first parents, newest first.
     pub fn log(&self, refspec: Option<&str>) -> Result<Vec<LogEntry>, GraphError> {
