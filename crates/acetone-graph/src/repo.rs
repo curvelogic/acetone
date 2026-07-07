@@ -39,7 +39,7 @@
 use crate::diff::{EdgeChange, GraphDiff, NodeChange};
 use crate::error::GraphError;
 use crate::lock::WriteLock;
-use crate::merge::{ConflictMap, ManifestMerge, MergeOutcome, merge_manifests};
+use crate::merge::{ConflictMap, ManifestMerge, MergeConflict, MergeOutcome, merge_manifests};
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
@@ -474,9 +474,12 @@ impl Repository {
     /// head is an ancestor of `theirs` (the branch simply advances, no merge
     /// commit); **Merged** when a genuine three-way merge over the merge base
     /// resolves cleanly (a two-parent merge commit `[ours, theirs]` is
-    /// written and the branch advanced); **Conflicts** when it does not (no
-    /// commit written, the repository unchanged — persisting and resolving
-    /// the conflicts is acetone-14c.4).
+    /// written and the branch advanced); **Conflicts** when it does not. On
+    /// **cell** conflicts the workspace enters merge-in-progress — the
+    /// conflicts are persisted and `MERGE_HEAD` names `theirs`, to be settled
+    /// with `resolve` then `commit` (acetone-14c.4a). On **graph-level**
+    /// violations, which have no resolution verb yet, the repository is left
+    /// unchanged and the violations are only reported (acetone-14c.4c).
     ///
     /// The merge is a pure function of the three commit manifests (Invariant
     /// #4): `merge_manifests` depends only on their contents, and `edges_rev`
@@ -544,6 +547,19 @@ impl Repository {
                 mut merged,
                 conflicts,
             } => {
+                // Only cell conflicts enter merge-in-progress: they are
+                // resolvable (`resolve --all-ours|--all-theirs`) and
+                // completable now. Graph-level violations have no resolution
+                // or abort verb yet (acetone-14c.4c), so persisting them would
+                // wedge the workspace — leave the repository unchanged and just
+                // report them, as before this bead. Conflicts are homogeneous
+                // (cell XOR graph), so this is an all-or-nothing check.
+                if !conflicts
+                    .iter()
+                    .all(|c| matches!(c, MergeConflict::Cell(_)))
+                {
+                    return Ok(MergeOutcome::Conflicts(conflicts));
+                }
                 let map = crate::conflicts::build_conflicts_map(
                     &self.store,
                     merged.chunk_params,

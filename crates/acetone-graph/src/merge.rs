@@ -56,9 +56,13 @@ pub enum MergeOutcome {
     /// commit was written and the branch advanced to it. Carries the merge
     /// commit's address.
     Merged(Hash),
-    /// The merge conflicted: no commit was written and the repository is
-    /// unchanged (persisting the conflicts map and resolving it is
-    /// acetone-14c.4). Carries the conflicts in category-then-key order.
+    /// The merge conflicted; no commit was written. For **cell** conflicts the
+    /// workspace enters merge-in-progress (the conflicts are persisted and
+    /// MERGE_HEAD is set; resolve and complete with `resolve`/`commit`,
+    /// acetone-14c.4a). For **graph-level** violations, which have no
+    /// resolution verb yet, the repository is left unchanged and the
+    /// violations are only reported (acetone-14c.4c). Carries the conflicts in
+    /// category-then-key order.
     Conflicts(Vec<MergeConflict>),
 }
 

@@ -7,11 +7,19 @@ use acetone_graph::merge::MergeOutcome;
 use acetone_graph::repo::{InitOptions, Repository, ResolveSide};
 use acetone_graph::{GraphError, fsck};
 use acetone_model::Value;
-use acetone_model::graph_keys::NodeKey;
-use acetone_model::records::NodeRecord;
+use acetone_model::graph_keys::{EdgeKey, NodeKey};
+use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_store::{CommitStore, Hash};
 use std::collections::BTreeMap;
 use std::path::Path;
+
+fn edge(s: u8, d: u8) -> EdgeKey {
+    EdgeKey::new(node(s), "R", node(d), Value::Null).expect("edge")
+}
+
+fn edge_record(w: i64) -> EdgeRecord {
+    EdgeRecord::new(BTreeMap::from([("w".to_string(), Value::Int(w))]))
+}
 
 fn init(dir: &Path) -> Repository {
     Repository::init(&dir.join("g.git"), InitOptions::default()).expect("init")
@@ -126,6 +134,77 @@ fn resolve_all_theirs_picks_the_other_side() {
     let txn = repo.begin_write().expect("begin");
     txn.commit("merge other", &[], None).expect("commit");
     assert_eq!(workspace_v(&repo, 1), Some(12));
+    assert!(repo.merge_head().expect("merge head").is_none());
+}
+
+#[test]
+fn resolves_an_edge_cell_conflict_and_keeps_edges_rev_symmetric() {
+    // Both sides modify edge (1)-[R]->(2)'s record differently -> a cell
+    // conflict on the edge. Resolving must maintain edges_rev (Invariant #5).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(0)).expect("put");
+    tx.put_node(&node(2), &record(0)).expect("put");
+    tx.put_edge(&edge(1, 2), &edge_record(0)).expect("edge");
+    let base = tx.commit("base", &[], None).expect("commit");
+
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_edge(&edge(1, 2), &edge_record(2)).expect("edge");
+    tx.commit("theirs edits edge", &[], None).expect("commit");
+
+    repo.checkout_branch("main").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_edge(&edge(1, 2), &edge_record(1)).expect("edge");
+    tx.commit("ours edits edge", &[], None).expect("commit");
+
+    match repo.merge("other", "merge other").expect("merge") {
+        MergeOutcome::Conflicts(c) => assert_eq!(c.len(), 1),
+        other => panic!("expected Conflicts, got {other:?}"),
+    }
+    assert_eq!(repo.resolve_all(ResolveSide::Theirs).expect("resolve"), 1);
+
+    // Theirs' edge record (w=2) is chosen.
+    let snap = repo.workspace_snapshot().expect("snapshot");
+    let edges = snap.edges().expect("edges");
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].1.properties().get("w"), Some(&Value::Int(2)));
+
+    let txn = repo.begin_write().expect("begin");
+    txn.commit("merge other", &[], None).expect("commit");
+    // fsck checks forward/reverse edge-map symmetry.
+    assert!(!fsck(&repo).expect("fsck").has_errors());
+}
+
+#[test]
+fn resolve_ours_on_a_delete_vs_modify_conflict_deletes_the_node() {
+    // ours deletes node 1; theirs modifies it -> a cell conflict. Resolving
+    // to ours (which has the key absent) deletes it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let base = commit_node(&repo, 1, 10, "base");
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    commit_node(&repo, 1, 12, "theirs modifies 1");
+    repo.checkout_branch("main").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.delete_node(&node(1)).expect("delete");
+    tx.commit("ours deletes 1", &[], None).expect("commit");
+
+    match repo.merge("other", "merge other").expect("merge") {
+        MergeOutcome::Conflicts(c) => assert_eq!(c.len(), 1),
+        other => panic!("expected Conflicts, got {other:?}"),
+    }
+    assert_eq!(repo.resolve_all(ResolveSide::Ours).expect("resolve"), 1);
+    // Ours deleted it, so the node stays gone.
+    assert_eq!(workspace_v(&repo, 1), None);
+    let txn = repo.begin_write().expect("begin");
+    txn.commit("merge other", &[], None).expect("commit");
+    assert_eq!(workspace_v(&repo, 1), None);
     assert!(repo.merge_head().expect("merge head").is_none());
 }
 

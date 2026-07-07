@@ -16,7 +16,7 @@ use acetone_prolly::{BatchOp, ChunkParams, Root, apply_batch, empty, scan};
 use acetone_store::ChunkStore;
 
 use crate::error::GraphError;
-use crate::merge::{ConflictMap, GraphViolation, MergeConflict};
+use crate::merge::{ConflictMap, Endpoint, GraphViolation, MergeConflict};
 
 const KIND_CELL: u8 = 0;
 const KIND_GRAPH: u8 = 1;
@@ -59,6 +59,12 @@ pub enum PersistedConflict {
     Graph,
 }
 
+/// Append a length-prefixed field, so a run of them cannot alias.
+fn push_field(key: &mut Vec<u8>, bytes: &[u8]) {
+    key.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    key.extend_from_slice(bytes);
+}
+
 /// The persisted-map entry key for one conflict.
 fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
     match conflict {
@@ -70,24 +76,36 @@ fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
             key
         }
         MergeConflict::Graph(violation) => {
-            // Graph violations are keyed by their primary entity so entries
-            // stay unique; the detail byte keeps the three classes apart.
+            // Every distinguishing field is length-prefixed so distinct
+            // violations never alias to the same entry key (e.g. an edge with
+            // *both* endpoints missing yields two DanglingEdge violations that
+            // must stay separate). Decode only recovers the kind, so the
+            // fields need not be parseable back — only unique.
             let mut key = vec![KIND_GRAPH];
             match violation {
-                GraphViolation::DanglingEdge { edge, .. } => {
+                GraphViolation::DanglingEdge { edge, role, .. } => {
                     key.push(0);
-                    key.extend_from_slice(edge);
+                    key.push(match role {
+                        Endpoint::Src => 0,
+                        Endpoint::Dst => 1,
+                    });
+                    push_field(&mut key, edge);
                 }
-                GraphViolation::MissingRequired { node, .. } => {
+                GraphViolation::MissingRequired { node, property } => {
                     key.push(1);
-                    key.extend_from_slice(node);
+                    push_field(&mut key, property.as_bytes());
+                    push_field(&mut key, node);
                 }
-                GraphViolation::UniqueViolation { nodes, .. } => {
+                GraphViolation::UniqueViolation {
+                    label,
+                    property,
+                    value,
+                    ..
+                } => {
                     key.push(2);
-                    // The colliding group is identified by its first node.
-                    if let Some(first) = nodes.first() {
-                        key.extend_from_slice(first);
-                    }
+                    push_field(&mut key, label.as_bytes());
+                    push_field(&mut key, property.as_bytes());
+                    push_field(&mut key, value);
                 }
             }
             key
@@ -141,4 +159,66 @@ pub fn read_conflicts<S: ChunkStore>(
         out.push(decode_entry(&key)?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merge::CellConflict;
+
+    /// Distinct violations that share a primary entity must not collide on
+    /// their entry key (M1 regression): an edge with both endpoints missing
+    /// yields a Src and a Dst DanglingEdge on the same edge.
+    #[test]
+    fn distinct_graph_violations_get_distinct_entry_keys() {
+        let src = MergeConflict::Graph(GraphViolation::DanglingEdge {
+            edge: vec![1, 2, 3],
+            endpoint: vec![9],
+            role: Endpoint::Src,
+        });
+        let dst = MergeConflict::Graph(GraphViolation::DanglingEdge {
+            edge: vec![1, 2, 3],
+            endpoint: vec![8],
+            role: Endpoint::Dst,
+        });
+        assert_ne!(entry_key(&src), entry_key(&dst));
+
+        // Two missing-required properties on one node stay distinct.
+        let a = MergeConflict::Graph(GraphViolation::MissingRequired {
+            node: vec![7],
+            property: "email".into(),
+        });
+        let b = MergeConflict::Graph(GraphViolation::MissingRequired {
+            node: vec![7],
+            property: "name".into(),
+        });
+        assert_ne!(entry_key(&a), entry_key(&b));
+    }
+
+    /// A cell conflict and a graph violation on the same key stay distinct,
+    /// and cell keys across maps do not alias.
+    #[test]
+    fn cell_and_graph_keys_do_not_alias() {
+        let cell = MergeConflict::Cell(CellConflict {
+            map: ConflictMap::Nodes,
+            key: vec![1, 2],
+            base: None,
+            ours: None,
+            theirs: None,
+        });
+        let node_missing = MergeConflict::Graph(GraphViolation::MissingRequired {
+            node: vec![1, 2],
+            property: "x".into(),
+        });
+        assert_ne!(entry_key(&cell), entry_key(&node_missing));
+
+        let schema_cell = MergeConflict::Cell(CellConflict {
+            map: ConflictMap::Schema,
+            key: vec![1, 2],
+            base: None,
+            ours: None,
+            theirs: None,
+        });
+        assert_ne!(entry_key(&cell), entry_key(&schema_cell));
+    }
 }

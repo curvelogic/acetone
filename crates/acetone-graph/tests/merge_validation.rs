@@ -532,9 +532,10 @@ fn a_dangling_merge_writes_no_commit_at_the_repository_level() {
         }
         other => panic!("expected Conflicts, got {other:?}"),
     }
-    // No commit: main still points at `ours`, but the merge is now in
-    // progress (a graph violation persists as a conflict, acetone-14c.4).
+    // Graph-level violations have no resolution verb yet, so a violating
+    // merge leaves the repository unchanged (acetone-14c.4c will persist and
+    // resolve them): no commit, no merge-in-progress state.
     assert_eq!(repo.head_commit().expect("head"), Some(ours));
-    assert!(repo.merge_head().expect("merge head").is_some());
-    assert_eq!(repo.conflicts().expect("conflicts").len(), 1);
+    assert!(repo.merge_head().expect("merge head").is_none());
+    assert!(!repo.is_dirty().expect("dirty"));
 }

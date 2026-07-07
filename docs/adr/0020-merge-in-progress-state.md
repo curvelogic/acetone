@@ -16,12 +16,20 @@ persisted and completed.
 
 ### The state: a partial-merge workspace + `MERGE_HEAD`
 
-On a conflicted merge the workspace becomes the **partial merge** — every
-non-conflicted key merged in, conflicted keys absent (cell conflicts) or the
-graph-invalid merge (graph violations) — with the manifest's `conflicts` map
-populated. A per-worktree ref `refs/worktree/acetone/merge-head` names
-`theirs` (a `MERGE_HEAD` equivalent). The branch does **not** move. Presence
-of `MERGE_HEAD` is the "merge in progress" signal.
+On a **cell**-conflicted merge the workspace becomes the **partial merge** —
+every non-conflicted key merged in, conflicted keys absent — with the
+manifest's `conflicts` map populated. A per-worktree ref
+`refs/worktree/acetone/merge-head` names `theirs` (a `MERGE_HEAD` equivalent).
+The branch does **not** move. Presence of `MERGE_HEAD` is the "merge in
+progress" signal.
+
+**Graph-level violations are not persisted in this slice.** They cannot be
+picked a side, there is no by-write resolution or abort verb yet
+(acetone-14c.4c), so persisting them would wedge the workspace with no exit.
+Until 14c.4c ships resolution + abort, a graph-violation merge leaves the
+repository unchanged and merely reports the violations (as before this bead).
+Conflicts are homogeneous (cell XOR graph), so `merge` persists only when
+every conflict is a cell conflict.
 
 ### The conflicts map records *which* keys conflict, not their values
 

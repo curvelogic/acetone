@@ -254,16 +254,24 @@ fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
             outln!("merge commit {}", commit.to_hex());
         }
         MergeOutcome::Conflicts(conflicts) => {
-            // The merge is now in progress: the conflicts are persisted and
-            // MERGE_HEAD is set (spec §6). Report them and how to resolve.
             outln!("merge produced {} conflict(s):", conflicts.len());
             for c in &conflicts {
                 outln!("  {}", render_conflict(c));
             }
-            outln!(
-                "resolve with `acetone resolve --all-ours|--all-theirs`, \
-                 then `acetone commit` to complete the merge"
-            );
+            // Cell conflicts enter merge-in-progress (MERGE_HEAD set); graph
+            // violations leave the repository unchanged, with no resolution
+            // verb yet (spec §6, acetone-14c.4c).
+            if repo.merge_head()?.is_some() {
+                outln!(
+                    "resolve with `acetone resolve --all-ours|--all-theirs`, \
+                     then `acetone commit` to complete the merge"
+                );
+            } else {
+                outln!(
+                    "these are graph-level violations; resolving them is not yet \
+                     available, so the merge was not started (repository unchanged)"
+                );
+            }
             // Non-zero exit: the merge did not finish.
             bail!("merge conflicts remain");
         }
