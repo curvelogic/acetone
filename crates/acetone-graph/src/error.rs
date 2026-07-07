@@ -132,6 +132,15 @@ pub enum GraphError {
         /// The version being merged in, in hex.
         theirs: String,
     },
+    /// The persisted `conflicts` map did not decode (spec §6).
+    #[error("corrupt conflicts map: {reason}")]
+    CorruptConflicts {
+        /// What was malformed.
+        reason: &'static str,
+    },
+    /// An operation needs a merge in progress but none is (or vice versa).
+    #[error("{0}")]
+    MergeState(&'static str),
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
     #[error("lock file I/O at {path}: {source}")]

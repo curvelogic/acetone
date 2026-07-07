@@ -39,7 +39,7 @@
 use crate::diff::{EdgeChange, GraphDiff, NodeChange};
 use crate::error::GraphError;
 use crate::lock::WriteLock;
-use crate::merge::{ManifestMerge, MergeOutcome, merge_manifests};
+use crate::merge::{ConflictMap, ManifestMerge, MergeConflict, MergeOutcome, merge_manifests};
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
@@ -56,6 +56,10 @@ use std::path::Path;
 /// namespace, so git and gix resolve it per-worktree: each worktree has its
 /// own working state, like its own index.
 pub const WORKTREE_WORKSPACE_REF: &str = "refs/worktree/acetone/workspace";
+/// The per-worktree `MERGE_HEAD`: names the `theirs` commit while a merge is
+/// in progress (spec §6, acetone-14c.4). Present iff the workspace is
+/// mid-merge; `commit` reads it as the second parent and clears it.
+pub const WORKTREE_MERGE_HEAD_REF: &str = "refs/worktree/acetone/merge-head";
 /// Legacy (pre-ADR-0014) shared workspace-ref namespace. Read as a
 /// fallback so an existing repository keeps its workspace across the
 /// upgrade; the first write migrates to [`WORKTREE_WORKSPACE_REF`].
@@ -91,6 +95,15 @@ impl Default for InitOptions {
             chunk_params: default_chunk_params(),
         }
     }
+}
+
+/// Which side to take when bulk-resolving a merge's conflicts (spec §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveSide {
+    /// The current branch's value (`--all-ours`).
+    Ours,
+    /// The merged-in version's value (`--all-theirs`).
+    Theirs,
 }
 
 /// One commit as reported by [`Repository::log`].
@@ -461,9 +474,12 @@ impl Repository {
     /// head is an ancestor of `theirs` (the branch simply advances, no merge
     /// commit); **Merged** when a genuine three-way merge over the merge base
     /// resolves cleanly (a two-parent merge commit `[ours, theirs]` is
-    /// written and the branch advanced); **Conflicts** when it does not (no
-    /// commit written, the repository unchanged — persisting and resolving
-    /// the conflicts is acetone-14c.4).
+    /// written and the branch advanced); **Conflicts** when it does not. On
+    /// **cell** conflicts the workspace enters merge-in-progress — the
+    /// conflicts are persisted and `MERGE_HEAD` names `theirs`, to be settled
+    /// with `resolve` then `commit` (acetone-14c.4a). On **graph-level**
+    /// violations, which have no resolution verb yet, the repository is left
+    /// unchanged and the violations are only reported (acetone-14c.4c).
     ///
     /// The merge is a pure function of the three commit manifests (Invariant
     /// #4): `merge_manifests` depends only on their contents, and `edges_rev`
@@ -523,9 +539,50 @@ impl Repository {
             &ours_manifest,
             &theirs_manifest,
         )? {
-            // No commit is written for a conflicted merge, so the workspace
-            // is untouched — the repository stays exactly on `ours`.
-            ManifestMerge::Conflicts(conflicts) => Ok(MergeOutcome::Conflicts(conflicts)),
+            // A conflicted merge enters merge-in-progress state: the workspace
+            // becomes the partial merge with a populated `conflicts` map, and
+            // MERGE_HEAD names `theirs` for the later completion (spec §6,
+            // acetone-14c.4). No commit is written.
+            ManifestMerge::Conflicts {
+                mut merged,
+                conflicts,
+            } => {
+                // Only cell conflicts enter merge-in-progress: they are
+                // resolvable (`resolve --all-ours|--all-theirs`) and
+                // completable now. Graph-level violations have no resolution
+                // or abort verb yet (acetone-14c.4c), so persisting them would
+                // wedge the workspace — leave the repository unchanged and just
+                // report them, as before this bead. Conflicts are homogeneous
+                // (cell XOR graph), so this is an all-or-nothing check.
+                if !conflicts
+                    .iter()
+                    .all(|c| matches!(c, MergeConflict::Cell(_)))
+                {
+                    return Ok(MergeOutcome::Conflicts(conflicts));
+                }
+                let map = crate::conflicts::build_conflicts_map(
+                    &self.store,
+                    merged.chunk_params,
+                    &conflicts,
+                )?;
+                merged.conflicts = Some(MapRoot::from_root(&map));
+                let manifest_hash = self.store.put(&merged.encode())?;
+                let tree = self.workspace_tree_for(&manifest_hash)?;
+                let expected = self.workspace_ref_value()?;
+                self.cas_workspace(expected.as_ref(), &tree)?;
+                // Record the other side for `commit` to complete the merge.
+                self.store
+                    .write_ref(WORKTREE_MERGE_HEAD_REF, None, &theirs)
+                    .or_else(|e| match e {
+                        // A stale MERGE_HEAD from an abandoned merge: overwrite.
+                        StoreError::CasFailed { .. } => {
+                            self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+                            self.store.write_ref(WORKTREE_MERGE_HEAD_REF, None, &theirs)
+                        }
+                        other => Err(other),
+                    })?;
+                Ok(MergeOutcome::Conflicts(conflicts))
+            }
             ManifestMerge::Clean(manifest) => {
                 // Reset the workspace to the merged manifest, then write the
                 // two-parent merge commit and advance the branch — the same
@@ -589,6 +646,51 @@ impl Repository {
         }
         touching.reverse(); // newest first
         Ok(touching)
+    }
+
+    /// The `theirs` commit of a merge in progress (`MERGE_HEAD`), or `None`
+    /// when no merge is in progress.
+    pub fn merge_head(&self) -> Result<Option<Hash>, GraphError> {
+        Ok(self.store.read_ref(WORKTREE_MERGE_HEAD_REF)?)
+    }
+
+    /// The conflicts of a merge in progress, in map order, or an empty vec
+    /// when none remain (spec §6). Errors if no merge is in progress.
+    pub fn conflicts(&self) -> Result<Vec<crate::conflicts::PersistedConflict>, GraphError> {
+        if self.merge_head()?.is_none() {
+            return Err(GraphError::MergeState("no merge in progress"));
+        }
+        let manifest = self.workspace_manifest()?;
+        match manifest.conflicts {
+            None => Ok(Vec::new()),
+            Some(root) => {
+                crate::conflicts::read_conflicts(&self.store, &root.to_root(manifest.chunk_params)?)
+            }
+        }
+    }
+
+    /// Resolve every cell conflict of a merge in progress by taking each
+    /// conflicted key's value from one side — `ours` (the current branch) or
+    /// `theirs` (`MERGE_HEAD`) — clearing the conflicts map (spec §6,
+    /// `acetone resolve --all-ours|--all-theirs`). Returns the number
+    /// resolved. `acetone commit` then completes the merge. Graph-level
+    /// violations cannot be picked a side; resolve those by editing the graph
+    /// (acetone-14c.4c).
+    pub fn resolve_all(&self, side: ResolveSide) -> Result<usize, GraphError> {
+        let theirs = self
+            .merge_head()?
+            .ok_or(GraphError::MergeState("no merge in progress"))?;
+        let ours = self.head_commit()?.ok_or(GraphError::MergeState(
+            "merge in progress but the branch is unborn",
+        ))?;
+        let source = self.manifest_at_commit(&match side {
+            ResolveSide::Ours => ours,
+            ResolveSide::Theirs => theirs,
+        })?;
+        let mut txn = self.begin_write()?;
+        let count = txn.resolve_conflicts_from(&source)?;
+        txn.save()?;
+        Ok(count)
     }
 
     /// The node's record at `commit` (its non-key properties and secondary
@@ -1029,19 +1131,32 @@ impl<'r> Transaction<'r> {
         trailers: &[(String, String)],
         author: Option<Signature>,
     ) -> Result<Hash, GraphError> {
+        let repo = self.repo;
+        // A merge in progress (MERGE_HEAD set) completes here: the commit gets
+        // `theirs` as a second parent (spec §6). It may only complete once
+        // every conflict is resolved — an unresolved `conflicts` map refuses.
+        let merge_head = repo.store.read_ref(WORKTREE_MERGE_HEAD_REF)?;
         if self.manifest.conflicts.is_some() {
-            return Err(GraphError::MergeInProgress);
+            return Err(match merge_head {
+                Some(_) => GraphError::MergeState(
+                    "cannot commit: unresolved merge conflicts remain — resolve them first",
+                ),
+                None => GraphError::MergeInProgress,
+            });
         }
         self.save_in_place()?;
 
-        let repo = self.repo;
         let branch = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
         let parent = repo.store.read_ref(&branch)?;
 
         let manifest_bytes = self.manifest.encode();
         let anchors = manifest_chunk_set(&repo.store, &self.manifest)?;
         let summary = summarise(&repo.store, &self.manifest)?;
-        let parents: Vec<Hash> = parent.into_iter().collect();
+        // `ours` (the branch tip) first; a completing merge adds `theirs`.
+        let mut parents: Vec<Hash> = parent.into_iter().collect();
+        if let Some(theirs) = merge_head {
+            parents.push(theirs);
+        }
 
         let mut new_commit = NewCommit::new(&manifest_bytes, &summary, message);
         new_commit.trailers = trailers;
@@ -1053,12 +1168,77 @@ impl<'r> Transaction<'r> {
         let commit_id = repo.store.create_commit(&new_commit)?;
 
         match repo.store.write_ref(&branch, parents.first(), &commit_id) {
-            Ok(()) => Ok(commit_id),
+            Ok(()) => {
+                // The merge is complete: clear MERGE_HEAD so the next commit
+                // is an ordinary single-parent one.
+                if merge_head.is_some() {
+                    repo.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+                }
+                Ok(commit_id)
+            }
             Err(StoreError::CasFailed { .. }) => Err(GraphError::BranchConflict {
                 name: branch.clone(),
             }),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Resolve every cell conflict by taking its value from `source` (the
+    /// `ours` or `theirs` manifest), maintaining `edges_rev`, and clear the
+    /// merge-in-progress `conflicts` map. Returns the number resolved. Graph
+    /// violations cannot be picked a side and must be resolved by ordinary
+    /// writes (acetone-14c.4c), so their presence is an error here.
+    fn resolve_conflicts_from(&mut self, source: &Manifest) -> Result<usize, GraphError> {
+        let params = self.manifest.chunk_params;
+        let conflicts_root = self
+            .manifest
+            .conflicts
+            .ok_or(GraphError::MergeState("no conflicts to resolve"))?
+            .to_root(params)?;
+        let conflicts = crate::conflicts::read_conflicts(&self.repo.store, &conflicts_root)?;
+        if conflicts
+            .iter()
+            .any(|c| !matches!(c, crate::conflicts::PersistedConflict::Cell { .. }))
+        {
+            return Err(GraphError::MergeState(
+                "graph-level violations must be resolved by editing the graph, not by picking a side",
+            ));
+        }
+
+        let mut count = 0;
+        for conflict in &conflicts {
+            let crate::conflicts::PersistedConflict::Cell { map, key } = conflict else {
+                continue;
+            };
+            let source_root = match map {
+                ConflictMap::Schema => source.schema,
+                ConflictMap::Nodes => source.nodes,
+                ConflictMap::Edges => source.edges_fwd,
+            }
+            .to_root(params)?;
+            let value = acetone_prolly::get(&self.repo.store, &source_root, key)?;
+            let op = match &value {
+                Some(bytes) => BatchOp::Put(key.clone(), bytes.to_vec()),
+                None => BatchOp::Delete(key.clone()),
+            };
+            match map {
+                ConflictMap::Schema => self.schema.push(op),
+                ConflictMap::Nodes => self.nodes.push(op),
+                ConflictMap::Edges => {
+                    self.edges_fwd.push(op);
+                    // `edges_rev` is derived: mirror the forward change.
+                    let rev = EdgeKey::decode_fwd(key)?.encode_rev()?;
+                    self.edges_rev.push(match &value {
+                        Some(_) => BatchOp::Put(rev, Vec::new()),
+                        None => BatchOp::Delete(rev),
+                    });
+                }
+            }
+            count += 1;
+        }
+        // The merge is fully resolved: drop the conflicts map.
+        self.manifest.conflicts = None;
+        Ok(count)
     }
 }
 

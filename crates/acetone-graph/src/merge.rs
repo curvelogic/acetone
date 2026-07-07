@@ -56,9 +56,13 @@ pub enum MergeOutcome {
     /// commit was written and the branch advanced to it. Carries the merge
     /// commit's address.
     Merged(Hash),
-    /// The merge conflicted: no commit was written and the repository is
-    /// unchanged (persisting the conflicts map and resolving it is
-    /// acetone-14c.4). Carries the conflicts in category-then-key order.
+    /// The merge conflicted; no commit was written. For **cell** conflicts the
+    /// workspace enters merge-in-progress (the conflicts are persisted and
+    /// MERGE_HEAD is set; resolve and complete with `resolve`/`commit`,
+    /// acetone-14c.4a). For **graph-level** violations, which have no
+    /// resolution verb yet, the repository is left unchanged and the
+    /// violations are only reported (acetone-14c.4c). Carries the conflicts in
+    /// category-then-key order.
     Conflicts(Vec<MergeConflict>),
 }
 
@@ -157,10 +161,17 @@ pub enum ManifestMerge {
     /// A clean, graph-validated merge: the merged manifest, with `edges_rev`
     /// rebuilt from the merged forward map and no conflicts.
     Clean(Box<Manifest>),
-    /// Conflicts (cell-level, or graph-level from post-merge validation); no
-    /// merged manifest is produced (persisting the conflicts map and
-    /// resolving them is acetone-14c.4).
-    Conflicts(Vec<MergeConflict>),
+    /// Conflicts (cell-level, or graph-level from post-merge validation).
+    Conflicts {
+        /// The partially-merged manifest: conflicted keys are absent (cell
+        /// conflicts merge every non-conflicted key), or the graph-invalid
+        /// merge (graph violations). Its `conflicts` field is `None`;
+        /// populating the persisted conflicts map is the commit-graph
+        /// wrapper's job (acetone-14c.4).
+        merged: Box<Manifest>,
+        /// The conflicts, in category-then-key order.
+        conflicts: Vec<MergeConflict>,
+    },
 }
 
 /// Three-way merge of graph manifests `ours` and `theirs` against their
@@ -225,16 +236,11 @@ pub fn merge_manifests<S: ChunkStore>(
         &mut cells,
     )?;
 
-    if !cells.is_empty() {
-        return Ok(ManifestMerge::Conflicts(
-            cells.into_iter().map(MergeConflict::Cell).collect(),
-        ));
-    }
-
     // `edges_rev` is derived: rebuild it from the merged forward map rather
     // than merging it, so forward and reverse can never diverge (Invariant
-    // #5). Secondary `indexes` are likewise derived; there are none before
-    // Phase 5, and they are rebuilt when they arrive.
+    // #5) — including on the cell-conflict path, where the conflicted edges
+    // are absent from both maps. Secondary `indexes` are likewise derived;
+    // there are none before Phase 5, and they are rebuilt when they arrive.
     let edges_rev = rebuild_reverse(store, &edges_fwd, params)?;
 
     let merged = Manifest {
@@ -247,13 +253,25 @@ pub fn merge_manifests<S: ChunkStore>(
         conflicts: None,
     };
 
+    // Cell conflicts short-circuit graph validation: the merged graph is
+    // partial (conflicted keys absent), so referential/constraint checks
+    // would be over an incomplete graph. The partial manifest is returned so
+    // the wrapper can persist the conflicts as a merge-in-progress workspace.
+    if !cells.is_empty() {
+        return Ok(ManifestMerge::Conflicts {
+            merged: Box::new(merged),
+            conflicts: cells.into_iter().map(MergeConflict::Cell).collect(),
+        });
+    }
+
     // Referential integrity and schema constraints can be broken by an
     // otherwise map-clean merge (acetone-14c.3); surface any breach as data.
     let violations = validate_merged(store, base, &merged)?;
     if !violations.is_empty() {
-        return Ok(ManifestMerge::Conflicts(
-            violations.into_iter().map(MergeConflict::Graph).collect(),
-        ));
+        return Ok(ManifestMerge::Conflicts {
+            merged: Box::new(merged),
+            conflicts: violations.into_iter().map(MergeConflict::Graph).collect(),
+        });
     }
 
     Ok(ManifestMerge::Clean(Box::new(merged)))

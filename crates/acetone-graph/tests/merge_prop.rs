@@ -111,7 +111,9 @@ fn disjoint_edits_merge_cleanly_to_the_union() {
             let union = manifest_of(&[(1, 10), (2, 20), (3, 30), (4, 40)]);
             assert_eq!(manifest.encode(), union.encode());
         }
-        ManifestMerge::Conflicts(c) => panic!("expected clean, got conflicts {c:?}"),
+        ManifestMerge::Conflicts { conflicts: c, .. } => {
+            panic!("expected clean, got conflicts {c:?}")
+        }
     }
 }
 
@@ -124,7 +126,7 @@ fn concurrent_edits_to_the_same_key_conflict() {
         &BTreeMap::from([(1, Some(12))]),
     );
     match merged {
-        ManifestMerge::Conflicts(conflicts) => {
+        ManifestMerge::Conflicts { conflicts, .. } => {
             assert_eq!(conflicts.len(), 1);
             let MergeConflict::Cell(cell) = &conflicts[0] else {
                 panic!("expected a cell conflict, got {:?}", conflicts[0]);
@@ -259,7 +261,7 @@ proptest! {
                 // Deterministic: repeating the merge is byte-identical.
                 prop_assert_eq!(enc(&f), enc(&a), "clean merge must be deterministic");
             }
-            (ManifestMerge::Conflicts(f), ManifestMerge::Conflicts(r), ManifestMerge::Conflicts(a)) => {
+            (ManifestMerge::Conflicts { conflicts: f, .. }, ManifestMerge::Conflicts { conflicts: r, .. }, ManifestMerge::Conflicts { conflicts: a, .. }) => {
                 use acetone_graph::merge::CellConflict;
                 // Deterministic: repeating the merge gives identical conflicts.
                 prop_assert_eq!(&f, &a, "conflict detection is deterministic");

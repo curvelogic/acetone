@@ -122,6 +122,17 @@ pub enum Command {
         #[arg(short = 'm', long)]
         message: String,
     },
+    /// Resolve the conflicts of a merge in progress by taking one whole side,
+    /// then `commit` to complete the merge (spec §6). Cell conflicts only;
+    /// graph-level violations and per-key resolution arrive later.
+    Resolve {
+        /// Take the current branch's value for every conflict.
+        #[arg(long = "all-ours")]
+        all_ours: bool,
+        /// Take the merged-in version's value for every conflict.
+        #[arg(long = "all-theirs", conflicts_with = "all_ours")]
+        all_theirs: bool,
+    },
     /// Show the graph-level difference between two versions (branch short
     /// names, full ref names or commit hashes): the nodes and relationships
     /// added (`+`), removed (`-`) or modified (`~`) from `from` to `to`.
