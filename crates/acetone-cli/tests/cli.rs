@@ -1292,17 +1292,14 @@ fn call_history_procedures_run_through_the_query_path() {
     assert!(text.contains("added"), "{text}");
     assert!(text.contains("[2]"), "{text}");
 
-    // A procedure whose data is not built yet fails cleanly (no panic).
+    // acetone.conflicts() runs cleanly and yields nothing when no merge is
+    // in progress.
     let out = acetone(
         &repo,
         &["query", "CALL acetone.conflicts() YIELD key RETURN key"],
     );
-    assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("not yet available"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("0 rows"), "{}", stdout(&out));
 }
 
 #[test]
@@ -1459,4 +1456,135 @@ fn merge_conflict_resolve_and_complete() {
     assert!(stdout(&q).contains("theirs"), "{}", stdout(&q));
     assert!(stdout(&acetone(&repo, &["status"])).contains("workspace: clean"));
     assert!(acetone(&repo, &["fsck"]).status.success());
+}
+
+#[test]
+fn call_conflicts_exposes_the_merge_conflicts() {
+    // acetone-14c.4b: CALL acetone.conflicts() yields the conflicting entities
+    // and the _Conflict virtual subgraph during a merge in progress.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=base"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=ours"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirs"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    let _ = acetone(&repo, &["merge", "other", "-m", "merge"]); // conflicts
+
+    // The conflict is reported with its label and key.
+    let rows = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD label, key RETURN label, key",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(stdout(&rows).contains("N"), "{}", stdout(&rows));
+
+    // The _Conflict virtual node carries ours' value.
+    let node = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD node \
+             WHERE '_Conflict' IN labels(node) RETURN node.name AS name",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(stdout(&node).contains("ours"), "{}", stdout(&node));
+
+    // After completing the merge, there are no conflicts.
+    assert!(acetone(&repo, &["resolve", "--all-ours"]).status.success());
+    assert!(acetone(&repo, &["commit", "-m", "done"]).status.success());
+    let none = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD label RETURN count(*) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(stdout(&none).contains("\n0"), "{}", stdout(&none));
+}
+
+#[test]
+fn conflicts_node_falls_back_to_theirs_when_ours_deleted() {
+    // acetone-14c.4b: the _Conflict node shows ours' value, but when ours
+    // deleted the node (delete-vs-modify), it falls back to theirs'.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=base"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+    // theirs modifies the node.
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirs"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    // ours deletes the node.
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    assert!(
+        acetone(&repo, &["query", "MATCH (n:N {id: 1}) DELETE n"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "ours deletes"])
+            .status
+            .success()
+    );
+    let _ = acetone(&repo, &["merge", "other", "-m", "merge"]); // conflicts
+
+    // ours has no node, so the _Conflict node carries theirs' value.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD node \
+             WHERE '_Conflict' IN labels(node) RETURN node.name AS name",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("theirs"), "{}", stdout(&out));
 }

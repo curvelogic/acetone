@@ -263,9 +263,90 @@ impl acetone_cypher::exec::ProcedureProvider for RepoProcedures<'_> {
                     })
                     .collect())
             }
-            "acetone.conflicts" => Err(
-                "acetone.conflicts is not yet available (arrives with acetone-14c.4)".to_string(),
-            ),
+            "acetone.conflicts" => {
+                use acetone_graph::conflicts::PersistedConflict;
+                use acetone_graph::merge::ConflictMap;
+                use acetone_model::graph_keys::{EdgeKey, NodeKey};
+                // No merge in progress: no conflicts.
+                let Some(theirs) = self.repo.merge_head().map_err(|e| e.to_string())? else {
+                    return Ok(Vec::new());
+                };
+                let conflicts = self.repo.conflicts().map_err(|e| e.to_string())?;
+                // `ours` is the branch tip during a merge; `theirs` is
+                // MERGE_HEAD. The `_Conflict` node shows the **ours-side**
+                // value (the current branch's), falling back to theirs' only
+                // when ours deleted the node. Base/ours/theirs side-by-side is
+                // a later refinement; `CALL acetone.diff` shows the full
+                // three-way detail.
+                let ours = self
+                    .repo
+                    .head_commit()
+                    .map_err(|e| e.to_string())?
+                    .ok_or("merge in progress but the branch is unborn")?;
+                let ours_snap = self
+                    .repo
+                    .snapshot(&ours.to_hex())
+                    .map_err(|e| e.to_string())?;
+                let theirs_snap = self
+                    .repo
+                    .snapshot(&theirs.to_hex())
+                    .map_err(|e| e.to_string())?;
+                let ours_schema = ours_snap.schema_entries().map_err(|e| e.to_string())?;
+                let theirs_schema = theirs_snap.schema_entries().map_err(|e| e.to_string())?;
+
+                let mut rows = Vec::new();
+                for conflict in conflicts {
+                    let PersistedConflict::Cell { map, key } = conflict else {
+                        // Graph violations are not persisted (acetone-14c.4a).
+                        continue;
+                    };
+                    let row = match map {
+                        ConflictMap::Nodes => {
+                            let node_key = NodeKey::decode(&key).map_err(|e| e.to_string())?;
+                            // The conflicting node as a virtual `_Conflict` node.
+                            let (record, schema) = match ours_snap
+                                .get_node(&node_key)
+                                .map_err(|e| e.to_string())?
+                            {
+                                Some(r) => (Some(r), &ours_schema),
+                                None => (
+                                    theirs_snap.get_node(&node_key).map_err(|e| e.to_string())?,
+                                    &theirs_schema,
+                                ),
+                            };
+                            let node = match record {
+                                Some(r) => Value::Node(acetone_cypher::exec::virtual_diff_node(
+                                    &node_key,
+                                    &r,
+                                    schema,
+                                    "_Conflict",
+                                )),
+                                None => Value::Null,
+                            };
+                            vec![
+                                Value::String(node_key.label().to_string()),
+                                Value::String(crate::commands::format_node_key(&node_key)),
+                                node,
+                            ]
+                        }
+                        ConflictMap::Edges => {
+                            let edge_key = EdgeKey::decode_fwd(&key).map_err(|e| e.to_string())?;
+                            vec![
+                                Value::String(edge_key.rtype().to_string()),
+                                Value::String(crate::commands::format_edge_key(&edge_key)),
+                                Value::Null,
+                            ]
+                        }
+                        ConflictMap::Schema => vec![
+                            Value::String("schema".to_string()),
+                            Value::String(key.iter().map(|b| format!("{b:02x}")).collect()),
+                            Value::Null,
+                        ],
+                    };
+                    rows.push(row);
+                }
+                Ok(rows)
+            }
             other => Err(format!("unknown procedure {other}")),
         }
     }
