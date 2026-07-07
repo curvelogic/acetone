@@ -6,8 +6,8 @@
 use acetone_graph::diff::ChangeKind;
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_model::Value;
-use acetone_model::graph_keys::NodeKey;
-use acetone_model::records::NodeRecord;
+use acetone_model::graph_keys::{EdgeKey, NodeKey};
+use acetone_model::records::{EdgeRecord, NodeRecord};
 use proptest::prelude::*;
 use std::collections::BTreeMap;
 
@@ -24,6 +24,21 @@ fn node(id: u8) -> NodeKey {
 
 fn record(v: i64) -> NodeRecord {
     NodeRecord::new([], BTreeMap::from([("v".to_string(), Value::Int(v))]))
+}
+
+/// A version's edges: a map from `(src, dst)` to a property value, so an edge
+/// exercises Added/Removed/Modified like a node (a changed record value is a
+/// Modified edge).
+fn edge_version() -> impl Strategy<Value = BTreeMap<(u8, u8), i64>> {
+    proptest::collection::btree_map((0u8..4, 0u8..4), 0i64..4, 0..6)
+}
+
+fn edge(s: u8, d: u8) -> EdgeKey {
+    EdgeKey::new(node(s), "R", node(d), Value::Null).expect("valid edge")
+}
+
+fn edge_record(v: i64) -> EdgeRecord {
+    EdgeRecord::new(BTreeMap::from([("w".to_string(), Value::Int(v))]))
 }
 
 proptest! {
@@ -74,5 +89,60 @@ proptest! {
             .collect();
 
         prop_assert_eq!(got, want);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+    #[test]
+    fn diff_equals_the_model_edge_difference(a in edge_version(), b in edge_version()) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = Repository::init(&dir.path().join("g.git"), InitOptions::default())
+            .expect("init");
+
+        // Endpoint nodes 0..4 exist in both versions, so only edges vary.
+        let mut tx = repo.begin_write().expect("begin");
+        for id in 0u8..4 {
+            tx.put_node(&node(id), &record(0)).expect("put node");
+        }
+        for ((s, d), v) in &a {
+            tx.put_edge(&edge(*s, *d), &edge_record(*v)).expect("put edge");
+        }
+        let v1 = tx.commit("a", &[], None).expect("commit a");
+
+        let mut tx = repo.begin_write().expect("begin");
+        for (s, d) in a.keys() {
+            if !b.contains_key(&(*s, *d)) {
+                tx.delete_edge(&edge(*s, *d)).expect("delete edge");
+            }
+        }
+        for ((s, d), v) in &b {
+            tx.put_edge(&edge(*s, *d), &edge_record(*v)).expect("put edge");
+        }
+        let v2 = tx.commit("b", &[], None).expect("commit b");
+
+        // The model edge difference, keyed by encoded forward edge key.
+        let mut want: BTreeMap<Vec<u8>, ChangeKind> = BTreeMap::new();
+        for k in a.keys().chain(b.keys()) {
+            let kind = match (a.get(k), b.get(k)) {
+                (Some(_), None) => ChangeKind::Removed,
+                (None, Some(_)) => ChangeKind::Added,
+                (Some(x), Some(y)) if x != y => ChangeKind::Modified,
+                _ => continue,
+            };
+            want.insert(edge(k.0, k.1).encode_fwd().expect("encode"), kind);
+        }
+
+        let diff = repo.diff(&v1.to_hex(), &v2.to_hex()).expect("diff");
+        let got: BTreeMap<Vec<u8>, ChangeKind> = diff
+            .edges
+            .iter()
+            .map(|e| (e.key.encode_fwd().expect("encode"), e.kind))
+            .collect();
+        prop_assert_eq!(got, want);
+
+        // Determinism: the same diff recomputes identically.
+        let again = repo.diff(&v1.to_hex(), &v2.to_hex()).expect("diff again");
+        prop_assert_eq!(diff.edges.len(), again.edges.len());
     }
 }

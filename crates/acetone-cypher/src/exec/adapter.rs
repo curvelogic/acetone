@@ -158,6 +158,32 @@ fn node_entity_id(key: &NodeKey) -> EntityId {
     EntityId::from_bytes(render_key_bytes(&logical))
 }
 
+/// Build a runtime node value for the diff virtual graph (acetone-14c.1):
+/// the stored `(key, record)` rendered as a node — key properties re-exposed
+/// under their schema-declared names — with a virtual change label
+/// (`_Added`/`_Removed`/`_Modified`) prepended to its label set, so a query
+/// can select it with `node:_Added`. `schema` is the version the record
+/// belongs to (its `to` version for added/modified, `from` for removed).
+pub fn virtual_diff_node(
+    key: &NodeKey,
+    record: &NodeRecord,
+    schema: &[SchemaEntry],
+    change_label: &str,
+) -> NodeValue {
+    let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
+    for entry in schema {
+        if let SchemaEntry::Label { name, def } = entry {
+            key_names.insert(name.clone(), def.key().to_vec());
+        }
+    }
+    let mut node = node_value(key, record, &key_names);
+    let mut labels = Vec::with_capacity(node.labels.len() + 1);
+    labels.push(change_label.to_string());
+    labels.append(&mut node.labels);
+    node.labels = labels;
+    node
+}
+
 fn node_value(
     key: &NodeKey,
     record: &NodeRecord,

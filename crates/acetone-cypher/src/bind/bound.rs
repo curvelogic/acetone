@@ -552,7 +552,12 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         name: "acetone.diff",
         min_args: 2,
         max_args: 2,
-        yields: &["kind", "label", "key"],
+        // `node` is the diff virtual graph (acetone-14c.1): a changed *node*
+        // as a virtual value labelled `_Added`/`_Removed`/`_Modified`, so
+        // `YIELD node WHERE node:_Added` queries the diff as a graph. It is
+        // null for a relationship change (virtual relationships are a
+        // follow-up).
+        yields: &["kind", "label", "key", "node"],
     },
     ProcedureDef {
         name: "acetone.blame",

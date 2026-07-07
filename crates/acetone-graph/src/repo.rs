@@ -1127,7 +1127,10 @@ impl<'s> Snapshot<'s> {
     /// Classify the graph-level difference from `self` (the `from` version)
     /// to `to`, over the node and forward-edge maps (spec §7). The reverse
     /// edge map is derived from the forward map and is not diffed. Both
-    /// snapshots must belong to the same repository (they share its store).
+    /// snapshots must belong to the same repository (they share its store);
+    /// this is documented, not enforced — but chunks are content-addressed, so
+    /// diffing across stores fails cleanly with `ChunkNotFound` (a missing
+    /// hash), never silent corruption.
     pub fn diff(&self, to: &Snapshot<'_>) -> Result<GraphDiff, GraphError> {
         let mut nodes = Vec::new();
         let (a, b) = (

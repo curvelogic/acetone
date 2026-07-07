@@ -10,7 +10,7 @@ pub mod source;
 pub mod value;
 pub mod write;
 
-pub use adapter::{GraphSnapshot, catalogue_from_schema};
+pub use adapter::{GraphSnapshot, catalogue_from_schema, virtual_diff_node};
 pub use eval::{ExecError, Row};
 pub use run::{QueryResult, execute, execute_versioned, execute_versioned_with, execute_write};
 pub use source::{
@@ -803,18 +803,20 @@ mod tests {
 
     #[test]
     fn call_binds_yields_and_applies_where() {
-        // acetone.diff yields (kind, label, key); the provider returns two
-        // rows, one added and one removed.
+        // acetone.diff yields (kind, label, key, node); the provider returns
+        // two rows, one added and one removed (node column unused here).
         let provider = FixedProcedures(vec![
             vec![
                 Value::String("added".into()),
                 Value::String("N".into()),
                 Value::String("k1".into()),
+                Value::Null,
             ],
             vec![
                 Value::String("removed".into()),
                 Value::String("N".into()),
                 Value::String("k2".into()),
+                Value::Null,
             ],
         ]);
         // YIELD a subset in a different order, filter with WHERE, then RETURN.
@@ -826,6 +828,43 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         assert!(matches!(&result.rows[0][0], Value::String(s) if s == "k1"));
         assert!(matches!(&result.rows[0][1], Value::String(s) if s == "added"));
+    }
+
+    #[test]
+    fn call_yields_virtual_diff_nodes() {
+        // The diff virtual graph (acetone-14c.1): acetone.diff's `node` column
+        // carries the changed node as a value labelled with its change kind,
+        // queryable with `'_Added' IN labels(node)`.
+        use crate::exec::value::{EntityId, NodeValue};
+        let node = |id: i64, kind: &str| {
+            Value::Node(NodeValue {
+                id: EntityId::from_bytes(format!("n{id}").into_bytes()),
+                labels: vec![kind.to_string(), "N".to_string()],
+                properties: BTreeMap::from([("id".to_string(), Value::Int(id))]),
+            })
+        };
+        let provider = FixedProcedures(vec![
+            vec![
+                Value::String("modified".into()),
+                Value::String("N".into()),
+                Value::String("k1".into()),
+                node(1, "_Modified"),
+            ],
+            vec![
+                Value::String("added".into()),
+                Value::String("N".into()),
+                Value::String("k2".into()),
+                node(2, "_Added"),
+            ],
+        ]);
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD node \
+             WHERE '_Added' IN labels(node) RETURN node.id AS id",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["id"]);
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::Int(2)));
     }
 
     #[test]
@@ -847,6 +886,7 @@ mod tests {
             Value::String("added".into()),
             Value::String("N".into()),
             Value::String("k1".into()),
+            Value::Null,
         ]]);
         let result = call_with("CALL acetone.diff('a', 'b') YIELD kind, key", &provider);
         assert_eq!(result.columns, vec!["kind", "key"]);
