@@ -23,7 +23,8 @@
 use std::collections::BTreeMap;
 
 use acetone_model::Value;
-use acetone_model::graph_keys::{IndexEntry, NodeKey};
+use acetone_model::graph_keys::{GraphKeyError, IndexEntry, NodeKey};
+use acetone_model::keys::KeyEncodeError;
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::NodeRecord;
 use acetone_model::schema::{IndexDef, SchemaEntry};
@@ -78,21 +79,24 @@ pub(crate) fn index_entry_key(
         Some(pos) => node_key.key().get(pos).cloned(),
         None => record.properties().get(def.property()).cloned(),
     }?;
-    // null-blind and NaN-blind: these are the only values intentionally left
-    // out of the index (openCypher equality/range are never true for them, and
-    // NaN is unencodable — ADR-0004).
-    if matches!(value, Value::Null) || matches!(value, Value::Float(f) if f.is_nan()) {
+    // null-blind: null encodes fine but is intentionally left out (openCypher
+    // equality/range are never true for null).
+    if matches!(value, Value::Null) {
         return None;
     }
     let entry = IndexEntry::new(def.label(), def.property(), value, node_key.clone())
         .expect("index label and property are non-empty (validated at declaration)");
     match entry.encode() {
         Ok(bytes) => Some(bytes),
+        // NaN-blind: NaN anywhere in the value — top-level or nested in a list —
+        // is unencodable (ADR-0004) and intentionally skipped (NaN comparisons
+        // are never true in openCypher).
+        Err(GraphKeyError::Encode(KeyEncodeError::NanNotPermitted)) => None,
         Err(_e) => {
-            // NaN is the only policy-blind unencodable value and is handled
-            // above, so any other encode failure is unexpected — surface it in
-            // debug/test builds rather than silently dropping the node from the
-            // index (which would also fool fsck, since it shares this fn).
+            // Any *other* encode failure (temporal range, list depth) is
+            // unexpected — surface it in debug/test builds rather than silently
+            // dropping the node from the index (which would also fool fsck,
+            // since it shares this fn).
             debug_assert!(false, "unexpected index-key encode failure: {_e}");
             None
         }

@@ -222,6 +222,52 @@ fn nan_valued_property_is_not_indexed() {
 }
 
 #[test]
+fn nan_nested_in_a_list_value_is_not_indexed_and_does_not_panic() {
+    // A list-valued indexed property with a NaN element is unencodable anywhere
+    // in the tuple; it must be skipped quietly (NaN-blind), not panic.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Index {
+            name: "host_scores".into(),
+            def: IndexDef::new("Host", "scores").expect("idx"),
+        })
+        .expect("s");
+        tx.commit("index", &[], None).expect("commit");
+    }
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        // A clean list is indexed; a list with a nested NaN is skipped.
+        tx.put_node(
+            &node("Host", "ok"),
+            &record(&[(
+                "scores",
+                Value::List(vec![Value::Float(1.0), Value::Float(2.0)]),
+            )]),
+        )
+        .expect("n");
+        tx.put_node(
+            &node("Host", "nan"),
+            &record(&[(
+                "scores",
+                Value::List(vec![Value::Float(1.0), Value::Float(f64::NAN)]),
+            )]),
+        )
+        .expect("n");
+        tx.commit("scores", &[], None).expect("commit");
+    }
+    // Only the clean-list node is indexed; both nodes persisted.
+    let contents = index_contents(&repo, "host_scores");
+    assert_eq!(contents.len(), 1);
+    assert_eq!(contents[0].1, "ok");
+    // reindex agrees (Invariant #5) and also does not panic.
+    repo.reindex().expect("reindex");
+    assert_eq!(index_contents(&repo, "host_scores").len(), 1);
+}
+
+#[test]
 fn reindex_reproduces_identical_roots() {
     let dir = tempfile::tempdir().expect("tmp");
     let repo = init_repo(dir.path());
