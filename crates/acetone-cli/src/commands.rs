@@ -47,6 +47,18 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             property,
         } => declare_index(repo_path, &name, &label, &property),
         Command::Reindex => reindex(repo_path),
+        Command::Export {
+            format,
+            label,
+            edge,
+            out,
+        } => crate::export::run(
+            repo_path,
+            &format,
+            label.as_deref(),
+            edge.as_deref(),
+            out.as_deref(),
+        ),
         Command::PutNode { label, key, prop } => put_node(repo_path, &label, &key, &prop),
         Command::Rekey {
             label,
