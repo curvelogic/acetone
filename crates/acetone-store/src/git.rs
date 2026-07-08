@@ -669,7 +669,12 @@ const SUMMARY_ENTRY: &str = "README.md";
 const ANCHORS_ENTRY: &str = "chunks";
 
 /// Validate one trailer pair against the git trailer format.
-fn validate_trailer(token: &str, value: &str) -> Result<(), StoreError> {
+/// Validate a commit-message trailer `(token, value)` against git's trailer
+/// rules (token `[A-Za-z0-9][A-Za-z0-9-]*`; value a single non-empty line with
+/// no control characters and no leading/trailing whitespace). Exposed so a
+/// caller can reject bad trailer values *before* staging any work, rather than
+/// discovering them when `create_commit` assembles the message.
+pub fn validate_trailer(token: &str, value: &str) -> Result<(), StoreError> {
     let invalid = |reason: &str| StoreError::InvalidTrailer {
         token: token.to_owned(),
         reason: reason.to_owned(),

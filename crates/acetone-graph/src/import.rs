@@ -39,6 +39,10 @@ pub enum ImportError {
     /// key property, unknown label, un-coercible value, …).
     #[error("import mapping: {0}")]
     Mapping(String),
+    /// The import was invoked in a way that cannot proceed (e.g. `--branch`
+    /// naming the current branch).
+    #[error("import: {0}")]
+    Config(String),
 }
 
 /// One canonical record produced by an extractor. Nodes and edges carry *all*
@@ -150,24 +154,46 @@ pub fn run(
         return Err(GraphError::DirtyWorkspace);
     }
 
+    // Validate the provenance trailer values *before* staging anything. The
+    // source string is user-controlled (a file path); an unsuitable value
+    // (control character, leading/trailing whitespace) is otherwise only
+    // rejected inside `commit()`, i.e. after `save()` has already advanced the
+    // workspace — which would leave it dirty and, under `--branch`, strand the
+    // caller on the side branch. Failing here keeps the workspace pristine.
+    let trailers = provenance_trailers(&opts.provenance);
+    for (token, value) in &trailers {
+        acetone_store::validate_trailer(token, value)?;
+    }
+
     // Extract before touching the workspace: a parse failure leaves the
     // repository untouched.
     let records = extractor.extract()?;
 
     match &opts.branch {
-        None => import_into_workspace(repo, records, &opts),
+        None => import_into_workspace(repo, records, &opts, &trailers),
         Some(branch) => {
             let original = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
             let original = original
                 .strip_prefix("refs/heads/")
                 .unwrap_or(&original)
                 .to_owned();
+            if branch == &original {
+                return Err(ImportError::Config(format!(
+                    "--branch {branch:?} is the current branch; import onto a \
+                     different branch for isolation"
+                ))
+                .into());
+            }
             switch_to_branch(repo, branch)?;
-            let result = import_into_workspace(repo, records, &opts);
-            // Always return to the original branch. The workspace is clean in
-            // every terminal state (no-op ⇒ matches HEAD; committed ⇒ matches
-            // the new HEAD; error before save ⇒ untouched), so the checkout
-            // back cannot fail on dirtiness.
+            let result = import_into_workspace(repo, records, &opts, &trailers);
+            // Return to the original branch. Provenance trailers were validated
+            // up front, so the realistic post-save failure is gone and the
+            // workspace is clean in every ordinary terminal state (no-op ⇒
+            // matches HEAD; committed ⇒ matches the new HEAD; error before
+            // save ⇒ untouched); the checkout back then succeeds. A residual
+            // *exceptional* store failure after save could still leave the
+            // workspace advanced, in which case the restore's own error is
+            // surfaced rather than swallowed.
             let restored = repo.checkout_branch(&original);
             match (result, restored) {
                 // Import error takes precedence over any restore error.
@@ -180,6 +206,18 @@ pub fn run(
     }
 }
 
+/// The three provenance trailers, in a stable order.
+fn provenance_trailers(provenance: &Provenance) -> Vec<(String, String)> {
+    vec![
+        ("Acetone-Source".to_owned(), provenance.source.clone()),
+        ("Acetone-Extractor".to_owned(), provenance.extractor.clone()),
+        (
+            "Acetone-Source-Hash".to_owned(),
+            provenance.source_hash.clone(),
+        ),
+    ]
+}
+
 /// Create `branch` (or check it out if it exists) and switch to it.
 fn switch_to_branch(repo: &Repository, branch: &str) -> Result<(), GraphError> {
     match repo.create_branch(branch, None) {
@@ -190,11 +228,13 @@ fn switch_to_branch(repo: &Repository, branch: &str) -> Result<(), GraphError> {
     repo.checkout_branch(branch)
 }
 
-/// Stage every record, save, then commit unless the graph is unchanged.
+/// Stage every record, save, then commit unless the graph is unchanged. The
+/// `trailers` are the already-validated provenance trailers from [`run`].
 fn import_into_workspace(
     repo: &Repository,
     records: Vec<ImportRecord>,
     opts: &ImportOptions,
+    trailers: &[(String, String)],
 ) -> Result<ImportOutcome, GraphError> {
     let (labels, rtypes) = schema_maps(repo)?;
 
@@ -238,24 +278,13 @@ fn import_into_workspace(
         return Ok(ImportOutcome::NoChange);
     }
 
-    let trailers = vec![
-        ("Acetone-Source".to_owned(), opts.provenance.source.clone()),
-        (
-            "Acetone-Extractor".to_owned(),
-            opts.provenance.extractor.clone(),
-        ),
-        (
-            "Acetone-Source-Hash".to_owned(),
-            opts.provenance.source_hash.clone(),
-        ),
-    ];
     let message = opts
         .message
         .clone()
         .unwrap_or_else(|| default_message(&opts.provenance, nodes, edges));
 
     let txn = repo.begin_write()?;
-    let commit = txn.commit(&message, &trailers, opts.author.clone())?;
+    let commit = txn.commit(&message, trailers, opts.author.clone())?;
     Ok(ImportOutcome::Committed {
         commit,
         nodes,

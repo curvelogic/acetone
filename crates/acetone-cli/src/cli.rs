@@ -196,7 +196,8 @@ pub enum Command {
     /// (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op
     /// when the source is unchanged (spec §7). Node mode (`--label`) maps each
     /// row to a node; edge mode (`--edge`) maps each row to a relationship.
-    /// Requires a clean workspace.
+    /// Requires a clean workspace — declare and `commit` the target label's
+    /// schema (and any relationship type) before importing.
     Import {
         /// Source format.
         #[arg(value_parser = ["csv", "json", "ndjson"])]

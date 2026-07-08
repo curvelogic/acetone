@@ -331,6 +331,72 @@ fn extractor_failure_leaves_repo_untouched() {
 }
 
 #[test]
+fn invalid_provenance_fails_before_staging_leaving_workspace_clean() {
+    // A source string unsuitable as a trailer value (trailing whitespace) is
+    // rejected up front, so the workspace is never advanced — even under a
+    // branch import, which must not strand the caller (reviewer MAJOR finding).
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host(&repo);
+    let head = repo.head_commit().expect("head");
+
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Host",
+            &[("name", Value::String("web1".into()))],
+        )],
+    };
+    let bad = ImportOptions {
+        branch: Some("ingest".into()),
+        message: None,
+        provenance: Provenance {
+            source: "hosts.csv ".into(), // trailing space → invalid trailer value
+            extractor: "csv".into(),
+            source_hash: "deadbeef".into(),
+        },
+        author: None,
+    };
+    assert!(import(&repo, &mut mock, bad).is_err());
+    // Workspace untouched, still on the original branch.
+    assert!(!repo.is_dirty().expect("clean"));
+    assert_eq!(repo.head_commit().expect("head"), head);
+    assert_eq!(
+        repo.current_branch().expect("branch"),
+        Some("refs/heads/main".into())
+    );
+    // No `ingest` branch was created.
+    assert!(
+        !repo
+            .branches()
+            .expect("branches")
+            .iter()
+            .any(|(n, _)| n == "ingest")
+    );
+}
+
+#[test]
+fn branch_equal_to_current_is_rejected() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host(&repo);
+
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Host",
+            &[("name", Value::String("web1".into()))],
+        )],
+    };
+    match import(&repo, &mut mock, opts(Some("main"))) {
+        Err(GraphError::Import(ImportError::Config(_))) => {}
+        other => panic!("expected Config error, got {other:?}"),
+    }
+    // Nothing committed.
+    assert!(!repo.is_dirty().expect("clean"));
+}
+
+#[test]
 fn unknown_label_is_a_mapping_error() {
     let dir = tempfile::tempdir().expect("tmp");
     let repo = init_repo(dir.path());
