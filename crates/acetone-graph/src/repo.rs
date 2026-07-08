@@ -757,6 +757,13 @@ impl Repository {
         })
     }
 
+    /// Rebuild every declared index map from the workspace `nodes`, to
+    /// identical roots (spec §3.3, Invariant #5). A no-op when the indexes are
+    /// already consistent. Takes the single-writer lock.
+    pub fn reindex(&self) -> Result<(), GraphError> {
+        self.begin_write()?.reindex()
+    }
+
     /// Resolve a refspec — branch short name, full ref name, or hex
     /// commit hash — to a commit address.
     ///
@@ -1079,6 +1086,18 @@ impl<'r> Transaction<'r> {
         }
         let store = &self.repo.store;
         let params = self.manifest.chunk_params;
+        // Captured before the staged node ops are consumed below, for derived
+        // index maintenance (spec §3.3): the pre-transaction `nodes` root, the
+        // node keys written this save, the pre-transaction index roots, and
+        // whether the schema changed (a new index may have been declared).
+        let base_nodes = self.manifest.nodes;
+        let base_indexes = self.manifest.indexes.clone();
+        let touched_nodes: Vec<Vec<u8>> = self
+            .nodes
+            .iter()
+            .map(|op| batch_op_key(op).to_vec())
+            .collect();
+        let schema_changed = !self.schema.is_empty();
         // By-write conflict resolution (spec §6, acetone-14c.4c): while a merge
         // is in progress, writing a conflicted key resolves it. Collect the
         // keys written this save (before the ops are consumed) so the
@@ -1105,7 +1124,7 @@ impl<'r> Transaction<'r> {
             }
             other => other,
         };
-        let manifest = Manifest {
+        let mut manifest = Manifest {
             chunk_params: params,
             schema: Self::apply_map(
                 store,
@@ -1131,9 +1150,34 @@ impl<'r> Transaction<'r> {
                 &self.manifest.edges_rev,
                 std::mem::take(&mut self.edges_rev),
             )?,
-            indexes: self.manifest.indexes.clone(),
+            indexes: base_indexes.clone(),
             conflicts,
         };
+        // Maintain the derived `idx/<name>` maps (spec §3.3, Invariant #5).
+        // Skipped entirely when no index exists and the schema is unchanged, so
+        // the common index-free write path costs nothing.
+        if !base_indexes.is_empty() || schema_changed {
+            let entries = Snapshot::new(store, manifest.clone()).schema_entries()?;
+            let (index_defs, label_keys) = crate::index::schema_index_info(&entries);
+            manifest.indexes = crate::index::maintain(
+                store,
+                params,
+                &base_nodes,
+                &manifest.nodes,
+                &touched_nodes,
+                &base_indexes,
+                &index_defs,
+                &label_keys,
+            )?;
+        }
+        self.persist_manifest(manifest)
+    }
+
+    /// Write a new manifest chunk and atomically advance the workspace ref to a
+    /// fresh tree anchoring its chunk set (compare-and-swap against the tree
+    /// this transaction loaded). Updates the transaction's base state.
+    fn persist_manifest(&mut self, manifest: Manifest) -> Result<(), GraphError> {
+        let store = &self.repo.store;
         let manifest_bytes = manifest.encode();
         let new_manifest_hash = store.put(&manifest_bytes)?;
         // Advance the per-worktree ref to a fresh workspace tree that
@@ -1150,6 +1194,21 @@ impl<'r> Transaction<'r> {
         self.base_hash = new_manifest_hash;
         self.manifest = manifest;
         Ok(())
+    }
+
+    /// Rebuild every declared index map from the workspace `nodes` and persist
+    /// the result (spec §3.3, Invariant #5: `reindex` reproduces identical
+    /// roots). A no-op — same manifest hash — when the indexes are already
+    /// consistent.
+    pub fn reindex(mut self) -> Result<(), GraphError> {
+        let store = &self.repo.store;
+        let entries = Snapshot::new(store, self.manifest.clone()).schema_entries()?;
+        let indexes = crate::index::rebuild_all(store, &self.manifest, &entries)?;
+        let manifest = Manifest {
+            indexes,
+            ..self.manifest.clone()
+        };
+        self.persist_manifest(manifest)
     }
 
     /// Save any staged mutations, then turn the workspace manifest into a
@@ -1379,6 +1438,24 @@ impl<'s> Snapshot<'s> {
         for item in acetone_prolly::scan(self.store, &root, ..)? {
             let (key, value) = item?;
             out.push((EdgeKey::decode_fwd(&key)?, EdgeRecord::decode(&value)?));
+        }
+        Ok(out)
+    }
+
+    /// The entries of a declared index map `idx/<name>`, in key order, or an
+    /// empty vec when no such index is present.
+    pub fn index_entries(
+        &self,
+        name: &str,
+    ) -> Result<Vec<acetone_model::graph_keys::IndexEntry>, GraphError> {
+        let Some(map_root) = self.manifest.indexes.get(name) else {
+            return Ok(Vec::new());
+        };
+        let root = self.root(map_root)?;
+        let mut out = Vec::new();
+        for item in acetone_prolly::scan(self.store, &root, ..)? {
+            let (key, _) = item?;
+            out.push(acetone_model::graph_keys::IndexEntry::decode(&key)?);
         }
         Ok(out)
     }

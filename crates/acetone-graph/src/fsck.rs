@@ -74,6 +74,9 @@ pub enum FindingKind {
     MapRoot,
     /// Advisory: the forward and reverse edge maps disagree.
     EdgeAsymmetry,
+    /// Advisory: a declared index map disagrees with what `nodes` implies (a
+    /// derived-map divergence, Invariant #5). Repairable with `acetone reindex`.
+    IndexInconsistency,
     /// Advisory: a reachable version was found but deliberately not verified
     /// in this phase (e.g. an annotated tag, whose tag-object peeling is
     /// deferred — see ADR-0012). The sin fsck must avoid is silence, so the
@@ -84,7 +87,9 @@ pub enum FindingKind {
 impl FindingKind {
     fn severity(&self) -> Severity {
         match self {
-            FindingKind::EdgeAsymmetry | FindingKind::Unverified => Severity::Advisory,
+            FindingKind::EdgeAsymmetry
+            | FindingKind::IndexInconsistency
+            | FindingKind::Unverified => Severity::Advisory,
             _ => Severity::Error,
         }
     }
@@ -422,7 +427,7 @@ fn check_manifest(
         }
     };
 
-    verify_map(
+    let nodes_ok = verify_map(
         store,
         origin,
         MapId::Nodes,
@@ -458,8 +463,9 @@ fn check_manifest(
         verified,
         report,
     );
+    let mut sound_indexes = Vec::new();
     for (name, root) in &manifest.indexes {
-        verify_map(
+        if verify_map(
             store,
             origin,
             MapId::Index(name.clone()),
@@ -467,7 +473,9 @@ fn check_manifest(
             &manifest,
             verified,
             report,
-        );
+        ) {
+            sound_indexes.push(name.clone());
+        }
     }
     if let Some(conflicts) = &manifest.conflicts {
         verify_map(
@@ -487,6 +495,107 @@ fn check_manifest(
     // advisory would just be noise.
     if fwd_ok && rev_ok {
         check_edge_symmetry(store, origin, &manifest, report);
+    }
+
+    // Index consistency (spec §3.3, Invariant #5): each declared index must be
+    // exactly reproducible from `nodes`. Only checked for indexes whose map is
+    // structurally sound and when the nodes map is sound — otherwise verify_map
+    // has already reported the real corruption.
+    if nodes_ok {
+        // A schema-declared index with no `idx/<name>` map at all is missing
+        // entirely (the mirror of a map with no declaration).
+        if let Ok(entries) = Snapshot::new(store, manifest.clone()).schema_entries() {
+            let (index_defs, _) = crate::index::schema_index_info(&entries);
+            for (name, _) in &index_defs {
+                if !manifest.indexes.contains_key(name) {
+                    report.push(
+                        FindingKind::IndexInconsistency,
+                        origin,
+                        Some(MapId::Index(name.clone())),
+                        format!("index {name:?} is declared but has no map; run `acetone reindex`"),
+                    );
+                }
+            }
+        }
+        for name in &sound_indexes {
+            check_index_consistency(store, origin, &manifest, name, report);
+        }
+    }
+}
+
+/// Advisory check that a declared index map matches what `nodes` implies,
+/// using the exact same entry-key function the write path uses (so only a
+/// genuine divergence trips it). Repairable with `acetone reindex`.
+fn check_index_consistency(
+    store: &GitStore,
+    origin: &Origin,
+    manifest: &Manifest,
+    name: &str,
+    report: &mut FsckReport,
+) {
+    let snapshot = Snapshot::new(store, manifest.clone());
+    let entries = match snapshot.schema_entries() {
+        Ok(e) => e,
+        Err(_) => return, // schema decode issues are reported elsewhere
+    };
+    let (index_defs, label_keys) = crate::index::schema_index_info(&entries);
+    let Some((_, def)) = index_defs.iter().find(|(n, _)| n == name) else {
+        // A `idx/<name>` map with no declaring schema entry is stale.
+        report.push(
+            FindingKind::IndexInconsistency,
+            origin,
+            Some(MapId::Index(name.to_owned())),
+            format!("index {name:?} has a map but no schema declaration; run `acetone reindex`"),
+        );
+        return;
+    };
+
+    // Expected entry keys, recomputed from nodes.
+    let expected: BTreeSet<Vec<u8>> = match snapshot.nodes() {
+        Ok(nodes) => nodes
+            .iter()
+            .filter_map(|(key, record)| {
+                crate::index::index_entry_key(key, Some(record), def, &label_keys)
+            })
+            .collect(),
+        Err(_) => return,
+    };
+    // Actual entry keys, from the index map.
+    let actual: BTreeSet<Vec<u8>> = match manifest.indexes.get(name) {
+        Some(root) => match root.to_root(manifest.chunk_params) {
+            Ok(root) => match acetone_prolly::scan(store, &root, ..) {
+                Ok(scan) => {
+                    let mut set = BTreeSet::new();
+                    for item in scan {
+                        match item {
+                            Ok((key, _)) => {
+                                set.insert(key.to_vec());
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                    set
+                }
+                Err(_) => return,
+            },
+            Err(_) => return,
+        },
+        None => BTreeSet::new(),
+    };
+
+    let missing = expected.difference(&actual).count();
+    let extra = actual.difference(&expected).count();
+    if missing != 0 || extra != 0 {
+        report.push(
+            FindingKind::IndexInconsistency,
+            origin,
+            Some(MapId::Index(name.to_owned())),
+            format!(
+                "index {name:?} disagrees with nodes: {missing} missing, \
+                 {extra} stale entr{}; run `acetone reindex`",
+                if missing + extra == 1 { "y" } else { "ies" }
+            ),
+        );
     }
 }
 

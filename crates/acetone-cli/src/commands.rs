@@ -41,6 +41,12 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             unique,
         } => declare_label(repo_path, &label, &key, &require, &unique),
         Command::DeclareRelType { rtype } => declare_rel_type(repo_path, &rtype),
+        Command::DeclareIndex {
+            name,
+            label,
+            property,
+        } => declare_index(repo_path, &name, &label, &property),
+        Command::Reindex => reindex(repo_path),
         Command::PutNode { label, key, prop } => put_node(repo_path, &label, &key, &prop),
         Command::Rekey {
             label,
@@ -449,6 +455,36 @@ fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
     txn.put_schema(&entry)?;
     txn.save().context("saving workspace")?;
     outln!("declared relationship type {}", format_label(rtype));
+    Ok(())
+}
+
+fn declare_index(repo_path: &Path, name: &str, label: &str, property: &str) -> Result<()> {
+    use acetone_model::schema::{IndexDef, SchemaEntry};
+    let def =
+        IndexDef::new(label, property).with_context(|| format!("declaring index {name:?}"))?;
+    let entry = SchemaEntry::Index {
+        name: name.to_owned(),
+        def,
+    };
+    let repo = open(repo_path)?;
+    let mut txn = repo.begin_write()?;
+    // Declaring the index stages its schema entry; the flush builds the
+    // `idx/<name>` map from the current nodes (spec §3.3, Invariant #5).
+    txn.put_schema(&entry)?;
+    txn.save().context("saving workspace")?;
+    outln!(
+        "declared index {} on {}.{}",
+        format_label(name),
+        format_label(label),
+        format_label(property)
+    );
+    Ok(())
+}
+
+fn reindex(repo_path: &Path) -> Result<()> {
+    let repo = open(repo_path)?;
+    repo.reindex().context("reindexing")?;
+    outln!("reindexed");
     Ok(())
 }
 
