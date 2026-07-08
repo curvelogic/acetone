@@ -57,3 +57,14 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # crc32fast: CRC-32 for the v2 pack index (ADR-0011). Already present
 # transitively. MIT/Apache-2.0.
 crc32fast = "1"
+# csv: the de-facto Rust CSV reader (BurntSushi), for the built-in CSV import
+# extractor (ADR-0021). Battle-tested, MIT/Unlicense, confined to acetone-cli.
+csv = "1"
+# serde_json: the de-facto JSON parser, for the built-in JSON/NDJSON import
+# extractor (ADR-0021). MIT/Apache-2.0, confined to acetone-cli. Used with its
+# own value model only (no serde derives), so no `serde` derive dependency.
+serde_json = "1"
+# sha2: RustCrypto SHA-256, for the git-object-format-independent
+# `Acetone-Source-Hash` import provenance (ADR-0021). MIT/Apache-2.0, confined
+# to acetone-cli.
+sha2 = "0.10"

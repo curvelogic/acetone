@@ -29,12 +29,17 @@ pub mod conflicts;
 pub mod diff;
 pub mod error;
 pub mod fsck;
+pub mod import;
 pub mod lock;
 pub mod merge;
 pub mod repo;
 
 pub use error::GraphError;
 pub use fsck::{Finding, FindingKind, FsckReport, MapId, Origin, Severity, check as fsck};
+pub use import::{
+    EndpointRef, ImportError, ImportOptions, ImportOutcome, ImportRecord, Provenance,
+    SourceExtractor, run as import,
+};
 pub use lock::WriteLock;
 pub use repo::{
     DEFAULT_BRANCH, DEFAULT_WORKSPACE, InitOptions, LogEntry, Repository, Snapshot, Transaction,
