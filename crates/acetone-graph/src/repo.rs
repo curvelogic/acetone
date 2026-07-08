@@ -771,8 +771,28 @@ impl Repository {
     /// every object's bytes and address exactly. Takes the single-writer lock
     /// so a concurrent write's fresh loose object cannot be pruned mid-run.
     pub fn gc(&self) -> Result<ConsolidateStats, GraphError> {
+        // Consolidation's reachability walk (`references().all()`) does not see
+        // *other* linked worktrees' private refs (`refs/worktree/*`, ADR-0014),
+        // so pruning could destroy their uncommitted workspace or in-progress
+        // merge. Refuse when any linked worktree exists until gc is made
+        // worktree-aware (walk every worktree's private refs); the single-
+        // worktree case — the common one — is safe.
+        if self.has_linked_worktrees()? {
+            return Err(GraphError::GcWithLinkedWorktrees);
+        }
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         Ok(self.store.consolidate(ConsolidateOptions::default())?)
+    }
+
+    /// Whether the repository has any linked worktree — git records one
+    /// directory per linked worktree under `<common>/worktrees/`.
+    fn has_linked_worktrees(&self) -> Result<bool, GraphError> {
+        let dir = self.store.common_dir().join("worktrees");
+        match std::fs::read_dir(&dir) {
+            Ok(mut entries) => Ok(entries.next().is_some()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(GraphError::LockIo { path: dir, source }),
+        }
     }
 
     /// Resolve a refspec — branch short name, full ref name, or hex
@@ -1087,8 +1107,11 @@ impl<'r> Transaction<'r> {
         // chunks against their predecessors (ADR-0011). The root is identical to
         // a plain `apply_batch`; losing hints only makes gc store more whole.
         let (new_root, hints) = acetone_prolly::apply_batch_recording(store, &root, ops)?;
+        // Best-effort: the hints are a local gc optimisation, so a failed write
+        // to the sidecar must never fail an otherwise-valid commit — losing
+        // them only makes a later gc store more objects whole.
         if !hints.is_empty() {
-            store.record_base_hints(&hints)?;
+            let _ = store.record_base_hints(&hints);
         }
         Ok(MapRoot::from_root(&new_root))
     }

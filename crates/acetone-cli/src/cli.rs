@@ -226,9 +226,9 @@ pub enum Command {
     Shell,
     /// Verify repository integrity: manifest decode, chunk reachability
     /// and prolly-tree structure for every version reachable from
-    /// workspaces, branches and tags; edge-map symmetry, index consistency
-    /// and history-independence spot-checks as advisories. Exits non-zero
-    /// when any error-severity finding exists.
+    /// workspaces, branches and tags; edge-map symmetry and index consistency
+    /// as advisories, and a history-independence spot-check (a non-canonical
+    /// map is an error). Exits non-zero when any error-severity finding exists.
     Fsck,
     /// Consolidate the object store into a self-contained packfile (spec §3.1,
     /// ADR-0011): delta rewritten chunks against their predecessors and prune

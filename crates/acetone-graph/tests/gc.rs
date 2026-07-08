@@ -96,3 +96,76 @@ fn gc_reclaims_space_after_churn() {
     let snapshot = repo.workspace_snapshot().expect("snap");
     assert_eq!(snapshot.nodes().expect("nodes").len(), 500);
 }
+
+#[test]
+fn gc_preserves_uncommitted_workspace_state() {
+    // The highest-stakes gc safety property: consolidation must treat the
+    // workspace (uncommitted, staged-and-saved) state as reachable and never
+    // prune the objects only it references.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.commit("schema", &[], None).expect("commit");
+    }
+    // Stage a body of nodes and SAVE without committing — this lives only in
+    // the workspace, not on any branch.
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        for i in 0..400i64 {
+            let key = NodeKey::new("N", vec![Value::Int(i)]).expect("k");
+            tx.put_node(
+                &key,
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+            )
+            .expect("n");
+        }
+        tx.save().expect("save");
+    }
+    assert!(repo.is_dirty().expect("dirty"), "workspace should be dirty");
+
+    // Consolidate + prune, then confirm the uncommitted nodes survive intact.
+    repo.gc().expect("gc");
+    let report = acetone_graph::fsck(&repo).expect("fsck");
+    assert!(
+        !report.has_errors(),
+        "gc pruned live workspace objects: {:?}",
+        report.findings
+    );
+    let snapshot = repo.workspace_snapshot().expect("snap");
+    assert_eq!(
+        snapshot.nodes().expect("nodes").len(),
+        400,
+        "uncommitted workspace nodes were lost by gc"
+    );
+}
+
+#[test]
+fn gc_refuses_when_linked_worktrees_exist() {
+    // gc cannot see another worktree's private refs, so it must refuse rather
+    // than risk pruning their uncommitted state (ADR-0014).
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.commit("schema", &[], None).expect("commit");
+    }
+    // Simulate a linked worktree the way git records one.
+    let worktrees = repo.store().common_dir().join("worktrees").join("wt-1");
+    std::fs::create_dir_all(&worktrees).expect("mkdir worktrees");
+
+    match repo.gc() {
+        Err(acetone_graph::GraphError::GcWithLinkedWorktrees) => {}
+        other => panic!("expected refusal with linked worktrees, got {other:?}"),
+    }
+}
