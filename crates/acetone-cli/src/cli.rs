@@ -226,9 +226,15 @@ pub enum Command {
     Shell,
     /// Verify repository integrity: manifest decode, chunk reachability
     /// and prolly-tree structure for every version reachable from
-    /// workspaces, branches and tags; edge-map symmetry as an advisory.
-    /// Exits non-zero when any error-severity finding exists.
+    /// workspaces, branches and tags; edge-map symmetry and index consistency
+    /// as advisories, and a history-independence spot-check (a non-canonical
+    /// map is an error). Exits non-zero when any error-severity finding exists.
     Fsck,
+    /// Consolidate the object store into a self-contained packfile (spec §3.1,
+    /// ADR-0011): delta rewritten chunks against their predecessors and prune
+    /// superseded loose objects and packs. Representation-only — preserves
+    /// every object exactly. Run periodically after churn to reclaim space.
+    Gc,
     /// Import a source file into the graph, recording provenance trailers
     /// (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op
     /// when the source is unchanged (spec §7). Node mode (`--label`) maps each

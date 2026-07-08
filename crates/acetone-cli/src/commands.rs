@@ -84,6 +84,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         }
         Command::Shell => crate::query::shell(repo_path),
         Command::Fsck => fsck(repo_path),
+        Command::Gc => gc(repo_path),
         Command::Import {
             format,
             source,
@@ -497,6 +498,22 @@ fn reindex(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
     repo.reindex().context("reindexing")?;
     outln!("reindexed");
+    Ok(())
+}
+
+fn gc(repo_path: &Path) -> Result<()> {
+    let repo = open(repo_path)?;
+    let stats = repo.gc().context("consolidating the object store")?;
+    outln!(
+        "gc: packed {} object(s) ({} delta, {} whole) into {} bytes; \
+         pruned {} loose object(s), {} superseded pack(s)",
+        stats.objects,
+        stats.deltas,
+        stats.whole,
+        stats.pack_bytes,
+        stats.pruned_loose,
+        stats.pruned_packs,
+    );
     Ok(())
 }
 

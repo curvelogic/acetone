@@ -145,6 +145,15 @@ pub enum GraphError {
     /// a canonical node/edge record (spec §7, ADR-0021).
     #[error(transparent)]
     Import(#[from] crate::import::ImportError),
+    /// `gc` was asked to run while linked worktrees exist. Consolidation's
+    /// reachability walk cannot see another worktree's private refs
+    /// (`refs/worktree/*`, ADR-0014), so pruning could destroy their
+    /// uncommitted or mid-merge state; it refuses until made worktree-aware.
+    #[error(
+        "gc is not safe while linked worktrees exist (it could prune their \
+         uncommitted work); run it with a single worktree"
+    )]
+    GcWithLinkedWorktrees,
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
     #[error("lock file I/O at {path}: {source}")]
