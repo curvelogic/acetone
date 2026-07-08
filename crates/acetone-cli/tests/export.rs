@@ -42,6 +42,22 @@ fn declare_schema(repo: &Path) {
         "declare Software",
     );
     ok(acetone(repo, &["declare-rel-type", "RUNS"]), "declare RUNS");
+    // A declared index, so the round-trip also proves the `indexes` map is
+    // rebuilt to an identical root on reimport (export omits it — Invariant #5).
+    ok(
+        acetone(
+            repo,
+            &[
+                "declare-index",
+                "host_os",
+                "--label",
+                "Host",
+                "--property",
+                "os",
+            ],
+        ),
+        "declare index",
+    );
     ok(acetone(repo, &["commit", "-m", "schema"]), "commit schema");
 }
 
@@ -164,6 +180,8 @@ fn assert_same_roots(a: &Path, b: &Path) {
     assert_eq!(ma.edges_fwd, mb.edges_fwd, "edges_fwd roots differ");
     assert_eq!(ma.edges_rev, mb.edges_rev, "edges_rev roots differ");
     assert_eq!(ma.schema, mb.schema, "schema roots differ");
+    // The derived index map, rebuilt on import, must also match (Invariant #5).
+    assert_eq!(ma.indexes, mb.indexes, "index map roots differ");
 }
 
 fn round_trip(ext: &str) {

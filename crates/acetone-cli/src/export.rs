@@ -1,12 +1,30 @@
 //! The `export` subcommand: dump a graph version as per-label node tables and
 //! per-type edge tables in CSV or JSON/NDJSON (spec §7, §9 — the seed of the
-//! relational projection). The inverse of `import`: export → import into a
-//! fresh repo reproduces identical map roots.
+//! relational projection). The inverse of `import`.
 //!
 //! Thin client: pure output formatting over a read snapshot, like
 //! `query --format`. Node key properties are re-exposed under their declared
 //! names (the record stores only non-key properties, spec §2/§3), so a node's
-//! full identity survives the round-trip.
+//! full identity survives.
+//!
+//! **Round-trip fidelity.** `json`/`ndjson` are the faithful formats: they
+//! preserve value types and distinguish absent from present properties, so
+//! export → import into a fresh repo with the same schema reproduces identical
+//! map roots (Invariant #1) for every value type the system can store —
+//! *except* non-finite floats (NaN/±Inf are not JSON-representable and export
+//! as `null`; rare, and flagged as a limitation). `csv` is a **lossy**
+//! relational/spreadsheet export: cells are untyped (so numeric/bool values
+//! reimport as strings unless the target schema declares their types — which
+//! the CLI cannot do yet), and an empty cell cannot distinguish an absent
+//! property from a null or empty-string one. CSV therefore round-trips exactly
+//! only for a label whose nodes all carry the same, all-string, non-null
+//! property set (and edges with uniform discriminators). Use `json`/`ndjson`
+//! when a faithful round-trip matters.
+//!
+//! Whole-graph export is not yet self-describing: reimport needs the caller to
+//! supply each relationship type's endpoint labels (`--from`/`--to`) and
+//! discriminator field. A type spanning more than one endpoint label pair is
+//! rejected rather than silently mis-exported (see `edge_table`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -141,13 +159,17 @@ fn node_table(
 
 /// Build the edge table for one relationship type. v0.1 supports single-column
 /// endpoint keys: columns `src`, `dst`, an optional `disc`, then edge
-/// properties (labels are supplied at import via `--from`/`--to`).
+/// properties (labels are supplied at import via `--from`/`--to`). Because the
+/// table drops endpoint labels — import supplies one `--from`/`--to` pair for
+/// the whole table — a type must connect a single `(srcLabel, dstLabel)` pair,
+/// or the flat table cannot round-trip; that is rejected loudly here.
 fn edge_table(
     edges: &[(EdgeKey, acetone_model::records::EdgeRecord)],
     rtype: &str,
 ) -> Result<Table> {
     let mut non_key: BTreeSet<String> = BTreeSet::new();
     let mut has_disc = false;
+    let mut endpoints: Option<(String, String)> = None;
     let mut rows = Vec::new();
     for (key, record) in edges.iter().filter(|(k, _)| k.rtype() == rtype) {
         if key.src().key().len() != 1 || key.dst().key().len() != 1 {
@@ -155,6 +177,22 @@ fn edge_table(
                 "exporting edges of type {rtype:?} needs single-column endpoint keys \
                  (composite-key edge export is not yet supported)"
             );
+        }
+        let pair = (key.src().label().to_owned(), key.dst().label().to_owned());
+        match &endpoints {
+            None => endpoints = Some(pair),
+            Some(seen) if *seen != pair => {
+                bail!(
+                    "edges of type {rtype:?} connect more than one label pair \
+                     ({}→{} and {}→{}); a flat edge table drops endpoint labels and \
+                     cannot round-trip this — export is not yet supported for it",
+                    seen.0,
+                    seen.1,
+                    pair.0,
+                    pair.1
+                );
+            }
+            Some(_) => {}
         }
         let mut row = BTreeMap::new();
         row.insert("src".to_owned(), key.src().key()[0].clone());
@@ -205,17 +243,37 @@ fn export_all(
 
     for label in &labels {
         let table = node_table(nodes, key_names, label);
-        let path = dir.join(format!("{label}.{}", format.ext()));
+        let path = dir.join(safe_filename(label, "", format)?);
         write_table(&table, format, Some(&path))?;
         outln!("exported {} node(s) → {}", table.rows.len(), path.display());
     }
     for rtype in &rtypes {
         let table = edge_table(edges, rtype)?;
-        let path = dir.join(format!("rel-{rtype}.{}", format.ext()));
+        let path = dir.join(safe_filename(rtype, "rel-", format)?);
         write_table(&table, format, Some(&path))?;
         outln!("exported {} edge(s) → {}", table.rows.len(), path.display());
     }
     Ok(())
+}
+
+/// A filesystem-safe file name `<prefix><name>.<ext>` for a schema-declared
+/// label or relationship type. Label/type names are user-controlled, so one
+/// containing a path separator, `..`, a NUL, or a control character could
+/// escape `--out` or corrupt the write; reject it (export that table on its
+/// own with an explicit `--out <file>` instead).
+fn safe_filename(name: &str, prefix: &str, format: Format) -> Result<String> {
+    let unsafe_component = name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\'])
+        || name.chars().any(|c| c.is_control());
+    if unsafe_component {
+        bail!(
+            "cannot derive a safe file name for {name:?}; export it individually \
+             with --label/--edge and --out <file>"
+        );
+    }
+    Ok(format!("{prefix}{name}.{}", format.ext()))
 }
 
 /// Serialise a table and write it to `out` (a file) or stdout.
@@ -391,6 +449,48 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines[0], "name,note");
         assert_eq!(lines[1], "\"a,b\",\"has \"\"quote\"\"\"");
+    }
+
+    #[test]
+    fn safe_filename_rejects_path_traversal_and_absolute_names() {
+        assert!(safe_filename("Host", "", Format::Csv).is_ok());
+        // Absolute path (Path::join would replace the base) and traversal.
+        assert!(safe_filename("/etc/passwd", "", Format::Csv).is_err());
+        assert!(safe_filename("../../etc/x", "", Format::Csv).is_err());
+        assert!(safe_filename("a/b", "", Format::Csv).is_err());
+        assert!(safe_filename("a\\b", "", Format::Csv).is_err());
+        assert!(safe_filename("..", "", Format::Csv).is_err());
+        assert!(safe_filename("", "", Format::Csv).is_err());
+        assert!(safe_filename("a\nb", "", Format::Csv).is_err());
+    }
+
+    #[test]
+    fn edge_table_rejects_heterogeneous_endpoint_labels() {
+        use acetone_model::records::EdgeRecord;
+        let edge = |src_label: &str, dst_label: &str| {
+            let src = NodeKey::new(src_label, vec![Value::String("s".into())]).unwrap();
+            let dst = NodeKey::new(dst_label, vec![Value::String("d".into())]).unwrap();
+            (
+                EdgeKey::new(src, "RUNS", dst, Value::Null).unwrap(),
+                EdgeRecord::new(BTreeMap::new()),
+            )
+        };
+        // Uniform label pair: fine.
+        assert!(
+            edge_table(
+                &[edge("Host", "Software"), edge("Host", "Software")],
+                "RUNS"
+            )
+            .is_ok()
+        );
+        // A second label pair for the same type: rejected loudly.
+        assert!(
+            edge_table(
+                &[edge("Host", "Software"), edge("Container", "Software")],
+                "RUNS"
+            )
+            .is_err()
+        );
     }
 
     #[test]
