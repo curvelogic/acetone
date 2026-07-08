@@ -21,10 +21,16 @@ The workbench read path materialises a whole graph version into an in-memory
 binary loads once and times queries). Consistent with that design, the adapter
 builds, at construction, a `by_index: name → (encoded value → node indices)`
 map for each **declared** index — exactly as it already builds `by_label`. The
-map key is the value-only memcomparable encoding (`encode_key([value])`), a
-subset of the stored index's four-part key, chosen so a seek selects the same
-node set the stored index would (null- and NaN-blind). `IndexSeek` is then an
-`O(matches)` hash lookup versus the `O(label population)` scan + filter.
+map key is the value-only memcomparable encoding (`encode_key([value])`) of the
+node's **runtime** property value — the same representation `node_satisfies`
+filters against and a query literal binds to — so the seek and the filter agree
+on what a property is. (This is deliberately the query-space representation, not
+the stored `idx/<name>` map's raw-typed key: the runtime renders `Bytes` and
+temporal values to strings, so keying the raw bytes would let a string-pinned
+seek silently miss them.) The two maps are independent — the stored one serves
+persistence/`fsck`/`reindex`, this one serves query seeks. `IndexSeek` is then
+an `O(matches)` hash lookup versus the `O(label population)` scan + filter,
+null- and NaN-blind.
 
 Because openCypher numeric equality is cross-type (`3 = 3.0`) while the encoding
 is type-tagged, a numeric seek probes **both** the `Int` and `Float` buckets,

@@ -329,6 +329,55 @@ fn numeric_index_seek_matches_across_int_and_float_like_a_scan() {
 }
 
 #[test]
+fn bytes_property_seek_matches_a_scan_end_to_end() {
+    // A stored Bytes property is rendered to a hex string in the runtime node
+    // value, so a string-pinned query matches it. The index must agree — key
+    // over the runtime representation, not the raw Bytes — or the seek would
+    // silently drop the node (a subset).
+    let schema_with = vec![
+        SchemaEntry::Label {
+            name: "B".into(),
+            def: LabelDef::new(
+                vec!["id".into()],
+                BTreeMap::from([("p".to_owned(), PropertyType::Bytes)]),
+                [],
+                [],
+            )
+            .expect("label"),
+        },
+        SchemaEntry::Index {
+            name: "b_p".into(),
+            def: IndexDef::new("B", "p").expect("idx"),
+        },
+    ];
+    let schema_without = vec![schema_with[0].clone()];
+    let edges: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
+    let recs = vec![(
+        NodeKey::new("B", vec![ModelValue::String("a".into())]).expect("k"),
+        NodeRecord::new(
+            [],
+            BTreeMap::from([(
+                "p".to_owned(),
+                ModelValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]),
+            )]),
+        ),
+    )];
+    let with = GraphSnapshot::from_records_with_schema(&recs, &edges, &schema_with);
+    let without = GraphSnapshot::from_records_with_schema(&recs, &edges, &schema_without);
+    let q = "MATCH (b:B {p: 'deadbeef'}) RETURN b.id";
+    assert_eq!(
+        count(q, &schema_with, &with),
+        count(q, &schema_without, &without),
+        "Bytes-property seek disagrees with a scan"
+    );
+    assert_eq!(
+        count(q, &schema_without, &without),
+        1,
+        "scan baseline wrong"
+    );
+}
+
+#[test]
 fn list_valued_seek_falls_back_to_a_scan() {
     // A list pin cannot be served by exact-byte buckets under element-wise
     // Int/Float equality, so nodes_by_index returns None → the executor scans.

@@ -118,14 +118,17 @@ impl GraphSnapshot {
             in_edges.entry(rel.end.clone()).or_default().push(index);
         }
 
-        // Declared-index value maps (IndexSeek), keyed by the same
-        // memcomparable value encoding the stored `idx/<name>` map uses, so a
-        // seek selects exactly the stored index's node set (null/NaN-blind).
+        // Declared-index value maps (IndexSeek). Built from the *runtime*
+        // node values — the same representation `node_satisfies` filters
+        // against — so the seek and the filter agree on what a property is.
+        // (This matters for stored `Bytes`/temporal values, which the runtime
+        // renders to a string; keying the raw typed value here would let a
+        // string-pinned seek miss them.) null/NaN-blind.
         let mut by_index: HashMap<String, HashMap<Vec<u8>, Vec<usize>>> = HashMap::new();
         for (name, label, property) in index_defs {
             let map = by_index.entry(name.clone()).or_default();
-            for (index, (key, record)) in nodes.iter().enumerate() {
-                if let Some(bytes) = index_value_bytes(key, record, label, property, key_names) {
+            for (index, node) in node_values.iter().enumerate() {
+                if let Some(bytes) = index_value_bytes(node, label, property) {
                     map.entry(bytes).or_default().push(index);
                 }
             }
@@ -433,29 +436,16 @@ fn index_lookup_keys(value: &Value) -> Vec<Vec<u8>> {
     }
 }
 
-/// The memcomparable encoding of a node's indexed property value, mirroring
-/// the stored `idx/<name>` map's selection (bears the label as primary or
-/// secondary; value from the node key when the property is a primary-key
-/// property, else the record; null- and NaN-blind).
-fn index_value_bytes(
-    key: &NodeKey,
-    record: &NodeRecord,
-    label: &str,
-    property: &str,
-    key_names: &HashMap<String, Vec<String>>,
-) -> Option<Vec<u8>> {
-    let bears = key.label() == label || record.secondary_labels().iter().any(|l| l == label);
-    if !bears {
+/// The memcomparable encoding of a runtime node's indexed property value, or
+/// `None` when the node does not contribute an entry (does not bear the label,
+/// property absent, or a null/NaN/non-scalar value). Uses the *runtime* value
+/// (key properties already re-exposed, `Bytes`/temporal already rendered), so
+/// it matches exactly what `node_satisfies` compares and what a seek probes.
+fn index_value_bytes(node: &NodeValue, label: &str, property: &str) -> Option<Vec<u8>> {
+    if !node.labels.iter().any(|l| l == label) {
         return None;
     }
-    let value = match key_names
-        .get(key.label())
-        .and_then(|names| names.iter().position(|k| k == property))
-    {
-        Some(pos) => key.key().get(pos)?,
-        None => record.properties().get(property)?,
-    };
-    encode_model_value(value)
+    encode_index_value(node.properties.get(property)?)
 }
 
 /// Encode a runtime [`Value`] as an index key value, or `None` when it is not
