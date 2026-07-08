@@ -23,6 +23,15 @@ pub trait GraphSource {
             .collect()
     }
 
+    /// Nodes an equality on the declared index `index_name` selects for
+    /// `value` (`IndexSeek`, spec §5.3). `None` means this source has no such
+    /// index, so the caller falls back to a label scan; `Some` is a candidate
+    /// superset the caller still filters. Indexes are null/NaN-blind, so a
+    /// null or NaN `value` selects nothing. The default has no indexes.
+    fn nodes_by_index(&self, _index_name: &str, _value: &Value) -> Option<Vec<NodeValue>> {
+        None
+    }
+
     /// Relationships incident to `node` in `direction`, filtered to
     /// `types` when non-empty. Each result is (relationship, neighbour).
     fn expand(

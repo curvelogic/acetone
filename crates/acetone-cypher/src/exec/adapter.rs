@@ -33,6 +33,11 @@ pub struct GraphSnapshot {
     /// Label → node indices (LabelScan; the empty-label "all" case reads
     /// `nodes` directly).
     by_label: HashMap<String, Vec<usize>>,
+    /// Declared index name → encoded property value → node indices
+    /// (IndexSeek). Built for the schema's declared indexes, keyed by the
+    /// memcomparable value encoding so lookups match the stored `idx/<name>`
+    /// map's selection exactly (null/NaN-blind).
+    by_index: HashMap<String, HashMap<Vec<u8>, Vec<usize>>>,
     /// Node id → indices into `rels` of edges leaving it (ExpandOut).
     out_edges: HashMap<EntityId, Vec<usize>>,
     /// Node id → indices into `rels` of edges entering it (ExpandIn).
@@ -49,7 +54,7 @@ impl GraphSnapshot {
     /// stored graph with a declared schema, use
     /// [`Self::from_records_with_schema`] so key values become queryable.
     pub fn from_records(nodes: &[(NodeKey, NodeRecord)], edges: &[(EdgeKey, EdgeRecord)]) -> Self {
-        Self::build(nodes, edges, &HashMap::new())
+        Self::build(nodes, edges, &HashMap::new(), &[])
     }
 
     /// Build with the schema's key-property names, so a node's key values
@@ -63,18 +68,30 @@ impl GraphSnapshot {
         schema: &[SchemaEntry],
     ) -> Self {
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
+        let mut index_defs: Vec<(String, String, String)> = Vec::new();
         for entry in schema {
-            if let SchemaEntry::Label { name, def } = entry {
-                key_names.insert(name.clone(), def.key().to_vec());
+            match entry {
+                SchemaEntry::Label { name, def } => {
+                    key_names.insert(name.clone(), def.key().to_vec());
+                }
+                SchemaEntry::Index { name, def } => {
+                    index_defs.push((
+                        name.clone(),
+                        def.label().to_owned(),
+                        def.property().to_owned(),
+                    ));
+                }
+                SchemaEntry::RelType { .. } => {}
             }
         }
-        Self::build(nodes, edges, &key_names)
+        Self::build(nodes, edges, &key_names, &index_defs)
     }
 
     fn build(
         nodes: &[(NodeKey, NodeRecord)],
         edges: &[(EdgeKey, EdgeRecord)],
         key_names: &HashMap<String, Vec<String>>,
+        index_defs: &[(String, String, String)],
     ) -> Self {
         let node_values: Vec<NodeValue> = nodes
             .iter()
@@ -101,11 +118,25 @@ impl GraphSnapshot {
             in_edges.entry(rel.end.clone()).or_default().push(index);
         }
 
+        // Declared-index value maps (IndexSeek), keyed by the same
+        // memcomparable value encoding the stored `idx/<name>` map uses, so a
+        // seek selects exactly the stored index's node set (null/NaN-blind).
+        let mut by_index: HashMap<String, HashMap<Vec<u8>, Vec<usize>>> = HashMap::new();
+        for (name, label, property) in index_defs {
+            let map = by_index.entry(name.clone()).or_default();
+            for (index, (key, record)) in nodes.iter().enumerate() {
+                if let Some(bytes) = index_value_bytes(key, record, label, property, key_names) {
+                    map.entry(bytes).or_default().push(index);
+                }
+            }
+        }
+
         GraphSnapshot {
             nodes: node_values,
             rels: rel_values,
             by_id,
             by_label,
+            by_index,
             out_edges,
             in_edges,
         }
@@ -327,6 +358,80 @@ impl GraphSource for GraphSnapshot {
     fn node(&self, id: &EntityId) -> Option<NodeValue> {
         self.by_id.get(id).map(|&i| self.nodes[i].clone())
     }
+
+    fn nodes_by_index(&self, index_name: &str, value: &Value) -> Option<Vec<NodeValue>> {
+        // Unknown index → the caller falls back to a label scan.
+        let map = self.by_index.get(index_name)?;
+        // A value that cannot form an index key (null, NaN, or a non-storable
+        // runtime value) selects nothing — the index is null/NaN-blind.
+        let Some(bytes) = encode_index_value(value) else {
+            return Some(Vec::new());
+        };
+        Some(match map.get(&bytes) {
+            None => Vec::new(),
+            Some(indices) => indices.iter().map(|&i| self.nodes[i].clone()).collect(),
+        })
+    }
+}
+
+/// The memcomparable encoding of a node's indexed property value, mirroring
+/// the stored `idx/<name>` map's selection (bears the label as primary or
+/// secondary; value from the node key when the property is a primary-key
+/// property, else the record; null- and NaN-blind).
+fn index_value_bytes(
+    key: &NodeKey,
+    record: &NodeRecord,
+    label: &str,
+    property: &str,
+    key_names: &HashMap<String, Vec<String>>,
+) -> Option<Vec<u8>> {
+    let bears = key.label() == label || record.secondary_labels().iter().any(|l| l == label);
+    if !bears {
+        return None;
+    }
+    let value = match key_names
+        .get(key.label())
+        .and_then(|names| names.iter().position(|k| k == property))
+    {
+        Some(pos) => key.key().get(pos)?,
+        None => record.properties().get(property)?,
+    };
+    encode_model_value(value)
+}
+
+/// Encode a runtime [`Value`] as an index key value, or `None` when it is not
+/// index-eligible (null, NaN, or a non-storable kind — map/node/rel/path).
+fn encode_index_value(value: &Value) -> Option<Vec<u8>> {
+    encode_model_value(&model_value_of(value)?)
+}
+
+/// Encode a stored [`ModelValue`] as an index key value, or `None` when it is
+/// null- or NaN-blind (both are excluded from the index).
+fn encode_model_value(value: &ModelValue) -> Option<Vec<u8>> {
+    if matches!(value, ModelValue::Null) {
+        return None;
+    }
+    // A NaN anywhere makes the value unencodable (ADR-0004) → not indexed.
+    acetone_model::keys::encode_key(std::slice::from_ref(value)).ok()
+}
+
+/// Convert a runtime [`Value`] to a stored [`ModelValue`], or `None` for a
+/// kind that cannot be an index value (map/node/relationship/path).
+fn model_value_of(value: &Value) -> Option<ModelValue> {
+    Some(match value {
+        Value::Null => ModelValue::Null,
+        Value::Bool(b) => ModelValue::Bool(*b),
+        Value::Int(n) => ModelValue::Int(*n),
+        Value::Float(x) => ModelValue::Float(*x),
+        Value::String(s) => ModelValue::String(s.clone()),
+        Value::List(items) => ModelValue::List(
+            items
+                .iter()
+                .map(model_value_of)
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        Value::Map(_) | Value::Node(_) | Value::Relationship(_) | Value::Path(_) => return None,
+    })
 }
 
 #[cfg(test)]

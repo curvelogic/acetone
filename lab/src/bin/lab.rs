@@ -68,7 +68,7 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
     let edge_records = snapshot.edges()?;
     let schema = snapshot.schema_entries()?;
     let graph = GraphSnapshot::from_records_with_schema(&node_records, &edge_records, &schema);
-    let catalogue = catalogue_from_schema(schema);
+    let catalogue = catalogue_from_schema(schema.clone());
     println!(
         "Loaded {} nodes / {} edges into the query engine in {:.2}s.\n",
         graph.node_count(),
@@ -91,6 +91,68 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
             result.rows.len(),
             elapsed.as_secs_f64() * 1000.0
         );
+    }
+
+    index_vs_scan_demo(&graph, &node_records, &edge_records, &schema, &params)?;
+    Ok(())
+}
+
+/// Demonstrate IndexSeek acceleration (acetone-6g5.3.2): the same pinned
+/// equality on the indexed `Host.os`, served by an IndexSeek (the declared
+/// `host_os` index) versus a LabelScan+filter (the identical graph with the
+/// index removed from the schema). Reports the best of several runs each.
+fn index_vs_scan_demo(
+    indexed: &GraphSnapshot,
+    node_records: &[(
+        acetone_model::graph_keys::NodeKey,
+        acetone_model::records::NodeRecord,
+    )],
+    edge_records: &[(
+        acetone_model::graph_keys::EdgeKey,
+        acetone_model::records::EdgeRecord,
+    )],
+    schema: &[acetone_model::schema::SchemaEntry],
+    params: &BTreeMap<String, acetone_cypher::exec::Value>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use acetone_model::schema::SchemaEntry;
+
+    let cypher = "MATCH (h:Host {os: 'debian'}) RETURN count(*) AS n";
+    let parsed = acetone_cypher::parse(cypher)?;
+
+    // Indexed: bind against the full schema (emits an IndexSeek hint) and run
+    // over the loaded snapshot (which has the value index).
+    let cat_indexed = catalogue_from_schema(schema.to_vec());
+    let bound_indexed = bind(cypher, &parsed, &cat_indexed, BindMode::Strict)?;
+
+    // Scan: the same graph and query with the index removed from the schema,
+    // so the binder emits no hint and the adapter builds no value index.
+    let schema_no_index: Vec<SchemaEntry> = schema
+        .iter()
+        .filter(|e| !matches!(e, SchemaEntry::Index { .. }))
+        .cloned()
+        .collect();
+    let scan_graph =
+        GraphSnapshot::from_records_with_schema(node_records, edge_records, &schema_no_index);
+    let cat_scan = catalogue_from_schema(schema_no_index);
+    let bound_scan = bind(cypher, &parsed, &cat_scan, BindMode::Strict)?;
+
+    let best = |bound: &_, graph: &GraphSnapshot| -> Result<f64, Box<dyn std::error::Error>> {
+        let mut best = f64::INFINITY;
+        for _ in 0..7 {
+            let start = Instant::now();
+            let _ = execute(bound, graph, params)?;
+            best = best.min(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        Ok(best)
+    };
+
+    let seek_ms = best(&bound_indexed, indexed)?;
+    let scan_ms = best(&bound_scan, &scan_graph)?;
+    println!("\nIndex acceleration ({cypher}):");
+    println!("  IndexSeek (host_os):      {seek_ms:>8.3} ms");
+    println!("  LabelScan + filter:       {scan_ms:>8.3} ms");
+    if seek_ms > 0.0 {
+        println!("  speedup:                  {:>8.1}x", scan_ms / seek_ms);
     }
     Ok(())
 }
