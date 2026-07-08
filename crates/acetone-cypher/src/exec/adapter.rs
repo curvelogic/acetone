@@ -369,6 +369,17 @@ impl GraphSource for GraphSnapshot {
         if matches!(value, Value::List(_)) {
             return None;
         }
+        // A float pin that is an integer at or beyond 2^53 has a non-unique
+        // integer preimage — many i64s round to the same f64 — so probing the
+        // single `f as i64` would miss the others and under-select. Below 2^53
+        // every integer is exactly representable, so the preimage is unique and
+        // the Int/Float probe below is exact; at/above it, fall back to a scan.
+        if let Value::Float(f) = value
+            && f.fract() == 0.0
+            && f.abs() >= 9_007_199_254_740_992.0
+        {
+            return None;
+        }
         // The candidate byte keys whose stored values could equal `value` under
         // openCypher equality: for a number that means BOTH the Int and Float
         // encodings (3 = 3.0), since the index stores them under distinct keys.

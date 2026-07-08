@@ -241,6 +241,30 @@ fn numeric_cross_type_query_matches_a_scan_end_to_end() {
         1,
         "scan baseline wrong"
     );
+
+    // f64 precision boundary: a large integer whose float-rounding equals the
+    // pin (2^53+1 rounds to 2^53) must still match via the scan fallback for a
+    // large integral float pin — the seek must not silently under-select.
+    let big_stored = vec![(
+        NodeKey::new("M", vec![ModelValue::String("c".into())]).expect("k"),
+        NodeRecord::new(
+            [],
+            BTreeMap::from([("v".to_owned(), ModelValue::Int(9_007_199_254_740_993))]),
+        ),
+    )];
+    let with3 = GraphSnapshot::from_records_with_schema(&big_stored, &edges, &schema_with);
+    let without3 = GraphSnapshot::from_records_with_schema(&big_stored, &edges, &schema_without);
+    let q3 = "MATCH (m:M {v: 9007199254740992.0}) RETURN m.id";
+    assert_eq!(
+        count(q3, &schema_with, &with3),
+        count(q3, &schema_without, &without3),
+        "seek disagrees with scan at the f64 integer-precision boundary"
+    );
+    assert_eq!(
+        count(q3, &schema_without, &without3),
+        1,
+        "scan baseline wrong"
+    );
 }
 
 #[test]
