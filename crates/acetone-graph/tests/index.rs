@@ -324,6 +324,169 @@ fn fsck_passes_a_maintained_index_and_flags_a_stale_one() {
 }
 
 #[test]
+fn multiple_ops_on_one_key_in_a_transaction_settle_on_the_final_state() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    declare_region_index(&repo);
+
+    // Two puts of the same key in one transaction: the last wins.
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(
+            &node("Host", "x"),
+            &record(&[("region", Value::String("eu".into()))]),
+        )
+        .expect("n");
+        tx.put_node(
+            &node("Host", "x"),
+            &record(&[("region", Value::String("us".into()))]),
+        )
+        .expect("n");
+        tx.commit("double put", &[], None).expect("commit");
+    }
+    assert_eq!(
+        index_contents(&repo, "host_region"),
+        vec![(Value::String("us".into()), "x".into())]
+    );
+
+    // Put-then-delete of the same key in one transaction: no entry.
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(
+            &node("Host", "y"),
+            &record(&[("region", Value::String("ap".into()))]),
+        )
+        .expect("n");
+        tx.delete_node(&node("Host", "y")).expect("del");
+        tx.commit("put then delete", &[], None).expect("commit");
+    }
+    // Only x (us) remains; y never reaches the index.
+    assert_eq!(
+        index_contents(&repo, "host_region"),
+        vec![(Value::String("us".into()), "x".into())]
+    );
+    repo.reindex().expect("reindex");
+    assert_eq!(
+        index_contents(&repo, "host_region"),
+        vec![(Value::String("us".into()), "x".into())]
+    );
+}
+
+#[test]
+fn secondary_label_membership_is_indexed_and_maintained() {
+    // Index on label `Tagged`, worn as a *secondary* label by a `Host` node.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Index {
+            name: "tagged_region".into(),
+            def: IndexDef::new("Tagged", "region").expect("idx"),
+        })
+        .expect("s");
+        tx.commit("index", &[], None).expect("commit");
+    }
+
+    // A Host that also bears the secondary label Tagged is indexed.
+    let tagged = NodeRecord::new(
+        ["Tagged".to_owned()],
+        BTreeMap::from([("region".to_owned(), Value::String("eu".into()))]),
+    );
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("Host", "web1"), &tagged).expect("n");
+        tx.commit("tagged host", &[], None).expect("commit");
+    }
+    assert_eq!(
+        index_contents(&repo, "tagged_region"),
+        vec![(Value::String("eu".into()), "web1".into())]
+    );
+
+    // Dropping the secondary label removes the entry.
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(
+            &node("Host", "web1"),
+            &record(&[("region", Value::String("eu".into()))]),
+        )
+        .expect("n");
+        tx.commit("untag", &[], None).expect("commit");
+    }
+    assert!(index_contents(&repo, "tagged_region").is_empty());
+}
+
+#[test]
+fn fsck_flags_an_index_map_with_no_schema_declaration() {
+    // A `idx/<name>` map present with no declaring schema entry is stale.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("Host", "web1"), &record(&[])).expect("n");
+        tx.commit("node", &[], None).expect("commit");
+    }
+
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let empty = acetone_prolly::empty(store, base.chunk_params).expect("empty");
+    let mut ghost = base.clone();
+    ghost
+        .indexes
+        .insert("ghost".into(), MapRoot::from_root(&empty));
+    let blob = store.put(&ghost.encode()).expect("put");
+    store
+        .write_ref("refs/acetone/workspaces/ghost", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .advisories()
+            .any(|f| f.kind == FindingKind::IndexInconsistency),
+        "expected IndexInconsistency for a schema-less index map: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn fsck_flags_a_declared_index_with_no_map() {
+    // The mirror: a schema-declared index whose map is entirely absent.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    declare_region_index(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(
+            &node("Host", "web1"),
+            &record(&[("region", Value::String("eu".into()))]),
+        )
+        .expect("n");
+        tx.commit("node", &[], None).expect("commit");
+    }
+
+    let store = repo.store();
+    let mut base = repo.workspace_manifest().expect("manifest");
+    base.indexes.remove("host_region"); // schema still declares it
+    let blob = store.put(&base.encode()).expect("put");
+    store
+        .write_ref("refs/acetone/workspaces/nomap", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .advisories()
+            .any(|f| f.kind == FindingKind::IndexInconsistency),
+        "expected IndexInconsistency for a declared index with no map: {:?}",
+        report.findings
+    );
+}
+
+#[test]
 fn key_property_index_sources_value_from_the_node_key() {
     // Indexing a KEY property must read the value from the node key (records
     // exclude key properties, Invariant #3).

@@ -502,6 +502,21 @@ fn check_manifest(
     // structurally sound and when the nodes map is sound — otherwise verify_map
     // has already reported the real corruption.
     if nodes_ok {
+        // A schema-declared index with no `idx/<name>` map at all is missing
+        // entirely (the mirror of a map with no declaration).
+        if let Ok(entries) = Snapshot::new(store, manifest.clone()).schema_entries() {
+            let (index_defs, _) = crate::index::schema_index_info(&entries);
+            for (name, _) in &index_defs {
+                if !manifest.indexes.contains_key(name) {
+                    report.push(
+                        FindingKind::IndexInconsistency,
+                        origin,
+                        Some(MapId::Index(name.clone())),
+                        format!("index {name:?} is declared but has no map; run `acetone reindex`"),
+                    );
+                }
+            }
+        }
         for name in &sound_indexes {
             check_index_consistency(store, origin, &manifest, name, report);
         }

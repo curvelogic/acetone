@@ -13,6 +13,12 @@
 //! absent, null, or an unencodable value (NaN, ADR-0004) contributes no entry.
 //! This loses nothing for the predicates an index serves — openCypher equality
 //! and range comparisons are never true for null or NaN.
+//!
+//! Incremental maintenance only revisits the nodes a transaction touched, so it
+//! assumes a label's declared key tuple is stable across the index's lifetime
+//! (redeclaring a key changes identity, an unsupported mutation). Should it ever
+//! drift, `fsck` recomputes with the current schema and flags the divergence,
+//! and `reindex` repairs it.
 
 use std::collections::BTreeMap;
 
@@ -72,14 +78,25 @@ pub(crate) fn index_entry_key(
         Some(pos) => node_key.key().get(pos).cloned(),
         None => record.properties().get(def.property()).cloned(),
     }?;
-    if matches!(value, Value::Null) {
-        return None; // null-blind
+    // null-blind and NaN-blind: these are the only values intentionally left
+    // out of the index (openCypher equality/range are never true for them, and
+    // NaN is unencodable — ADR-0004).
+    if matches!(value, Value::Null) || matches!(value, Value::Float(f) if f.is_nan()) {
+        return None;
     }
-    // NaN-blind: an unencodable value yields no entry (IndexEntry::encode errs).
-    IndexEntry::new(def.label(), def.property(), value, node_key.clone())
-        .ok()?
-        .encode()
-        .ok()
+    let entry = IndexEntry::new(def.label(), def.property(), value, node_key.clone())
+        .expect("index label and property are non-empty (validated at declaration)");
+    match entry.encode() {
+        Ok(bytes) => Some(bytes),
+        Err(_e) => {
+            // NaN is the only policy-blind unencodable value and is handled
+            // above, so any other encode failure is unexpected — surface it in
+            // debug/test builds rather than silently dropping the node from the
+            // index (which would also fool fsck, since it shares this fn).
+            debug_assert!(false, "unexpected index-key encode failure: {_e}");
+            None
+        }
+    }
 }
 
 /// A node record read from a map root by its encoded key.
