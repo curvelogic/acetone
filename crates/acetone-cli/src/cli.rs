@@ -115,6 +115,25 @@ pub enum Command {
     /// when the indexes are already consistent; repairs any divergence `fsck`
     /// reports.
     Reindex,
+    /// Export a graph version as per-label node tables and per-type edge
+    /// tables (spec §7, §9). The inverse of `import`: exporting then importing
+    /// into a fresh repo with the same schema reproduces identical map roots.
+    Export {
+        /// Output format.
+        #[arg(value_parser = ["csv", "json", "ndjson"])]
+        format: String,
+        /// Export only this label's nodes.
+        #[arg(long, conflicts_with = "edge")]
+        label: Option<String>,
+        /// Export only this relationship type's edges.
+        #[arg(long)]
+        edge: Option<String>,
+        /// Output file (single table) or, with neither `--label` nor `--edge`,
+        /// the directory to write one table per label and type into. A single
+        /// table with no `--out` goes to stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Insert or replace a node (plumbing; single-column keys only).
     PutNode {
         /// Primary label.

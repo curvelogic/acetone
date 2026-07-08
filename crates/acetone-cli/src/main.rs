@@ -2,6 +2,7 @@
 
 mod cli;
 mod commands;
+mod export;
 mod import;
 mod output;
 mod query;
