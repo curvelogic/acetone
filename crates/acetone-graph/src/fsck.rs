@@ -19,6 +19,13 @@
 //!    by construction by the Phase 1 write path but not yet *enforced*
 //!    against hand-built or foreign repositories, so a violation is a
 //!    warning, not a hard failure (ADR-0012).
+//! 4. **Index consistency** (advisory): every declared `idx/<name>` map is
+//!    exactly what `nodes` implies (Invariant #5), and no declared index is
+//!    missing or stale. Repairable with `acetone reindex`.
+//! 5. **History-independence spot-check** (error): the primary content maps
+//!    are the canonical prolly tree for their contents — rebuilding a map from
+//!    what it holds reproduces its root (Invariant #1). A mismatch is damage
+//!    or a foreign, non-canonical writer.
 //!
 //! The result is structured data, not a boolean: a healthy repository
 //! yields an empty [`FsckReport`], and every finding names the ref/commit,
@@ -37,7 +44,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use acetone_model::manifest::{Manifest, MapRoot};
-use acetone_prolly::{ChunkFaultKind, verify_reachable};
+use acetone_prolly::{BatchOp, ChunkFaultKind, apply_batch, empty, scan, verify_reachable};
 use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore, StoreError};
 
 use crate::error::GraphError;
@@ -77,6 +84,10 @@ pub enum FindingKind {
     /// Advisory: a declared index map disagrees with what `nodes` implies (a
     /// derived-map divergence, Invariant #5). Repairable with `acetone reindex`.
     IndexInconsistency,
+    /// A map's stored prolly tree is not the canonical tree for its contents:
+    /// rebuilding the map from what it holds yields a different root
+    /// (Invariant #1 — history independence). Real damage or a foreign writer.
+    HistoryIndependence,
     /// Advisory: a reachable version was found but deliberately not verified
     /// in this phase (e.g. an annotated tag, whose tag-object peeling is
     /// deferred — see ADR-0012). The sin fsck must avoid is silence, so the
@@ -520,6 +531,70 @@ fn check_manifest(
         for name in &sound_indexes {
             check_index_consistency(store, origin, &manifest, name, report);
         }
+    }
+
+    // History-independence spot-checks (spec §7, Invariant #1): the primary
+    // content maps must be the canonical prolly tree for their contents.
+    // Gated on structural soundness — a corrupt tree is reported above.
+    let params = manifest.chunk_params;
+    if nodes_ok {
+        check_canonical(store, params, &manifest.nodes, MapId::Nodes, origin, report);
+    }
+    if fwd_ok {
+        check_canonical(
+            store,
+            params,
+            &manifest.edges_fwd,
+            MapId::EdgesFwd,
+            origin,
+            report,
+        );
+    }
+}
+
+/// Verify a map's stored root is the canonical prolly tree for its contents:
+/// scan what it holds, rebuild it from scratch, and compare roots. A mismatch
+/// is a history-independence violation (Invariant #1) — the tree was not built
+/// canonically (damage or a foreign writer). Returns silently on a read error
+/// (verify_map has already reported the structural fault).
+fn check_canonical(
+    store: &GitStore,
+    params: acetone_prolly::ChunkParams,
+    map_root: &MapRoot,
+    map_id: MapId,
+    origin: &Origin,
+    report: &mut FsckReport,
+) {
+    let Ok(root) = map_root.to_root(params) else {
+        return;
+    };
+    let mut ops = Vec::new();
+    match scan(store, &root, ..) {
+        Ok(items) => {
+            for item in items {
+                match item {
+                    Ok((key, value)) => ops.push(BatchOp::Put(key.to_vec(), value.to_vec())),
+                    Err(_) => return,
+                }
+            }
+        }
+        Err(_) => return,
+    }
+    let Ok(empty_root) = empty(store, params) else {
+        return;
+    };
+    let Ok(rebuilt) = apply_batch(store, &empty_root, ops) else {
+        return;
+    };
+    if rebuilt.hash() != root.hash() {
+        report.push(
+            FindingKind::HistoryIndependence,
+            origin,
+            Some(map_id),
+            "map root is not the canonical prolly tree for its contents \
+             (history-independence violation, Invariant #1)"
+                .to_owned(),
+        );
     }
 }
 

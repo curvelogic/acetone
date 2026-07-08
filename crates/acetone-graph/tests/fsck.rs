@@ -13,7 +13,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::MapRoot;
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_prolly::{BatchOp, Hash, apply_batch, reachable_chunks};
+use acetone_prolly::{BatchOp, ChunkParams, Hash, apply_batch, empty, reachable_chunks};
 use acetone_store::{ChunkStore, CommitStore, NewCommit, RefStore};
 
 fn init_repo(dir: &Path) -> Repository {
@@ -558,4 +558,64 @@ fn commit_history_versions_are_verified() {
         "history walk must catch the damaged historical chunk, got {:?}",
         report.findings
     );
+}
+
+#[test]
+fn non_canonical_map_is_a_history_independence_error() {
+    // A `nodes` map whose prolly tree was built with different chunk
+    // parameters than the manifest declares is structurally valid (verify_map
+    // passes) but not the canonical tree for its contents — a history-
+    // independence violation (Invariant #1) the spot-check must catch.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+
+    let ops: Vec<BatchOp> = (0..300i64)
+        .map(|i| {
+            let key = node("N", &format!("{i:08}"));
+            BatchOp::Put(
+                key.encode().expect("encode"),
+                NodeRecord::new([], Default::default())
+                    .encode()
+                    .expect("rec"),
+            )
+        })
+        .collect();
+
+    // A smaller mean chunk size gives different content-defined boundaries.
+    let alt_params = ChunkParams::new(64, 6, 512).expect("params");
+    let alt_root = apply_batch(
+        store,
+        &empty(store, alt_params).expect("empty"),
+        ops.clone(),
+    )
+    .expect("alt tree");
+    let canonical = apply_batch(store, &empty(store, base.chunk_params).expect("empty"), ops)
+        .expect("canonical tree");
+    assert_ne!(
+        alt_root.hash(),
+        canonical.hash(),
+        "the two parameter sets must produce different trees for this test"
+    );
+
+    // Point the manifest's `nodes` at the non-canonical tree, keeping its own
+    // (default) chunk parameters, and expose it as a workspace.
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&alt_root);
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/noncanon", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::HistoryIndependence),
+        "expected a HistoryIndependence finding, got {:?}",
+        report.findings
+    );
+    assert!(report.has_errors(), "a non-canonical map must be an error");
 }

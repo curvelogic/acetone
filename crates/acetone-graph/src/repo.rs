@@ -46,8 +46,8 @@ use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_model::schema::SchemaEntry;
 use acetone_prolly::{BatchOp, ChunkParams, Root, collect_reachable_chunks};
 use acetone_store::{
-    ChunkStore, CommitStore, GitStore, GitStoreOptions, Hash, NewCommit, ObjectFormat, RefStore,
-    Signature, StoreError,
+    ChunkStore, CommitStore, ConsolidateOptions, ConsolidateStats, GitStore, GitStoreOptions, Hash,
+    NewCommit, ObjectFormat, RefStore, Signature, StoreError,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -764,6 +764,17 @@ impl Repository {
         self.begin_write()?.reindex()
     }
 
+    /// Consolidate the object store into a self-contained packfile, deltaing
+    /// rewritten chunks against the predecessors chosen at write time (ADR-0011,
+    /// spec §3.1) and pruning the superseded loose objects and packs. This is
+    /// acetone's own periodic maintenance — representation-only, preserving
+    /// every object's bytes and address exactly. Takes the single-writer lock
+    /// so a concurrent write's fresh loose object cannot be pruned mid-run.
+    pub fn gc(&self) -> Result<ConsolidateStats, GraphError> {
+        let _lock = WriteLock::acquire(self.store.git_dir())?;
+        Ok(self.store.consolidate(ConsolidateOptions::default())?)
+    }
+
     /// Resolve a refspec — branch short name, full ref name, or hex
     /// commit hash — to a commit address.
     ///
@@ -1057,6 +1068,10 @@ impl<'r> Transaction<'r> {
             && self.edges_rev.is_empty())
     }
 
+    /// Apply staged ops to one map, returning the new root and the
+    /// `(new_chunk, predecessor)` base hints the splice discovered — recorded
+    /// for a later `gc` so rewritten chunks delta against their predecessors
+    /// (ADR-0011). The root is identical to a plain `apply_batch`.
     fn apply_map(
         store: &GitStore,
         params: ChunkParams,
@@ -1067,9 +1082,15 @@ impl<'r> Transaction<'r> {
             return Ok(*root);
         }
         let root = root.to_root(params)?;
-        Ok(MapRoot::from_root(&acetone_prolly::apply_batch(
-            store, &root, ops,
-        )?))
+        // Record the `(new_chunk, predecessor)` base hints the splice discovers
+        // (a local sidecar, never transferred) so a later `gc` deltas rewritten
+        // chunks against their predecessors (ADR-0011). The root is identical to
+        // a plain `apply_batch`; losing hints only makes gc store more whole.
+        let (new_root, hints) = acetone_prolly::apply_batch_recording(store, &root, ops)?;
+        if !hints.is_empty() {
+            store.record_base_hints(&hints)?;
+        }
+        Ok(MapRoot::from_root(&new_root))
     }
 
     /// Apply the staged mutations: new map roots, new manifest chunk,
