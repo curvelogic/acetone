@@ -192,4 +192,42 @@ pub enum Command {
     /// workspaces, branches and tags; edge-map symmetry as an advisory.
     /// Exits non-zero when any error-severity finding exists.
     Fsck,
+    /// Import a source file into the graph, recording provenance trailers
+    /// (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op
+    /// when the source is unchanged (spec §7). Node mode (`--label`) maps each
+    /// row to a node; edge mode (`--edge`) maps each row to a relationship.
+    /// Requires a clean workspace — declare and `commit` the target label's
+    /// schema (and any relationship type) before importing.
+    Import {
+        /// Source format.
+        #[arg(value_parser = ["csv", "json", "ndjson"])]
+        format: String,
+        /// Path to the source file.
+        source: PathBuf,
+        /// Node mode: the primary label for every imported row. The label's
+        /// declared key selects which fields form the node key.
+        #[arg(long, required_unless_present = "edge", conflicts_with = "edge")]
+        label: Option<String>,
+        /// Edge mode: the relationship type for every imported row. Requires
+        /// `--from` and `--to`.
+        #[arg(long)]
+        edge: Option<String>,
+        /// Edge mode: the source endpoint, as `LABEL=field[,field...]` (the
+        /// fields carry the endpoint's key, in key order).
+        #[arg(long, requires = "edge")]
+        from: Option<String>,
+        /// Edge mode: the destination endpoint, as `LABEL=field[,field...]`.
+        #[arg(long, requires = "edge")]
+        to: Option<String>,
+        /// Edge mode: the field carrying the discriminator (optional).
+        #[arg(long, requires = "edge")]
+        disc: Option<String>,
+        /// Import onto this branch in isolation, leaving the current branch
+        /// unchanged (created if absent, appended to if present).
+        #[arg(long)]
+        branch: Option<String>,
+        /// Commit message (default synthesised from the source and counts).
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+    },
 }

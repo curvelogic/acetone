@@ -141,6 +141,10 @@ pub enum GraphError {
     /// An operation needs a merge in progress but none is (or vice versa).
     #[error("{0}")]
     MergeState(&'static str),
+    /// An import extractor failed, or a source record could not be mapped to
+    /// a canonical node/edge record (spec §7, ADR-0021).
+    #[error(transparent)]
+    Import(#[from] crate::import::ImportError),
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
     #[error("lock file I/O at {path}: {source}")]

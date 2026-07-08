@@ -66,6 +66,28 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         }
         Command::Shell => crate::query::shell(repo_path),
         Command::Fsck => fsck(repo_path),
+        Command::Import {
+            format,
+            source,
+            label,
+            edge,
+            from,
+            to,
+            disc,
+            branch,
+            message,
+        } => crate::import::run(
+            repo_path,
+            &format,
+            &source,
+            label.as_deref(),
+            edge.as_deref(),
+            from.as_deref(),
+            to.as_deref(),
+            disc.as_deref(),
+            branch.as_deref(),
+            message.as_deref(),
+        ),
     }
 }
 
@@ -111,7 +133,7 @@ fn init(repo_path: &Path, object_format: &str, path: Option<PathBuf>) -> Result<
     Ok(())
 }
 
-fn open(repo_path: &Path) -> Result<Repository> {
+pub(crate) fn open(repo_path: &Path) -> Result<Repository> {
     Repository::open(repo_path)
         .with_context(|| format!("opening repository at {}", repo_path.display()))
 }

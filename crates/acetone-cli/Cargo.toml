@@ -35,6 +35,12 @@ anyhow = "1"
 # UTF-8) is exactly the kind of bug class a well-tested, ubiquitous parser
 # exists to avoid. No std alternative exists for subcommand parsing.
 clap = { version = "4", features = ["derive"] }
+# csv / serde_json / sha2: the built-in import format extractors and the
+# source-hash provenance (ADR-0021). Confined to the thin client so the core
+# crates carry no format-parsing dependencies.
+csv.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
