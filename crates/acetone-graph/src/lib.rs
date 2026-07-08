@@ -30,6 +30,7 @@ pub mod diff;
 pub mod error;
 pub mod fsck;
 pub mod import;
+pub mod index;
 pub mod lock;
 pub mod merge;
 pub mod repo;
