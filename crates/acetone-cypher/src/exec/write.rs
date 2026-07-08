@@ -607,6 +607,20 @@ impl GraphSource for MutableGraph<'_> {
     fn node(&self, id: &EntityId) -> Option<NodeValue> {
         self.current_node(id)
     }
+
+    fn nodes_by_index(&self, name: &str, value: &Value) -> Option<Vec<NodeValue>> {
+        // The base's index is authoritative only while the overlay is empty:
+        // a created, modified, or deleted node could change which nodes match,
+        // and the base index knows nothing of the overlay. Once any write has
+        // landed, fall back to a scan (`None`) so correctness is preserved.
+        if !self.created_nodes.is_empty()
+            || !self.node_overrides.is_empty()
+            || !self.deleted_nodes.is_empty()
+        {
+            return None;
+        }
+        self.base.nodes_by_index(name, value)
+    }
 }
 
 #[cfg(test)]

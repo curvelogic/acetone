@@ -918,8 +918,14 @@ fn match_path(
             Value::Node(node) => vec![node],
             _ => return Ok(Vec::new()),
         },
-        // Fresh or anonymous: scan (the heuristic LabelScan/AllNodesScan).
-        _ => ctx.graph.nodes_by_labels(&pattern.start.labels),
+        // Fresh or anonymous: an IndexSeek when the binder found a declared
+        // index covering a pinned equality (spec §5.3), else a LabelScan.
+        // Either way `node_satisfies` below still filters, so the seek only
+        // needs to return a candidate superset.
+        _ => match index_seek_anchor(&pattern.start, &state.row, ctx)? {
+            Some(nodes) => nodes,
+            None => ctx.graph.nodes_by_labels(&pattern.start.labels),
+        },
     };
 
     let mut results = Vec::new();
@@ -949,6 +955,31 @@ fn match_path(
         )?;
     }
     Ok(results)
+}
+
+/// The anchor set for a leading node pattern the binder marked with an
+/// `IndexSeek` hint: the nodes the declared index selects for the pattern's
+/// pinned equality value. `None` when there is no usable index seek (no hint,
+/// no property map, the pinned property is absent, or the source has no such
+/// index), so the caller falls back to a label scan.
+fn index_seek_anchor(
+    pattern: &BoundNodePattern,
+    row: &Row,
+    ctx: &EvalCtx,
+) -> Result<Option<Vec<NodeValue>>, ExecError> {
+    let Some(IndexHint::IndexSeek { name, property, .. }) = &pattern.index_hint else {
+        return Ok(None);
+    };
+    let Some(props) = &pattern.properties else {
+        return Ok(None);
+    };
+    let Value::Map(map) = eval(props, row, ctx)? else {
+        return Ok(None);
+    };
+    let Some(value) = map.get(property) else {
+        return Ok(None);
+    };
+    Ok(ctx.graph.nodes_by_index(name, value))
 }
 
 #[derive(Clone)]
