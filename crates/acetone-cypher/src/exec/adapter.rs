@@ -362,15 +362,63 @@ impl GraphSource for GraphSnapshot {
     fn nodes_by_index(&self, index_name: &str, value: &Value) -> Option<Vec<NodeValue>> {
         // Unknown index → the caller falls back to a label scan.
         let map = self.by_index.get(index_name)?;
-        // A value that cannot form an index key (null, NaN, or a non-storable
-        // runtime value) selects nothing — the index is null/NaN-blind.
-        let Some(bytes) = encode_index_value(value) else {
-            return Some(Vec::new());
-        };
-        Some(match map.get(&bytes) {
-            None => Vec::new(),
-            Some(indices) => indices.iter().map(|&i| self.nodes[i].clone()).collect(),
-        })
+        // A list value's equality recurses element-wise with the same Int/Float
+        // cross-type rule (`[1] = [1.0]`), which an exact-byte bucket cannot
+        // serve without enumerating 2^k element-type combinations. Fall back to
+        // a scan for a list pin (`None`) — correct, just not accelerated.
+        if matches!(value, Value::List(_)) {
+            return None;
+        }
+        // The candidate byte keys whose stored values could equal `value` under
+        // openCypher equality: for a number that means BOTH the Int and Float
+        // encodings (3 = 3.0), since the index stores them under distinct keys.
+        // The result is a candidate superset the caller still filters, so being
+        // over-broad is safe; under-selecting would silently drop matches.
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for bytes in index_lookup_keys(value) {
+            if let Some(indices) = map.get(&bytes) {
+                for &i in indices {
+                    if seen.insert(i) {
+                        out.push(self.nodes[i].clone());
+                    }
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
+/// The index byte keys whose stored value could equal a seek `value` under
+/// openCypher equality. A number matches its own type *and* the other numeric
+/// type (`3 = 3.0`); everything else matches only its own encoding. Null, NaN
+/// and non-storable kinds yield no keys (select nothing — null/NaN-blind).
+fn index_lookup_keys(value: &Value) -> Vec<Vec<u8>> {
+    match value {
+        Value::Int(n) => [
+            encode_model_value(&ModelValue::Int(*n)),
+            encode_model_value(&ModelValue::Float(*n as f64)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        Value::Float(f) => {
+            let mut keys: Vec<Vec<u8>> = Vec::with_capacity(2);
+            if let Some(k) = encode_model_value(&ModelValue::Float(*f)) {
+                keys.push(k);
+            }
+            // An integer-valued float also equals the same integer.
+            if f.is_finite()
+                && f.fract() == 0.0
+                && *f >= i64::MIN as f64
+                && *f <= i64::MAX as f64
+                && let Some(k) = encode_model_value(&ModelValue::Int(*f as i64))
+            {
+                keys.push(k);
+            }
+            keys
+        }
+        other => encode_index_value(other).into_iter().collect(),
     }
 }
 

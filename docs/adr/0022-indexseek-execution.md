@@ -20,11 +20,16 @@ The workbench read path materialises a whole graph version into an in-memory
 `GraphSnapshot` once, then executes against it (adapter module doc; the `lab`
 binary loads once and times queries). Consistent with that design, the adapter
 builds, at construction, a `by_index: name → (encoded value → node indices)`
-map for each **declared** index — exactly as it already builds `by_label` —
-keyed by the same memcomparable value encoding the stored index uses, so a seek
-selects precisely the stored index's node set (null- and NaN-blind). `IndexSeek`
-is then an `O(matches)` hash lookup versus the `O(label population)` scan +
-filter.
+map for each **declared** index — exactly as it already builds `by_label`. The
+map key is the value-only memcomparable encoding (`encode_key([value])`), a
+subset of the stored index's four-part key, chosen so a seek selects the same
+node set the stored index would (null- and NaN-blind). `IndexSeek` is then an
+`O(matches)` hash lookup versus the `O(label population)` scan + filter.
+
+Because openCypher numeric equality is cross-type (`3 = 3.0`) while the encoding
+is type-tagged, a numeric seek probes **both** the `Int` and `Float` buckets,
+and a list pin (whose equality recurses element-wise) falls back to a scan — so
+the seek is always a superset of what `node_satisfies` accepts.
 
 Rationale: the graph is materialised regardless, so a per-query in-memory seek
 is a genuine, measurable win (4.9× on `Host.os = 'debian'` over a 44k-node lab

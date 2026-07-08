@@ -163,6 +163,181 @@ fn index_seek_returns_the_same_rows_as_a_scan() {
     );
 }
 
+/// Run `cypher` against a snapshot built from `schema`, returning the row
+/// count. Used to compare an indexed run against an unindexed (scan) run.
+fn count(cypher: &str, schema: &[SchemaEntry], graph: &dyn GraphSource) -> usize {
+    let ast = acetone_cypher::parse(cypher).expect("parse");
+    let catalogue = catalogue_from_schema(schema.to_vec());
+    let bound = acetone_cypher::bind::binder::bind(cypher, &ast, &catalogue, BindMode::Strict)
+        .expect("bind");
+    let resolver = SingleVersion::new(graph);
+    execute_versioned_with(&bound, &resolver, &NoProcedures, &BTreeMap::new())
+        .expect("execute")
+        .rows
+        .len()
+}
+
+#[test]
+fn numeric_cross_type_query_matches_a_scan_end_to_end() {
+    // A node whose indexed numeric property is stored as a Float, queried with
+    // an Int literal (and vice versa), must return the same rows via IndexSeek
+    // as via a scan — openCypher `1 = 1.0`.
+    let schema_with = vec![
+        SchemaEntry::Label {
+            name: "M".into(),
+            def: LabelDef::new(
+                vec!["id".into()],
+                BTreeMap::from([("v".to_owned(), PropertyType::Int)]),
+                [],
+                [],
+            )
+            .expect("label"),
+        },
+        SchemaEntry::Index {
+            name: "m_v".into(),
+            def: IndexDef::new("M", "v").expect("idx"),
+        },
+    ];
+    let schema_without = vec![schema_with[0].clone()];
+    let edges: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
+
+    // Stored as Float(1.0), queried with Int literal 1.
+    let float_stored = vec![(
+        NodeKey::new("M", vec![ModelValue::String("a".into())]).expect("k"),
+        NodeRecord::new(
+            [],
+            BTreeMap::from([("v".to_owned(), ModelValue::Float(1.0))]),
+        ),
+    )];
+    let with = GraphSnapshot::from_records_with_schema(&float_stored, &edges, &schema_with);
+    let without = GraphSnapshot::from_records_with_schema(&float_stored, &edges, &schema_without);
+    let q = "MATCH (m:M {v: 1}) RETURN m.id";
+    assert_eq!(
+        count(q, &schema_with, &with),
+        1,
+        "IndexSeek dropped a cross-type match"
+    );
+    assert_eq!(
+        count(q, &schema_without, &without),
+        1,
+        "scan baseline wrong"
+    );
+
+    // Stored as Int(2), queried with Float literal 2.0.
+    let int_stored = vec![(
+        NodeKey::new("M", vec![ModelValue::String("b".into())]).expect("k"),
+        NodeRecord::new([], BTreeMap::from([("v".to_owned(), ModelValue::Int(2))])),
+    )];
+    let with2 = GraphSnapshot::from_records_with_schema(&int_stored, &edges, &schema_with);
+    let without2 = GraphSnapshot::from_records_with_schema(&int_stored, &edges, &schema_without);
+    let q2 = "MATCH (m:M {v: 2.0}) RETURN m.id";
+    assert_eq!(
+        count(q2, &schema_with, &with2),
+        1,
+        "IndexSeek dropped a cross-type match"
+    );
+    assert_eq!(
+        count(q2, &schema_without, &without2),
+        1,
+        "scan baseline wrong"
+    );
+}
+
+#[test]
+fn numeric_index_seek_matches_across_int_and_float_like_a_scan() {
+    // An index on a numeric property must honour openCypher's cross-type
+    // equality (3 = 3.0): a seek pinned with one numeric type must still find a
+    // node stored under the other, exactly as a scan would.
+    let recs = vec![
+        (
+            NodeKey::new("M", vec![ModelValue::String("as_int".into())]).expect("k"),
+            NodeRecord::new([], BTreeMap::from([("v".to_owned(), ModelValue::Int(3))])),
+        ),
+        (
+            NodeKey::new("M", vec![ModelValue::String("as_float".into())]).expect("k"),
+            NodeRecord::new(
+                [],
+                BTreeMap::from([("v".to_owned(), ModelValue::Float(3.0))]),
+            ),
+        ),
+        (
+            NodeKey::new("M", vec![ModelValue::String("other".into())]).expect("k"),
+            NodeRecord::new([], BTreeMap::from([("v".to_owned(), ModelValue::Int(4))])),
+        ),
+    ];
+    let edges: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
+    let schema = vec![
+        SchemaEntry::Label {
+            name: "M".into(),
+            def: LabelDef::new(
+                vec!["id".into()],
+                BTreeMap::from([("v".to_owned(), PropertyType::Int)]),
+                [],
+                [],
+            )
+            .expect("label"),
+        },
+        SchemaEntry::Index {
+            name: "m_v".into(),
+            def: IndexDef::new("M", "v").expect("idx"),
+        },
+    ];
+    let adapter = GraphSnapshot::from_records_with_schema(&recs, &edges, &schema);
+
+    // Seek with an Int: finds both the Int-stored and Float-stored node.
+    let by_int = adapter
+        .nodes_by_index("m_v", &Value::Int(3))
+        .expect("present");
+    assert_eq!(by_int.len(), 2, "Int seek missed the Float-stored node");
+    // Seek with a Float: same two nodes.
+    let by_float = adapter
+        .nodes_by_index("m_v", &Value::Float(3.0))
+        .expect("present");
+    assert_eq!(by_float.len(), 2, "Float seek missed the Int-stored node");
+    // A non-integer float matches neither.
+    assert_eq!(
+        adapter
+            .nodes_by_index("m_v", &Value::Float(3.5))
+            .expect("present")
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn list_valued_seek_falls_back_to_a_scan() {
+    // A list pin cannot be served by exact-byte buckets under element-wise
+    // Int/Float equality, so nodes_by_index returns None → the executor scans.
+    let recs = vec![(
+        NodeKey::new("M", vec![ModelValue::String("a".into())]).expect("k"),
+        NodeRecord::new(
+            [],
+            BTreeMap::from([(
+                "tags".to_owned(),
+                ModelValue::List(vec![ModelValue::Float(1.0)]),
+            )]),
+        ),
+    )];
+    let edges: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
+    let schema = vec![
+        SchemaEntry::Label {
+            name: "M".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        },
+        SchemaEntry::Index {
+            name: "m_tags".into(),
+            def: IndexDef::new("M", "tags").expect("idx"),
+        },
+    ];
+    let adapter = GraphSnapshot::from_records_with_schema(&recs, &edges, &schema);
+    assert!(
+        adapter
+            .nodes_by_index("m_tags", &Value::List(vec![Value::Int(1)]))
+            .is_none(),
+        "a list pin must fall back to a scan, not risk a subset"
+    );
+}
+
 #[test]
 fn nodes_by_index_selects_correctly_and_is_null_blind() {
     let recs = records();
