@@ -35,6 +35,14 @@ use acetone_core::{InitOptions, Repository};
 let repo = Repository::init("graph.git".as_ref(), InitOptions::default())?;
 ```
 
+## Documentation
+
+- [`docs/user-guide.md`](docs/user-guide.md) — the everyday CLI and library
+  workflow.
+- [`docs/conformance.md`](docs/conformance.md) — the openCypher conformance
+  statement (pass rate and known gaps).
+- [`docs/RELEASING.md`](docs/RELEASING.md) — release and crate-publish process.
+
 ## Design record
 
 The `docs/` directory is authoritative — read the spec before relying on
