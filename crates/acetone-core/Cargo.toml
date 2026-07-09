@@ -1,0 +1,15 @@
+[package]
+name = "acetone-core"
+description = "The acetone library API: an embedded, version-controlled labelled property graph over a git object store, queried with openCypher."
+version.workspace = true
+publish = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+acetone-graph.workspace = true
+acetone-model.workspace = true
+acetone-cypher.workspace = true
+acetone-store.workspace = true

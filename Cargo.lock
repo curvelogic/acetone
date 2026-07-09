@@ -28,6 +28,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "acetone-core"
+version = "0.0.1"
+dependencies = [
+ "acetone-cypher",
+ "acetone-graph",
+ "acetone-model",
+ "acetone-store",
+]
+
+[[package]]
 name = "acetone-cypher"
 version = "0.0.1"
 dependencies = [

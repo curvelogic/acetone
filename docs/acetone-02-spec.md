@@ -78,7 +78,7 @@ Parser (decypher or equivalent, producing a spanned AST) → binder (resolves la
 
 ## 8. Crate layout
 
-`acetone-store` (ChunkStore trait; git backend; refs/commits) · `acetone-prolly` (trees, diff, merge; property-tested for history independence) · `acetone-model` (keys, records, encodings, schema, manifest) · `acetone-graph` (graph mutations, constraints, validation, merge orchestration) · `acetone-cypher` (front end, planner, executor; TCK harness) · `acetone-cli`. Dependency direction is strictly downward in that list.
+`acetone-store` (ChunkStore trait; git backend; refs/commits) · `acetone-prolly` (trees, diff, merge; property-tested for history independence) · `acetone-model` (keys, records, encodings, schema, manifest) · `acetone-graph` (graph mutations, constraints, validation, merge orchestration) · `acetone-cypher` (front end, planner, executor; TCK harness) · `acetone-core` (the façade re-exporting the above as the single library API — **the real product surface** of §7, ADR-0026) · `acetone-cli` (the thin CLI client). Dependency direction is strictly downward in that list.
 
 ## 9. Reserved for future layers
 

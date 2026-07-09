@@ -1,0 +1,69 @@
+name: Release
+
+# Build the single static `acetone` binary for each supported target when a
+# version tag is pushed, and attach the artefacts to the GitHub release.
+# Publishing the library crates to crates.io is a separate, deliberate manual
+# step (see docs/RELEASING.md) — it reserves names irreversibly.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  binary:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: statically linked against musl — a self-contained binary.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          # macOS: the platform binary (fully static is not supported on macOS).
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - name: Install cross-linker (musl)
+        if: contains(matrix.target, 'linux-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          fi
+      - name: Build release binary
+        run: cargo build --release --locked --bin acetone --target ${{ matrix.target }}
+      - name: Package
+        # `REF_NAME` is passed through the environment and referenced as a bash
+        # variable — never interpolated into the script text — so a crafted tag
+        # name (git allows `$`, backticks, `;`, …) cannot inject shell.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          staging="acetone-${REF_NAME}-${TARGET}"
+          mkdir "$staging"
+          cp "target/${TARGET}/release/acetone" "$staging/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$staging/" 2>/dev/null || true
+          tar czf "$staging.tar.gz" "$staging"
+          shasum -a 256 "$staging.tar.gz" > "$staging.tar.gz.sha256"
+      - name: Attach to release
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.0.8
+        with:
+          files: |
+            acetone-*.tar.gz
+            acetone-*.tar.gz.sha256
