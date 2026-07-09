@@ -24,10 +24,19 @@
 //! **Scope / limitations (first cut).** Rewrites `refs/heads/*` and
 //! `refs/tags/*` whose targets are commits; an annotated-tag object (a tag
 //! that is not a direct commit) is reported as [`GraphError::NotACommit`]
-//! rather than silently skipped. Requires a clean, non-merging workspace,
+//! rather than silently skipped, and a checked-out **detached HEAD** (not
+//! under `refs/heads/`) is left pointing at its now-superseded commit — the
+//! CLI does not expose detached HEAD. Requires a clean, non-merging workspace,
 //! which it resets to the rewritten head. Ref swings are CAS, one at a time
 //! (safe under acetone's single-writer model), not a single atomic
-//! transaction.
+//! transaction: a **completed** migration is deterministic and idempotent
+//! (re-running produces the same hashes and is a no-op), but a process that
+//! dies mid-migration — after some refs are swung but before the workspace is
+//! reset — leaves the workspace lagging the branch, which reads as *dirty* and
+//! makes a bare re-run refuse. No data is lost (refs point at the correct
+//! rewritten commits); recover with `acetone checkout <branch>` to resync the
+//! workspace. A single atomic swing (or a journaled, resumable migration) is a
+//! tracked follow-up.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -221,6 +230,11 @@ fn topo_order(store: &GitStore, refs: &[(String, Hash)]) -> Result<Vec<Hash>, Gr
     let mut parents_of: HashMap<Hash, Vec<Hash>> = HashMap::new();
     let mut stack: Vec<Hash> = Vec::new();
     for (name, target) in refs {
+        // Anything that is not readable as a commit here — an annotated-tag
+        // object, a blob, or a genuinely damaged object — aborts the whole
+        // migration before any object is rewritten or any ref is swung. The
+        // common case is an annotated tag, so `NotACommit` names it; a rarer
+        // read failure is reported the same way rather than misread.
         if !matches!(store.read_commit(target), Ok(Some(_))) {
             return Err(GraphError::NotACommit { name: name.clone() });
         }

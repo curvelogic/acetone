@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use acetone_graph::merge::MergeOutcome;
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_graph::{MigrateReport, Rechunk, rewrite_history};
 use acetone_model::Value;
@@ -156,6 +157,68 @@ fn rechunk_migration_rewrites_history_preserving_data_and_metadata() {
     assert_eq!(again.commits_rewritten, 3);
     assert_eq!(target(&repo, "refs/heads/main"), Some(new_main));
     assert_eq!(target(&repo, "refs/heads/feature"), Some(new_feature));
+}
+
+#[test]
+fn migrate_rewrites_a_merge_commit_remapping_both_parents() {
+    // The highest-risk history shape for a rewrite: a real two-parent merge
+    // commit in a diamond. Both parents must be remapped to their rewrites and
+    // the merged content preserved.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+
+    let base = put_range(&repo, 0, 50, "base");
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout other");
+    let theirs = put_range(&repo, 50, 100, "on other");
+    repo.checkout_branch("main").expect("checkout main");
+    let ours = put_range(&repo, 100, 150, "on main");
+    let old_merge = match repo.merge("other", "merge other").expect("merge") {
+        MergeOutcome::Merged(h) => h,
+        other => panic!("expected a merge commit, got {other:?}"),
+    };
+    // Sanity: the merge records both tips as parents.
+    let old_parents = repo
+        .store()
+        .read_commit(&old_merge)
+        .expect("read")
+        .expect("present")
+        .parents;
+    assert_eq!(old_parents, vec![ours, theirs]);
+    let old_entries = nodes_entries(&repo);
+    let old_history = history_len(&repo, old_merge);
+
+    let new_params = ChunkParams::new(512, 10, 8192).expect("params");
+    rewrite_history(&repo, &Rechunk::new(new_params)).expect("migrate");
+
+    let new_merge = target(&repo, "refs/heads/main").expect("main");
+    assert_ne!(new_merge, old_merge, "the merge commit was rewritten");
+    let new_parents = repo
+        .store()
+        .read_commit(&new_merge)
+        .expect("read")
+        .expect("present")
+        .parents;
+    assert_eq!(new_parents.len(), 2, "still a two-parent merge");
+    assert!(
+        new_parents.iter().all(|p| !old_parents.contains(p)),
+        "both parents were remapped to their rewrites"
+    );
+    assert_eq!(
+        history_len(&repo, new_merge),
+        old_history,
+        "commit-graph shape preserved"
+    );
+    assert_eq!(nodes_entries(&repo), old_entries, "merged data preserved");
+
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir.path().join("graph.git"))
+        .args(["fsck", "--strict"])
+        .status()
+        .expect("run git fsck");
+    assert!(status.success(), "git fsck clean after merge migrate");
 }
 
 #[test]
