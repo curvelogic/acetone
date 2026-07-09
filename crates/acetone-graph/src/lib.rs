@@ -33,6 +33,7 @@ pub mod import;
 pub mod index;
 pub mod lock;
 pub mod merge;
+pub mod migrate;
 pub mod repo;
 
 pub use error::GraphError;
@@ -42,6 +43,7 @@ pub use import::{
     SourceExtractor, run as import,
 };
 pub use lock::WriteLock;
+pub use migrate::{FormatTransform, MigrateReport, Rechunk, rewrite_history};
 pub use repo::{
     DEFAULT_BRANCH, DEFAULT_WORKSPACE, InitOptions, LogEntry, Repository, Snapshot, Transaction,
 };

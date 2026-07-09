@@ -208,7 +208,7 @@ impl Repository {
     /// Build the workspace tree (`{manifest, chunks/}`, huo) for the manifest
     /// blob `manifest_hash`, anchoring its complete chunk set. Returns the
     /// tree hash the workspace ref should point at.
-    fn workspace_tree_for(&self, manifest_hash: &Hash) -> Result<Hash, GraphError> {
+    pub(crate) fn workspace_tree_for(&self, manifest_hash: &Hash) -> Result<Hash, GraphError> {
         let manifest = read_manifest_chunk(&self.store, manifest_hash)?;
         let anchors = manifest_chunk_set(&self.store, &manifest)?;
         Ok(self
@@ -829,7 +829,7 @@ impl Repository {
     /// The manifest blob hash inside a commit (re-adding the manifest
     /// bytes to the content-addressed store is the identity operation, so
     /// this needs no extra bookkeeping).
-    fn commit_manifest_hash(&self, commit: &Hash) -> Result<Hash, GraphError> {
+    pub(crate) fn commit_manifest_hash(&self, commit: &Hash) -> Result<Hash, GraphError> {
         let commit = self
             .store
             .read_commit(commit)?
@@ -1011,7 +1011,7 @@ fn read_ref_lenient(store: &GitStore, name: &str) -> Result<Option<Hash>, GraphE
     }
 }
 
-fn read_manifest_chunk(store: &GitStore, hash: &Hash) -> Result<Manifest, GraphError> {
+pub(crate) fn read_manifest_chunk(store: &GitStore, hash: &Hash) -> Result<Manifest, GraphError> {
     let bytes = store.get(hash)?.ok_or_else(|| StoreError::InvalidHash {
         reason: format!("workspace manifest chunk {hash} is missing"),
     })?;
@@ -1383,7 +1383,10 @@ impl<'r> Transaction<'r> {
 
 /// The complete chunk set of a manifest: every chunk of every map root,
 /// as sorted anchor list for [`NewCommit::anchors`].
-fn manifest_chunk_set(store: &GitStore, manifest: &Manifest) -> Result<Vec<Hash>, GraphError> {
+pub(crate) fn manifest_chunk_set(
+    store: &GitStore,
+    manifest: &Manifest,
+) -> Result<Vec<Hash>, GraphError> {
     let params = manifest.chunk_params;
     let mut set = BTreeSet::new();
     let mut add = |map_root: &MapRoot| -> Result<(), GraphError> {
@@ -1405,7 +1408,7 @@ fn manifest_chunk_set(store: &GitStore, manifest: &Manifest) -> Result<Vec<Hash>
 }
 
 /// The human-readable summary stored as `README.md` in the commit tree.
-fn summarise(store: &GitStore, manifest: &Manifest) -> Result<String, GraphError> {
+pub(crate) fn summarise(store: &GitStore, manifest: &Manifest) -> Result<String, GraphError> {
     let snapshot = Snapshot {
         store,
         manifest: manifest.clone(),
