@@ -33,7 +33,7 @@ plus the exit simulation (#70):
   - *Query* (6g5.3.2): the binder's existing `IndexSeek` hint is wired through
     the executor — a per-query in-memory value map gives `O(matches)` seeks
     versus a label scan (ADR-0022). **~4.9× faster than scan** for
-    `Host.os = 'debian'` on a 44k-node lab graph.
+    `Host.os = 'debian'` on a 44k-node lab graph (`lab <repo> --scale 20000`).
 - **Export** (acetone-6g5.2, #68). `acetone export <csv|json|ndjson> [--label |
   --edge] [--out]` — one table per keyed label, one per relationship type; the
   seed of the relational projection (spec §9). JSON/NDJSON are the faithful
@@ -65,7 +65,7 @@ verifying index and reverse-edge consistency."*
   v3 is a detected no-op; `diff(v1,v2)` reports `~ web1` and `+ new1` and omits
   the unchanged hosts; both real commits carry provenance trailers.
 - **Index faster than scan** — the `lab` binary's index-vs-scan comparison:
-  IndexSeek ~14 ms vs LabelScan+filter ~69 ms (~4.9×) on 44k nodes, verified by
+  IndexSeek ~14 ms vs LabelScan+filter ~69 ms (~4.9×) on the 44k-node lab graph (`--scale 20000`), verified by
   a parity test proving the seek returns exactly the scan's rows.
 - **fsck index and reverse-edge consistency** — `check_index_consistency`
   (6g5.3.1) recomputes each declared index from `nodes`; edge-map symmetry

@@ -269,7 +269,7 @@
     <div class="slide-inner">
       <p class="eyebrow">Declared indexes</p>
       <h2>An equality that seeks, not scans.</h2>
-      <p class="lede">Declare an index on a property and the binder's <code>IndexSeek</code> hint is now honoured by the executor: an <code>O(matches)</code> lookup instead of scanning the whole label. On the 44k-node lab graph, <code>MATCH (h:Host {os:'debian'})</code>:</p>
+      <p class="lede">Declare an index on a property and the binder's <code>IndexSeek</code> hint is now honoured by the executor: an <code>O(matches)</code> lookup instead of scanning the whole label. On the 44k-node lab graph (<code>--scale 20000</code>), <code>MATCH (h:Host {os:'debian'})</code>:</p>
       <div class="cards" style="margin-top:18px; display:flex; gap:14px; flex-wrap:wrap">
         <div class="card lead" style="flex:1 1 220px"><div class="tag">INDEXSEEK</div><h3 style="font-size:30px; margin:.2em 0">~14 ms</h3><p>the declared <code>host_os</code> index</p></div>
         <div class="card" style="flex:1 1 220px"><div class="tag">LABELSCAN + FILTER</div><h3 style="font-size:30px; margin:.2em 0">~69 ms</h3><p>the whole <code>Host</code> population</p></div>
