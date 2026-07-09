@@ -87,9 +87,13 @@ fn git_fsck_is_clean_and_log_shows_the_commit() {
     );
     assert_eq!(trailer_out.trim(), "unit-test");
 
-    // The manifest and summary are plain files in the commit tree, and the
-    // anchored chunks are visible as tree entries.
-    let manifest_out = git(&repo, &["cat-file", "-p", &format!("{REF}:manifest")]);
+    // The manifest lives under the reserved `.acetone/` directory and the
+    // summary is a plain `README.md` at the tree root (ADR-0023); the anchored
+    // chunks are visible as tree entries under `.acetone/chunks/`.
+    let manifest_out = git(
+        &repo,
+        &["cat-file", "-p", &format!("{REF}:.acetone/manifest")],
+    );
     assert_eq!(manifest_out.as_bytes(), seeded.manifest.as_slice());
     let summary_out = git(&repo, &["cat-file", "-p", &format!("{REF}:README.md")]);
     assert!(summary_out.contains("acetone graph"));
@@ -100,7 +104,7 @@ fn git_fsck_is_clean_and_log_shows_the_commit() {
         &[
             "cat-file",
             "-p",
-            &format!("{REF}:chunks/{}/{}", &hex[..2], &hex[2..]),
+            &format!("{REF}:.acetone/chunks/{}/{}", &hex[..2], &hex[2..]),
         ],
     );
     assert_eq!(chunk_out.as_bytes(), first_data.as_slice());
@@ -249,7 +253,10 @@ fn sha256_store_round_trips_and_interops_with_git() {
     git(&repo, &["fsck", "--strict"]);
     let log = git(&repo, &["log", "--format=%H %s", REF]);
     assert!(log.contains(&commit.to_hex()), "log: {log}");
-    let manifest_out = git(&repo, &["cat-file", "-p", &format!("{REF}:manifest")]);
+    let manifest_out = git(
+        &repo,
+        &["cat-file", "-p", &format!("{REF}:.acetone/manifest")],
+    );
     assert_eq!(manifest_out.as_bytes(), b"sha256 manifest");
 }
 

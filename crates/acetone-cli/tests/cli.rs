@@ -248,16 +248,21 @@ fn fsck_reports_clean_and_detects_damage() {
     assert!(stdout(&out).contains("fsck: clean"));
 
     // Surgically destroy the repository's objects, sparing only what `open`
-    // needs to read the workspace manifest — the workspace tree and the
-    // manifest blob it contains (huo) — so `open` still succeeds and fsck
-    // itself runs: fsck must then report error findings for the missing
-    // chunks, exit non-zero, no Debug dump. (A random victim won't do — a
-    // fresh repo also holds unreachable superseded manifests whose loss fsck
-    // rightly ignores.)
+    // needs to read the workspace manifest — the workspace tree, the reserved
+    // `.acetone/` subtree, and the manifest blob it contains (huo, ADR-0023) —
+    // so `open` still succeeds and fsck itself runs: fsck must then report
+    // error findings for the missing chunks, exit non-zero, no Debug dump. (A
+    // random victim won't do — a fresh repo also holds unreachable superseded
+    // manifests whose loss fsck rightly ignores.)
     let workspace_tree = git_rev_parse(&repo, "refs/worktree/acetone/workspace");
-    let manifest_blob = git_rev_parse(&repo, "refs/worktree/acetone/workspace:manifest");
+    let acetone_subtree = git_rev_parse(&repo, "refs/worktree/acetone/workspace:.acetone");
+    let manifest_blob = git_rev_parse(&repo, "refs/worktree/acetone/workspace:.acetone/manifest");
     let object_path = |oid: &str| repo.join("objects").join(&oid[..2]).join(&oid[2..]);
-    let spared = [object_path(&workspace_tree), object_path(&manifest_blob)];
+    let spared = [
+        object_path(&workspace_tree),
+        object_path(&acetone_subtree),
+        object_path(&manifest_blob),
+    ];
     for object in loose_objects(&repo.join("objects")) {
         if !spared.contains(&object) {
             std::fs::remove_file(&object).expect("remove object");
