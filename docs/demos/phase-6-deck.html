@@ -1,0 +1,408 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck { height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .card.lead { border-left: 3px solid var(--accent); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  .term {
+    background: var(--ink); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65;
+  }
+  @media (prefers-color-scheme: dark) { .term { border: 1px solid var(--line); } }
+  :root[data-theme="dark"] .term { border: 1px solid var(--line); }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term .p { color: #2dd4bf; }
+  .term .c { color: #e8eef0; }
+  .term .o { color: #8b9aa2; }
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+</style>
+<title>Acetone · Phase 6 sprint demo</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Where we are"></a>
+  <a href="#s3" aria-label="What shipped"></a>
+  <a href="#s4" aria-label="The freeze"></a>
+  <a href="#s5" aria-label="The escape hatch"></a>
+  <a href="#s6" aria-label="Packaged and documented"></a>
+  <a href="#s7" aria-label="Decisions"></a>
+  <a href="#s8" aria-label="The review gate"></a>
+  <a href="#s9" aria-label="Gate and security"></a>
+  <a href="#s10" aria-label="Live demo"></a>
+  <a href="#s11" aria-label="For Greg"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · Phase 6 boundary</p>
+      <h1>Freeze it. Migrate it.<br>Ship it.</h1>
+      <p class="lede">Phase 5 made a graph you can feed and query. Phase 6 makes it one you can <strong>rely on and release</strong>: name the on-disk layout for co-tenancy, <strong>freeze</strong> it, build the <code>migrate</code> escape hatch that makes freezing safe — then package the binary, publish the library, and write it all down.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>5 PRs · #73–#77</span>
+        <span class="chip good"><span class="dot"></span>format_version 1 · frozen</span>
+        <span class="chip good"><span class="dot"></span>acetone migrate · works</span>
+        <span class="chip good"><span class="dot"></span>Security gate · ready</span>
+        <span class="chip good"><span class="dot"></span>Packaged · documented</span>
+      </div>
+    </div>
+    <div class="foot">epic acetone-cbl · 2026-07-09 · main @ 3f59eba</div>
+    <div class="num">01 / 11</div>
+  </section>
+
+  <!-- 2 · Where we are -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>From feature-complete to shippable.</h2>
+      <p class="lede">0.1 asks one thing of the storage layer: <strong>a repository written today is readable tomorrow</strong>. Phase 6 is the discipline that guarantees it — and the escape hatch for when the format must change anyway.</p>
+      <div class="flow" style="margin-top:26px">
+        <div class="step"><div class="k">NAMESPACE</div><div class="v">.acetone/</div><div class="d">machine entries reserved · README at root</div></div>
+        <div class="step"><div class="k">FREEZE</div><div class="v">version 1</div><div class="d">golden-anchored · audited · byte-stable</div></div>
+        <div class="step"><div class="k">MIGRATE</div><div class="v">rewrite</div><div class="d">carry history forward · new hashes</div></div>
+        <div class="step"><div class="k">PACKAGE</div><div class="v">acetone-core</div><div class="d">static binary · library crate</div></div>
+        <div class="step"><div class="k">DOCUMENT</div><div class="v">0.1 docs</div><div class="d">user guide · conformance</div></div>
+      </div>
+    </div>
+    <div class="num">02 / 11</div>
+  </section>
+
+  <!-- 3 · What shipped -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">What shipped</p>
+      <h2>Five PRs, one stability story.</h2>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>Bead</th><th>What it does</th><th>ADR</th><th>PR</th></tr></thead>
+          <tbody>
+            <tr><td><code>gbd</code></td><td>Namespace machine entries under <code>.acetone/</code></td><td class="pr">0023</td><td class="pr">#73</td></tr>
+            <tr><td><code>cbl.1</code></td><td>Gate D — freeze <code>format_version 1</code>, golden-anchor the prolly format</td><td class="pr">0024</td><td class="pr">#74</td></tr>
+            <tr><td><code>hsg</code></td><td><code>acetone migrate</code> — history-rewrite engine</td><td class="pr">0025</td><td class="pr">#75</td></tr>
+            <tr><td><code>cbl.5&nbsp;·&nbsp;7</code></td><td><code>acetone-core</code> façade + release packaging</td><td class="pr">0026</td><td class="pr">#76</td></tr>
+            <tr><td><code>cbl.4</code></td><td>User guide + openCypher conformance statement</td><td class="pr">—</td><td class="pr">#77</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="clean" style="margin-top:20px">
+        <li><b>No new dependencies.</b> The whole phase adds only the internal <code>acetone-core</code> façade crate.</li>
+        <li><b>The invariants held.</b> The freeze is envelope-only and byte-stable; <code>migrate</code> preserves contents, authorship and a clean <code>fsck</code>.</li>
+      </ul>
+    </div>
+    <div class="num">03 / 11</div>
+  </section>
+
+  <!-- 4 · The freeze -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">Gate D · the freeze</p>
+      <h2>Three audits, one silent gap, then frozen.</h2>
+      <p class="lede">Three independent adversarial audits — key encodings, value CBOR, schema + prolly + chunking — each returned <strong>freeze-ready</strong>. All that stood between us and a stable format was one blind spot.</p>
+      <div class="grid cols-2" style="margin-top:22px">
+        <div class="card lead">
+          <div class="tag">THE GAP THE AUDIT FOUND</div>
+          <h3>The prolly format could drift silently</h3>
+          <p>Every other artefact was byte-pinned; the node/chunker format was guarded only by <em>self-relative</em> tests that pass even when the bytes change. A format drift would have altered every root hash under an unchanged version. Closed by golden byte- and root-hash pins.</p>
+        </div>
+        <div class="card">
+          <div class="tag">WHAT FREEZING MEANS</div>
+          <h3>version 1, unchanged in bytes</h3>
+          <p>The §3.4 encodings, the prolly node/chunker, and the manifest schema are all golden-anchored — a change flips a pin and fails loudly. The manifest's <code>format_version</code> is checked first on every decode, so a future-version repo is rejected, never misread.</p>
+        </div>
+      </div>
+    </div>
+    <div class="num">04 / 11</div>
+  </section>
+
+  <!-- 5 · migrate -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">The escape hatch</p>
+      <h2><code>acetone migrate</code> — the freeze made safe.</h2>
+      <p class="lede">A freeze without a way forward is a trap. <code>migrate</code> re-encodes every version under a pluggable transform and rebuilds the commit graph with new hashes — <strong>preserving each commit's message, author and committer, identity and timestamp, verbatim</strong>.</p>
+      <div class="grid cols-3" style="margin-top:22px">
+        <div class="card"><div class="tag">ENGINE</div><h3>Generic + faithful</h3><p>Walk refs → topo-order → re-encode → remap parents → swing refs → reset workspace. Deterministic and idempotent; <code>fsck</code> stays clean.</p></div>
+        <div class="card"><div class="tag">TODAY</div><h3>Re-chunk transform</h3><p>Version-preserving, yet it rewrites every root and commit — exactly what exercises the full engine end to end.</p></div>
+        <div class="card"><div class="tag">DECISION</div><h3>Engine now, demo at 0.2</h3><p>The real cross-version transform slots into the same engine at the first format bump — no synthetic format invented to demo against.</p></div>
+      </div>
+    </div>
+    <div class="num">05 / 11</div>
+  </section>
+
+  <!-- 6 · Packaged & documented -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">Packaged and documented</p>
+      <h2>A binary to run, a crate to build on, docs to read.</h2>
+      <div class="grid cols-3" style="margin-top:8px">
+        <div class="card"><div class="tag">PACKAGING</div><h3>acetone-core</h3><p>The library product surface (spec §7) — one façade crate re-exporting the API. A static musl binary on a <code>v*</code> tag; the workspace is publish-ready.</p></div>
+        <div class="card"><div class="tag">DOCS</div><h3>Guide + conformance</h3><p>A user guide for the everyday workflow, and a published openCypher conformance statement with a tracked known-gap list.</p></div>
+        <div class="card"><div class="tag">CONFORMANCE</div><h3>41.0% · honest declines</h3><p>1596 / 3897 TCK scenarios pass. The rest decline cleanly (typed "not supported"), never a wrong answer; 56 real failures are the tracked backlog.</p></div>
+      </div>
+      <p style="margin-top:20px">The design pack (spec §3.4/§3.5/§8, roadmap Phase 6 status) was revised to match reality — one of the three exit criteria.</p>
+    </div>
+    <div class="num">06 / 11</div>
+  </section>
+
+  <!-- 7 · Decisions -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions · for ratification</p>
+      <h2>Four ADRs — and one call you might make differently.</h2>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>ADR</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr><td><code>0023</code></td><td>Namespace machine entries under <code>.acetone/</code>; README stays at the tree root</td></tr>
+            <tr><td><code>0024</code></td><td>Freeze <code>format_version = 1</code>; ratify the deliberate scalar-domain caps</td></tr>
+            <tr><td><code>0025</code></td><td>The migrate engine; "engine now, demo at 0.2"</td></tr>
+            <tr><td><code>0026</code></td><td>The <code>acetone-core</code> façade and release packaging</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card lead" style="margin-top:18px">
+        <div class="tag">FLAGGED FOR YOUR CALL</div>
+        <h3>The schema index entry is frozen as <code>{label, property}</code></h3>
+        <p>Single-property, not speculatively widened for composite indexes. No scheduled index work needs a wider <em>definition</em>, and a half-designed widening risks freezing a worse format than a clean one <code>migrate</code> can evolve. Cheap to widen now if you'd rather — a <code>migrate</code> later if not.</p>
+      </div>
+    </div>
+    <div class="num">07 / 11</div>
+  </section>
+
+  <!-- 8 · The review gate -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">The review gate</p>
+      <h2>A fresh reviewer on every PR — and it earned its keep.</h2>
+      <p class="lede">Every PR faced a fresh subagent with no implementation context, prompted to break it. Nearly every one caught something real.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card"><div class="tag">#75 · MIGRATE</div><p>The engine handled merge commits, but it was <strong>unproven in-tree</strong>. Review demanded a two-parent migration test before merge.</p></div>
+        <div class="card"><div class="tag">#76 · PACKAGING</div><p>A real <strong>command injection</strong> via a crafted git tag name in the release workflow — which CI can never run. Closed with an <code>env:</code> var.</p></div>
+        <div class="card"><div class="tag">#74 · FREEZE</div><p>The prolly golden-pin gap, and an order-breaking §3.4 wording trap. The reviewer re-derived the git-blob hash and the datetime range by hand.</p></div>
+        <div class="card"><div class="tag">#73 · NAMESPACING</div><p>Missed tree paths in a CI script and a workspace ref — caught, then fixed before merge.</p></div>
+      </div>
+    </div>
+    <div class="num">08 / 11</div>
+  </section>
+
+  <!-- 9 · Gate & security -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="eyebrow">Gate · security</p>
+      <h2>Milestone security review: gate ready.</h2>
+      <p class="lede">A dedicated security pass over the whole Phase 6 diff — untrusted-repo reads, injection, panics, dependencies — found <strong>no blocker, high, or medium</strong> issues.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card"><div class="tag">CLOSED</div><h3>Release-workflow injection</h3><p>Confirmed closed — the tag name is a bash env var, not interpolated into the script. Actions SHA-pinned, permissions minimal, no secret exposed.</p></div>
+        <div class="card"><div class="tag">HARDENED</div><h3>Every untrusted read is typed</h3><p>The <code>.acetone/</code> reader, commit identity/timestamp parsing, the migrate walk and <code>rewrite_commit</code> all return typed errors under size caps — no panics, no injection, no traversal. No new dependencies.</p></div>
+      </div>
+      <div class="chips" style="margin-top:20px">
+        <span class="chip good"><span class="dot"></span>0 blocker / high / medium</span>
+        <span class="chip good"><span class="dot"></span>Injection closed</span>
+        <span class="chip good"><span class="dot"></span>No new deps</span>
+        <span class="chip accent"><span class="dot"></span>3 INFO notes · filed</span>
+      </div>
+    </div>
+    <div class="num">09 / 11</div>
+  </section>
+
+  <!-- 10 · Live demo -->
+  <section class="slide" id="s10">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo</p>
+      <h2>Freeze evidence, then a migration.</h2>
+      <p class="lede">Driving the phase's own tooling, one step at a time.</p>
+      <div class="term" style="margin-top:18px">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+        <div class="term-body">
+<div class="l"><span class="o"># 1 · the freeze fails loudly if the format drifts</span></div>
+<div class="l"><span class="p">$</span> <span class="c">cargo test -p acetone-prolly --test golden</span></div>
+<div class="l"><span class="ok">   ok</span> <span class="o">golden_leaf_node_and_root_hash · golden_inner_node_and_root_hash</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 2 · a small history, then migrate it forward</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone migrate --min-bytes 256 --mask-bits 9 --max-bytes 4096</span></div>
+<div class="l"><span class="o">   migrate: rewrote 3 commit(s), updated 2 ref(s)</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone get-node Host web1</span>   <span class="o"># data preserved, new hashes</span></div>
+<div class="l"><span class="ok">   os: "linux"</span></div>
+<div class="l"><span class="p">$</span> <span class="c">git fsck --strict</span>   <span class="ok">→ clean</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 3 · the product surface</span></div>
+<div class="l"><span class="p">$</span> <span class="c">cargo publish --dry-run -p acetone-store</span>   <span class="ok">→ packaged, clean</span></div>
+<div class="l"><span class="p">$</span> <span class="c">cargo build --release --bin acetone</span>   <span class="o">→ 4.0M optimized binary</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="num">10 / 11</div>
+  </section>
+
+  <!-- 11 · For Greg -->
+  <section class="slide" id="s11">
+    <div class="slide-inner">
+      <p class="eyebrow">At the boundary</p>
+      <h2>Yours to close.</h2>
+      <p class="lede">The phase's format-stability foundation is shipped and green. What remains is deliberately yours.</p>
+      <ul class="clean" style="margin-top:18px">
+        <li><b>Ratify</b> ADR-0023 – 0026, and rule on the flagged <code>{label, property}</code> index-freeze decision.</li>
+        <li><b>Tag 0.1</b> when ready — the release workflow and publish process stand ready (it reserves crates.io names irreversibly).</li>
+        <li><b>Dogfood</b> the real asset registry on your private remote — the fortnight in anger is the last exit criterion, and it is inherently yours.</li>
+      </ul>
+      <div class="risk" style="margin-top:22px">
+        <div class="r"><span class="id">filed</span><span class="t">TCK improvement (i64::MIN, pattern comprehension) · error-message pass · store-backed IndexSeek · migrate hardening — none blocks the boundary.</span></div>
+      </div>
+      <div class="chips" style="margin-top:20px">
+        <span class="chip good"><span class="dot"></span>main green @ 3f59eba</span>
+        <span class="chip good"><span class="dot"></span>Security gate ready</span>
+        <span class="chip accent"><span class="dot"></span>5 PRs · 4 ADRs · reviewed</span>
+      </div>
+    </div>
+    <div class="foot">docs/reports/phase-6.md · docs/demos/phase-6-deck.html</div>
+    <div class="num">11 / 11</div>
+  </section>
+
+</main>
