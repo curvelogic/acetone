@@ -168,9 +168,8 @@ pub struct NewCommit<'a> {
     /// anchoring only the roots is not enough — list every chunk of the
     /// version being committed. Anchors are stored as a sharded
     /// `.acetone/chunks/` tree of entries referencing the existing blobs: no
-    /// chunk data is
-    /// copied, and shards shared between versions deduplicate as tree
-    /// objects.
+    /// chunk data is copied, and shards shared between versions deduplicate as
+    /// tree objects.
     pub anchors: &'a [Hash],
     /// Author and committer identity (git-native; both set to this value).
     pub author: Signature,

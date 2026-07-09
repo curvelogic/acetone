@@ -68,8 +68,8 @@ step "branch, mutate, commit"
 "$ACETONE" --repo "$REPO" commit -m "add web3"
 
 step "root-level diff: diverged branches have different manifest roots"
-MAIN_MANIFEST=$(git -C "$REPO" rev-parse main:manifest)
-FEATURE_MANIFEST=$(git -C "$REPO" rev-parse feature:manifest)
+MAIN_MANIFEST=$(git -C "$REPO" rev-parse main:.acetone/manifest)
+FEATURE_MANIFEST=$(git -C "$REPO" rev-parse feature:.acetone/manifest)
 [ "$MAIN_MANIFEST" != "$FEATURE_MANIFEST" ] \
     || fail "diverged branches must differ at the manifest root"
 
@@ -107,10 +107,12 @@ if [ -n "${E2E_REMOTE:-}" ]; then
     FSCK_OUT="$(git -C "$CLONE" fsck --strict 2>&1)" \
         || fail "cloned repository must be connected: $FSCK_OUT"
     # Workspace refs are local-only (never pushed); recreate the default
-    # workspace in the clone by pointing it at main's manifest blob —
-    # pure git plumbing, then acetone opens the clone like any repo.
+    # workspace in the clone by pointing it at main's manifest blob under the
+    # reserved .acetone/ directory (ADR-0023) — a bare-blob workspace ref,
+    # which acetone still resolves — pure git plumbing, then acetone opens the
+    # clone like any repo.
     git -C "$CLONE" update-ref refs/acetone/workspaces/default \
-        "$(git -C "$CLONE" rev-parse main:manifest)"
+        "$(git -C "$CLONE" rev-parse main:.acetone/manifest)"
     git -C "$CLONE" symbolic-ref HEAD refs/heads/main
     "$ACETONE" --repo "$CLONE" get-node Host web1 | grep -q '"os": "linux"' \
         || fail "clone must serve node data"

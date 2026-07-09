@@ -15,8 +15,9 @@ its **root**:
   auto-renders something meaningful when a repository is browsed.
 
 The workspace tree (the Dolt-style working state under
-`refs/acetone/workspaces/*`, ADR-0010/huo) placed `manifest` and `chunks/` at
-its root too.
+`refs/acetone/workspaces/*`, whose `{manifest, chunks/}` shape ADR-0015
+established to survive foreign `git gc`) placed `manifest` and `chunks/` at its
+root too; this ADR amends that layout.
 
 These names are acetone conventions, not git requirements. The moment acetone
 shares a repository or a tree with other content (the shared-tree co-tenancy
