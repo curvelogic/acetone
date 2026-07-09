@@ -1,6 +1,14 @@
 # ADR-0021: Import plugin interface, provenance and no-op detection
 
-*Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-08 · Bead: acetone-6g5.1*
+*Status: accepted — ratified by Greg at the Phase 5 boundary (2026-07-09) · Date: 2026-07-08 · Bead: acetone-6g5.1*
+
+> **Phase 5 boundary outcome (2026-07-09).** Placement (extractors in the CLI)
+> accepted. Authoritative-replace accepted for now, with the human-curation
+> risk it carries — a re-import blats manual annotations on replaced nodes —
+> tracked as `acetone-6g5.11`. The priority direction there is import-to-branch
+> `+` merge (reuse the Phase 4 merge/conflict machinery), with a per-import
+> `--protect <props>` list as a secondary fallback; deletions/full-sync remain
+> further out.
 
 ## Context
 
