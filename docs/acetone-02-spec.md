@@ -40,7 +40,9 @@ A graph version is a **manifest**: a small canonical record listing the root has
 
 ### 3.4 Encodings
 
-Keys use an order-preserving tuple encoding (memcomparable): type-tagged, big-endian integers with sign flip, IEEE-754 total-order transform for floats, length-framed UTF-8, so that byte order equals logical order and range scans equal label/prefix scans. Values use canonical deterministic CBOR (definite lengths, sorted map keys). Any change to either encoding is a format version bump in the manifest header.
+Keys use an order-preserving tuple encoding (memcomparable): type-tagged, big-endian integers with sign flip, IEEE-754 total-order transform for floats, and **order-preserving chunked framing** for UTF-8 strings and byte strings (8-byte groups with escape markers — *not* a length prefix, which would break lexicographic order across strings of different lengths), so that byte order equals logical order and range scans equal label/prefix scans. Values use canonical deterministic CBOR (definite lengths, sorted map keys). Any change to either encoding is a format version bump in the manifest header.
+
+**Frozen scalar domains (format_version 1; ADR-0024 freeze, ratified at Gate D).** These are deliberate, permanent limits until a format bump: integers are `i64`; `Date` is `i64` days from the Unix epoch; `Time` is a nanosecond-of-day in `0..86_400_000_000_000`; **`DateTime` is `i64` nanoseconds from the Unix epoch, so its representable instant range is approximately 1677-09-21 to 2262-04-11**, with the **UTC offset stored in whole minutes** (`i16`, within ±18:00) — sub-minute historical offsets are truncated to the minute; `Duration` carries `(i64 months, i64 days, i64 nanos)` unnormalised. Floats are IEEE-754 `f64`; NaN is rejected in key positions and `-0.0` normalises to `+0.0` in keys (values preserve both). Widening any of these (e.g. `i128`-nanosecond datetimes, second-granular offsets, composite/kinded secondary indexes) is a format-version bump handled by `acetone migrate`.
 
 ### 3.5 Commits and refs
 
@@ -84,4 +86,4 @@ Views: named Cypher definitions stored in `schema`, addressed like labels. Mater
 
 ## 10. Format stability
 
-Until 1.0, the manifest carries `format_version`; any change to key encoding, value encoding, chunking parameters or manifest schema increments it, and `acetone migrate` rewrites history (producing new hashes — this is understood and acceptable pre-1.0, and a strong reason to harden §3.4 early).
+Until 1.0, the manifest carries `format_version`; any change to key encoding, value encoding, chunking parameters or manifest schema increments it, and `acetone migrate` rewrites history (producing new hashes — this is understood and acceptable pre-1.0, and a strong reason to harden §3.4 early). **Gate D (ADR-0024) froze `format_version = 1` for the 0.1 release**: the §3.4 encodings, the prolly node/chunker format and the manifest schema are byte-anchored by golden tests (a change flips a pin, failing loudly rather than drifting silently), and the version is checked first on every manifest decode so a future-version repository is rejected with a clear error rather than misread.
