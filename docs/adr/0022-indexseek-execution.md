@@ -1,6 +1,14 @@
 # ADR-0022: IndexSeek execution over the materialised query snapshot
 
-*Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-08 · Bead: acetone-6g5.3.2*
+*Status: accepted — ratified by Greg at the Phase 5 boundary (2026-07-09) · Date: 2026-07-08 · Bead: acetone-6g5.3.2*
+
+> **Phase 5 boundary outcome (2026-07-09).** In-memory seek accepted as the
+> bounded-win-first choice. The lazy, store-backed seek (the real scalability
+> win — a query touching only matching rows instead of materialising the whole
+> version) is **pulled into Phase 6** as `acetone-cbl.11`; it must reproduce the
+> numeric cross-type and runtime-representation handling recorded here or it
+> reintroduces the silent-subset bugs the review caught. `IndexRange` and
+> `KeySeek` execution remain in `acetone-6g5.3.3`.
 
 ## Context
 
