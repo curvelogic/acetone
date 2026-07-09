@@ -56,7 +56,7 @@ Each is tracked; the pass rate climbs as these land.
 
 Larger **deferred-syntax** families (the 1137 above) — e.g. `CALL {}`
 subqueries, `FOREACH`, `LOAD CSV`, quantified path patterns, `UNION` variants —
-are out of scope for 0.1 by design (spec §5, "Beyond 0.1"). They decline
+are out of scope for 0.1 by design (spec §5.1, "Explicitly deferred"). They decline
 cleanly rather than fail.
 
 ## How to read a regression
