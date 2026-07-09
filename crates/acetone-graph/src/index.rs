@@ -70,22 +70,32 @@ pub(crate) fn index_entry_key(
     if !bears {
         return None;
     }
-    // The indexed value: a key property lives in the node key (by position in
-    // the node's *primary* label key tuple); everything else in the record.
-    let value = match label_keys
-        .get(node_key.label())
-        .and_then(|keys| keys.iter().position(|k| k == def.property()))
-    {
-        Some(pos) => node_key.key().get(pos).cloned(),
-        None => record.properties().get(def.property()).cloned(),
-    }?;
-    // null-blind: null encodes fine but is intentionally left out (openCypher
-    // equality/range are never true for null).
-    if matches!(value, Value::Null) {
-        return None;
+    // Gather every indexed property's value, in declaration order: a key
+    // property lives in the node key (by position in the node's *primary* label
+    // key tuple); everything else in the record. **Composite null-blind**: if
+    // any component is absent or null, the node contributes no entry (an
+    // equality that pins all components is never true when one is null).
+    let mut values = Vec::with_capacity(def.properties().len());
+    for property in def.properties() {
+        let value = match label_keys
+            .get(node_key.label())
+            .and_then(|keys| keys.iter().position(|k| k == property))
+        {
+            Some(pos) => node_key.key().get(pos).cloned(),
+            None => record.properties().get(property).cloned(),
+        }?;
+        if matches!(value, Value::Null) {
+            return None;
+        }
+        values.push(value);
     }
-    let entry = IndexEntry::new(def.label(), def.property(), value, node_key.clone())
-        .expect("index label and property are non-empty (validated at declaration)");
+    let entry = IndexEntry::new(
+        def.label(),
+        def.properties().to_vec(),
+        values,
+        node_key.clone(),
+    )
+    .expect("index label and properties are non-empty (validated at declaration)");
     match entry.encode() {
         Ok(bytes) => Some(bytes),
         // NaN-blind: NaN anywhere in the value — top-level or nested in a list —

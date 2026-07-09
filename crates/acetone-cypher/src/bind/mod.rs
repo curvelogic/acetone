@@ -42,7 +42,7 @@ mod tests {
             },
             SchemaEntry::Index {
                 name: "host_os".into(),
-                def: IndexDef::new("Host", "os").unwrap(),
+                def: IndexDef::new("Host", vec!["os".into()]).unwrap(),
             },
         ])
     }

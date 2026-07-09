@@ -105,7 +105,7 @@ fn host_label() -> SchemaEntry {
 fn os_index() -> SchemaEntry {
     SchemaEntry::Index {
         name: "host_os".into(),
-        def: IndexDef::new("Host", "os").expect("idx"),
+        def: IndexDef::new("Host", vec!["os".into()]).expect("idx"),
     }
 }
 
@@ -195,7 +195,7 @@ fn numeric_cross_type_query_matches_a_scan_end_to_end() {
         },
         SchemaEntry::Index {
             name: "m_v".into(),
-            def: IndexDef::new("M", "v").expect("idx"),
+            def: IndexDef::new("M", vec!["v".into()]).expect("idx"),
         },
     ];
     let schema_without = vec![schema_with[0].clone()];
@@ -303,7 +303,7 @@ fn numeric_index_seek_matches_across_int_and_float_like_a_scan() {
         },
         SchemaEntry::Index {
             name: "m_v".into(),
-            def: IndexDef::new("M", "v").expect("idx"),
+            def: IndexDef::new("M", vec!["v".into()]).expect("idx"),
         },
     ];
     let adapter = GraphSnapshot::from_records_with_schema(&recs, &edges, &schema);
@@ -347,7 +347,7 @@ fn bytes_property_seek_matches_a_scan_end_to_end() {
         },
         SchemaEntry::Index {
             name: "b_p".into(),
-            def: IndexDef::new("B", "p").expect("idx"),
+            def: IndexDef::new("B", vec!["p".into()]).expect("idx"),
         },
     ];
     let schema_without = vec![schema_with[0].clone()];
@@ -399,7 +399,7 @@ fn list_valued_seek_falls_back_to_a_scan() {
         },
         SchemaEntry::Index {
             name: "m_tags".into(),
-            def: IndexDef::new("M", "tags").expect("idx"),
+            def: IndexDef::new("M", vec!["tags".into()]).expect("idx"),
         },
     ];
     let adapter = GraphSnapshot::from_records_with_schema(&recs, &edges, &schema);

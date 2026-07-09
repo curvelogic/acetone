@@ -1,6 +1,14 @@
 # ADR-0024: Gate D — freeze the on-disk format at `format_version = 1`
 
-*Status: proposed (mid-phase decision gate; flagged for Greg's retrospective review at the Phase 6 boundary) · Date: 2026-07-09 · Bead: acetone-cbl.1*
+*Status: accepted — ratified by Greg at the Phase 6 boundary (2026-07-09) · Date: 2026-07-09 · Bead: acetone-cbl.1*
+
+> **Phase 6 boundary outcome (2026-07-09).** The freeze is accepted. The one
+> flagged decision — the schema index entry frozen as `{label, property}` — was
+> **overruled in the safe direction**: Greg ratified **allowing composite
+> (multi-property) index keys**, widened *before* the 0.1 tag so the format
+> stays `format_version = 1` and never needs a migration (the "cheap now" window
+> this ADR called out). Implemented in `acetone-at0` / ADR-0027; the frozen-format
+> golden pins are re-pinned deliberately as part of that change.
 
 ## Context
 

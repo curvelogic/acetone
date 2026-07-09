@@ -53,11 +53,20 @@ impl Catalogue {
         self.rel_types.get(name)
     }
 
-    /// A declared secondary index over `(label, property)`, if any.
+    /// A declared **single-property** secondary index over `(label, property)`,
+    /// if any. Composite (multi-property) indexes are not yet consulted for
+    /// seek planning — a query pinning all their properties falls back to a
+    /// scan-and-filter, which is correct but unaccelerated (the seek
+    /// acceleration is a tracked follow-up); they are still maintained and
+    /// `fsck`-verified.
     pub fn index_on(&self, label: &str, property: &str) -> Option<(&str, &IndexDef)> {
         self.indexes
             .iter()
-            .find(|(_, def)| def.label() == label && def.property() == property)
+            .find(|(_, def)| {
+                def.label() == label
+                    && def.properties().len() == 1
+                    && def.properties()[0] == property
+            })
             .map(|(name, def)| (name.as_str(), def))
     }
 

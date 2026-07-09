@@ -308,26 +308,27 @@ impl RelTypeDef {
     }
 }
 
-/// A declared property index (spec §3.3): the map `idx/<name>` indexes
-/// `property` over nodes with `label`.
+/// A declared property index (spec §3.3): the map `idx/<name>` indexes one or
+/// more `properties` over nodes with `label`. A **composite** index has more
+/// than one property; its key is the ordered tuple of their values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexDef {
     label: String,
-    property: String,
+    properties: Vec<String>,
 }
 
 impl IndexDef {
-    /// Declare an index over `(label, property)`.
-    pub fn new(label: impl Into<String>, property: impl Into<String>) -> Result<Self, SchemaError> {
+    /// Declare an index over `(label, properties)`. `properties` must be
+    /// non-empty and contain no empty names.
+    pub fn new(label: impl Into<String>, properties: Vec<String>) -> Result<Self, SchemaError> {
         let label = label.into();
-        let property = property.into();
         if label.is_empty() {
             return Err(SchemaError::EmptyName("index label"));
         }
-        if property.is_empty() {
+        if properties.is_empty() || properties.iter().any(|p| p.is_empty()) {
             return Err(SchemaError::EmptyName("index property"));
         }
-        Ok(IndexDef { label, property })
+        Ok(IndexDef { label, properties })
     }
 
     /// The indexed label.
@@ -335,9 +336,9 @@ impl IndexDef {
         &self.label
     }
 
-    /// The indexed property.
-    pub fn property(&self) -> &str {
-        &self.property
+    /// The indexed properties, in declaration order.
+    pub fn properties(&self) -> &[String] {
+        &self.properties
     }
 }
 
@@ -440,12 +441,17 @@ impl SchemaEntry {
                 write_name_array(&mut out, &def.exists);
             }
             SchemaEntry::Index { def, .. } => {
-                // Canonical field order: label, property.
+                // Canonical field order: label < properties. The property list
+                // is in *declaration* order (a composite index's key is the
+                // ordered tuple), not sorted.
                 write_head(&mut out, MAJOR_MAP, 2);
                 write_text(&mut out, "label");
                 write_text(&mut out, &def.label);
-                write_text(&mut out, "property");
-                write_text(&mut out, &def.property);
+                write_text(&mut out, "properties");
+                write_head(&mut out, MAJOR_ARRAY, def.properties.len() as u64);
+                for property in &def.properties {
+                    write_text(&mut out, property);
+                }
             }
         }
         out
@@ -500,9 +506,15 @@ impl SchemaEntry {
                 expect_map(&mut reader, 2, "index declaration")?;
                 expect_field(&mut reader, "label")?;
                 let label = reader.read_text()?;
-                expect_field(&mut reader, "property")?;
-                let property = reader.read_text()?;
-                let def = IndexDef::new(label, property)?;
+                expect_field(&mut reader, "properties")?;
+                let count = reader.read_head(MAJOR_ARRAY)?;
+                let count =
+                    usize::try_from(count).map_err(|_| SchemaError::EmptyName("index property"))?;
+                let mut properties = Vec::with_capacity(count.min(reader.remaining()));
+                for _ in 0..count {
+                    properties.push(reader.read_text()?);
+                }
+                let def = IndexDef::new(label, properties)?;
                 SchemaEntry::Index {
                     name: name.clone(),
                     def,
@@ -672,7 +684,7 @@ mod tests {
             },
             SchemaEntry::Index {
                 name: "host_os".into(),
-                def: IndexDef::new("Host", "os").expect("valid"),
+                def: IndexDef::new("Host", vec!["os".into()]).expect("valid"),
             },
         ];
         for entry in entries {
@@ -711,7 +723,7 @@ mod tests {
             Err(SchemaError::EmptyName(_))
         ));
         assert!(matches!(
-            IndexDef::new("", "os"),
+            IndexDef::new("", vec!["os".into()]),
             Err(SchemaError::EmptyName(_))
         ));
     }

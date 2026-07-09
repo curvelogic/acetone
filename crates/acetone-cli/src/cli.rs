@@ -97,19 +97,20 @@ pub enum Command {
         /// The relationship type.
         rtype: String,
     },
-    /// Declare a property index `idx/<name>` over `(label, property)` (spec
+    /// Declare a property index `idx/<name>` over `(label, properties)` (spec
     /// §3.3). The index is built from the current nodes and maintained
-    /// transactionally thereafter; it accelerates equality lookups on the
-    /// property. Indexes are null- and NaN-blind.
+    /// transactionally thereafter; it accelerates equality lookups. Repeat
+    /// `--property` for a **composite** index — its key is the ordered tuple of
+    /// those property values. Indexes are null- and NaN-blind.
     DeclareIndex {
         /// The index name (the `idx/<name>` map).
         name: String,
         /// The indexed primary label.
         #[arg(long)]
         label: String,
-        /// The indexed property.
-        #[arg(long)]
-        property: String,
+        /// An indexed property; repeat, in order, for a composite index.
+        #[arg(long = "property", required = true)]
+        property: Vec<String>,
     },
     /// Rebuild every declared index from the nodes map (spec §3.3). A no-op
     /// when the indexes are already consistent; repairs any divergence `fsck`

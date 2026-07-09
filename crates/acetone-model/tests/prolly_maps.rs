@@ -104,7 +104,7 @@ fn fixture() -> Fixture {
         },
         SchemaEntry::Index {
             name: "host_os".into(),
-            def: IndexDef::new("Host", "os").expect("valid"),
+            def: IndexDef::new("Host", vec!["os".into()]).expect("valid"),
         },
     ];
     let nodes = vec![
@@ -159,7 +159,8 @@ fn fixture() -> Fixture {
         .filter(|(k, _)| k.label() == "Host")
         .filter_map(|(k, r)| {
             r.properties().get("os").map(|os| {
-                let entry = IndexEntry::new("Host", "os", os.clone(), k.clone()).expect("valid");
+                let entry = IndexEntry::new("Host", vec!["os".into()], vec![os.clone()], k.clone())
+                    .expect("valid");
                 (entry.encode().expect("encode"), Vec::new())
             })
         })
