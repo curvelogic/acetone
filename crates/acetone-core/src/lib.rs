@@ -4,7 +4,8 @@
 //! graph**: Dolt-style prolly trees stored in a git-compatible object store,
 //! queried with openCypher, operated as a workbench (spec §7, §8). This crate
 //! is the **real product surface** — the single dependency a library consumer
-//! adds. The `acetone` CLI is a thin client over this same surface.
+//! adds. The `acetone` CLI is a thin client over the same crates (routing it
+//! through this façade is a planned tidy-up).
 //!
 //! The constituent crates are re-exported as modules for full access:
 //!

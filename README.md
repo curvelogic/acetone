@@ -50,9 +50,11 @@ behaviour:
 
 ## Architecture
 
-A Cargo workspace of crates with strictly downward dependencies:
-`acetone-cli` → `acetone-core` (facade) → `acetone-cypher` → `acetone-graph`
-→ `acetone-model` → `acetone-prolly` → `acetone-store`.
+A Cargo workspace of crates with strictly downward dependencies. The library
+chain is `acetone-core` (façade) → `acetone-cypher` → `acetone-graph` →
+`acetone-model` → `acetone-prolly` → `acetone-store`. `acetone-cli` is a thin
+client that today depends on the constituent crates directly; routing it through
+the `acetone-core` façade is a planned tidy-up.
 
 ## Building and releasing
 

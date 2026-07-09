@@ -48,10 +48,16 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked --bin acetone --target ${{ matrix.target }}
       - name: Package
+        # `REF_NAME` is passed through the environment and referenced as a bash
+        # variable — never interpolated into the script text — so a crafted tag
+        # name (git allows `$`, backticks, `;`, …) cannot inject shell.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
         run: |
-          staging="acetone-${{ github.ref_name }}-${{ matrix.target }}"
+          staging="acetone-${REF_NAME}-${TARGET}"
           mkdir "$staging"
-          cp "target/${{ matrix.target }}/release/acetone" "$staging/"
+          cp "target/${TARGET}/release/acetone" "$staging/"
           cp README.md LICENSE-MIT LICENSE-APACHE "$staging/" 2>/dev/null || true
           tar czf "$staging.tar.gz" "$staging"
           shasum -a 256 "$staging.tar.gz" > "$staging.tar.gz.sha256"
