@@ -17,7 +17,7 @@ canonical CBOR value encoding (`values.rs`, `cbor.rs`), the schema encoding
 (`schema.rs`), the manifest schema (`manifest.rs`), and the prolly node framing
 plus content-defined chunker (`acetone-prolly/node.rs`, `chunker.rs`). The
 manifest already stores `[format_version, body]` with the version read *first*
-and unknown versions rejected (`manifest.rs:190`), and `FORMAT_VERSION = 1`.
+and unknown versions rejected (`manifest.rs:190–192`), and `FORMAT_VERSION = 1`.
 
 Three fresh, adversarial format-freeze audits (one per encoding surface, strongest
 model tier per ADR-0009 — the cost of a latent freeze defect is high) reviewed
