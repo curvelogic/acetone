@@ -112,7 +112,9 @@ fn scheduled_import_simulation() {
     )
     .expect("snapshot 2 commits");
 
-    // Snapshot 3: identical bytes to snapshot 2 → a detected no-op, no commit.
+    // Snapshot 3: the same content as snapshot 2 → a detected no-op, no commit.
+    // Detection is content-based (workspace-vs-HEAD), so it holds even if the
+    // bytes differ but the graph would not change.
     let v3 = import_snapshot(
         &repo,
         dir.path(),
@@ -143,15 +145,16 @@ fn scheduled_import_simulation() {
         "cache1 should be unchanged: {text}"
     );
 
-    // Every provenance trail is present, and the index tracked the mutation:
-    // web1 is now found under os=windows, not os=linux.
+    // The mutation is reflected in queries: web1 is now found under os=windows.
+    // (This query is planned as an IndexSeek on host_os; correctness is what we
+    // assert here — fsck below guards the index's integrity.)
     let q = acetone(
         &repo,
         &["query", "MATCH (h:Host {os: 'windows'}) RETURN h.name"],
     );
     assert!(
         stdout(&q).contains("web1"),
-        "index missed the mutation: {}",
+        "the os mutation is not queryable: {}",
         stdout(&q)
     );
 
