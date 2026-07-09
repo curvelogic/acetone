@@ -139,11 +139,12 @@ impl Default for Signature {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct NewCommit<'a> {
-    /// The manifest bytes; stored as the `manifest` blob in the commit
-    /// tree. Opaque to this crate — the model layer defines the format.
+    /// The manifest bytes; stored as the `.acetone/manifest` blob in the
+    /// commit tree (ADR-0023). Opaque to this crate — the model layer defines
+    /// the format.
     pub manifest: &'a [u8],
-    /// A small human-readable summary, stored as `README.md` in the commit
-    /// tree so hosting UIs show something meaningful.
+    /// A small human-readable summary, stored as `README.md` at the commit
+    /// tree **root** (not under `.acetone/`) so hosting UIs auto-render it.
     pub summary: &'a str,
     /// The commit message proper (subject and optional body), *without*
     /// trailers — those are supplied separately and appended as the final
@@ -165,8 +166,9 @@ pub struct NewCommit<'a> {
     /// by `git clone`/`push`/`fetch`** (git moves only ref-reachable
     /// objects). Chunks reference their children by content too, so
     /// anchoring only the roots is not enough — list every chunk of the
-    /// version being committed. Anchors are stored as a sharded `chunks/`
-    /// tree of entries referencing the existing blobs: no chunk data is
+    /// version being committed. Anchors are stored as a sharded
+    /// `.acetone/chunks/` tree of entries referencing the existing blobs: no
+    /// chunk data is
     /// copied, and shards shared between versions deduplicate as tree
     /// objects.
     pub anchors: &'a [Hash],
@@ -196,9 +198,10 @@ impl<'a> NewCommit<'a> {
 
 /// A commit read back from the store.
 ///
-/// The commit's tree may contain entries beyond `manifest` and `README.md`
-/// (future versions anchor chunk-reachability data there); readers ignore
-/// what they do not understand.
+/// The commit's tree carries acetone's machine-readable state under
+/// `.acetone/` (the `manifest` blob and the `chunks/` anchor tree) plus a
+/// root `README.md` (ADR-0023); it may contain further entries at the root or
+/// within `.acetone/`, and readers ignore what they do not understand.
 #[derive(Debug, Clone)]
 pub struct Commit {
     /// The commit's own address.

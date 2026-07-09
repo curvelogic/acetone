@@ -101,6 +101,73 @@ fn anchored_commit_round_trips_and_reads_ignore_the_anchor_tree() {
 }
 
 #[test]
+fn commit_and_workspace_trees_namespace_machine_entries_under_acetone() {
+    // ADR-0023: the manifest and chunk-anchor tree live under a reserved
+    // `.acetone/` directory; `README.md` stays at the commit-tree root so
+    // hosting UIs auto-render it. Entry order is git-canonical.
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    let chunks: Vec<Hash> = (0..3u32)
+        .map(|i| store.put(format!("chunk-{i}").as_bytes()).expect("put"))
+        .collect();
+    let manifest = b"manifest referencing chunks".as_slice();
+    let mut new = NewCommit::new(manifest, "# summary\n", "commit");
+    new.anchors = &chunks;
+    let id = store.create_commit(&new).expect("create_commit");
+
+    // Commit-tree root: `.acetone/` (a directory) then `README.md`.
+    let root = git(
+        &repo,
+        &["ls-tree", "--name-only", &format!("{id}^{{tree}}")],
+    );
+    let root_names: Vec<&str> = root.lines().collect();
+    assert_eq!(root_names, vec![".acetone", "README.md"]);
+
+    // `.acetone/` holds the chunk-anchor tree then the manifest blob.
+    let inner = git(
+        &repo,
+        &["ls-tree", "--name-only", &format!("{id}:.acetone")],
+    );
+    let inner_names: Vec<&str> = inner.lines().collect();
+    assert_eq!(inner_names, vec!["chunks", "manifest"]);
+
+    // Round-trip still resolves the manifest through the reserved directory.
+    let commit = store.read_commit(&id).expect("read").expect("present");
+    assert_eq!(commit.manifest.as_ref(), manifest);
+
+    // The workspace tree uses the same `.acetone/` shape (no root README) and
+    // resolves the manifest the same way.
+    let ws_tree = store
+        .write_workspace_tree(manifest, &chunks)
+        .expect("workspace tree");
+    let ws_root = git(&repo, &["ls-tree", "--name-only", &ws_tree.to_hex()]);
+    assert_eq!(ws_root.lines().collect::<Vec<_>>(), vec![".acetone"]);
+    let ws_inner = git(
+        &repo,
+        &[
+            "ls-tree",
+            "--name-only",
+            &format!("{}:.acetone", ws_tree.to_hex()),
+        ],
+    );
+    assert_eq!(
+        ws_inner.lines().collect::<Vec<_>>(),
+        vec!["chunks", "manifest"]
+    );
+    let manifest_hash = store
+        .workspace_manifest_hash(&ws_tree)
+        .expect("workspace manifest hash");
+    assert_eq!(
+        store
+            .get(&manifest_hash)
+            .expect("get")
+            .expect("present")
+            .as_ref(),
+        manifest
+    );
+}
+
+#[test]
 fn anchors_are_deduplicated_and_order_insensitive() {
     // The anchor tree is derived data: the same anchor *set* must produce
     // the same commit tree regardless of input order or duplicates.
@@ -300,7 +367,8 @@ fn commit_whose_tree_lacks_manifest_is_corrupt() {
     match store.read_commit(&hash) {
         Err(StoreError::Corrupt { context, reason }) => {
             assert_eq!(context, "commit tree");
-            assert!(reason.contains("manifest"), "reason: {reason}");
+            // No `.acetone/` directory at all (ADR-0023).
+            assert!(reason.contains(".acetone"), "reason: {reason}");
         }
         other => panic!("expected Corrupt, got {other:?}"),
     }
@@ -310,12 +378,17 @@ fn commit_whose_tree_lacks_manifest_is_corrupt() {
 fn commit_with_missing_manifest_blob_is_corrupt() {
     let (dir, store) = new_store();
     let repo = repo_path(&dir);
-    // A tree entry pointing at an object that does not exist.
+    // A `.acetone/manifest` entry pointing at an object that does not exist.
     let bogus = "0123456789abcdef0123456789abcdef01234567";
-    let tree = git_stdin(
+    let acetone = git_stdin(
         &repo,
         &["mktree", "--missing"],
         format!("100644 blob {bogus}\tmanifest\n").as_bytes(),
+    );
+    let tree = git_stdin(
+        &repo,
+        &["mktree"],
+        format!("040000 tree {a}\t.acetone\n", a = acetone.trim()).as_bytes(),
     );
     let commit = git_stdin(
         &repo,
@@ -331,20 +404,34 @@ fn commit_with_missing_manifest_blob_is_corrupt() {
 
 #[test]
 fn readers_ignore_unknown_tree_entries() {
-    // Forward compatibility: a future version may add entries to the
-    // commit tree; today's reader must not choke on them.
+    // Forward compatibility: a future version may add entries at the commit
+    // tree root *or* within `.acetone/` (ADR-0023); today's reader must not
+    // choke on them, and must still find `.acetone/manifest`.
     let (dir, store) = new_store();
     let repo = repo_path(&dir);
     let manifest = b"manifest bytes".as_slice();
     let manifest_hex = git_stdin(&repo, &["hash-object", "-w", "--stdin"], manifest);
     let extra_hex = git_stdin(&repo, &["hash-object", "-w", "--stdin"], b"from the future");
+    let extra = extra_hex.trim();
+    // `.acetone/` with unknown siblings around the manifest ("aa" < "manifest"
+    // < "zz").
+    let acetone = git_stdin(
+        &repo,
+        &["mktree"],
+        format!(
+            "100644 blob {extra}\taa-inner-extra\n100644 blob {m}\tmanifest\n100644 blob {extra}\tzz-inner-extra\n",
+            m = manifest_hex.trim(),
+        )
+        .as_bytes(),
+    );
+    // Root with unknown siblings around `.acetone/` (".acetone" < "future" <
+    // "zz").
     let tree = git_stdin(
         &repo,
         &["mktree"],
         format!(
-            "100644 blob {e}\tfuture-metadata\n100644 blob {m}\tmanifest\n100644 blob {e}\tzz-trailing-entry\n",
-            m = manifest_hex.trim(),
-            e = extra_hex.trim()
+            "040000 tree {a}\t.acetone\n100644 blob {extra}\tfuture-metadata\n100644 blob {extra}\tzz-trailing-entry\n",
+            a = acetone.trim(),
         )
         .as_bytes(),
     );

@@ -188,12 +188,13 @@ impl GitStore {
         self.repo.path()
     }
 
-    /// Build a workspace tree `{chunks/: <anchor tree>, manifest: <blob>}`
-    /// — the commit-tree shape minus the README — and return its object id.
-    /// The `chunks/` anchor tree makes git's reachability walk keep every
-    /// chunk the manifest references, so uncommitted working state survives
-    /// a foreign `git gc` (acetone-huo, amends ADR-0010). The workspace ref
-    /// then points at this tree instead of the bare manifest blob.
+    /// Build a workspace tree `{.acetone/: {chunks/: <anchor tree>, manifest:
+    /// <blob>}}` — the commit-tree shape minus the root README — and return
+    /// its object id (ADR-0023). The `.acetone/chunks/` anchor tree makes
+    /// git's reachability walk keep every chunk the manifest references, so
+    /// uncommitted working state survives a foreign `git gc` (acetone-huo,
+    /// amends ADR-0010). The workspace ref then points at this tree instead of
+    /// the bare manifest blob.
     pub fn write_workspace_tree(
         &self,
         manifest: &[u8],
@@ -202,20 +203,12 @@ impl GitStore {
         use gix::objs::tree::{Entry, EntryKind};
 
         let manifest_id = self.write_blob_capped(manifest, "writing workspace manifest")?;
-        // Git tree order: "chunks" < "manifest" byte-wise.
-        let mut entries = Vec::new();
-        if !anchors.is_empty() {
-            entries.push(Entry {
-                mode: EntryKind::Tree.into(),
-                filename: ANCHORS_ENTRY.into(),
-                oid: self.write_anchor_tree(anchors)?,
-            });
-        }
-        entries.push(Entry {
-            mode: EntryKind::Blob.into(),
-            filename: MANIFEST_ENTRY.into(),
-            oid: manifest_id.oid(),
-        });
+        let acetone_oid = self.write_acetone_subtree(manifest_id.oid(), anchors)?;
+        let entries = vec![Entry {
+            mode: EntryKind::Tree.into(),
+            filename: ACETONE_DIR.into(),
+            oid: acetone_oid,
+        }];
         let tree_id = self
             .repo
             .write_object(&gix::objs::Tree { entries })
@@ -225,9 +218,10 @@ impl GitStore {
     }
 
     /// Resolve the manifest blob a workspace ref points at. The ref value is
-    /// either a workspace tree (huo) whose `manifest` entry is the blob, or
-    /// — for a pre-huo workspace — the manifest blob directly. Lets the
-    /// graph layer read a workspace uniformly across the migration.
+    /// either a workspace tree (huo) whose `.acetone/manifest` entry is the
+    /// blob (ADR-0023), or — for a pre-huo workspace — the manifest blob
+    /// directly. Lets the graph layer read a workspace uniformly across the
+    /// migration.
     pub fn workspace_manifest_hash(&self, ref_value: &Hash) -> Result<Hash, StoreError> {
         let header = self.find_header(ref_value)?.ok_or_else(|| {
             StoreError::corrupt(
@@ -246,18 +240,7 @@ impl GitStore {
                 )?;
                 let tree = gix::objs::TreeRef::from_bytes(&data, self.repo.object_hash())
                     .map_err(|e| StoreError::corrupt("workspace tree", e.to_string()))?;
-                let entry = tree
-                    .entries
-                    .iter()
-                    .find(|entry| entry.filename == MANIFEST_ENTRY)
-                    .ok_or_else(|| StoreError::corrupt("workspace tree", "no `manifest` entry"))?;
-                if !entry.mode.is_blob() {
-                    return Err(StoreError::corrupt(
-                        "workspace tree",
-                        "`manifest` entry is not a blob",
-                    ));
-                }
-                Ok(Hash::from_oid(entry.oid.to_owned()))
+                self.root_manifest_hash(&tree, "workspace tree")
             }
             other => Err(StoreError::corrupt(
                 "workspace ref",
@@ -423,6 +406,80 @@ impl GitStore {
             })
             .map_err(|e| StoreError::backend("writing anchor tree", e))?
             .detach())
+    }
+
+    /// Build the `.acetone/` subtree that holds acetone's machine-readable
+    /// state — `{chunks/: <anchor tree> (iff anchors), manifest: <blob>}`
+    /// (ADR-0023) — and return its object id. Shared verbatim by commit and
+    /// workspace trees, so identical contents dedupe to one tree object.
+    fn write_acetone_subtree(
+        &self,
+        manifest_oid: gix::ObjectId,
+        anchors: &[Hash],
+    ) -> Result<gix::ObjectId, StoreError> {
+        use gix::objs::tree::{Entry, EntryKind};
+
+        // Git tree order: "chunks" < "manifest" byte-wise.
+        let mut entries = Vec::new();
+        if !anchors.is_empty() {
+            entries.push(Entry {
+                mode: EntryKind::Tree.into(),
+                filename: ANCHORS_ENTRY.into(),
+                oid: self.write_anchor_tree(anchors)?,
+            });
+        }
+        entries.push(Entry {
+            mode: EntryKind::Blob.into(),
+            filename: MANIFEST_ENTRY.into(),
+            oid: manifest_oid,
+        });
+        Ok(self
+            .repo
+            .write_object(&gix::objs::Tree { entries })
+            .map_err(|e| StoreError::backend("writing .acetone subtree", e))?
+            .detach())
+    }
+
+    /// Resolve the `manifest` blob hash from a commit- or workspace-tree root
+    /// by descending into the reserved `.acetone/` directory (ADR-0023).
+    /// Unknown sibling entries at the root and within `.acetone/` are ignored
+    /// (forward compatibility). `what` names the tree in error context.
+    fn root_manifest_hash(
+        &self,
+        root: &gix::objs::TreeRef<'_>,
+        what: &'static str,
+    ) -> Result<Hash, StoreError> {
+        let acetone = root
+            .entries
+            .iter()
+            .find(|entry| entry.filename == ACETONE_DIR)
+            .ok_or_else(|| StoreError::corrupt(what, "no `.acetone` directory in tree"))?;
+        if !acetone.mode.is_tree() {
+            return Err(StoreError::corrupt(
+                what,
+                "`.acetone` entry is not a directory",
+            ));
+        }
+        let acetone_hash = Hash::from_oid(acetone.oid.to_owned());
+        let header = self
+            .find_header(&acetone_hash)?
+            .ok_or_else(|| StoreError::corrupt(what, "`.acetone` subtree object is missing"))?;
+        let data =
+            self.read_object_checked(&acetone_hash, &header, gix::object::Kind::Tree, what)?;
+        let sub = gix::objs::TreeRef::from_bytes(&data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
+        let manifest = sub
+            .entries
+            .iter()
+            .find(|entry| entry.filename == MANIFEST_ENTRY)
+            .ok_or_else(|| StoreError::corrupt(what, "no `manifest` entry under `.acetone`"))?;
+        if !manifest.mode.is_blob() {
+            return Err(StoreError::corrupt(
+                what,
+                "`.acetone/manifest` entry is not a blob",
+            ));
+        }
+        Ok(Hash::from_oid(manifest.oid.to_owned()))
     }
 }
 
@@ -658,12 +715,18 @@ impl RefStore for GitStore {
     }
 }
 
-/// Name of the manifest blob within a commit tree (spec §3.5).
+/// Reserved directory holding acetone's machine-readable commit- and
+/// workspace-tree entries (`manifest`, `chunks/`), keeping the tree root free
+/// for co-tenant files such as a user's own `README.md` (ADR-0023). Chosen so
+/// it sorts before `README.md` at the root (`'.'` 0x2E < `'R'` 0x52).
+const ACETONE_DIR: &str = ".acetone";
+/// Name of the manifest blob within the `.acetone/` directory (spec §3.5).
 const MANIFEST_ENTRY: &str = "manifest";
-/// Name of the human-readable summary blob within a commit tree; `README.md`
-/// so hosting UIs render it.
+/// Name of the human-readable summary blob at the commit-tree **root**;
+/// `README.md` so hosting UIs render it (kept at the root deliberately —
+/// ADR-0023).
 const SUMMARY_ENTRY: &str = "README.md";
-/// Name of the chunk-anchor tree within a commit tree: `chunks/<hh>/<hex>`
+/// Name of the chunk-anchor tree within `.acetone/`: `.acetone/chunks/<hh>/<hex>`
 /// entries reference every anchored chunk so git's reachability walk keeps
 /// them alive and transfers them.
 const ANCHORS_ENTRY: &str = "chunks";
@@ -766,26 +829,22 @@ impl CommitStore for GitStore {
         let signature = git_signature(&commit.author)?;
         let manifest_id = self.write_blob_capped(commit.manifest, "writing manifest")?;
         let summary_id = self.write_blob_capped(commit.summary.as_bytes(), "writing summary")?;
+        let acetone_oid = self.write_acetone_subtree(manifest_id.oid(), commit.anchors)?;
 
-        // Entries must be in git tree order; "README.md" < "chunks" <
-        // "manifest" byte-wise, so this literal order is already sorted.
-        let mut entries = vec![Entry {
-            mode: EntryKind::Blob.into(),
-            filename: SUMMARY_ENTRY.into(),
-            oid: summary_id.oid(),
-        }];
-        if !commit.anchors.is_empty() {
-            entries.push(Entry {
+        // Root entries must be in git tree order; ".acetone" (a directory,
+        // compared as ".acetone/") < "README.md" byte-wise (ADR-0023).
+        let entries = vec![
+            Entry {
                 mode: EntryKind::Tree.into(),
-                filename: ANCHORS_ENTRY.into(),
-                oid: self.write_anchor_tree(commit.anchors)?,
-            });
-        }
-        entries.push(Entry {
-            mode: EntryKind::Blob.into(),
-            filename: MANIFEST_ENTRY.into(),
-            oid: manifest_id.oid(),
-        });
+                filename: ACETONE_DIR.into(),
+                oid: acetone_oid,
+            },
+            Entry {
+                mode: EntryKind::Blob.into(),
+                filename: SUMMARY_ENTRY.into(),
+                oid: summary_id.oid(),
+            },
+        ];
         let tree = gix::objs::Tree { entries };
         let tree_id = self
             .repo
@@ -844,20 +903,7 @@ impl CommitStore for GitStore {
         let tree = gix::objs::TreeRef::from_bytes(&tree_data, self.repo.object_hash())
             .map_err(|e| StoreError::corrupt("commit tree", e.to_string()))?;
 
-        let manifest_entry = tree
-            .entries
-            .iter()
-            .find(|entry| entry.filename == MANIFEST_ENTRY)
-            .ok_or_else(|| {
-                StoreError::corrupt("commit tree", "no `manifest` entry in commit tree")
-            })?;
-        if !manifest_entry.mode.is_blob() {
-            return Err(StoreError::corrupt(
-                "commit tree",
-                "`manifest` entry is not a blob",
-            ));
-        }
-        let manifest_hash = Hash::from_oid(manifest_entry.oid.to_owned());
+        let manifest_hash = self.root_manifest_hash(&tree, "commit tree")?;
         let manifest = self
             .get(&manifest_hash)?
             .ok_or_else(|| StoreError::corrupt("commit manifest", "manifest blob is missing"))?;
