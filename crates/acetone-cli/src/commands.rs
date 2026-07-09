@@ -476,10 +476,10 @@ fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
     Ok(())
 }
 
-fn declare_index(repo_path: &Path, name: &str, label: &str, property: &str) -> Result<()> {
+fn declare_index(repo_path: &Path, name: &str, label: &str, properties: &[String]) -> Result<()> {
     use acetone_model::schema::{IndexDef, SchemaEntry};
-    let def =
-        IndexDef::new(label, property).with_context(|| format!("declaring index {name:?}"))?;
+    let def = IndexDef::new(label, properties.to_vec())
+        .with_context(|| format!("declaring index {name:?}"))?;
     let entry = SchemaEntry::Index {
         name: name.to_owned(),
         def,
@@ -490,11 +490,16 @@ fn declare_index(repo_path: &Path, name: &str, label: &str, property: &str) -> R
     // `idx/<name>` map from the current nodes (spec §3.3, Invariant #5).
     txn.put_schema(&entry)?;
     txn.save().context("saving workspace")?;
+    let props = properties
+        .iter()
+        .map(|p| format_label(p))
+        .collect::<Vec<_>>()
+        .join(", ");
     outln!(
-        "declared index {} on {}.{}",
+        "declared index {} on {}({})",
         format_label(name),
         format_label(label),
-        format_label(property)
+        props
     );
     Ok(())
 }

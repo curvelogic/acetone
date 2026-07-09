@@ -283,13 +283,18 @@ fn golden_edge_keys() {
 
 #[test]
 fn golden_index_entry() {
-    let entry =
-        IndexEntry::new("Host", "os", Value::String("linux".into()), host_web1()).expect("valid");
-    // (label, property, value, node key) — label/property as bare strings,
-    // the node key as its one list-element encoding.
+    let entry = IndexEntry::new(
+        "Host",
+        vec!["os".into()],
+        vec![Value::String("linux".into())],
+        host_web1(),
+    )
+    .expect("valid");
+    // [label, [property names], [values], node key] — a single-property index
+    // is one-element lists (composite indexes, ADR-0024 ratification/ADR-0027).
     assert_eq!(
         hex(&entry.encode().expect("encode")),
-        "06486f737400000000fb066f73000000000000f9066c696e7578000000fc\
+        "06486f737400000000fb0c066f73000000000000f9000c066c696e7578000000fc00\
          0c06486f737400000000fb067765623100000000fb00"
             .replace(char::is_whitespace, "")
     );
@@ -363,16 +368,16 @@ fn golden_schema_entries() {
 
     let index = SchemaEntry::Index {
         name: "host_os".into(),
-        def: IndexDef::new("Host", "os").expect("valid"),
+        def: IndexDef::new("Host", vec!["os".into()]).expect("valid"),
     };
     assert_eq!(
         hex(&index.map_key()),
         "06696e646578000000fc06686f73745f6f7300fe"
     );
-    // {"label": "Host", "property": "os"}.
+    // {"label": "Host", "properties": ["os"]}.
     assert_eq!(
         hex(&index.encode_value()),
-        "a2656c6162656c64486f73746870726f7065727479626f73"
+        "a2656c6162656c64486f73746a70726f7065727469657381626f73"
     );
 
     assert_eq!(hex(&schema_kind_prefix("label")), "066c6162656c000000fc");

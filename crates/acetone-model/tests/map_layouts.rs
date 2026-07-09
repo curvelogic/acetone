@@ -145,7 +145,7 @@ fn schema_entry() -> impl Strategy<Value = SchemaEntry> {
         1 => (name(), name(), name()).prop_map(|(entry_name, label, property)| {
             SchemaEntry::Index {
                 name: entry_name,
-                def: IndexDef::new(label, property).expect("valid"),
+                def: IndexDef::new(label, vec![property]).expect("valid"),
             }
         }),
     ]
@@ -269,11 +269,11 @@ proptest! {
     /// Index entries: round trip; the equality-probe prefix matches.
     #[test]
     fn index_entry_round_trip(label in name(), property in name(), v in key_scalar(), k in node_key()) {
-        let entry = IndexEntry::new(label.clone(), property.clone(), v.clone(), k)
+        let entry = IndexEntry::new(label.clone(), vec![property.clone()], vec![v.clone()], k)
             .expect("valid");
         let bytes = entry.encode().expect("encodable");
         prop_assert_eq!(IndexEntry::decode(&bytes).expect("decodable"), entry);
-        let probe = index_value_prefix(&label, &property, &v).expect("encodable");
+        let probe = index_value_prefix(&label, std::slice::from_ref(&property), std::slice::from_ref(&v)).expect("encodable");
         prop_assert!(bytes.starts_with(&probe));
     }
 

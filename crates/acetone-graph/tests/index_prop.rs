@@ -58,7 +58,7 @@ proptest! {
             }).expect("s");
             tx.put_schema(&SchemaEntry::Index {
                 name: "n_region".into(),
-                def: IndexDef::new("N", "region").expect("idx"),
+                def: IndexDef::new("N", vec!["region".into()]).expect("idx"),
             }).expect("s");
             tx.commit("schema", &[], None).expect("commit");
         }

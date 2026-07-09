@@ -247,7 +247,7 @@ pub fn schema() -> Vec<SchemaEntry> {
         },
         SchemaEntry::Index {
             name: "host_os".into(),
-            def: IndexDef::new("Host", "os").expect("valid"),
+            def: IndexDef::new("Host", vec!["os".into()]).expect("valid"),
         },
     ]
 }

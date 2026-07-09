@@ -68,6 +68,9 @@ impl GraphSnapshot {
         schema: &[SchemaEntry],
     ) -> Self {
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
+        // Only single-property indexes drive the in-memory seek (ADR-0022);
+        // composite indexes are maintained and fsck-verified but not yet
+        // seek-accelerated (a tracked follow-up), so a composite pin scans.
         let mut index_defs: Vec<(String, String, String)> = Vec::new();
         for entry in schema {
             match entry {
@@ -75,11 +78,9 @@ impl GraphSnapshot {
                     key_names.insert(name.clone(), def.key().to_vec());
                 }
                 SchemaEntry::Index { name, def } => {
-                    index_defs.push((
-                        name.clone(),
-                        def.label().to_owned(),
-                        def.property().to_owned(),
-                    ));
+                    if let [property] = def.properties() {
+                        index_defs.push((name.clone(), def.label().to_owned(), property.clone()));
+                    }
                 }
                 SchemaEntry::RelType { .. } => {}
             }

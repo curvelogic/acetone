@@ -16,8 +16,9 @@
 //!   discriminator is `Null` unless the relationship type declares one
 //!   (spec §2);
 //! - an **index entry** ([`IndexEntry`]) encodes as
-//!   `[String(label), String(property), value, node_key]` with an empty
-//!   map value (spec §3.3).
+//!   `[String(label), List(property names), List(values), node_key]` with an
+//!   empty map value (spec §3.3); a composite index keys on the ordered value
+//!   tuple, a single-property index on a one-element tuple (ADR-0027).
 //!
 //! Prefix helpers return the byte prefixes that make the spec's scan
 //! shapes ("all nodes with label L", "all edges out of X", "all T-edges
@@ -279,40 +280,51 @@ pub fn edge_endpoint_type_prefix(node: &NodeKey, rtype: &str) -> Result<Vec<u8>,
 }
 
 /// One entry of a declared property index map `idx/<name>`:
-/// `(label, property, value, node key)` with an empty value (spec §3.3).
+/// `[String(label), List(property names), List(values), node key]` (spec §3.3).
+/// The value is empty; the key is everything. A **composite** index carries
+/// more than one property; a single-property index is the one-element case,
+/// encoded uniformly (a one-element list, not a bare scalar).
 ///
-/// This layer is policy-free about *which* values are indexable beyond
-/// what the key encoding itself enforces (NaN is unencodable, ADR-0004);
-/// the graph layer decides how NaN-valued properties are handled when it
-/// maintains indexes.
+/// This layer is policy-free about *which* values are indexable beyond what the
+/// key encoding itself enforces (NaN is unencodable, ADR-0004); the graph layer
+/// decides how null/NaN-valued properties are handled when it maintains
+/// indexes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexEntry {
     label: String,
-    property: String,
-    value: Value,
+    properties: Vec<String>,
+    values: Vec<Value>,
     node: NodeKey,
 }
 
 impl IndexEntry {
-    /// Validate and construct an index entry.
+    /// Validate and construct an index entry. `properties` must be non-empty
+    /// (no empty names) and the same length as `values`.
     pub fn new(
         label: impl Into<String>,
-        property: impl Into<String>,
-        value: Value,
+        properties: Vec<String>,
+        values: Vec<Value>,
         node: NodeKey,
     ) -> Result<Self, GraphKeyError> {
         let label = label.into();
-        let property = property.into();
         if label.is_empty() {
             return Err(GraphKeyError::EmptyName("index label"));
         }
-        if property.is_empty() {
+        if properties.is_empty() {
             return Err(GraphKeyError::EmptyName("index property"));
+        }
+        if properties.iter().any(|p| p.is_empty()) {
+            return Err(GraphKeyError::EmptyName("index property"));
+        }
+        if properties.len() != values.len() {
+            return Err(GraphKeyError::Shape(
+                "index entry property and value counts differ",
+            ));
         }
         Ok(IndexEntry {
             label,
-            property,
-            value,
+            properties,
+            values,
             node,
         })
     }
@@ -322,14 +334,14 @@ impl IndexEntry {
         &self.label
     }
 
-    /// The indexed property name.
-    pub fn property(&self) -> &str {
-        &self.property
+    /// The indexed property names, in declaration order.
+    pub fn properties(&self) -> &[String] {
+        &self.properties
     }
 
-    /// The indexed property value.
-    pub fn value(&self) -> &Value {
-        &self.value
+    /// The indexed values, aligned with [`Self::properties`].
+    pub fn values(&self) -> &[Value] {
+        &self.values
     }
 
     /// The node the entry points at.
@@ -341,8 +353,8 @@ impl IndexEntry {
     pub fn encode(&self) -> Result<Vec<u8>, GraphKeyError> {
         Ok(keys::encode_key(&[
             Value::String(self.label.clone()),
-            Value::String(self.property.clone()),
-            self.value.clone(),
+            Value::List(self.properties.iter().cloned().map(Value::String).collect()),
+            Value::List(self.values.clone()),
             self.node.to_value(),
         ])?)
     }
@@ -350,30 +362,40 @@ impl IndexEntry {
     /// Decode an `idx/<name>` map key.
     pub fn decode(bytes: &[u8]) -> Result<Self, GraphKeyError> {
         let tuple = keys::decode_key(bytes)?;
-        let [label, property, value, node] = tuple.as_slice() else {
+        let [label, properties, values, node] = tuple.as_slice() else {
             return Err(GraphKeyError::Shape(
                 "index key must have exactly four elements",
             ));
         };
-        let (Value::String(label), Value::String(property)) = (label, property) else {
+        let (Value::String(label), Value::List(properties), Value::List(values)) =
+            (label, properties, values)
+        else {
             return Err(GraphKeyError::Shape(
-                "index key must start with string label and property",
+                "index key must be [label, [properties], [values], node]",
             ));
         };
+        let properties = properties
+            .iter()
+            .map(|p| match p {
+                Value::String(s) => Ok(s.clone()),
+                _ => Err(GraphKeyError::Shape("index property names must be strings")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         IndexEntry::new(
             label.clone(),
-            property.clone(),
-            value.clone(),
+            properties,
+            values.clone(),
             NodeKey::from_value(node)?,
         )
     }
 }
 
-/// Byte prefix of every index entry for `(label, property)`.
-pub fn index_prefix(label: &str, property: &str) -> Vec<u8> {
+/// Byte prefix of every index entry for `(label, properties)` — the "all
+/// entries of this index" scan and the base for a value-tuple seek prefix.
+pub fn index_prefix(label: &str, properties: &[String]) -> Vec<u8> {
     keys::encode_key(&[
         Value::String(label.to_owned()),
-        Value::String(property.to_owned()),
+        Value::List(properties.iter().cloned().map(Value::String).collect()),
     ])
     .expect("string tuples always encode")
 }
@@ -382,13 +404,13 @@ pub fn index_prefix(label: &str, property: &str) -> Vec<u8> {
 /// equality probe; the remaining suffix enumerates matching node keys.
 pub fn index_value_prefix(
     label: &str,
-    property: &str,
-    value: &Value,
+    properties: &[String],
+    values: &[Value],
 ) -> Result<Vec<u8>, GraphKeyError> {
     Ok(keys::encode_key(&[
         Value::String(label.to_owned()),
-        Value::String(property.to_owned()),
-        value.clone(),
+        Value::List(properties.iter().cloned().map(Value::String).collect()),
+        Value::List(values.to_vec()),
     ])?)
 }
 
@@ -531,21 +553,44 @@ mod tests {
 
     #[test]
     fn index_entry_round_trips_and_prefixes_nest() {
+        // Single-property index: a one-element property/value list.
         let entry = IndexEntry::new(
             "Host",
-            "region",
-            Value::String("eu".into()),
+            vec!["region".into()],
+            vec![Value::String("eu".into())],
             nk("Host", "web1"),
         )
         .expect("valid");
         let bytes = entry.encode().expect("encode");
         assert_eq!(IndexEntry::decode(&bytes).expect("decode"), entry);
-        let by_prop = index_prefix("Host", "region");
+        let props = vec!["region".to_string()];
+        let by_prop = index_prefix("Host", &props);
         let by_value =
-            index_value_prefix("Host", "region", &Value::String("eu".into())).expect("prefix");
+            index_value_prefix("Host", &props, &[Value::String("eu".into())]).expect("prefix");
         assert!(bytes.starts_with(&by_prop));
         assert!(bytes.starts_with(&by_value));
         assert!(by_value.starts_with(&by_prop));
+    }
+
+    #[test]
+    fn composite_index_entry_round_trips_and_seek_prefix_nests() {
+        let props = vec!["os".to_string(), "dc".to_string()];
+        let vals = vec![Value::String("linux".into()), Value::Int(3)];
+        let entry = IndexEntry::new("Host", props.clone(), vals.clone(), nk("Host", "web1"))
+            .expect("valid");
+        let bytes = entry.encode().expect("encode");
+        let back = IndexEntry::decode(&bytes).expect("decode");
+        assert_eq!(back, entry);
+        assert_eq!(back.properties(), props.as_slice());
+        assert_eq!(back.values(), vals.as_slice());
+        // Seeking the full value tuple is a byte prefix of the entry.
+        let by_value = index_value_prefix("Host", &props, &vals).expect("prefix");
+        assert!(bytes.starts_with(&by_value));
+        assert!(by_value.starts_with(&index_prefix("Host", &props)));
+        // Arity mismatch is rejected.
+        assert!(
+            IndexEntry::new("Host", props.clone(), vec![Value::Int(3)], nk("Host", "w")).is_err()
+        );
     }
 
     #[test]

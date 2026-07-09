@@ -46,7 +46,7 @@ fn declare_region_index(repo: &Repository) {
     let mut tx = repo.begin_write().expect("begin");
     tx.put_schema(&SchemaEntry::Index {
         name: "host_region".into(),
-        def: IndexDef::new("Host", "region").expect("index"),
+        def: IndexDef::new("Host", vec!["region".into()]).expect("index"),
     })
     .expect("schema");
     tx.commit("declare index", &[], None).expect("commit");
@@ -63,7 +63,8 @@ fn index_contents(repo: &Repository, name: &str) -> Vec<(Value, String)> {
                 Value::String(s) => s.clone(),
                 other => format!("{other:?}"),
             };
-            (e.value().clone(), node)
+            // These fixtures declare single-property indexes.
+            (e.values()[0].clone(), node)
         })
         .collect()
 }
@@ -192,7 +193,7 @@ fn nan_valued_property_is_not_indexed() {
         .expect("s");
         tx.put_schema(&SchemaEntry::Index {
             name: "m_score".into(),
-            def: IndexDef::new("M", "score").expect("idx"),
+            def: IndexDef::new("M", vec!["score".into()]).expect("idx"),
         })
         .expect("s");
         tx.commit("schema", &[], None).expect("commit");
@@ -232,7 +233,7 @@ fn nan_nested_in_a_list_value_is_not_indexed_and_does_not_panic() {
         let mut tx = repo.begin_write().expect("begin");
         tx.put_schema(&SchemaEntry::Index {
             name: "host_scores".into(),
-            def: IndexDef::new("Host", "scores").expect("idx"),
+            def: IndexDef::new("Host", vec!["scores".into()]).expect("idx"),
         })
         .expect("s");
         tx.commit("index", &[], None).expect("commit");
@@ -315,6 +316,102 @@ fn reindex_reproduces_identical_roots() {
         .get("host_region")
         .copied();
     assert_eq!(root_before, root_after, "reindex changed the index root");
+}
+
+#[test]
+fn composite_index_maintains_a_value_tuple_and_is_null_blind() {
+    // A composite (multi-property) index over (os, dc): its key is the ordered
+    // value tuple; a node missing any component contributes no entry
+    // (composite null-blind). ADR-0024 ratification / ADR-0027.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        for (k, os, dc) in [
+            ("web1", "linux", Some("ams")),
+            ("web2", "linux", Some("lon")),
+            ("db1", "bsd", Some("ams")),
+            ("partial", "linux", None), // missing dc → not indexed
+        ] {
+            let mut props = vec![("os", Value::String(os.into()))];
+            if let Some(dc) = dc {
+                props.push(("dc", Value::String(dc.into())));
+            }
+            tx.put_node(&node("Host", k), &record(&props)).expect("n");
+        }
+        tx.commit("nodes", &[], None).expect("commit");
+    }
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Index {
+            name: "host_os_dc".into(),
+            def: IndexDef::new("Host", vec!["os".into(), "dc".into()]).expect("index"),
+        })
+        .expect("schema");
+        tx.commit("declare composite index", &[], None)
+            .expect("commit");
+    }
+
+    // The three fully-populated nodes are indexed under their (os, dc) tuple;
+    // `partial` (no dc) is null-blind and absent.
+    let snap = repo.workspace_snapshot().expect("snap");
+    let mut got: Vec<(Vec<Value>, String)> = snap
+        .index_entries("host_os_dc")
+        .expect("entries")
+        .into_iter()
+        .map(|e| {
+            let node = match &e.node().key()[0] {
+                Value::String(s) => s.clone(),
+                other => format!("{other:?}"),
+            };
+            (e.values().to_vec(), node)
+        })
+        .collect();
+    got.sort_by(|a, b| a.1.cmp(&b.1));
+    let s = |x: &str| Value::String(x.into());
+    assert_eq!(
+        got,
+        vec![
+            (vec![s("bsd"), s("ams")], "db1".to_string()),
+            (vec![s("linux"), s("ams")], "web1".to_string()),
+            (vec![s("linux"), s("lon")], "web2".to_string()),
+        ]
+    );
+    drop(snap);
+
+    // Invariant #5: reindex reproduces the identical composite root.
+    let root_before = repo
+        .workspace_snapshot()
+        .expect("snap")
+        .manifest()
+        .indexes
+        .get("host_os_dc")
+        .copied();
+    repo.reindex().expect("reindex");
+    let root_after = repo
+        .workspace_snapshot()
+        .expect("snap")
+        .manifest()
+        .indexes
+        .get("host_os_dc")
+        .copied();
+    assert_eq!(
+        root_before, root_after,
+        "reindex changed the composite root"
+    );
+    assert!(root_before.is_some());
+
+    // fsck (which shares index_entry_key) verifies the composite index clean.
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| matches!(f.kind, FindingKind::IndexInconsistency)),
+        "composite index must be fsck-consistent: {:?}",
+        report.findings
+    );
 }
 
 #[test]
@@ -429,7 +526,7 @@ fn secondary_label_membership_is_indexed_and_maintained() {
         let mut tx = repo.begin_write().expect("begin");
         tx.put_schema(&SchemaEntry::Index {
             name: "tagged_region".into(),
-            def: IndexDef::new("Tagged", "region").expect("idx"),
+            def: IndexDef::new("Tagged", vec!["region".into()]).expect("idx"),
         })
         .expect("s");
         tx.commit("index", &[], None).expect("commit");
@@ -543,7 +640,7 @@ fn key_property_index_sources_value_from_the_node_key() {
         let mut tx = repo.begin_write().expect("begin");
         tx.put_schema(&SchemaEntry::Index {
             name: "host_name".into(),
-            def: IndexDef::new("Host", "name").expect("idx"),
+            def: IndexDef::new("Host", vec!["name".into()]).expect("idx"),
         })
         .expect("s");
         tx.commit("index on key", &[], None).expect("commit");
