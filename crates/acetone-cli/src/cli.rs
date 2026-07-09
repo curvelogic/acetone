@@ -235,6 +235,25 @@ pub enum Command {
     /// superseded loose objects and packs. Representation-only — preserves
     /// every object exactly. Run periodically after churn to reclaim space.
     Gc,
+    /// Rewrite all history under new chunk parameters, producing new hashes
+    /// (ADR-0025). A version-preserving re-chunk — `format_version` is
+    /// unchanged (chunk parameters are manifest data) — that re-encodes every
+    /// version and rebuilds the commit graph, preserving each commit's
+    /// message, author and committer (identity and timestamp). This is the
+    /// generic history-rewrite engine; a future `format_version` bump plugs
+    /// into the same command. Requires a clean, non-merging workspace, which it
+    /// resets to the rewritten head.
+    Migrate {
+        /// Target minimum chunk size in bytes.
+        #[arg(long)]
+        min_bytes: u32,
+        /// Target rolling-hash mask bits (mean chunk size ≈ 2^mask_bits).
+        #[arg(long)]
+        mask_bits: u32,
+        /// Target maximum chunk size in bytes.
+        #[arg(long)]
+        max_bytes: u32,
+    },
     /// Import a source file into the graph, recording provenance trailers
     /// (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op
     /// when the source is unchanged (spec §7). Node mode (`--label`) maps each

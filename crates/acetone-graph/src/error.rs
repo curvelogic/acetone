@@ -141,6 +141,10 @@ pub enum GraphError {
     /// An operation needs a merge in progress but none is (or vice versa).
     #[error("{0}")]
     MergeState(&'static str),
+    /// A history rewrite (`acetone migrate`) hit an internal inconsistency
+    /// (a cycle in the commit graph, or a reachable commit that vanished).
+    #[error("migrate: {0}")]
+    Migrate(String),
     /// An import extractor failed, or a source record could not be mapped to
     /// a canonical node/edge record (spec §7, ADR-0021).
     #[error(transparent)]

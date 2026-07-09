@@ -78,4 +78,6 @@ pub use consolidate::{ConsolidateOptions, ConsolidateStats};
 pub use error::StoreError;
 pub use git::{DEFAULT_MAX_CHUNK_SIZE, GitStore, GitStoreOptions, ObjectFormat, validate_trailer};
 pub use hash::Hash;
-pub use store::{ChunkStore, Commit, CommitStore, NewCommit, RefStore, Signature};
+pub use store::{
+    ChunkStore, Commit, CommitStore, Identity, NewCommit, RefStore, RewriteCommit, Signature,
+};

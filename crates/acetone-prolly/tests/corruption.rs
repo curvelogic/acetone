@@ -92,20 +92,14 @@ fn exercise(f: &Fixture) -> Result<(), ProllyError> {
     let forward: Result<Vec<_>, _> = scan(&f.store, &f.root, ..)?
         .map(|r| r.map(|(k, v)| (k.to_vec(), v.to_vec())))
         .collect();
-    match forward {
-        Ok(got) => assert_eq!(got, expected, "scan succeeded with wrong contents"),
-        Err(e) => return Err(e),
-    }
+    let got = forward?;
+    assert_eq!(got, expected, "scan succeeded with wrong contents");
     let reverse: Result<Vec<_>, _> = scan_rev(&f.store, &f.root, ..)?
         .map(|r| r.map(|(k, v)| (k.to_vec(), v.to_vec())))
         .collect();
-    match reverse {
-        Ok(mut got) => {
-            got.reverse();
-            assert_eq!(got, expected, "reverse scan succeeded with wrong contents");
-        }
-        Err(e) => return Err(e),
-    }
+    let mut got = reverse?;
+    got.reverse();
+    assert_eq!(got, expected, "reverse scan succeeded with wrong contents");
     // A batch touching everything near the damage would be nice, but any
     // wide batch works: it must either succeed building the right tree or
     // report the damage.

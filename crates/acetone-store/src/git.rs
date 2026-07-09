@@ -34,7 +34,7 @@ use bytes::Bytes;
 
 use crate::error::StoreError;
 use crate::hash::Hash;
-use crate::store::{ChunkStore, Commit, CommitStore, NewCommit, RefStore};
+use crate::store::{ChunkStore, Commit, CommitStore, NewCommit, RefStore, RewriteCommit};
 
 /// Default hard cap on the size of any single object this store will
 /// materialise: 64 MiB.
@@ -440,6 +440,79 @@ impl GitStore {
             .detach())
     }
 
+    /// Write the commit tree `{.acetone/: {chunks/?, manifest}, README.md}`
+    /// (ADR-0023) and return its object id. Shared by [`Self::create_commit`]
+    /// and [`Self::rewrite_commit`].
+    fn write_commit_tree_oid(
+        &self,
+        manifest: &[u8],
+        summary: &str,
+        anchors: &[Hash],
+    ) -> Result<gix::ObjectId, StoreError> {
+        use gix::objs::tree::{Entry, EntryKind};
+
+        let manifest_id = self.write_blob_capped(manifest, "writing manifest")?;
+        let summary_id = self.write_blob_capped(summary.as_bytes(), "writing summary")?;
+        let acetone_oid = self.write_acetone_subtree(manifest_id.oid(), anchors)?;
+
+        // Root entries must be in git tree order; ".acetone" (a directory,
+        // compared as ".acetone/") < "README.md" byte-wise (ADR-0023).
+        let entries = vec![
+            Entry {
+                mode: EntryKind::Tree.into(),
+                filename: ACETONE_DIR.into(),
+                oid: acetone_oid,
+            },
+            Entry {
+                mode: EntryKind::Blob.into(),
+                filename: SUMMARY_ENTRY.into(),
+                oid: summary_id.oid(),
+            },
+        ];
+        Ok(self
+            .repo
+            .write_object(&gix::objs::Tree { entries })
+            .map_err(|e| StoreError::backend("writing commit tree", e))?
+            .detach())
+    }
+
+    /// Rewrite one commit for a history migration (`acetone migrate`),
+    /// preserving its message, author and committer (identity **and**
+    /// timestamp) verbatim while taking a transformed manifest and
+    /// already-rewritten parents. Unlike [`Self::create_commit`] this does not
+    /// restamp the time or re-assemble trailers — the message is written as
+    /// given — so the rewritten history keeps its dates and authorship. The
+    /// tree is still built from the manifest, summary and anchors, and every
+    /// anchor is verified present, so the result is `git fsck`-connected.
+    pub fn rewrite_commit(&self, spec: &RewriteCommit<'_>) -> Result<Hash, StoreError> {
+        let author = git_identity(spec.author)?;
+        let committer = git_identity(spec.committer)?;
+        let body = spec.message.trim_end();
+        if body.is_empty() {
+            return Err(StoreError::Corrupt {
+                context: "rewritten commit",
+                reason: "commit message must not be empty".into(),
+            });
+        }
+        let message = format!("{body}\n");
+        let tree_id = self.write_commit_tree_oid(spec.manifest, spec.summary, spec.anchors)?;
+        let commit_object = gix::objs::Commit {
+            tree: tree_id,
+            parents: spec.parents.iter().map(Hash::oid).collect(),
+            author,
+            committer,
+            encoding: None,
+            message: message.into(),
+            extra_headers: Vec::new(),
+        };
+        let commit_id = self
+            .repo
+            .write_object(&commit_object)
+            .map_err(|e| StoreError::backend("writing rewritten commit", e))?
+            .detach();
+        Ok(Hash::from_oid(commit_id))
+    }
+
     /// Resolve the `manifest` blob hash from a commit- or workspace-tree root
     /// by descending into the reserved `.acetone/` directory (ADR-0023).
     /// Unknown sibling entries at the root and within `.acetone/` are ignored
@@ -799,21 +872,29 @@ fn assemble_message(message: &str, trailers: &[(String, String)]) -> Result<Stri
     Ok(out)
 }
 
-/// Validate and convert an author/committer identity.
-fn git_signature(sig: &crate::store::Signature) -> Result<gix::actor::Signature, StoreError> {
+/// Validate a name/email pair for a commit identity (git-native rules:
+/// non-empty name, no angle brackets or control characters).
+fn validate_identity_fields(name: &str, email: &str) -> Result<(), StoreError> {
     let invalid = |reason: &str| StoreError::InvalidSignature {
         reason: reason.to_owned(),
     };
-    if sig.name.trim().is_empty() {
+    if name.trim().is_empty() {
         return Err(invalid("name must not be empty"));
     }
-    for (field, text) in [("name", &sig.name), ("email", &sig.email)] {
+    for (field, text) in [("name", name), ("email", email)] {
         if text.chars().any(|c| c == '<' || c == '>' || c.is_control()) {
             return Err(invalid(&format!(
                 "{field} must not contain angle brackets or control characters"
             )));
         }
     }
+    Ok(())
+}
+
+/// Validate and convert an author/committer identity, stamping the time as
+/// *now* (for freshly created commits).
+fn git_signature(sig: &crate::store::Signature) -> Result<gix::actor::Signature, StoreError> {
+    validate_identity_fields(&sig.name, &sig.email)?;
     Ok(gix::actor::Signature {
         name: sig.name.as_str().into(),
         email: sig.email.as_str().into(),
@@ -821,36 +902,26 @@ fn git_signature(sig: &crate::store::Signature) -> Result<gix::actor::Signature,
     })
 }
 
+/// Convert a stored [`Identity`] to a git signature, **preserving** its
+/// timestamp (for history rewrites).
+fn git_identity(id: &crate::store::Identity) -> Result<gix::actor::Signature, StoreError> {
+    validate_identity_fields(&id.name, &id.email)?;
+    Ok(gix::actor::Signature {
+        name: id.name.as_str().into(),
+        email: id.email.as_str().into(),
+        time: gix::date::Time {
+            seconds: id.time_seconds,
+            offset: id.time_offset_seconds,
+        },
+    })
+}
+
 impl CommitStore for GitStore {
     fn create_commit(&self, commit: &NewCommit<'_>) -> Result<Hash, StoreError> {
-        use gix::objs::tree::{Entry, EntryKind};
-
         let message = assemble_message(commit.message, commit.trailers)?;
         let signature = git_signature(&commit.author)?;
-        let manifest_id = self.write_blob_capped(commit.manifest, "writing manifest")?;
-        let summary_id = self.write_blob_capped(commit.summary.as_bytes(), "writing summary")?;
-        let acetone_oid = self.write_acetone_subtree(manifest_id.oid(), commit.anchors)?;
-
-        // Root entries must be in git tree order; ".acetone" (a directory,
-        // compared as ".acetone/") < "README.md" byte-wise (ADR-0023).
-        let entries = vec![
-            Entry {
-                mode: EntryKind::Tree.into(),
-                filename: ACETONE_DIR.into(),
-                oid: acetone_oid,
-            },
-            Entry {
-                mode: EntryKind::Blob.into(),
-                filename: SUMMARY_ENTRY.into(),
-                oid: summary_id.oid(),
-            },
-        ];
-        let tree = gix::objs::Tree { entries };
-        let tree_id = self
-            .repo
-            .write_object(&tree)
-            .map_err(|e| StoreError::backend("writing commit tree", e))?
-            .detach();
+        let tree_id =
+            self.write_commit_tree_oid(commit.manifest, commit.summary, commit.anchors)?;
 
         let commit_object = gix::objs::Commit {
             tree: tree_id,
@@ -878,6 +949,18 @@ impl CommitStore for GitStore {
             .map_err(|e| StoreError::corrupt("commit object", e.to_string()))?;
 
         let parents: Vec<Hash> = commit.parents().map(Hash::from_oid).collect();
+        let author = identity_from_ref(
+            commit
+                .author()
+                .map_err(|e| StoreError::corrupt("commit author", e.to_string()))?,
+            "commit author",
+        )?;
+        let committer = identity_from_ref(
+            commit
+                .committer()
+                .map_err(|e| StoreError::corrupt("commit committer", e.to_string()))?,
+            "commit committer",
+        )?;
         let message = String::from_utf8_lossy(commit.message).into_owned();
         let trailers: Vec<(String, String)> = commit
             .message()
@@ -914,8 +997,27 @@ impl CommitStore for GitStore {
             message,
             trailers,
             parents,
+            author,
+            committer,
         }))
     }
+}
+
+/// Convert a git signature reference read from a commit into a stored
+/// [`Identity`], parsing its timestamp. `what` names the field in errors.
+fn identity_from_ref(
+    sig: gix::actor::SignatureRef<'_>,
+    what: &'static str,
+) -> Result<crate::store::Identity, StoreError> {
+    let time = sig
+        .time()
+        .map_err(|e| StoreError::corrupt(what, format!("unparsable timestamp: {e}")))?;
+    Ok(crate::store::Identity {
+        name: String::from_utf8_lossy(sig.name).into_owned(),
+        email: String::from_utf8_lossy(sig.email).into_owned(),
+        time_seconds: time.seconds,
+        time_offset_seconds: time.offset,
+    })
 }
 
 #[cfg(test)]

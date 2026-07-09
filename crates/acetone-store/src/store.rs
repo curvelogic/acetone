@@ -135,6 +135,22 @@ impl Default for Signature {
     }
 }
 
+/// A commit author or committer *read back* from a commit: identity plus the
+/// git timestamp, so a history rewrite ([`GitStore::rewrite_commit`]) can
+/// reproduce it faithfully rather than restamping "now". Times are git-native
+/// (seconds since the Unix epoch, plus a timezone offset east of UTC).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    /// Human-readable name.
+    pub name: String,
+    /// Email address (not verified; git-native semantics).
+    pub email: String,
+    /// Seconds since the Unix epoch.
+    pub time_seconds: i64,
+    /// Timezone offset in seconds east of UTC (git's `+HHMM` as seconds).
+    pub time_offset_seconds: i32,
+}
+
 /// Everything needed to create one acetone commit (spec §3.5).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -215,6 +231,57 @@ pub struct Commit {
     pub trailers: Vec<(String, String)>,
     /// Parent commit addresses, in order.
     pub parents: Vec<Hash>,
+    /// The commit's author identity and timestamp, as stored.
+    pub author: Identity,
+    /// The commit's committer identity and timestamp, as stored.
+    pub committer: Identity,
+}
+
+/// Everything needed to *rewrite* one commit during a history migration
+/// ([`GitStore::rewrite_commit`]): the same tree inputs as [`NewCommit`], but
+/// with the message taken **verbatim** (no trailer re-assembly) and explicit
+/// author/committer identities and timestamps, so the rewrite preserves
+/// authorship and dates instead of restamping them. Parents are the
+/// already-rewritten new parents.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct RewriteCommit<'a> {
+    /// The (transformed) manifest bytes for the new commit's `.acetone/`.
+    pub manifest: &'a [u8],
+    /// The human-readable `README.md` summary.
+    pub summary: &'a str,
+    /// The complete chunk set of the new manifest's version (anchors).
+    pub anchors: &'a [Hash],
+    /// The new (already-rewritten) parent commits, in order.
+    pub parents: &'a [Hash],
+    /// The commit message, written **verbatim** (it already carries any
+    /// trailer paragraph, as read from the original commit).
+    pub message: &'a str,
+    /// Author identity and timestamp to preserve.
+    pub author: &'a Identity,
+    /// Committer identity and timestamp to preserve.
+    pub committer: &'a Identity,
+}
+
+impl<'a> RewriteCommit<'a> {
+    /// A rewrite spec carrying the required parts and empty parents/anchors.
+    pub fn new(
+        manifest: &'a [u8],
+        summary: &'a str,
+        message: &'a str,
+        author: &'a Identity,
+        committer: &'a Identity,
+    ) -> Self {
+        RewriteCommit {
+            manifest,
+            summary,
+            anchors: &[],
+            parents: &[],
+            message,
+            author,
+            committer,
+        }
+    }
 }
 
 /// Version snapshots: real git commits whose tree carries the manifest

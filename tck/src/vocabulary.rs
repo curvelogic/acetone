@@ -109,10 +109,11 @@ pub fn match_step(text: &str, docstring: Option<&str>) -> Option<StepKind> {
             (ErrorPhase::CompileTime, d)
         } else if let Some(d) = tail.strip_prefix("runtime:") {
             (ErrorPhase::Runtime, d)
-        } else if let Some(d) = tail.strip_prefix("any time:") {
-            (ErrorPhase::AnyTime, d)
         } else {
-            return None;
+            // clippy 1.97 `question_mark`: the trailing prefix match returns
+            // `None` from the enclosing function if it does not match.
+            let d = tail.strip_prefix("any time:")?;
+            (ErrorPhase::AnyTime, d)
         };
         return Some(StepKind::ExpectError {
             error_type,

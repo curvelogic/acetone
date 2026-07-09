@@ -4,7 +4,10 @@
 
 mod common;
 
-use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, NewCommit, Signature, StoreError};
+use acetone_store::{
+    ChunkStore, CommitStore, GitStore, Hash, Identity, NewCommit, RewriteCommit, Signature,
+    StoreError,
+};
 use common::{git, git_stdin, new_capped_store, new_store, repo_path};
 
 fn trailer(token: &str, value: &str) -> (String, String) {
@@ -165,6 +168,93 @@ fn commit_and_workspace_trees_namespace_machine_entries_under_acetone() {
             .as_ref(),
         manifest
     );
+}
+
+#[test]
+fn read_commit_exposes_author_and_committer() {
+    // Faithful history rewrite (acetone-hsg) needs the stored identities and
+    // timestamps, so read_commit must surface them.
+    let (_dir, store) = new_store();
+    let mut new = NewCommit::new(b"m", "s", "authored");
+    new.author = Signature {
+        name: "Ada Lovelace".into(),
+        email: "ada@example.com".into(),
+    };
+    let id = store.create_commit(&new).expect("create");
+    let commit = store.read_commit(&id).expect("read").expect("present");
+    // create_commit stamps author == committer, time == now (UTC, offset 0).
+    assert_eq!(commit.author.name, "Ada Lovelace");
+    assert_eq!(commit.author.email, "ada@example.com");
+    assert_eq!(commit.committer, commit.author);
+    assert_eq!(commit.author.time_offset_seconds, 0);
+    assert!(commit.author.time_seconds > 0, "a real epoch timestamp");
+}
+
+#[test]
+fn rewrite_commit_preserves_identity_message_and_changes_the_tree() {
+    // The migrate primitive: a transformed manifest with preserved authorship,
+    // timestamps (incl. a non-UTC offset) and message written verbatim.
+    let (_dir, store) = new_store();
+    let author = Identity {
+        name: "Grace Hopper".into(),
+        email: "grace@example.com".into(),
+        time_seconds: 1_000_000_000,
+        time_offset_seconds: -5 * 3600, // UTC-5, a real non-zero offset
+    };
+    let committer = Identity {
+        name: "acetone migrate".into(),
+        email: "migrate@acetone.invalid".into(),
+        time_seconds: 1_700_000_000,
+        time_offset_seconds: 90 * 60, // UTC+1:30
+    };
+    let message = "subject line\n\nbody paragraph.\n\nAcetone-Source: s3://x\n";
+    let mut spec = RewriteCommit::new(
+        b"new-manifest-bytes",
+        "new summary",
+        message,
+        &author,
+        &committer,
+    );
+    let parent = store
+        .create_commit(&NewCommit::new(b"p", "s", "parent"))
+        .expect("parent");
+    let parents = [parent];
+    spec.parents = &parents;
+
+    let id = store.rewrite_commit(&spec).expect("rewrite");
+    let commit = store.read_commit(&id).expect("read").expect("present");
+
+    // Transformed manifest is in the tree; identities and timestamps preserved
+    // exactly; parents preserved; message stored verbatim (trailer parsed).
+    assert_eq!(commit.manifest.as_ref(), b"new-manifest-bytes");
+    assert_eq!(commit.author, author);
+    assert_eq!(commit.committer, committer);
+    assert_eq!(commit.parents, vec![parent]);
+    assert!(commit.message.starts_with("subject line"));
+    assert_eq!(
+        commit.trailers,
+        vec![("Acetone-Source".to_owned(), "s3://x".to_owned())]
+    );
+
+    // The commit is git-valid and the summary rendered at the tree root.
+    let repo = repo_path(&_dir);
+    git(&repo, &["fsck", "--strict"]);
+}
+
+#[test]
+fn rewrite_commit_rejects_empty_message() {
+    let (_dir, store) = new_store();
+    let id = Identity {
+        name: "x".into(),
+        email: "x@example.com".into(),
+        time_seconds: 1,
+        time_offset_seconds: 0,
+    };
+    let spec = RewriteCommit::new(b"m", "s", "   \n", &id, &id);
+    assert!(matches!(
+        store.rewrite_commit(&spec),
+        Err(StoreError::Corrupt { .. })
+    ));
 }
 
 #[test]

@@ -47,6 +47,11 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             property,
         } => declare_index(repo_path, &name, &label, &property),
         Command::Reindex => reindex(repo_path),
+        Command::Migrate {
+            min_bytes,
+            mask_bits,
+            max_bytes,
+        } => migrate(repo_path, min_bytes, mask_bits, max_bytes),
         Command::Export {
             format,
             label,
@@ -498,6 +503,21 @@ fn reindex(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
     repo.reindex().context("reindexing")?;
     outln!("reindexed");
+    Ok(())
+}
+
+fn migrate(repo_path: &Path, min_bytes: u32, mask_bits: u32, max_bytes: u32) -> Result<()> {
+    use acetone_graph::{Rechunk, rewrite_history};
+
+    let repo = open(repo_path)?;
+    let transform = Rechunk::from_raw(min_bytes, mask_bits, max_bytes)
+        .context("invalid target chunk parameters")?;
+    let report = rewrite_history(&repo, &transform).context("rewriting history")?;
+    outln!(
+        "migrate: rewrote {} commit(s), updated {} ref(s)",
+        report.commits_rewritten,
+        report.refs_updated
+    );
     Ok(())
 }
 

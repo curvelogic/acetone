@@ -173,7 +173,7 @@ proptest! {
             (ManifestMerge::Clean(f), ManifestMerge::Clean(r)) => {
                 prop_assert_eq!(f.encode(), r.encode(), "clean merge must be direction-independent");
             }
-            (ManifestMerge::Conflicts { conflicts: _, .. }, ManifestMerge::Conflicts { conflicts: _, .. }) => {}
+            (ManifestMerge::Conflicts { .. }, ManifestMerge::Conflicts { .. }) => {}
             _ => prop_assert!(false, "swapping sides changed clean vs conflicted"),
         }
 
