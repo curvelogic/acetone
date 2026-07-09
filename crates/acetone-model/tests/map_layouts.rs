@@ -142,12 +142,12 @@ fn schema_entry() -> impl Strategy<Value = SchemaEntry> {
                 name: entry_name,
                 def: RelTypeDef::new(disc, types, exists).expect("valid"),
             }),
-        1 => (name(), name(), name()).prop_map(|(entry_name, label, property)| {
-            SchemaEntry::Index {
+        1 => (name(), name(), proptest::collection::vec(name(), 1..4))
+            .prop_map(|(entry_name, label, properties)| SchemaEntry::Index {
                 name: entry_name,
-                def: IndexDef::new(label, vec![property]).expect("valid"),
-            }
-        }),
+                // 1..4 properties exercises both single and composite indexes.
+                def: IndexDef::new(label, properties).expect("valid"),
+            }),
     ]
 }
 
