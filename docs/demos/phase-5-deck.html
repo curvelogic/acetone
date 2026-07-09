@@ -1,0 +1,355 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck {
+    height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .cols-4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3, .cols-4 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+
+  .card.lead { border-left: 3px solid var(--accent); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  .term {
+    background: var(--ink); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65;
+  }
+  :root[data-theme="dark"] .term, :root:not([data-theme="light"]) .term { border: 1px solid var(--line); }
+  @media (prefers-color-scheme: dark) { .term { border: 1px solid var(--line); } }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term .p { color: #2dd4bf; } /* prompt */
+  .term .c { color: #e8eef0; } /* command */
+  .term .o { color: #8b9aa2; } /* output */
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px;
+    position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+</style>
+<title>Acetone · Phase 5 sprint demo</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Where we are"></a>
+  <a href="#s3" aria-label="What shipped"></a>
+  <a href="#s4" aria-label="The scheduled-import loop"></a>
+  <a href="#s5" aria-label="Indexes faster than scan"></a>
+  <a href="#s6" aria-label="Decisions"></a>
+  <a href="#s7" aria-label="The review gate"></a>
+  <a href="#s8" aria-label="Gate & security"></a>
+  <a href="#s9" aria-label="Live demo"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · Phase 5 boundary</p>
+      <h1>Feed it, index it,<br>ship it.</h1>
+      <p class="lede">Phase 4 made a graph you can branch and merge. Phase 5 makes it one you can <strong>feed and query at speed</strong>: bulk-import external sources as provenanced commits, accelerate lookups with declared indexes, export back to the relational world, and keep the store compact and verifiably intact.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>5 feature PRs · #65–#69</span>
+        <span class="chip good"><span class="dot"></span>Scheduled-import demo · works</span>
+        <span class="chip good"><span class="dot"></span>Index ~4.9× faster than scan</span>
+        <span class="chip good"><span class="dot"></span>Round-trip · identical roots</span>
+        <span class="chip good"><span class="dot"></span>Security gate · ready</span>
+      </div>
+    </div>
+    <div class="foot">epic acetone-6g5 · 2026-07-09</div>
+    <div class="num">01 / 09</div>
+  </section>
+
+  <!-- 2 · Where we are -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>From a graph you edit to a graph you operate.</h2>
+      <p class="lede">The registry use case has an owner outside the database — a scanner, a CMDB, a spreadsheet — that keeps changing. Phase 5 is the machinery to <strong>sync that source into version-controlled history</strong> and read the answers back fast.</p>
+      <div class="flow" style="margin-top:26px">
+        <div class="step"><div class="k">IMPORT</div><div class="v">a commit</div><div class="d">CSV / JSON / NDJSON · provenance trailers</div></div>
+        <div class="step"><div class="k">NO-OP</div><div class="v">unchanged</div><div class="d">re-sync of the same graph makes no commit</div></div>
+        <div class="step"><div class="k">INDEX</div><div class="v">seek</div><div class="d">declared property indexes · faster than scan</div></div>
+        <div class="step"><div class="k">EXPORT</div><div class="v">round-trip</div><div class="d">one table per label · identical roots back</div></div>
+        <div class="step"><div class="k">GC · FSCK</div><div class="v">durable</div><div class="d">consolidate · verify integrity</div></div>
+      </div>
+    </div>
+    <div class="num">02 / 09</div>
+  </section>
+
+  <!-- 3 · What shipped -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">What shipped</p>
+      <h2>Five features, one source-sync story.</h2>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>Bead</th><th>What it does</th><th>PR</th></tr></thead>
+          <tbody>
+            <tr><td><code>6g5.1</code></td><td>Import plugin interface + CSV / JSON / NDJSON, provenance, <code>--branch</code></td><td class="pr">#65</td></tr>
+            <tr><td><code>6g5.3</code></td><td>Declared property indexes — maintenance + <code>IndexSeek</code> execution</td><td class="pr">#66 · #67</td></tr>
+            <tr><td><code>6g5.2</code></td><td>Export to CSV / JSON / NDJSON — the relational-projection seed</td><td class="pr">#68</td></tr>
+            <tr><td><code>6g5.4</code></td><td>Round out <code>gc</code> (pack-on-write deltas) and <code>fsck</code></td><td class="pr">#69</td></tr>
+            <tr><td><code>6g5.5</code></td><td>Scheduled-import simulation — the flagship exit demo</td><td class="pr">#70</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="clean" style="margin-top:20px">
+        <li><b>No new core dependencies.</b> The import interface lives in <code>acetone-graph</code>; only the leaf CLI gained <code>csv</code>, <code>serde_json</code>, <code>sha2</code>.</li>
+        <li><b>The invariants held.</b> Index maintenance and <code>reindex</code> reproduce identical roots (property-tested); imports go through the standard prolly path.</li>
+      </ul>
+    </div>
+    <div class="num">03 / 09</div>
+  </section>
+
+  <!-- 4 · The scheduled-import loop -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">The flagship</p>
+      <h2>A mutating source, synced as history.</h2>
+      <p class="lede">Each sync of the source is an import commit carrying its provenance. Re-syncing the same graph is a <strong>detected no-op</strong>. The <code>diff</code> between two syncs is the change report.</p>
+      <div class="term" style="margin-top:20px">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+        <div class="term-body">
+<div class="l"><span class="p">$</span> <span class="c">acetone import ndjson snap2.ndjson --label Host</span></div>
+<div class="l"><span class="ok">imported 4 node(s) and 0 edge(s)</span><span class="o"> onto the current branch; commit 39fe364…</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone diff 9e92004… 39fe364…</span></div>
+<div class="l"><span class="o">+ node "Host" ["new1"]      </span><span class="ok">← a host appeared</span></div>
+<div class="l"><span class="o">~ node "Host" ["web1"]      </span><span class="ok">← web1 was re-imaged</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone import ndjson snap3.ndjson --label Host   </span><span class="o"># same graph</span></div>
+<div class="l"><span class="ok">source unchanged; nothing imported</span></div>
+          </div>
+      </div>
+    </div>
+    <div class="num">04 / 09</div>
+  </section>
+
+  <!-- 5 · Indexes faster than scan -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">Declared indexes</p>
+      <h2>An equality that seeks, not scans.</h2>
+      <p class="lede">Declare an index on a property and the binder's <code>IndexSeek</code> hint is now honoured by the executor: an <code>O(matches)</code> lookup instead of scanning the whole label. On the 44k-node lab graph (<code>--scale 20000</code>), <code>MATCH (h:Host {os:'debian'})</code>:</p>
+      <div class="cards" style="margin-top:18px; display:flex; gap:14px; flex-wrap:wrap">
+        <div class="card lead" style="flex:1 1 220px"><div class="tag">INDEXSEEK</div><h3 style="font-size:30px; margin:.2em 0">~14 ms</h3><p>the declared <code>host_os</code> index</p></div>
+        <div class="card" style="flex:1 1 220px"><div class="tag">LABELSCAN + FILTER</div><h3 style="font-size:30px; margin:.2em 0">~69 ms</h3><p>the whole <code>Host</code> population</p></div>
+        <div class="card lead" style="flex:1 1 220px; border-left-color:var(--good)"><div class="tag">SPEEDUP</div><h3 style="font-size:30px; margin:.2em 0; color:var(--good)">4.9×</h3><p>same rows, proven by a parity test</p></div>
+      </div>
+      <ul class="clean" style="margin-top:20px">
+        <li><b>Maintained transactionally</b> — a delta per touched node; <code>reindex</code> rebuilds to identical roots (Invariant #5). <b>null- and NaN-blind.</b></li>
+        <li><b>The seek returns exactly the scan's rows</b> — numeric <code>3 = 3.0</code>, the f64 2⁵³ boundary, and <code>Bytes</code>/temporal representation were each caught by the review and fixed.</li>
+      </ul>
+    </div>
+    <div class="num">05 / 09</div>
+  </section>
+
+  <!-- 6 · Decisions -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions taken</p>
+      <h2>Two ADRs, both mid-phase.</h2>
+      <div class="cards" style="margin-top:8px; display:flex; gap:14px; flex-wrap:wrap">
+        <div class="card lead" style="flex:1 1 300px"><h3>ADR-0021 · import interface</h3><p>Interface in <code>acetone-graph</code> (no seventh crate); format extractors + <code>csv</code>/<code>serde_json</code>/<code>sha2</code> confined to the CLI. <b>Authoritative-replace</b> apply; source hash = sha256 of the raw bytes; no-op = workspace-vs-HEAD.</p></div>
+        <div class="card lead" style="flex:1 1 300px"><h3>ADR-0022 · IndexSeek execution</h3><p>Seek runs over an in-memory value map keyed by the <b>runtime</b> representation (a lazy store-backed seek is the deferred scalability win). Numeric equality probes both Int and Float buckets. Equality only — <code>IndexRange</code> deferred.</p></div>
+      </div>
+      <p class="lede" style="margin-top:20px">Both were decided by ADR so the work could proceed, and are flagged here for your retrospective review.</p>
+    </div>
+    <div class="num">06 / 09</div>
+  </section>
+
+  <!-- 7 · The review gate -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">The review gate earned its keep</p>
+      <h2>A real, shipping-blocking bug on every feature PR.</h2>
+      <p class="lede">Every PR passed a fresh-subagent adversarial review with no implementation context. The gate did not rubber-stamp — it caught genuine defects, several of the silent-wrong-results class, each fixed and re-reviewed before merge.</p>
+      <div class="risk" style="margin-top:18px">
+        <div class="r"><div class="id">#65</div><div class="t"><b>Import</b> — provenance trailers validated <em>after</em> save left the workspace dirty and stranded the caller under <code>--branch</code>. → validate up front.</div></div>
+        <div class="r"><div class="id">#67</div><div class="t"><b>IndexSeek</b> — three rounds, three silent subset bugs: <code>3 = 3.0</code> cross-type, the f64 2⁵³ precision boundary, and <code>Bytes</code>/temporal keyed off the runtime representation. All fixed.</div></div>
+        <div class="r"><div class="id">#68</div><div class="t"><b>Export</b> — path traversal via an attacker-controlled label name, and a rel type spanning two label pairs silently producing wrong roots. → sanitise + reject.</div></div>
+        <div class="r"><div class="id">#69</div><div class="t"><b>gc</b> — consolidation can't see <em>other</em> worktrees' private refs, so a cross-worktree <code>gc</code> could prune their uncommitted work. → refuse while linked worktrees exist.</div></div>
+      </div>
+    </div>
+    <div class="num">07 / 09</div>
+  </section>
+
+  <!-- 8 · Gate & security -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">Gate evidence &amp; security</p>
+      <h2>Exit criteria met; security gate ready.</h2>
+      <ul class="clean">
+        <li><b>Scheduled-import simulation</b> — snapshots as commits, no-op on unchanged, <code>diff</code> as the change report. Integration-tested + a demo script.</li>
+        <li><b>Index faster than scan</b> — 4.9× on the lab graph, with a parity test proving the seek's rows equal the scan's.</li>
+        <li><b>fsck</b> — index consistency and a history-independence spot-check; each category has a seeded-corruption test.</li>
+      </ul>
+      <div class="cards" style="margin-top:20px; display:flex; gap:14px; flex-wrap:wrap">
+        <div class="card" style="flex:1 1 300px; border-left:3px solid var(--good)"><div class="tag" style="color:var(--good)">SECURITY REVIEW · READY</div><p>Whole-phase security pass: <b>no blocker or high findings</b>. Trailer injection, path traversal, panics on hostile data, and <code>gc</code> data-loss all verified safe.</p></div>
+        <div class="card" style="flex:1 1 300px; border-left:3px solid var(--warn)"><div class="tag" style="color:var(--warn)">OPEN ITEMS · TRACKED</div><p><b>F1</b> CSV formula-injection (off-terminal, medium) · <b>F2</b> label/rel filename collision · <b>F3</b> whole-graph materialisation. Filed to <code>6g5.9</code>/<code>6g5.7</code>.</p></div>
+      </div>
+    </div>
+    <div class="num">08 / 09</div>
+  </section>
+
+  <!-- 9 · Live demo -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo</p>
+      <h2>The scheduled-import loop, end to end.</h2>
+      <p class="lede"><code>scripts/phase-5-demo.sh</code> — driven step by step, one step per turn:</p>
+      <div class="flow" style="margin-top:22px">
+        <div class="step"><div class="k">1 · SCHEMA</div><div class="v">declare</div><div class="d"><code>Host(name)</code> + index on <code>os</code></div></div>
+        <div class="step"><div class="k">2 · SYNC</div><div class="v">import</div><div class="d">snapshot 1 → a provenanced commit</div></div>
+        <div class="step"><div class="k">3 · MUTATE</div><div class="v">import</div><div class="d">snapshot 2 → a second commit</div></div>
+        <div class="step"><div class="k">4 · REPORT</div><div class="v">diff</div><div class="d"><code>+ new1</code> · <code>~ web1</code></div></div>
+        <div class="step"><div class="k">5 · NO-OP</div><div class="v">import</div><div class="d">unchanged snapshot → no commit</div></div>
+        <div class="step"><div class="k">6 · SEEK</div><div class="v">query</div><div class="d"><code>{os:'windows'}</code> finds web1</div></div>
+        <div class="step"><div class="k">7 · DURABLE</div><div class="v">fsck · gc</div><div class="d">clean · consolidated</div></div>
+      </div>
+      <p class="lede" style="margin-top:24px; color:var(--faint)">Then: the docs — spec §7/§9, ADR-0021/0022, and <code>docs/reports/phase-5.md</code> — at your pace.</p>
+    </div>
+    <div class="foot">acetone-6g5.5 · scheduled-import simulation</div>
+    <div class="num">09 / 09</div>
+  </section>
+
+</main>
