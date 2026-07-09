@@ -48,6 +48,8 @@ Format freeze review of spec §3.4 encodings and manifest (with `format_version`
 
 Exit criteria: 0.1 tagged; a fortnight of dogfooding without data-integrity incidents; the three documents in this pack revised to match reality.
 
+> **Status (2026-07-09).** Landed: the format freeze at `format_version = 1` (ADR-0024, golden-anchored), `.acetone/` tree namespacing (ADR-0023), the `acetone migrate` history-rewrite engine (ADR-0025), the `acetone-core` façade crate + release packaging (ADR-0026), the [user guide](user-guide.md) and [conformance statement](conformance.md) (openCypher pass rate 41.0% / 1596 of 3897, known gaps tracked). Remaining at the boundary: the dogfood *fortnight* (inherently post-boundary), the 0.1 tag (a human call), and continued TCK/error-message improvement filed as beads. See [`reports/phase-6.md`](reports/phase-6.md).
+
 ## Beyond 0.1 (unscheduled, in rough order of pull)
 
 Views and materialised views over the provider-pluggable scan interface; the virtual-element provider API generalised from the conflict/diff machinery; RDF projection (oxigraph-backed SPARQL over exports first, live adapter later); relational/Parquet projection; costed query planning and var-length path performance; a native chunk store behind the existing trait if scale demands it; `CALL {}` subqueries and GQL-alignment syntax work; optional read-only server mode for dashboards (a deliberate late arrival — the workbench identity comes first).
