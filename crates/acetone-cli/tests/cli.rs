@@ -1648,3 +1648,53 @@ fn merge_conflict_resolved_by_ordinary_write() {
     );
     assert!(stdout(&q).contains("merged"), "{}", stdout(&q));
 }
+
+/// acetone-c8b: the shell must run write queries through the transactional
+/// write path (advancing the workspace), not silently execute only the read
+/// side and discard the mutation.
+#[test]
+fn shell_persists_write_queries() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    // A keyed label so a Cypher SET can identify the node (Invariant #3).
+    let out = acetone(&repo, &["declare-label", "Host", "--key", "name"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = acetone(&repo, &["put-node", "Host", "web1", "--prop", "os=debian"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Drive the shell over stdin: a SET write, then EOF (stdin closed).
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = std::process::Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "shell"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn acetone shell");
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        stdin
+            .write_all(b"MATCH (h:Host {name: 'web1'}) SET h.os = 'ubuntu';\n")
+            .expect("write query");
+    } // stdin dropped -> EOF -> shell exits
+    let shell_out = child.wait_with_output().expect("wait");
+    assert!(
+        shell_out.status.success(),
+        "shell exit: {}",
+        String::from_utf8_lossy(&shell_out.stderr)
+    );
+
+    // The write must have advanced the workspace: a fresh read sees 'ubuntu'.
+    let out = acetone(&repo, &["query", "MATCH (h:Host) RETURN h.os"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("ubuntu"),
+        "shell write was discarded; query output: {text}"
+    );
+    assert!(!text.contains("debian"), "old value still present: {text}");
+}

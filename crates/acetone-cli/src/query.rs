@@ -715,6 +715,15 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
 
 fn run_in_shell(repo_path: &std::path::Path, cypher: &str, format: Format) -> Result<()> {
     let repo = Repository::open(repo_path)?;
+    // A write query must go through the transactional write path and advance the
+    // workspace, exactly as `run` does — otherwise the shell would silently
+    // execute the read side and discard the mutation. Subsequent shell queries
+    // read the advanced workspace; the user commits separately with
+    // `acetone commit`.
+    let parsed = acetone_cypher::parse(cypher).map_err(|e| anyhow!("{}", e.render(cypher)))?;
+    if parsed.clauses.iter().any(|clause| clause.is_write()) {
+        return run_write(&repo, cypher, format);
+    }
     let snapshot = repo.workspace_snapshot()?;
     let result = execute_query(&repo, &snapshot, cypher)?;
     render(&result, format);
