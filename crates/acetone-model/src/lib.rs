@@ -21,6 +21,8 @@
 //! Every encoding in this crate is **normative**: any change is a
 //! `format_version` bump in the manifest header (spec §10).
 
+#![forbid(unsafe_code)]
+
 pub(crate) mod cbor;
 pub mod graph_keys;
 pub mod keys;

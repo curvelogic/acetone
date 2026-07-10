@@ -24,6 +24,8 @@
 //! # Ok::<(), acetone_core::GraphError>(())
 //! ```
 
+#![forbid(unsafe_code)]
+
 pub use acetone_cypher as cypher;
 pub use acetone_graph as graph;
 pub use acetone_model as model;

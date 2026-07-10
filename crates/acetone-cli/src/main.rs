@@ -1,5 +1,7 @@
 //! The acetone CLI (spec §7) — a thin client over the library crates.
 
+#![forbid(unsafe_code)]
+
 mod cli;
 mod commands;
 mod export;
