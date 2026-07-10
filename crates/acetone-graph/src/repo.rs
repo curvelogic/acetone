@@ -50,6 +50,7 @@ use acetone_store::{
     NewCommit, ObjectFormat, RefStore, Signature, StoreError,
 };
 use std::collections::BTreeSet;
+use std::ops::Bound;
 use std::path::Path;
 
 /// The per-worktree workspace ref (ADR-0014). Under git's `refs/worktree/*`
@@ -988,6 +989,89 @@ fn render_node_key(key: &NodeKey) -> String {
     format!("[{}]", parts.join(", "))
 }
 
+/// A `GraphError::DanglingEdge` naming the offending edge and missing endpoint.
+fn dangling_edge(rtype: &str, role: &'static str, endpoint: &NodeKey) -> GraphError {
+    GraphError::DanglingEdge {
+        rtype: rtype.to_owned(),
+        role,
+        endpoint: format!("{}{}", endpoint.label(), render_node_key(endpoint)),
+    }
+}
+
+/// Enforce referential integrity for one transaction's staged changes against
+/// its resulting map roots (ADR-0028, Invariant #3). An edge must never exist
+/// without both its endpoint nodes. A save can break this in two ways: by
+/// putting an edge whose `src` or `dst` node is absent from the new `nodes`
+/// map, or by deleting a node while an edge still references it. Both are
+/// checked against the post-transaction roots, so the check is correct
+/// regardless of op order within the transaction. It is incremental: only the
+/// edges added and nodes deleted this transaction are examined, and a deleted
+/// node's incident edges are a degree-bounded prefix scan (its key bytes are
+/// exactly the prefix of every edge whose leading endpoint is that node —
+/// out-edges in `edges_fwd`, in-edges in `edges_rev`).
+fn check_referential_integrity(
+    store: &GitStore,
+    params: ChunkParams,
+    nodes: &MapRoot,
+    edges_fwd: &MapRoot,
+    edges_rev: &MapRoot,
+    put_edge_keys: &[Vec<u8>],
+    deleted_node_keys: &[Vec<u8>],
+) -> Result<(), GraphError> {
+    let nodes_root = nodes.to_root(params)?;
+
+    // (1) Every edge added this transaction must have both endpoints present.
+    for raw in put_edge_keys {
+        let edge = EdgeKey::decode_fwd(raw)?;
+        for (role, endpoint) in [("source", edge.src()), ("target", edge.dst())] {
+            if acetone_prolly::get(store, &nodes_root, &endpoint.encode()?)?.is_none() {
+                return Err(dangling_edge(edge.rtype(), role, endpoint));
+            }
+        }
+    }
+
+    // (2) Every node genuinely deleted this transaction must have no surviving
+    // incident edge.
+    if !deleted_node_keys.is_empty() {
+        let fwd_root = edges_fwd.to_root(params)?;
+        let rev_root = edges_rev.to_root(params)?;
+        for key in deleted_node_keys {
+            // A `Delete` op only dangles if the node really is gone from the
+            // new map (a re-add in the same transaction is not a deletion).
+            if acetone_prolly::get(store, &nodes_root, key)?.is_some() {
+                continue;
+            }
+            let node = NodeKey::decode(key)?;
+            // `edges_fwd` is keyed by src, `edges_rev` by dst; in both the
+            // leading endpoint's key is the prefix, so the deleted node's key
+            // bytes select exactly its out-edges (fwd) and in-edges (rev).
+            for (root, reversed) in [(&fwd_root, false), (&rev_root, true)] {
+                let hit = acetone_prolly::scan(
+                    store,
+                    root,
+                    (Bound::Included(key.as_slice()), Bound::Unbounded),
+                )?
+                .next();
+                if let Some(item) = hit {
+                    let (edge_key, _) = item?;
+                    if edge_key.starts_with(key) {
+                        let edge = if reversed {
+                            EdgeKey::decode_rev(&edge_key)?
+                        } else {
+                            EdgeKey::decode_fwd(&edge_key)?
+                        };
+                        // The deleted node is this edge's leading endpoint: its
+                        // source for a forward hit, its target for a reverse.
+                        let role = if reversed { "target" } else { "source" };
+                        return Err(dangling_edge(edge.rtype(), role, &node));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn workspace_ref(name: &str) -> String {
     format!("{WORKSPACE_REF_PREFIX}{name}")
 }
@@ -1168,6 +1252,25 @@ impl<'r> Transaction<'r> {
             }
             other => other,
         };
+        // For the referential-integrity check (ADR-0028), captured before the
+        // staged ops are consumed below: forward-edge keys added, and node keys
+        // deleted, this transaction.
+        let put_edge_keys: Vec<Vec<u8>> = self
+            .edges_fwd
+            .iter()
+            .filter_map(|op| match op {
+                BatchOp::Put(k, _) => Some(k.clone()),
+                BatchOp::Delete(_) => None,
+            })
+            .collect();
+        let deleted_node_keys: Vec<Vec<u8>> = self
+            .nodes
+            .iter()
+            .filter_map(|op| match op {
+                BatchOp::Delete(k) => Some(k.clone()),
+                BatchOp::Put(..) => None,
+            })
+            .collect();
         let mut manifest = Manifest {
             chunk_params: params,
             schema: Self::apply_map(
@@ -1212,6 +1315,21 @@ impl<'r> Transaction<'r> {
                 &base_indexes,
                 &index_defs,
                 &label_keys,
+            )?;
+        }
+        // Referential integrity (ADR-0028): reject before the workspace CAS
+        // advances if this transaction would leave any edge without an endpoint
+        // node — an edge put whose endpoint is absent, or a node deleted while
+        // an edge still references it.
+        if !put_edge_keys.is_empty() || !deleted_node_keys.is_empty() {
+            check_referential_integrity(
+                store,
+                params,
+                &manifest.nodes,
+                &manifest.edges_fwd,
+                &manifest.edges_rev,
+                &put_edge_keys,
+                &deleted_node_keys,
             )?;
         }
         self.persist_manifest(manifest)

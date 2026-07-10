@@ -10,9 +10,11 @@ use acetone_graph::merge::{
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
-use acetone_model::manifest::Manifest;
+use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_model::schema::{LabelDef, SchemaEntry};
+use acetone_prolly::{BatchOp, apply_batch};
+use acetone_store::GitStore;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -158,29 +160,58 @@ fn deleting_the_edge_source_also_dangles() {
     ));
 }
 
+/// Copy `m` with node `id` removed from its `nodes` map (plumbing that bypasses
+/// the transaction boundary, which — ADR-0028 — refuses to leave an edge
+/// dangling). Used to fabricate a pre-existing dangling edge.
+fn with_node_removed(store: &GitStore, m: &Manifest, id: u8) -> Manifest {
+    let nodes = apply_batch(
+        store,
+        &m.nodes.to_root(m.chunk_params).expect("nodes root"),
+        vec![BatchOp::Delete(node(id).encode().expect("encode"))],
+    )
+    .expect("apply_batch");
+    let mut out = m.clone();
+    out.nodes = MapRoot::from_root(&nodes);
+    out
+}
+
+/// Copy `m` with an unrelated node `id` added.
+fn with_node_added(store: &GitStore, m: &Manifest, id: u8) -> Manifest {
+    let nodes = apply_batch(
+        store,
+        &m.nodes.to_root(m.chunk_params).expect("nodes root"),
+        vec![BatchOp::Put(
+            node(id).encode().expect("encode"),
+            record(&[]).encode().expect("encode record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut out = m.clone();
+    out.nodes = MapRoot::from_root(&nodes);
+    out
+}
+
 #[test]
 fn a_pre_existing_dangling_edge_is_not_attributed_to_the_merge() {
-    // If base already contains a dangling edge (constructed via plumbing) and
-    // neither side touches it, a disjoint clean merge must NOT report it.
+    // If base already contains a dangling edge (constructed via plumbing — the
+    // write path no longer admits one) and neither side touches it, a disjoint
+    // clean merge must NOT report it.
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init(dir.path());
-    let (b, o, t) = diverge(
-        &repo,
-        // base: an edge 1 -> 2 but only node 1 exists (edge to a missing 2).
-        |tx| {
-            tx.put_node(&node(1), &record(&[])).expect("put");
-            tx.put_edge(&edge(1, 2), &EdgeRecord::default())
-                .expect("edge");
-        },
-        // ours: add an unrelated node 3.
-        |tx| {
-            tx.put_node(&node(3), &record(&[])).expect("put");
-        },
-        // theirs: add an unrelated node 4.
-        |tx| {
-            tx.put_node(&node(4), &record(&[])).expect("put");
-        },
-    );
+
+    // A valid base with nodes 1, 2 and edge 1 -> 2, then drop node 2 by plumbing
+    // so the edge dangles in `base` and both sides.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(&[])).expect("put 1");
+    tx.put_node(&node(2), &record(&[])).expect("put 2");
+    tx.put_edge(&edge(1, 2), &EdgeRecord::default())
+        .expect("edge");
+    let base_commit = tx.commit("base", &[], None).expect("commit");
+    let valid = manifest_at(&repo, &base_commit.to_hex());
+
+    let b = with_node_removed(repo.store(), &valid, 2);
+    let o = with_node_added(repo.store(), &b, 3); // ours: unrelated node 3
+    let t = with_node_added(repo.store(), &b, 4); // theirs: unrelated node 4
 
     match merge(&repo, &b, &o, &t) {
         ManifestMerge::Clean(_) => {}

@@ -411,3 +411,58 @@ fn unknown_label_is_a_mapping_error() {
         other => panic!("expected mapping error, got {other:?}"),
     }
 }
+
+#[test]
+fn importing_an_edge_to_a_missing_node_is_rejected_and_leaves_no_commit() {
+    // U6 (pre-0.1 review / ADR-0028): import must not commit a dangling edge.
+    // web1 exists; db1 is never imported, so the PEERS_WITH edge has no target.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::RelType {
+            name: "PEERS_WITH".into(),
+            def: RelTypeDef::new(None, BTreeMap::new(), []).expect("rtype"),
+        })
+        .expect("schema");
+        tx.commit("declare rel", &[], None).expect("commit");
+    }
+    let head_before = repo.head_commit().expect("head");
+
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![
+            node_record("Host", &[("name", Value::String("web1".into()))]),
+            ImportRecord::Edge {
+                rtype: "PEERS_WITH".into(),
+                src: EndpointRef {
+                    label: "Host".into(),
+                    key: vec![Value::String("web1".into())],
+                },
+                dst: EndpointRef {
+                    label: "Host".into(),
+                    key: vec![Value::String("db1".into())], // never imported
+                },
+                discriminator: Value::Null,
+                properties: BTreeMap::new(),
+            },
+        ],
+    };
+
+    match import(&repo, &mut mock, opts(None)) {
+        Err(GraphError::DanglingEdge { role, .. }) => assert_eq!(role, "target"),
+        other => panic!("expected DanglingEdge (target), got {other:?}"),
+    }
+    // No commit was written, and the workspace is left clean.
+    assert_eq!(repo.head_commit().expect("head"), head_before);
+    assert!(!repo.is_dirty().expect("dirty"));
+    assert!(
+        repo.workspace_snapshot()
+            .expect("snap")
+            .edges()
+            .expect("edges")
+            .is_empty(),
+        "no edge should have been persisted"
+    );
+}

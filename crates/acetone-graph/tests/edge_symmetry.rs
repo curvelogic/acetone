@@ -6,7 +6,7 @@
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
-use acetone_model::records::EdgeRecord;
+use acetone_model::records::{EdgeRecord, NodeRecord};
 use proptest::prelude::*;
 use std::collections::BTreeMap;
 
@@ -42,6 +42,17 @@ proptest! {
         let mut expected: BTreeMap<Vec<u8>, EdgeKey> = BTreeMap::new();
 
         let mut tx = Some(repo.begin_write().expect("begin"));
+        // Referential integrity (ADR-0028) requires every edge's endpoints to
+        // exist; create all candidate endpoint nodes up front so the property
+        // under test — edge-map symmetry — is exercised over valid graphs.
+        {
+            let t = tx.as_mut().unwrap();
+            for i in 0u8..6 {
+                let key = NodeKey::new("N", vec![Value::Int(i64::from(i))]).expect("valid");
+                t.put_node(&key, &NodeRecord::new(Vec::<String>::new(), BTreeMap::new()))
+                    .expect("put node");
+            }
+        }
         for step in &ops {
             match step {
                 Op::Put(s, t, d) => {

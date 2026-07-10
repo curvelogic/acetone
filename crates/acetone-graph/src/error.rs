@@ -117,6 +117,20 @@ pub enum GraphError {
         /// Rendered key.
         key: String,
     },
+    /// A write would leave an edge without one of its endpoint nodes present
+    /// (referential integrity — Invariant #3 / ADR-0028). The transaction is
+    /// rejected before it can commit a structurally invalid graph.
+    #[error(
+        "operation would leave a dangling {rtype} edge: its {role} endpoint node {endpoint} does not exist"
+    )]
+    DanglingEdge {
+        /// The relationship type of the offending edge.
+        rtype: String,
+        /// Which endpoint is missing ("source" or "target").
+        role: &'static str,
+        /// The rendered missing endpoint (label and key).
+        endpoint: String,
+    },
     /// A merge input carries state the merge does not yet handle.
     #[error("merge is not yet supported for {feature}")]
     MergeUnsupported {
