@@ -43,13 +43,13 @@ use crate::merge::{ConflictMap, ManifestMerge, MergeConflict, MergeOutcome, merg
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_model::schema::SchemaEntry;
+use acetone_model::schema::{IndexDef, SchemaEntry};
 use acetone_prolly::{BatchOp, ChunkParams, Root, collect_reachable_chunks};
 use acetone_store::{
     ChunkStore, CommitStore, ConsolidateOptions, ConsolidateStats, GitStore, GitStoreOptions, Hash,
     NewCommit, ObjectFormat, RefStore, Signature, StoreError,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::path::Path;
 
@@ -1306,13 +1306,37 @@ impl<'r> Transaction<'r> {
         if !base_indexes.is_empty() || schema_changed {
             let entries = Snapshot::new(store, manifest.clone()).schema_entries()?;
             let (index_defs, label_keys) = crate::index::schema_index_info(&entries);
+            // On a schema change an index's *definition* may have changed
+            // (redeclaration under the same name). Incrementally deltaing the new
+            // definition onto the map built for the old one leaves stale/wrong
+            // entries, so a redefined index must be rebuilt from scratch: drop
+            // its base root, which sends `maintain` down the full-build path.
+            // Indexes whose definition is unchanged keep their base root and stay
+            // cheap-incremental. (Only possible on a schema change, so the common
+            // path is untouched.)
+            let base_for_maintain = if schema_changed {
+                let old_entries = Snapshot::new(store, self.manifest.clone()).schema_entries()?;
+                let old_defs: BTreeMap<String, IndexDef> =
+                    crate::index::schema_index_info(&old_entries)
+                        .0
+                        .into_iter()
+                        .collect();
+                let new_defs: BTreeMap<String, IndexDef> = index_defs.iter().cloned().collect();
+                base_indexes
+                    .iter()
+                    .filter(|(name, _)| old_defs.get(*name) == new_defs.get(*name))
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect()
+            } else {
+                base_indexes.clone()
+            };
             manifest.indexes = crate::index::maintain(
                 store,
                 params,
                 &base_nodes,
                 &manifest.nodes,
                 &touched_nodes,
-                &base_indexes,
+                &base_for_maintain,
                 &index_defs,
                 &label_keys,
             )?;

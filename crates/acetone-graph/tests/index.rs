@@ -655,3 +655,61 @@ fn key_property_index_sources_value_from_the_node_key() {
         vec![(Value::String("web1".into()), "web1".into())]
     );
 }
+
+#[test]
+fn redeclaring_an_index_with_a_new_property_rebuilds_it() {
+    // U8 (pre-0.1 review): redeclaring an index under the same name but a
+    // different property must rebuild its map. An incremental delta over the map
+    // built for the old property leaves stale entries, so seeks on the new
+    // property return wrong (usually empty) results.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    declare_region_index(&repo); // "host_region" over property `region`
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(
+        &node("Host", "h1"),
+        &record(&[
+            ("region", Value::String("eu".into())),
+            ("zone", Value::String("z1".into())),
+        ]),
+    )
+    .expect("put");
+    tx.commit("add host", &[], None).expect("commit");
+
+    // Baseline: the index is over `region`.
+    let before: Vec<Value> = index_contents(&repo, "host_region")
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect();
+    assert_eq!(before, vec![Value::String("eu".into())]);
+
+    // Redeclare the same index over `zone`.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "host_region".into(),
+        def: IndexDef::new("Host", vec!["zone".into()]).expect("index"),
+    })
+    .expect("schema");
+    tx.commit("redeclare index on zone", &[], None)
+        .expect("commit");
+
+    // The index now reflects `zone`, not the stale `region`.
+    let after: Vec<Value> = index_contents(&repo, "host_region")
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect();
+    assert_eq!(
+        after,
+        vec![Value::String("z1".into())],
+        "index must be rebuilt over the new property, not left stale on the old one"
+    );
+    // And it is consistent with `nodes` under the new schema (no stale advisory).
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.is_clean(),
+        "redeclared index must be consistent with nodes: {:?}",
+        report.findings
+    );
+}
