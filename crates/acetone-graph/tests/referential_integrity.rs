@@ -150,27 +150,34 @@ fn completing_a_merge_whose_resolution_dangles_an_edge_is_rejected() {
     tx.commit("ours modifies the edge", &[], None)
         .expect("commit");
 
-    match repo.merge("other", "merge other").expect("merge") {
-        // Safe outcome A: the merge refuses up front (graph violation).
-        MergeOutcome::Conflicts(_) if repo.merge_head().expect("mh").is_none() => {}
-        // Safe outcome B: an edge cell conflict enters merge-in-progress;
-        // resolving it to `ours` restores the edge over the deleted node, which
-        // must be rejected as a dangling edge — at the resolving save or, failing
-        // that, at commit. Either way the merge cannot complete into an invalid
-        // graph.
-        MergeOutcome::Conflicts(_) => match repo.resolve_all(ResolveSide::Ours) {
-            Err(GraphError::DanglingEdge { .. }) => {}
-            Ok(_) => {
-                let tx = repo.begin_write().expect("begin");
-                match tx.commit("complete", &[], None) {
-                    Err(GraphError::DanglingEdge { .. }) => {}
-                    other => {
-                        panic!("completing a dangling merge must be rejected, got {other:?}")
-                    }
-                }
+    let outcome = repo.merge("other", "merge other").expect("merge");
+    assert!(
+        matches!(outcome, MergeOutcome::Conflicts(_)),
+        "expected conflicts, got {outcome:?}"
+    );
+    // This scenario deterministically enters merge-in-progress (an edge *cell*
+    // conflict), so the transaction-boundary backstop — not an up-front graph
+    // refusal — is what must catch the dangling resolution. Lock that coverage
+    // in: were a future merge refactor to refuse up front instead, this assert
+    // fails loudly rather than letting the test pass without exercising the
+    // backstop.
+    assert!(
+        repo.merge_head().expect("merge head").is_some(),
+        "expected merge-in-progress so the resolve→save backstop is exercised"
+    );
+    // Resolving the edge cell-conflict to `ours` restores edge 1 -> 2 over the
+    // now-absent node2; it must be rejected as a dangling edge — at the resolving
+    // save or, failing that, at commit. Either way the merge cannot complete
+    // into an invalid graph.
+    match repo.resolve_all(ResolveSide::Ours) {
+        Err(GraphError::DanglingEdge { .. }) => {}
+        Ok(_) => {
+            let tx = repo.begin_write().expect("begin");
+            match tx.commit("complete", &[], None) {
+                Err(GraphError::DanglingEdge { .. }) => {}
+                other => panic!("completing a dangling merge must be rejected, got {other:?}"),
             }
-            Err(other) => panic!("unexpected resolve error: {other:?}"),
-        },
-        other => panic!("expected conflicts, got {other:?}"),
+        }
+        Err(other) => panic!("unexpected resolve error: {other:?}"),
     }
 }
