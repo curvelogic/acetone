@@ -8,7 +8,7 @@ use acetone_graph::fsck;
 use acetone_graph::merge::{
     Endpoint, GraphViolation, ManifestMerge, MergeConflict, MergeOutcome, merge_manifests,
 };
-use acetone_graph::repo::{InitOptions, Repository};
+use acetone_graph::repo::{InitOptions, Repository, ResolveSide};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
@@ -663,5 +663,90 @@ fn repository_merge_of_an_indexed_repo_commits_and_stays_fsck_clean() {
         !fsck::check(&repo).expect("fsck").has_errors(),
         "a merged indexed repository must be fsck-clean: {:?}",
         fsck::check(&repo).expect("fsck").findings
+    );
+}
+
+#[test]
+fn resolving_a_cell_conflict_on_an_indexed_property_keeps_the_index_consistent() {
+    // U9 regression, the riskiest path: a cell conflict on an *indexed* property.
+    // Mid-merge the conflicted node is absent from the (partial) merged nodes, so
+    // the rebuilt index must hold no stale entry for it; after resolution the
+    // index must gain exactly the resolved entry. fsck (index-consistency,
+    // Invariant #5) must be clean at both points.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let def = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("label def");
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "N".into(),
+        def,
+    })
+    .expect("schema");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "by_region".into(),
+        def: IndexDef::new("N", vec!["region".into()]).expect("index def"),
+    })
+    .expect("index");
+    tx.put_node(
+        &node(1),
+        &record(&[("region", Value::String("base".into()))]),
+    )
+    .expect("put");
+    let base = tx.commit("base", &[], None).expect("commit");
+
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(&[("region", Value::String("us".into()))]))
+        .expect("put");
+    tx.commit("theirs sets us", &[], None).expect("commit");
+
+    repo.checkout_branch("main").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(&[("region", Value::String("eu".into()))]))
+        .expect("put");
+    tx.commit("ours sets eu", &[], None).expect("commit");
+
+    // A cell conflict on node 1's region: enters merge-in-progress.
+    match repo.merge("other", "merge other").expect("merge") {
+        MergeOutcome::Conflicts(_) => {}
+        other => panic!("expected a cell conflict, got {other:?}"),
+    }
+    assert!(repo.merge_head().expect("merge head").is_some());
+    // Mid-merge: the conflicted node is absent, so the index carries no entry
+    // for it, and fsck's index-consistency check passes over the partial graph.
+    assert!(
+        !fsck::check(&repo).expect("fsck").has_errors(),
+        "mid-merge index must be consistent: {:?}",
+        fsck::check(&repo).expect("fsck").findings
+    );
+
+    repo.resolve_all(ResolveSide::Ours).expect("resolve");
+    let tx = repo.begin_write().expect("begin");
+    tx.commit("complete", &[], None).expect("commit");
+
+    // Post-resolution: exactly one index entry (region = eu → node 1), fsck clean.
+    assert!(
+        !fsck::check(&repo).expect("fsck").has_errors(),
+        "post-resolution index must be consistent: {:?}",
+        fsck::check(&repo).expect("fsck").findings
+    );
+    let merged = repo.workspace_manifest().expect("manifest");
+    let root = merged
+        .indexes
+        .get("by_region")
+        .expect("index present")
+        .to_root(merged.chunk_params)
+        .expect("root");
+    let entries: Vec<Vec<u8>> = scan(repo.store(), &root, ..)
+        .expect("scan")
+        .map(|item| item.expect("entry").0.to_vec())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "one resolved index entry, got {entries:?}"
     );
 }

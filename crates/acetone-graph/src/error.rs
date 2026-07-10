@@ -131,12 +131,6 @@ pub enum GraphError {
         /// The rendered missing endpoint (label and key).
         endpoint: String,
     },
-    /// A merge input carries state the merge does not yet handle.
-    #[error("merge is not yet supported for {feature}")]
-    MergeUnsupported {
-        /// The unsupported aspect (e.g. secondary indexes).
-        feature: &'static str,
-    },
     /// Two versions share no common ancestor, so there is no base for a
     /// three-way merge (unrelated histories).
     #[error("cannot merge {theirs} into {ours}: no common ancestor (unrelated histories)")]
