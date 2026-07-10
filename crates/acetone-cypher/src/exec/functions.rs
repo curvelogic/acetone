@@ -6,6 +6,12 @@ use crate::exec::source::GraphSource;
 use crate::exec::value::Value;
 use crate::span::Span;
 
+/// Upper bound on the number of elements `range()` may materialise, so a query
+/// like `range(0, 9223372036854775807)` cannot exhaust memory. A resource
+/// governor will make this configurable (acetone-iq6); until then it is a fixed,
+/// generous cap.
+const MAX_RANGE_ELEMENTS: i128 = 10_000_000;
+
 pub fn call(
     name: &str,
     args: Vec<Value>,
@@ -217,12 +223,43 @@ pub fn call(
                     span,
                 });
             }
-            let (start, end) = (bounds[0], bounds[1]);
-            let mut items = Vec::new();
+            // The binder validates range()'s arity; guard defensively anyway so
+            // untrusted input can never index out of bounds.
+            let (Some(&start), Some(&end)) = (bounds.first(), bounds.get(1)) else {
+                return Err(ExecError::InvalidArgument {
+                    message: "range() needs a start and an end".into(),
+                    span,
+                });
+            };
+            // Compute the element count in i128 so neither the count nor the
+            // stepping can overflow i64, and cap it so a huge range cannot
+            // exhaust memory (previously `at += step` could panic on overflow or
+            // grow the list without bound).
+            let span_len = i128::from(end) - i128::from(start);
+            let count: i128 = if (step > 0 && span_len < 0) || (step < 0 && span_len > 0) {
+                0
+            } else {
+                span_len / i128::from(step) + 1
+            };
+            if count > MAX_RANGE_ELEMENTS {
+                return Err(ExecError::InvalidArgument {
+                    message: format!(
+                        "range() would produce {count} elements, exceeding the limit of \
+                         {MAX_RANGE_ELEMENTS}"
+                    ),
+                    span,
+                });
+            }
+            let count = count as usize;
+            let mut items = Vec::with_capacity(count);
             let mut at = start;
-            while (step > 0 && at <= end) || (step < 0 && at >= end) {
+            for i in 0..count {
                 items.push(Value::Int(at));
-                at += step;
+                // Only advance between elements: every emitted value stays within
+                // [start, end], so this never overflows i64.
+                if i + 1 < count {
+                    at += step;
+                }
             }
             Ok(Value::List(items))
         }

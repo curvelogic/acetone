@@ -1083,8 +1083,22 @@ fn walk_steps(
     Ok(())
 }
 
-/// Var-length expansion with relationship uniqueness pruning; at each
-/// depth within bounds, try to close on the target node pattern.
+/// One outstanding node to expand in the variable-length walk.
+struct VarHopFrame {
+    from: NodeValue,
+    state: MatchState,
+    path: PathBuild,
+    hops: Vec<RelValue>,
+}
+
+/// Explore a variable-length relationship pattern by an explicit-stack DFS
+/// rather than per-hop recursion: a `*` pattern over a large or cyclic graph can
+/// reach path lengths in the thousands, which would overflow the call stack
+/// (SIGABRT) on untrusted input. The stack lives on the heap; `walk_steps` (the
+/// remainder of the pattern) still recurses, but only over the fixed number of
+/// pattern steps, not the path length. Children are pushed in reverse so they
+/// pop in forward order, preserving the pre-order DFS match order of the former
+/// recursive form.
 #[allow(clippy::too_many_arguments)]
 fn expand_var_length(
     pattern: &BoundPathPattern,
@@ -1100,76 +1114,88 @@ fn expand_var_length(
     ctx: &EvalCtx,
     results: &mut Vec<MatchState>,
 ) -> Result<(), ExecError> {
-    if hops.len() >= min && node_satisfies(&from, node_pattern, &state.row, ctx)? {
-        let mut next = MatchState {
-            row: state.row.clone(),
-            used_rels: state.used_rels.clone(),
-        };
-        if let Some(var) = rel_pattern.var {
-            next.row.set(
-                var,
-                Value::List(hops.iter().cloned().map(Value::Relationship).collect()),
-            );
-        }
-        let target_ok = match node_pattern.var {
-            Some(var) if next.row.contains(var) => {
-                matches!(next.row.get(var), Value::Node(bound) if bound.id == from.id)
-            }
-            Some(var) => {
-                next.row.set(var, Value::Node(from.clone()));
-                true
-            }
-            None => true,
-        };
-        if target_ok {
-            walk_steps(
-                pattern,
-                at + 1,
-                from.clone(),
-                next,
-                path.clone(),
-                ctx,
-                results,
-            )?;
-        }
-    }
-    if hops.len() >= max {
-        return Ok(());
-    }
-    for (rel, neighbour) in ctx
-        .graph
-        .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
+    let mut stack = vec![VarHopFrame {
+        from,
+        state,
+        path,
+        hops,
+    }];
+    while let Some(VarHopFrame {
+        from,
+        state,
+        path,
+        hops,
+    }) = stack.pop()
     {
-        if state.used_rels.contains(&rel.id) {
+        if hops.len() >= min && node_satisfies(&from, node_pattern, &state.row, ctx)? {
+            let mut next = MatchState {
+                row: state.row.clone(),
+                used_rels: state.used_rels.clone(),
+            };
+            if let Some(var) = rel_pattern.var {
+                next.row.set(
+                    var,
+                    Value::List(hops.iter().cloned().map(Value::Relationship).collect()),
+                );
+            }
+            let target_ok = match node_pattern.var {
+                Some(var) if next.row.contains(var) => {
+                    matches!(next.row.get(var), Value::Node(bound) if bound.id == from.id)
+                }
+                Some(var) => {
+                    next.row.set(var, Value::Node(from.clone()));
+                    true
+                }
+                None => true,
+            };
+            if target_ok {
+                walk_steps(
+                    pattern,
+                    at + 1,
+                    from.clone(),
+                    next,
+                    path.clone(),
+                    ctx,
+                    results,
+                )?;
+            }
+        }
+        if hops.len() >= max {
             continue;
         }
-        if !rel_satisfies(&rel, rel_pattern, &state.row, ctx)? {
-            continue;
+        // Collect this node's expansions, then push them in reverse so the DFS
+        // visits them in the same (forward) order the recursive form did.
+        let mut children = Vec::new();
+        for (rel, neighbour) in
+            ctx.graph
+                .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
+        {
+            if state.used_rels.contains(&rel.id) {
+                continue;
+            }
+            if !rel_satisfies(&rel, rel_pattern, &state.row, ctx)? {
+                continue;
+            }
+            let mut next_state = MatchState {
+                row: state.row.clone(),
+                used_rels: state.used_rels.clone(),
+            };
+            next_state.used_rels.insert(rel.id.clone());
+            let mut next_path = path.clone();
+            next_path.rels.push(rel.clone());
+            next_path.nodes.push(neighbour.clone());
+            let mut next_hops = hops.clone();
+            next_hops.push(rel.clone());
+            children.push(VarHopFrame {
+                from: neighbour,
+                state: next_state,
+                path: next_path,
+                hops: next_hops,
+            });
         }
-        let mut next_state = MatchState {
-            row: state.row.clone(),
-            used_rels: state.used_rels.clone(),
-        };
-        next_state.used_rels.insert(rel.id.clone());
-        let mut next_path = path.clone();
-        next_path.rels.push(rel.clone());
-        next_path.nodes.push(neighbour.clone());
-        let mut next_hops = hops.clone();
-        next_hops.push(rel.clone());
-        expand_var_length(
-            pattern,
-            at,
-            rel_pattern,
-            node_pattern,
-            neighbour,
-            next_state,
-            next_path,
-            next_hops,
-            min,
-            max,
-            ctx,
-            results,
-        )?;
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
     }
     Ok(())
 }
