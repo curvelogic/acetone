@@ -1083,9 +1083,6 @@ fn walk_steps(
     Ok(())
 }
 
-/// Var-length expansion with relationship uniqueness pruning; at each
-/// depth within bounds, try to close on the target node pattern.
-#[allow(clippy::too_many_arguments)]
 /// One outstanding node to expand in the variable-length walk.
 struct VarHopFrame {
     from: NodeValue,
