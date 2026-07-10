@@ -25,9 +25,9 @@ use acetone_graph::merge::{ManifestMerge, merge_manifests};
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
-use acetone_model::manifest::Manifest;
+use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_prolly::{get, scan};
+use acetone_prolly::{BatchOp, apply_batch, get, scan};
 use acetone_store::{GitStore, Hash};
 use proptest::prelude::*;
 
@@ -200,11 +200,19 @@ fn has_dangling_detects_a_missing_endpoint() {
         "a graph whose edge endpoints all exist is not dangling"
     );
 
-    // Delete node 2 via plumbing while leaving edge 1 -> 2 in place: the
-    // workspace manifest now holds an edge to an absent endpoint.
-    let mut tx = repo.begin_write().expect("begin");
-    tx.delete_node(&node(2)).expect("delete");
-    let dangling_m = tx.save().expect("save");
+    // Remove node 2 from the nodes map via plumbing (apply_batch bypasses the
+    // transaction boundary, which now — ADR-0028 — refuses to leave edge 1 -> 2
+    // dangling), leaving the edge in place: the manifest holds an edge to an
+    // absent endpoint.
+    let params = valid_m.chunk_params;
+    let nodes = apply_batch(
+        repo.store(),
+        &valid_m.nodes.to_root(params).expect("nodes root"),
+        vec![BatchOp::Delete(node(2).encode().expect("encode"))],
+    )
+    .expect("apply_batch");
+    let mut dangling_m = valid_m.clone();
+    dangling_m.nodes = MapRoot::from_root(&nodes);
     assert!(
         has_dangling(repo.store(), &dangling_m),
         "edge 1 -> 2 dangles once node 2 is deleted"

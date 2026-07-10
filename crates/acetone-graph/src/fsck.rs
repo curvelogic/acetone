@@ -88,6 +88,10 @@ pub enum FindingKind {
     /// rebuilding the map from what it holds yields a different root
     /// (Invariant #1 — history independence). Real damage or a foreign writer.
     HistoryIndependence,
+    /// An edge in `edges_fwd` references an endpoint node absent from `nodes`
+    /// (referential integrity, ADR-0028 / Invariant #3). The write path now
+    /// rejects this, but an older or foreign-written repository may carry one.
+    DanglingEdge,
     /// Advisory: a reachable version was found but deliberately not verified
     /// in this phase (e.g. an annotated tag, whose tag-object peeling is
     /// deferred — see ADR-0012). The sin fsck must avoid is silence, so the
@@ -508,6 +512,14 @@ fn check_manifest(
         check_edge_symmetry(store, origin, &manifest, report);
     }
 
+    // Referential integrity (ADR-0028, Invariant #3): every forward edge must
+    // have both its endpoint nodes present in `nodes`. Gated on both maps being
+    // structurally sound so a corruption verify_map already reported is not
+    // double-counted.
+    if nodes_ok && fwd_ok {
+        check_referential_integrity(store, origin, &manifest, report);
+    }
+
     // Index consistency (spec §3.3, Invariant #5): each declared index must be
     // exactly reproducible from `nodes`. Only checked for indexes whose map is
     // structurally sound and when the nodes map is sound — otherwise verify_map
@@ -737,6 +749,48 @@ fn verify_map(
 /// an edge entry fails to decode this surfaces it as a clearly-labelled
 /// advisory — "could not check symmetry" — rather than silently passing
 /// the repository as clean.
+/// Referential integrity (ADR-0028, Invariant #3): every edge in `edges_fwd`
+/// must have both endpoint nodes present in `nodes`. The write path now rejects
+/// dangling edges, but an older or foreign-written repository may carry one, and
+/// fsck must name it rather than stay silent. The caller gates this on both maps
+/// being structurally sound (verify_map has otherwise reported the real fault).
+fn check_referential_integrity(
+    store: &GitStore,
+    origin: &Origin,
+    manifest: &Manifest,
+    report: &mut FsckReport,
+) {
+    let snapshot = Snapshot::new(store, manifest.clone());
+    let (Ok(nodes), Ok(edges)) = (snapshot.nodes(), snapshot.edges()) else {
+        return;
+    };
+    let present: BTreeSet<Vec<u8>> = nodes
+        .iter()
+        .filter_map(|(key, _)| key.encode().ok())
+        .collect();
+    for (edge, _) in &edges {
+        for (role, endpoint) in [("source", edge.src()), ("target", edge.dst())] {
+            let Ok(enc) = endpoint.encode() else { continue };
+            if !present.contains(&enc) {
+                report.push(
+                    FindingKind::DanglingEdge,
+                    origin,
+                    Some(MapId::EdgesFwd),
+                    format!(
+                        "edge :{} from {}{:?} to {}{:?} has no {} node",
+                        edge.rtype(),
+                        edge.src().label(),
+                        edge.src().key(),
+                        edge.dst().label(),
+                        edge.dst().key(),
+                        role,
+                    ),
+                );
+            }
+        }
+    }
+}
+
 fn check_edge_symmetry(
     store: &GitStore,
     origin: &Origin,

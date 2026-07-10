@@ -248,8 +248,33 @@ fn asymmetric_edge_maps_are_an_advisory_not_an_error() {
     )
     .expect("apply_batch");
 
+    // Give the edge real endpoint nodes, so the only fault is the asymmetry —
+    // otherwise the referential-integrity check (ADR-0028) would also, and
+    // correctly, flag the edge as dangling.
+    let empty_nodes = base.nodes.to_root(base.chunk_params).expect("root");
+    let nodes = apply_batch(
+        store,
+        &empty_nodes,
+        vec![
+            BatchOp::Put(
+                node("Host", "a").encode().expect("encode"),
+                NodeRecord::new([], Default::default())
+                    .encode()
+                    .expect("encode record"),
+            ),
+            BatchOp::Put(
+                node("Host", "b").encode().expect("encode"),
+                NodeRecord::new([], Default::default())
+                    .encode()
+                    .expect("encode record"),
+            ),
+        ],
+    )
+    .expect("apply_batch nodes");
+
     let mut manifest = base.clone();
     manifest.edges_fwd = MapRoot::from_root(&fwd);
+    manifest.nodes = MapRoot::from_root(&nodes);
     let blob = store.put(&manifest.encode()).expect("put manifest");
     store
         .write_ref("refs/acetone/workspaces/asym", None, &blob)
@@ -618,4 +643,76 @@ fn non_canonical_map_is_a_history_independence_error() {
         report.findings
     );
     assert!(report.has_errors(), "a non-canonical map must be an error");
+}
+
+#[test]
+fn a_dangling_edge_is_a_referential_integrity_error() {
+    // U7 (pre-0.1 review / ADR-0028): an edge whose endpoint node is absent from
+    // `nodes` is structural damage. fsck must name it as an error, not stay
+    // silent. Hand-build a manifest (bypassing the write path, which now rejects
+    // this): node "a" exists, "b" does not, and a symmetric edge a-[:LINK]->b.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "a").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("encode record"),
+        )],
+    )
+    .expect("apply_batch nodes");
+
+    let key = EdgeKey::new(node("Host", "a"), "LINK", node("Host", "b"), Value::Null).expect("key");
+    let fwd = apply_batch(
+        store,
+        &base.edges_fwd.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            key.encode_fwd().expect("encode"),
+            EdgeRecord::default().encode().expect("encode record"),
+        )],
+    )
+    .expect("apply_batch fwd");
+    // Mirror into edges_rev so the only finding is the dangling edge, not an
+    // asymmetry advisory.
+    let rev = apply_batch(
+        store,
+        &base.edges_rev.to_root(params).expect("root"),
+        vec![BatchOp::Put(key.encode_rev().expect("encode"), Vec::new())],
+    )
+    .expect("apply_batch rev");
+
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+    manifest.edges_fwd = MapRoot::from_root(&fwd);
+    manifest.edges_rev = MapRoot::from_root(&rev);
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/dangling", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let danglers: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::DanglingEdge)
+        .collect();
+    assert_eq!(
+        danglers.len(),
+        1,
+        "expected one dangling-edge error, got {:?}",
+        report.findings
+    );
+    assert_eq!(danglers[0].severity, Severity::Error);
+    assert!(
+        danglers[0].detail.contains("has no target node"),
+        "detail: {}",
+        danglers[0].detail
+    );
 }
