@@ -11,6 +11,8 @@
 //! catalogue, lowering to the bound IR). Planner and executor follow
 //! under Phase 2.
 
+#![forbid(unsafe_code)]
+
 pub mod ast;
 pub mod bind;
 pub mod error;
