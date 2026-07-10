@@ -1698,3 +1698,90 @@ fn shell_persists_write_queries() {
     );
     assert!(!text.contains("debian"), "old value still present: {text}");
 }
+
+/// acetone-8yn (U11): CREATE must not silently overwrite an existing edge or
+/// collapse parallel edges (v0.1 has no query-reachable discriminator, ADR-0030).
+/// MERGE (upsert) and SET (modify) on an existing edge still work.
+#[test]
+fn create_of_a_duplicate_edge_is_rejected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "Host", "--key", "name"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["declare-rel-type", "RUNS"])
+            .status
+            .success()
+    );
+
+    // Create two nodes and an edge between them.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (a:Host {name:'a'})-[:RUNS]->(b:Host {name:'b'})",
+        ],
+    );
+    assert!(out.status.success(), "initial create: {}", stderr(&out));
+
+    // Re-creating the same edge over the matched nodes is rejected.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (a:Host {name:'a'}), (b:Host {name:'b'}) CREATE (a)-[:RUNS]->(b)",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "duplicate edge CREATE must fail, but it succeeded"
+    );
+    assert!(
+        stderr(&out).contains("existing edge"),
+        "expected a duplicate-edge error, got: {}",
+        stderr(&out)
+    );
+
+    // Two parallel CREATEs in one statement collapse — also rejected.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (a:Host {name:'a'}), (b:Host {name:'b'}) \
+             CREATE (a)-[:RUNS]->(b), (a)-[:RUNS]->(b)",
+        ],
+    );
+    assert!(!out.status.success(), "parallel edge CREATE must fail");
+
+    // MERGE of the existing edge is an upsert (matches) — still works.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (a:Host {name:'a'}), (b:Host {name:'b'}) MERGE (a)-[:RUNS]->(b)",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "MERGE of an existing edge must succeed: {}",
+        stderr(&out)
+    );
+
+    // SET on the matched edge modifies it — still works.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (a:Host {name:'a'})-[r:RUNS]->(b:Host {name:'b'}) SET r.weight = 5",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "SET on a matched edge must succeed: {}",
+        stderr(&out)
+    );
+}

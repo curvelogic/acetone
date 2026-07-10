@@ -56,6 +56,18 @@ pub enum PersistError {
     )]
     DuplicateKey { label: String, key: String },
     #[error(
+        "CREATE of {rtype} relationship {src} -> {dst} conflicts with an existing edge; acetone \
+         v0.1 has no parallel-edge discriminator (ADR-0030) — use MERGE to upsert, or SET to modify"
+    )]
+    DuplicateEdge {
+        /// The relationship type.
+        rtype: String,
+        /// The source endpoint, rendered.
+        src: String,
+        /// The destination endpoint, rendered.
+        dst: String,
+    },
+    #[error(
         "SET must not change the key property of {label:?} (node identity is immutable; a key change is a delete-plus-create — see rekey)"
     )]
     KeyImmutable { label: String },
@@ -171,7 +183,41 @@ pub fn persist_changes(
     for (key, record) in &node_records {
         txn.put_node(key, record)?;
     }
-    for rel in &changes.upserted_rels {
+    // A CREATE cannot make a duplicate/parallel edge: acetone v0.1 has no
+    // query-reachable discriminator, so two edges with the same (src, type, dst)
+    // share one key. Reject a created edge whose key already exists in the base
+    // graph (and is not being deleted this statement) or duplicates another
+    // created edge (ADR-0030). MERGE that matched an existing edge never reaches
+    // here as a create, and SET on a matched edge is a modification, put below.
+    if !changes.created_rels.is_empty() {
+        let mut deleted_edge_keys: HashSet<Vec<u8>> = HashSet::new();
+        for rel in &changes.deleted_rels {
+            deleted_edge_keys.insert(edge_key(rel, &entity_to_key)?.encode_fwd()?);
+        }
+        // `existing` starts as the base edge keys (minus those freed by a delete
+        // this statement) and grows with each created edge, so a collision with
+        // either base or an earlier create fails the insert.
+        let mut existing: HashSet<Vec<u8>> = HashSet::new();
+        for (key, _) in base.edges()? {
+            let enc = key.encode_fwd()?;
+            if !deleted_edge_keys.contains(&enc) {
+                existing.insert(enc);
+            }
+        }
+        for rel in &changes.created_rels {
+            let edge = edge_key(rel, &entity_to_key)?;
+            if !existing.insert(edge.encode_fwd()?) {
+                return Err(PersistError::DuplicateEdge {
+                    rtype: edge.rtype().to_string(),
+                    src: format!("{}{:?}", edge.src().label(), edge.src().key()),
+                    dst: format!("{}{:?}", edge.dst().label(), edge.dst().key()),
+                });
+            }
+            let record = EdgeRecord::new(convert_map(&rel.properties)?);
+            txn.put_edge(&edge, &record)?;
+        }
+    }
+    for rel in &changes.modified_rels {
         let edge = edge_key(rel, &entity_to_key)?;
         let record = EdgeRecord::new(convert_map(&rel.properties)?);
         txn.put_edge(&edge, &record)?;

@@ -102,8 +102,14 @@ pub struct WriteChanges {
     /// Base nodes to delete. Created-then-deleted nodes are a net no-op and
     /// are omitted (their overlay id encodes no persistent identity).
     pub deleted_nodes: Vec<EntityId>,
-    /// Created or modified relationships, in their final state.
-    pub upserted_rels: Vec<RelValue>,
+    /// Relationships created this statement (CREATE, or MERGE that did not
+    /// match), in their final state. A persistence layer must reject one whose
+    /// edge key already exists — a CREATE cannot make a duplicate/parallel edge
+    /// (ADR-0030) — whereas [`Self::modified_rels`] target already-matched edges.
+    pub created_rels: Vec<RelValue>,
+    /// Base relationships modified this statement (SET on a matched edge), in
+    /// their final state. Their edge keys already exist; they are updates.
+    pub modified_rels: Vec<RelValue>,
     /// Relationships to delete, carrying endpoints and type so the edge key
     /// can be rebuilt.
     pub deleted_rels: Vec<RelValue>,
@@ -493,21 +499,24 @@ impl<'a> MutableGraph<'a> {
             .collect();
 
         let mut seen_rels = HashSet::new();
-        let mut upserted_rels = Vec::new();
+        let mut created_rels = Vec::new();
         for rel in &self.created_rels {
             if self.deleted_rels.contains_key(&rel.id) {
                 continue;
             }
             if seen_rels.insert(rel.id.clone()) {
-                upserted_rels.push(self.overlay_rel(rel.clone()));
+                created_rels.push(self.overlay_rel(rel.clone()));
             }
         }
+        // Overrides not already covered by a create are SET on base-matched
+        // edges (updates), not new edges.
+        let mut modified_rels = Vec::new();
         for (id, rel) in &self.rel_overrides {
             if self.deleted_rels.contains_key(id) {
                 continue;
             }
             if seen_rels.insert(id.clone()) {
-                upserted_rels.push(rel.clone());
+                modified_rels.push(rel.clone());
             }
         }
 
@@ -521,7 +530,8 @@ impl<'a> MutableGraph<'a> {
         WriteChanges {
             upserted_nodes,
             deleted_nodes,
-            upserted_rels,
+            created_rels,
+            modified_rels,
             deleted_rels,
         }
     }
