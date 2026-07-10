@@ -117,6 +117,19 @@ pub enum GraphError {
         /// Rendered key.
         key: String,
     },
+    /// A schema change would alter a label's key tuple while nodes bearing that
+    /// label already exist. Node identity is `(primary label, key tuple)`
+    /// (Invariant #3), so changing the key orphans every existing node's key
+    /// from the schema — an unsupported mutation. Redeclare the key only before
+    /// adding data, or evolve it with `migrate`.
+    #[error(
+        "cannot change the key of label {label:?}: nodes already exist under its current key \
+         (node identity is immutable — redeclare before adding data, or use migrate)"
+    )]
+    LabelKeyChanged {
+        /// The label whose key tuple the change would alter.
+        label: String,
+    },
     /// A write would leave an edge without one of its endpoint nodes present
     /// (referential integrity — Invariant #3 / ADR-0028). The transaction is
     /// rejected before it can commit a structurally invalid graph.

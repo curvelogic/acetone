@@ -668,3 +668,117 @@ fn legacy_workspace_ref_is_adopted_and_migrated() {
         "per-worktree ref should exist after the migrating write"
     );
 }
+
+/// Declare label `name` with the given key tuple.
+fn declare_label_key(tx: &mut acetone_graph::repo::Transaction<'_>, name: &str, key: &[&str]) {
+    tx.put_schema(&SchemaEntry::Label {
+        name: name.into(),
+        def: LabelDef::new(
+            key.iter().map(|s| (*s).to_owned()).collect(),
+            BTreeMap::new(),
+            [],
+            [],
+        )
+        .expect("valid label def"),
+    })
+    .expect("put schema");
+}
+
+#[test]
+fn changing_a_label_key_over_live_data_is_rejected() {
+    // U3 (pre-0.1 review): node identity is (primary label, key tuple), so
+    // changing a label's key while nodes exist under the old key would orphan
+    // their identity — must be rejected (Invariant #3).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("node");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["id"]); // different key tuple
+    match tx.save() {
+        Err(GraphError::LabelKeyChanged { label }) => assert_eq!(label, "Host"),
+        other => panic!("expected LabelKeyChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn redeclaring_a_label_with_the_same_key_over_live_data_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("node");
+    tx.commit("seed", &[], None).expect("commit");
+
+    // Re-declaring the identical key tuple is a no-op change, not a corruption.
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.save().expect("same-key redeclare must be allowed");
+}
+
+#[test]
+fn changing_a_label_key_before_any_data_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.commit("declare", &[], None).expect("commit");
+
+    // No nodes yet: refining the key before adding data is fine.
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["id"]);
+    tx.save().expect("key change before data must be allowed");
+}
+
+#[test]
+fn reordering_a_composite_label_key_over_live_data_is_rejected() {
+    // A composite key's property order is significant (it is the key tuple), so
+    // reordering it over live data is a rejected identity change.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Reading", &["sensor", "at"]);
+    let key = NodeKey::new(
+        "Reading",
+        vec![Value::String("s1".into()), Value::String("t1".into())],
+    )
+    .expect("key");
+    tx.put_node(&key, &record(&[])).expect("node");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Reading", &["at", "sensor"]); // reordered
+    match tx.save() {
+        Err(GraphError::LabelKeyChanged { label }) => assert_eq!(label, "Reading"),
+        other => panic!("expected LabelKeyChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn changing_a_key_of_a_label_used_only_as_secondary_is_allowed() {
+    // The key tuple belongs to a node's PRIMARY label. A node bearing L only as
+    // a secondary label is keyed by its own primary label, so changing L's key
+    // cannot orphan it — the change is allowed.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    declare_label_key(&mut tx, "Tagged", &["x"]);
+    // A node whose PRIMARY label is Host, bearing Tagged as a secondary label.
+    let key = NodeKey::new("Host", vec![Value::String("web1".into())]).expect("key");
+    let rec = NodeRecord::new(["Tagged".to_string()], BTreeMap::new());
+    tx.put_node(&key, &rec).expect("node");
+    tx.commit("seed", &[], None).expect("commit");
+
+    // Changing Tagged's key is fine: no node has Tagged as its primary label.
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Tagged", &["y"]);
+    tx.save()
+        .expect("changing a secondary-only label's key must be allowed");
+}

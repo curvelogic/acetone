@@ -989,6 +989,47 @@ fn render_node_key(key: &NodeKey) -> String {
     format!("[{}]", parts.join(", "))
 }
 
+/// Reject a schema change that alters a label's key tuple while nodes bearing
+/// that label already exist in `base_nodes` (Invariant #3). Node identity is
+/// `(primary label, key tuple)`, so changing the key would orphan every existing
+/// node's key from the schema — an unsupported mutation (`migrate` is the path).
+fn check_label_key_stability(
+    store: &GitStore,
+    params: ChunkParams,
+    base_nodes: &MapRoot,
+    old_keys: &BTreeMap<String, Vec<String>>,
+    new_keys: &BTreeMap<String, Vec<String>>,
+) -> Result<(), GraphError> {
+    let root = base_nodes.to_root(params)?;
+    for (label, new_key) in new_keys {
+        // A label absent from the old schema is a fresh declaration, not a
+        // change; an unchanged key tuple is fine.
+        match old_keys.get(label) {
+            Some(old_key) if old_key != new_key => {}
+            _ => continue,
+        }
+        // The key tuple changed: reject if any pre-existing node bears this
+        // label. Its encoded key is prefixed by the label, so a single
+        // prefix scan decides existence.
+        let prefix = acetone_model::graph_keys::node_label_prefix(label);
+        if let Some(item) = acetone_prolly::scan(
+            store,
+            &root,
+            (Bound::Included(prefix.as_slice()), Bound::Unbounded),
+        )?
+        .next()
+        {
+            let (key, _) = item?;
+            if key.starts_with(&prefix) {
+                return Err(GraphError::LabelKeyChanged {
+                    label: label.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A `GraphError::DanglingEdge` naming the offending edge and missing endpoint.
 fn dangling_edge(rtype: &str, role: &'static str, endpoint: &NodeKey) -> GraphError {
     GraphError::DanglingEdge {
@@ -1300,6 +1341,21 @@ impl<'r> Transaction<'r> {
             indexes: base_indexes.clone(),
             conflicts,
         };
+        // Guard node identity (Invariant #3): a schema change must not alter a
+        // label's key tuple while nodes bearing that label already exist — that
+        // would orphan every existing node's key from the schema. Such a change
+        // needs an explicit `migrate`, not a redeclare.
+        if schema_changed {
+            let old_keys = crate::index::schema_index_info(
+                &Snapshot::new(store, self.manifest.clone()).schema_entries()?,
+            )
+            .1;
+            let new_keys = crate::index::schema_index_info(
+                &Snapshot::new(store, manifest.clone()).schema_entries()?,
+            )
+            .1;
+            check_label_key_stability(store, params, &base_nodes, &old_keys, &new_keys)?;
+        }
         // Maintain the derived `idx/<name>` maps (spec §3.3, Invariant #5).
         // Skipped entirely when no index exists and the schema is unchanged, so
         // the common index-free write path costs nothing.
