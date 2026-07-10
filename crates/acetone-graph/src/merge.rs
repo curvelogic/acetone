@@ -198,14 +198,6 @@ pub fn merge_manifests<S: ChunkStore>(
         ours.chunk_params == params && theirs.chunk_params == params,
         "merge inputs must share chunk parameters (fixed per repository)"
     );
-    // Secondary indexes are a derived map; merging them would need a rebuild
-    // from the merged nodes. None exist before Phase 5, so rather than
-    // silently drop a populated index map, refuse it explicitly.
-    if !base.indexes.is_empty() || !ours.indexes.is_empty() || !theirs.indexes.is_empty() {
-        return Err(GraphError::MergeUnsupported {
-            feature: "secondary indexes (arrive in Phase 5)",
-        });
-    }
     let mut cells = Vec::new();
 
     let schema = merge_one(
@@ -239,11 +231,10 @@ pub fn merge_manifests<S: ChunkStore>(
     // `edges_rev` is derived: rebuild it from the merged forward map rather
     // than merging it, so forward and reverse can never diverge (Invariant
     // #5) — including on the cell-conflict path, where the conflicted edges
-    // are absent from both maps. Secondary `indexes` are likewise derived;
-    // there are none before Phase 5, and they are rebuilt when they arrive.
+    // are absent from both maps.
     let edges_rev = rebuild_reverse(store, &edges_fwd, params)?;
 
-    let merged = Manifest {
+    let mut merged = Manifest {
         chunk_params: params,
         schema: MapRoot::from_root(&schema),
         nodes: MapRoot::from_root(&nodes),
@@ -252,6 +243,15 @@ pub fn merge_manifests<S: ChunkStore>(
         indexes: Default::default(),
         conflicts: None,
     };
+    // Secondary `indexes` are likewise derived (Invariant #5): rebuild them from
+    // the merged schema + nodes, exactly as `edges_rev` is rebuilt from
+    // `edges_fwd`, so a merge of any indexed repository is supported and the
+    // index maps can never diverge from `nodes`. On the cell-conflict path the
+    // merged `nodes` are partial (conflicted keys absent); the indexes rebuilt
+    // here are consistent with that partial graph and are brought up to date
+    // incrementally when the conflict is resolved (`save_in_place`).
+    let entries = schema_entries(store, &schema)?;
+    merged.indexes = crate::index::rebuild_all(store, &merged, &entries)?;
 
     // Cell conflicts short-circuit graph validation: the merged graph is
     // partial (conflicted keys absent), so referential/constraint checks
@@ -478,6 +478,17 @@ fn validate_merged<S: ChunkStore>(
 }
 
 /// Read the label definitions of a `schema` map root, keyed by label name.
+/// Every schema entry in a schema map, decoded (labels, indexes, rel types) —
+/// used to rebuild the derived index maps for a merged manifest.
+fn schema_entries<S: ChunkStore>(store: &S, schema: &Root) -> Result<Vec<SchemaEntry>, GraphError> {
+    let mut out = Vec::new();
+    for item in scan(store, schema, ..)? {
+        let (key, value) = item?;
+        out.push(SchemaEntry::decode(&key, &value)?);
+    }
+    Ok(out)
+}
+
 fn label_defs<S: ChunkStore>(
     store: &S,
     schema: &Root,
