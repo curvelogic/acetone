@@ -202,6 +202,19 @@ fn edge_table(
             has_disc = true;
         }
         for (name, value) in record.properties() {
+            // `src`, `dst` and `disc` are the flat edge table's reserved
+            // endpoint/discriminator columns. An edge property with one of those
+            // names would otherwise overwrite the endpoint value in the row and
+            // produce a duplicate column — silently corrupting the export and
+            // breaking round-trip. Reject it rather than emit a wrong table.
+            if matches!(name.as_str(), "src" | "dst" | "disc") {
+                bail!(
+                    "edges of type {rtype:?} have a property named {name:?}, which collides \
+                     with the reserved endpoint/discriminator column of the flat edge table; \
+                     a flat export cannot round-trip it (rename the property, or project it \
+                     under a different name) — not yet supported"
+                );
+            }
             non_key.insert(name.clone());
             row.insert(name.clone(), value.clone());
         }
@@ -491,6 +504,37 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn edge_table_rejects_a_property_colliding_with_a_reserved_column() {
+        // U10 (pre-0.1 review): an edge property named src/dst/disc would
+        // overwrite the endpoint/discriminator column and duplicate it —
+        // silent corruption. Reject it rather than emit a wrong table.
+        use acetone_model::records::EdgeRecord;
+        let src = NodeKey::new("Host", vec![Value::String("s".into())]).unwrap();
+        let dst = NodeKey::new("Host", vec![Value::String("d".into())]).unwrap();
+        for reserved in ["src", "dst", "disc"] {
+            let record = EdgeRecord::new(BTreeMap::from([(reserved.to_string(), Value::Int(1))]));
+            let edge = (
+                EdgeKey::new(src.clone(), "R", dst.clone(), Value::Null).unwrap(),
+                record,
+            );
+            match edge_table(&[edge], "R") {
+                Err(e) => {
+                    let msg = e.to_string();
+                    assert!(
+                        msg.contains("reserved") && msg.contains(reserved),
+                        "expected a reserved-column error naming {reserved:?}, got: {msg}"
+                    );
+                }
+                Ok(_) => panic!("expected a reserved-column error for {reserved:?}"),
+            }
+        }
+        // A non-colliding property still exports fine.
+        let ok = EdgeRecord::new(BTreeMap::from([("weight".to_string(), Value::Int(1))]));
+        let edge = (EdgeKey::new(src, "R", dst, Value::Null).unwrap(), ok);
+        assert!(edge_table(&[edge], "R").is_ok());
     }
 
     #[test]
