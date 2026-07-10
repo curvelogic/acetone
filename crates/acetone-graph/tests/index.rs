@@ -713,3 +713,105 @@ fn redeclaring_an_index_with_a_new_property_rebuilds_it() {
         report.findings
     );
 }
+
+#[test]
+fn redeclaring_a_composite_index_with_reordered_properties_rebuilds_it() {
+    // U8 follow-up (ADR-0027): a composite index's property *order* is
+    // significant (it determines the key tuple), so reordering it is a
+    // definition change that must rebuild — not an incremental no-op.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "hz".into(),
+        def: IndexDef::new("Host", vec!["region".into(), "zone".into()]).expect("index"),
+    })
+    .expect("schema");
+    tx.put_node(
+        &node("Host", "h1"),
+        &record(&[
+            ("region", Value::String("eu".into())),
+            ("zone", Value::String("z1".into())),
+        ]),
+    )
+    .expect("put");
+    tx.commit("declare + node", &[], None).expect("commit");
+
+    // Redeclare the same index with the properties reordered.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "hz".into(),
+        def: IndexDef::new("Host", vec!["zone".into(), "region".into()]).expect("index"),
+    })
+    .expect("schema");
+    tx.commit("reorder composite index", &[], None)
+        .expect("commit");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.is_clean(),
+        "a reordered composite index must be rebuilt to match nodes: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn redeclaring_one_of_two_indexes_leaves_the_other_untouched() {
+    // U8 follow-up: only the redefined index rebuilds; an unchanged sibling
+    // stays cheap-incremental and correct.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "a_idx".into(),
+        def: IndexDef::new("Host", vec!["region".into()]).expect("index"),
+    })
+    .expect("schema");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "b_idx".into(),
+        def: IndexDef::new("Host", vec!["zone".into()]).expect("index"),
+    })
+    .expect("schema");
+    tx.put_node(
+        &node("Host", "h1"),
+        &record(&[
+            ("region", Value::String("eu".into())),
+            ("zone", Value::String("z1".into())),
+            ("tier", Value::String("t1".into())),
+        ]),
+    )
+    .expect("put");
+    tx.commit("two indexes + node", &[], None).expect("commit");
+
+    // Redeclare only a_idx, moving it from `region` to `tier`.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "a_idx".into(),
+        def: IndexDef::new("Host", vec!["tier".into()]).expect("index"),
+    })
+    .expect("schema");
+    tx.commit("redeclare a_idx on tier", &[], None)
+        .expect("commit");
+
+    let a: Vec<Value> = index_contents(&repo, "a_idx")
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect();
+    let b: Vec<Value> = index_contents(&repo, "b_idx")
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect();
+    assert_eq!(
+        a,
+        vec![Value::String("t1".into())],
+        "a_idx rebuilt over `tier`"
+    );
+    assert_eq!(
+        b,
+        vec![Value::String("z1".into())],
+        "b_idx unchanged over `zone`"
+    );
+    assert!(fsck::check(&repo).expect("fsck").is_clean());
+}
