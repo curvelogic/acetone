@@ -221,6 +221,21 @@ fn second_consolidation_does_not_truncate_the_live_pack() {
     perms.set_readonly(true);
     std::fs::set_permissions(&pack_path, perms).expect("chmod read-only");
 
+    // The test's discriminator is EACCES on reopening the pack for writing. If
+    // this environment does not enforce the read-only bit (running as root, or a
+    // permissive filesystem), the buggy path would truncate-then-rewrite
+    // byte-identical bytes without erroring and the test would pass spuriously —
+    // so skip rather than assert a guarantee we cannot observe here. (This
+    // write-mode open does not truncate, so it leaves the pack intact.)
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open(&pack_path)
+        .is_ok()
+    {
+        eprintln!("skipping: filesystem does not enforce the read-only bit");
+        return;
+    }
+
     store
         .consolidate(ConsolidateOptions::default())
         .expect("second consolidate must not reopen the live pack for writing");
@@ -249,6 +264,56 @@ fn second_consolidation_does_not_truncate_the_live_pack() {
             data.as_slice(),
             "chunk {hash} preserved across double gc"
         );
+    }
+}
+
+/// The idempotent no-op only fires when *both* `{stem}.pack` and `{stem}.idx`
+/// exist. The other crash state — a `.pack` published but the run interrupted
+/// before the `.idx` (git ignores such a pack; the loose sources are still
+/// unpruned) — must instead be *healed*: a later `gc` proceeds and rewrites the
+/// pack via temp+rename, producing a complete pack+index. This test recreates
+/// that state (pack present, index removed, loose sources intact) and asserts
+/// the next consolidation heals it and git accepts the result.
+#[test]
+fn consolidation_heals_a_pack_present_without_its_index() {
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    let all = build_history(&store, 8, 4);
+
+    // Consolidate WITHOUT pruning loose, so the objects remain available as
+    // loose while we simulate the crash-between-renames state below.
+    let mut opts = ConsolidateOptions::default();
+    opts.prune_loose = false;
+    store
+        .consolidate(opts)
+        .expect("first consolidate (no prune)");
+
+    let packs = pack_files(&repo);
+    assert_eq!(packs.len(), 1, "one pack after first gc");
+    let pack_path = packs.into_iter().next().expect("one pack");
+    let idx_path = pack_path.with_extension("idx");
+
+    // Simulate a crash after the .pack rename but before the .idx: the index is
+    // gone, git ignores the pack, but the loose sources are intact.
+    std::fs::remove_file(&idx_path).expect("remove index");
+    assert!(
+        pack_path.exists() && !idx_path.exists(),
+        "pack without index"
+    );
+
+    // The next gc must not no-op (index absent): it heals the pack+index.
+    store
+        .consolidate(ConsolidateOptions::default())
+        .expect("second consolidate heals the pack");
+
+    assert!(idx_path.exists(), "index restored");
+    assert!(pack_path.exists(), "pack present");
+    git(&repo, &["fsck", "--strict"]);
+
+    let store = GitStore::open(&repo).expect("reopen");
+    for (hash, data) in &all {
+        let got = store.get(hash).expect("get").expect("present");
+        assert_eq!(got.as_ref(), data.as_slice(), "chunk {hash} healed");
     }
 }
 

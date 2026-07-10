@@ -351,14 +351,16 @@ impl GitStore {
     ///
     /// **Atomic.** A fresh pack is written to a temp file, `fsync`ed, then
     /// published by an atomic rename, so the destination `.pack` is never a torn
-    /// or truncated file even transiently. The `.pack` is published before the
-    /// `.idx` (a pack with no index is simply ignored, and the objects remain
-    /// available as loose until pruning), the index is likewise temp-written and
-    /// renamed, and finally the directory entry itself is `fsync`ed. A crash at
-    /// any point leaves either no index (pack ignored, loose sources still
-    /// unpruned) or a complete, durable index over a complete, durable pack —
-    /// never a dangling or torn index, and never a pack that can evaporate after
-    /// its loose sources were deleted.
+    /// or truncated file even transiently. The `.pack` is published and its
+    /// directory entry `fsync`ed *before* the `.idx` is written (a pack with no
+    /// index is simply ignored, and the objects remain available as loose until
+    /// pruning); the index is likewise temp-written, renamed, and the directory
+    /// `fsync`ed again. Making pack-entry durability strictly precede idx-entry
+    /// durability means no filesystem reordering can persist the index rename
+    /// while dropping the pack rename. A crash at any point leaves either no
+    /// index (pack ignored, loose sources still unpruned) or a complete, durable
+    /// index over a complete, durable pack — never a dangling or torn index, and
+    /// never a pack that can evaporate after its loose sources were deleted.
     fn install_pack(&self, stem: &str, pack: &[u8], idx: &[u8]) -> Result<(), StoreError> {
         let dir = self.repo().common_dir().join("objects").join("pack");
         let pack_path = dir.join(format!("{stem}.pack"));
@@ -374,6 +376,9 @@ impl GitStore {
         write_synced(&pack_tmp, pack, "writing pack")?;
         std::fs::rename(&pack_tmp, &pack_path)
             .map_err(|e| StoreError::backend("publishing pack", e))?;
+        // Make the .pack directory entry durable before the .idx exists, so a
+        // crash can never leave a published index over an absent pack.
+        fsync_dir(&dir)?;
         let idx_tmp = dir.join(format!("{stem}.idx.tmp"));
         write_synced(&idx_tmp, idx, "writing pack index")?;
         std::fs::rename(&idx_tmp, &idx_path)
