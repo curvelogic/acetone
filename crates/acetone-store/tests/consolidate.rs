@@ -172,6 +172,86 @@ fn consolidation_is_representation_only_and_deltifies() {
     git(&repo, &["fsck", "--strict"]);
 }
 
+/// The `.pack` files under `objects/pack`.
+fn pack_files(repo: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let dir = repo.join("objects").join("pack");
+    std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "pack"))
+        .collect()
+}
+
+/// Running `gc` twice must never truncate the live pack in place. The stem is
+/// content-addressed (`pack-<trailer>`), so a no-change second consolidation
+/// regenerates the identical stem; and once the first run pruned the loose
+/// sources, the pack is the *only* copy of those objects — reopening it for a
+/// truncate-then-rewrite is a crash window that can destroy the repository.
+/// Installing an already-present pack must be a no-op.
+///
+/// The test makes the installed pack read-only and consolidates again: the old
+/// truncate-in-place install path fails trying to reopen it for writing (turning
+/// the otherwise-silent truncation into an observable error), while the fixed,
+/// idempotent path skips the write entirely and leaves the pack untouched.
+#[test]
+fn second_consolidation_does_not_truncate_the_live_pack() {
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    let all = build_history(&store, 8, 4);
+
+    store
+        .consolidate(ConsolidateOptions::default())
+        .expect("first consolidate");
+
+    let packs = pack_files(&repo);
+    assert_eq!(
+        packs.len(),
+        1,
+        "exactly one consolidation pack after first gc"
+    );
+    let pack_path = packs.into_iter().next().expect("one pack");
+    let bytes_before = std::fs::read(&pack_path).expect("read pack bytes");
+
+    // Make the live pack read-only. A correct, idempotent install never reopens
+    // it; the buggy truncate-in-place install fails here (EACCES) instead of
+    // silently destroying the only copy of the objects.
+    let mut perms = std::fs::metadata(&pack_path).expect("meta").permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&pack_path, perms).expect("chmod read-only");
+
+    store
+        .consolidate(ConsolidateOptions::default())
+        .expect("second consolidate must not reopen the live pack for writing");
+
+    // Same content-addressed stem (not a spurious second pack), left untouched.
+    let packs_after = pack_files(&repo);
+    assert_eq!(
+        packs_after,
+        vec![pack_path.clone()],
+        "still the one same pack"
+    );
+    let bytes_after = std::fs::read(&pack_path).expect("read pack bytes");
+    assert_eq!(
+        bytes_before, bytes_after,
+        "the live pack must be byte-identical"
+    );
+
+    // (A read-only file in a writable dir is still removable, so leaving the
+    // pack read-only does not impede the tempdir's cleanup.)
+    // Every object still reads back byte-for-byte across the double gc.
+    let store = GitStore::open(&repo).expect("reopen");
+    for (hash, data) in &all {
+        let got = store.get(hash).expect("get").expect("present");
+        assert_eq!(
+            got.as_ref(),
+            data.as_slice(),
+            "chunk {hash} preserved across double gc"
+        );
+    }
+}
+
 #[test]
 fn consolidation_is_representation_only_on_a_sha256_repo() {
     // The pack/index writers are hash-kind parameterised; exercise the 32-byte
