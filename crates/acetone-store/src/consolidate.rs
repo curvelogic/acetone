@@ -338,22 +338,50 @@ impl GitStore {
     /// returns, the new pack must survive power loss before any pruning — so
     /// the bytes are `fsync`ed, not merely written into the page cache. git
     /// treats a pack as present only once its `.idx` exists, and then requires
-    /// the `.pack`; so the `.pack` is written and `fsync`ed in full first (a
-    /// pack with no index is simply ignored, and the objects remain available
-    /// as loose until pruning), then the index is `fsync`ed to a temp file and
-    /// published via an atomic rename, and finally the directory entry itself
-    /// is `fsync`ed. A crash at any point leaves either no index (pack ignored)
-    /// or a complete, durable index over a complete, durable pack — never a
-    /// dangling or torn index, and never a pack that can evaporate after its
-    /// loose sources were deleted.
+    /// the `.pack`.
+    ///
+    /// **Idempotent.** The stem is content-addressed (`pack-<trailer>`), so an
+    /// already-installed pack — both its `.pack` and its `.idx` present — is
+    /// byte-for-byte what this call would produce. Installing it again is a
+    /// no-op. This is not merely an optimisation: rewriting the `.pack` in place
+    /// would truncate a *live* pack, and once a prior run pruned the loose
+    /// sources those bytes are the only copy of their objects. A crash in the
+    /// truncate-then-rewrite window would then destroy the repository — so a
+    /// second `gc` must never reopen the live pack for writing.
+    ///
+    /// **Atomic.** A fresh pack is written to a temp file, `fsync`ed, then
+    /// published by an atomic rename, so the destination `.pack` is never a torn
+    /// or truncated file even transiently. The `.pack` is published and its
+    /// directory entry `fsync`ed *before* the `.idx` is written (a pack with no
+    /// index is simply ignored, and the objects remain available as loose until
+    /// pruning); the index is likewise temp-written, renamed, and the directory
+    /// `fsync`ed again. Making pack-entry durability strictly precede idx-entry
+    /// durability means no filesystem reordering can persist the index rename
+    /// while dropping the pack rename. A crash at any point leaves either no
+    /// index (pack ignored, loose sources still unpruned) or a complete, durable
+    /// index over a complete, durable pack — never a dangling or torn index, and
+    /// never a pack that can evaporate after its loose sources were deleted.
     fn install_pack(&self, stem: &str, pack: &[u8], idx: &[u8]) -> Result<(), StoreError> {
         let dir = self.repo().common_dir().join("objects").join("pack");
+        let pack_path = dir.join(format!("{stem}.pack"));
+        let idx_path = dir.join(format!("{stem}.idx"));
+        // Content-addressed: if this exact pack is already durably installed,
+        // do not touch it (truncating the only copy of pruned objects is fatal).
+        if pack_path.exists() && idx_path.exists() {
+            return Ok(());
+        }
         std::fs::create_dir_all(&dir)
             .map_err(|e| StoreError::backend("creating objects/pack", e))?;
-        write_synced(&dir.join(format!("{stem}.pack")), pack, "writing pack")?;
+        let pack_tmp = dir.join(format!("{stem}.pack.tmp"));
+        write_synced(&pack_tmp, pack, "writing pack")?;
+        std::fs::rename(&pack_tmp, &pack_path)
+            .map_err(|e| StoreError::backend("publishing pack", e))?;
+        // Make the .pack directory entry durable before the .idx exists, so a
+        // crash can never leave a published index over an absent pack.
+        fsync_dir(&dir)?;
         let idx_tmp = dir.join(format!("{stem}.idx.tmp"));
         write_synced(&idx_tmp, idx, "writing pack index")?;
-        std::fs::rename(&idx_tmp, dir.join(format!("{stem}.idx")))
+        std::fs::rename(&idx_tmp, &idx_path)
             .map_err(|e| StoreError::backend("publishing pack index", e))?;
         fsync_dir(&dir)?;
         Ok(())
