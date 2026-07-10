@@ -668,3 +668,70 @@ fn legacy_workspace_ref_is_adopted_and_migrated() {
         "per-worktree ref should exist after the migrating write"
     );
 }
+
+/// Declare label `name` with the given key tuple.
+fn declare_label_key(tx: &mut acetone_graph::repo::Transaction<'_>, name: &str, key: &[&str]) {
+    tx.put_schema(&SchemaEntry::Label {
+        name: name.into(),
+        def: LabelDef::new(
+            key.iter().map(|s| (*s).to_owned()).collect(),
+            BTreeMap::new(),
+            [],
+            [],
+        )
+        .expect("valid label def"),
+    })
+    .expect("put schema");
+}
+
+#[test]
+fn changing_a_label_key_over_live_data_is_rejected() {
+    // U3 (pre-0.1 review): node identity is (primary label, key tuple), so
+    // changing a label's key while nodes exist under the old key would orphan
+    // their identity — must be rejected (Invariant #3).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("node");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["id"]); // different key tuple
+    match tx.save() {
+        Err(GraphError::LabelKeyChanged { label }) => assert_eq!(label, "Host"),
+        other => panic!("expected LabelKeyChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn redeclaring_a_label_with_the_same_key_over_live_data_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("node");
+    tx.commit("seed", &[], None).expect("commit");
+
+    // Re-declaring the identical key tuple is a no-op change, not a corruption.
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.save().expect("same-key redeclare must be allowed");
+}
+
+#[test]
+fn changing_a_label_key_before_any_data_is_allowed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["name"]);
+    tx.commit("declare", &[], None).expect("commit");
+
+    // No nodes yet: refining the key before adding data is fine.
+    let mut tx = repo.begin_write().expect("begin");
+    declare_label_key(&mut tx, "Host", &["id"]);
+    tx.save().expect("key change before data must be allowed");
+}
