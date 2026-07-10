@@ -663,6 +663,16 @@ impl RefStore for GitStore {
             None,
         )
         .map_err(|e| StoreError::backend("locking refs for compare-and-swap", e))?;
+        // gix's `MustNotExist` treats a *value-equal* edit as a no-op success
+        // rather than a failure, which breaks the create-CAS contract: creating a
+        // ref that already exists must fail even when it already holds `new`
+        // (callers rely on the error to detect a lost create race). Under the
+        // writer guard this read is atomic with the write, so enforce it here.
+        if expected.is_none() && self.read_ref(name)?.is_some() {
+            return Err(StoreError::CasFailed {
+                name: name.to_string(),
+            });
+        }
         let precondition = match expected {
             None => PreviousValue::MustNotExist,
             Some(hash) => PreviousValue::MustExistAndMatch(Target::Object(hash.oid())),

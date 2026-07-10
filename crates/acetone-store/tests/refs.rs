@@ -43,6 +43,21 @@ fn create_fails_if_ref_exists() {
 }
 
 #[test]
+fn create_fails_if_ref_exists_even_with_the_same_value() {
+    // acetone-0ej: gix's MustNotExist treats a value-equal edit as a no-op
+    // success. A create (expected = None) of a ref that already exists must
+    // fail even when it already holds the same target — the caller relies on
+    // the error to detect a lost create race.
+    let (_dir, store) = new_store();
+    let v1 = store.put(b"v1").expect("put");
+    store.write_ref(REF, None, &v1).expect("create");
+    match store.write_ref(REF, None, &v1) {
+        Err(StoreError::CasFailed { name }) => assert_eq!(name, REF),
+        other => panic!("expected CasFailed on a value-equal create, got {other:?}"),
+    }
+}
+
+#[test]
 fn stale_expected_value_is_rejected() {
     let (_dir, store) = new_store();
     let v1 = store.put(b"v1").expect("put");
