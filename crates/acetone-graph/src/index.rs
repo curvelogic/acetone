@@ -29,7 +29,7 @@ use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::NodeRecord;
 use acetone_model::schema::{IndexDef, SchemaEntry};
 use acetone_prolly::{BatchOp, ChunkParams};
-use acetone_store::GitStore;
+use acetone_store::ChunkStore;
 
 use crate::error::GraphError;
 
@@ -114,8 +114,8 @@ pub(crate) fn index_entry_key(
 }
 
 /// A node record read from a map root by its encoded key.
-fn record_at(
-    store: &GitStore,
+fn record_at<S: ChunkStore>(
+    store: &S,
     params: ChunkParams,
     nodes: &MapRoot,
     encoded_key: &[u8],
@@ -129,8 +129,8 @@ fn record_at(
 
 /// Build one index map from scratch over every node in `nodes` (used for a
 /// newly-declared index and by `reindex`).
-pub(crate) fn build_full(
-    store: &GitStore,
+pub(crate) fn build_full<S: ChunkStore>(
+    store: &S,
     params: ChunkParams,
     nodes: &MapRoot,
     def: &IndexDef,
@@ -155,8 +155,8 @@ pub(crate) fn build_full(
 /// Rebuild every declared index map for `manifest` from its `nodes` map.
 /// Deterministic and history-independent, so it reproduces exactly the roots
 /// incremental maintenance would (Invariant #5).
-pub(crate) fn rebuild_all(
-    store: &GitStore,
+pub(crate) fn rebuild_all<S: ChunkStore>(
+    store: &S,
     manifest: &Manifest,
     entries: &[SchemaEntry],
 ) -> Result<BTreeMap<String, MapRoot>, GraphError> {
@@ -180,8 +180,8 @@ pub(crate) fn rebuild_all(
 /// touched keys; an index newly declared this transaction (no base root) is
 /// built in full from `new_nodes`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn maintain(
-    store: &GitStore,
+pub(crate) fn maintain<S: ChunkStore>(
+    store: &S,
     params: ChunkParams,
     base_nodes: &MapRoot,
     new_nodes: &MapRoot,

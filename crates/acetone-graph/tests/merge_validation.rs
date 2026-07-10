@@ -4,16 +4,17 @@
 //! and surfaces any breach as a structured [`GraphViolation`] conflict — data,
 //! not an error — leaving the repository untouched at the commit-graph level.
 
+use acetone_graph::fsck;
 use acetone_graph::merge::{
     Endpoint, GraphViolation, ManifestMerge, MergeConflict, MergeOutcome, merge_manifests,
 };
-use acetone_graph::repo::{InitOptions, Repository};
+use acetone_graph::repo::{InitOptions, Repository, ResolveSide};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_model::schema::{LabelDef, SchemaEntry};
-use acetone_prolly::{BatchOp, apply_batch};
+use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+use acetone_prolly::{BatchOp, apply_batch, scan};
 use acetone_store::GitStore;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -569,4 +570,183 @@ fn a_dangling_merge_writes_no_commit_at_the_repository_level() {
     assert_eq!(repo.head_commit().expect("head"), Some(ours));
     assert!(repo.merge_head().expect("merge head").is_none());
     assert!(!repo.is_dirty().expect("dirty"));
+}
+
+#[test]
+fn merging_an_indexed_repository_rebuilds_the_index_not_refuses_it() {
+    // U9 (pre-0.1 review): a stale guard refused any merge of a repository that
+    // carried a secondary index. Indexes are derived (Invariant #5), so the
+    // merge rebuilds them from the merged nodes, exactly as it rebuilds edges_rev.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let def = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("label def");
+    let (b, o, t) = diverge(
+        &repo,
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".into(),
+                def: def.clone(),
+            })
+            .expect("schema");
+            tx.put_schema(&SchemaEntry::Index {
+                name: "by_region".into(),
+                def: IndexDef::new("N", vec!["region".into()]).expect("index def"),
+            })
+            .expect("index");
+        },
+        |tx| {
+            tx.put_node(&node(1), &record(&[("region", Value::String("eu".into()))]))
+                .expect("put");
+        },
+        |tx| {
+            tx.put_node(&node(2), &record(&[("region", Value::String("us".into()))]))
+                .expect("put");
+        },
+    );
+
+    match merge(&repo, &b, &o, &t) {
+        ManifestMerge::Clean(merged) => {
+            let root = merged
+                .indexes
+                .get("by_region")
+                .expect("index survives the merge")
+                .to_root(merged.chunk_params)
+                .expect("root");
+            let count = scan(repo.store(), &root, ..).expect("scan").count();
+            assert_eq!(count, 2, "the merged index has one entry per merged node");
+        }
+        other => panic!("an indexed merge must be clean, not refused: {other:?}"),
+    }
+}
+
+#[test]
+fn repository_merge_of_an_indexed_repo_commits_and_stays_fsck_clean() {
+    // End-to-end through Repository::merge: a real three-way merge on an indexed
+    // repository commits, and the rebuilt index is consistent with the merged
+    // nodes (fsck's index-consistency check passes).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let def = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("label def");
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "N".into(),
+        def,
+    })
+    .expect("schema");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "by_region".into(),
+        def: IndexDef::new("N", vec!["region".into()]).expect("index def"),
+    })
+    .expect("index");
+    let base = tx.commit("base", &[], None).expect("commit");
+
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(2), &record(&[("region", Value::String("us".into()))]))
+        .expect("put");
+    tx.commit("theirs adds 2", &[], None).expect("commit");
+
+    repo.checkout_branch("main").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(&[("region", Value::String("eu".into()))]))
+        .expect("put");
+    tx.commit("ours adds 1", &[], None).expect("commit");
+
+    match repo.merge("other", "merge other").expect("merge") {
+        MergeOutcome::Merged(_) | MergeOutcome::FastForward(_) => {}
+        other => panic!("expected a completed merge, got {other:?}"),
+    }
+    assert!(
+        !fsck::check(&repo).expect("fsck").has_errors(),
+        "a merged indexed repository must be fsck-clean: {:?}",
+        fsck::check(&repo).expect("fsck").findings
+    );
+}
+
+#[test]
+fn resolving_a_cell_conflict_on_an_indexed_property_keeps_the_index_consistent() {
+    // U9 regression, the riskiest path: a cell conflict on an *indexed* property.
+    // Mid-merge the conflicted node is absent from the (partial) merged nodes, so
+    // the rebuilt index must hold no stale entry for it; after resolution the
+    // index must gain exactly the resolved entry. fsck (index-consistency,
+    // Invariant #5) must be clean at both points.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let def = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("label def");
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "N".into(),
+        def,
+    })
+    .expect("schema");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "by_region".into(),
+        def: IndexDef::new("N", vec!["region".into()]).expect("index def"),
+    })
+    .expect("index");
+    tx.put_node(
+        &node(1),
+        &record(&[("region", Value::String("base".into()))]),
+    )
+    .expect("put");
+    let base = tx.commit("base", &[], None).expect("commit");
+
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(&[("region", Value::String("us".into()))]))
+        .expect("put");
+    tx.commit("theirs sets us", &[], None).expect("commit");
+
+    repo.checkout_branch("main").expect("checkout");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &record(&[("region", Value::String("eu".into()))]))
+        .expect("put");
+    tx.commit("ours sets eu", &[], None).expect("commit");
+
+    // A cell conflict on node 1's region: enters merge-in-progress.
+    match repo.merge("other", "merge other").expect("merge") {
+        MergeOutcome::Conflicts(_) => {}
+        other => panic!("expected a cell conflict, got {other:?}"),
+    }
+    assert!(repo.merge_head().expect("merge head").is_some());
+    // Mid-merge: the conflicted node is absent, so the index carries no entry
+    // for it, and fsck's index-consistency check passes over the partial graph.
+    assert!(
+        !fsck::check(&repo).expect("fsck").has_errors(),
+        "mid-merge index must be consistent: {:?}",
+        fsck::check(&repo).expect("fsck").findings
+    );
+
+    repo.resolve_all(ResolveSide::Ours).expect("resolve");
+    let tx = repo.begin_write().expect("begin");
+    tx.commit("complete", &[], None).expect("commit");
+
+    // Post-resolution: exactly one index entry (region = eu → node 1), fsck clean.
+    assert!(
+        !fsck::check(&repo).expect("fsck").has_errors(),
+        "post-resolution index must be consistent: {:?}",
+        fsck::check(&repo).expect("fsck").findings
+    );
+    let merged = repo.workspace_manifest().expect("manifest");
+    let root = merged
+        .indexes
+        .get("by_region")
+        .expect("index present")
+        .to_root(merged.chunk_params)
+        .expect("root");
+    let entries: Vec<Vec<u8>> = scan(repo.store(), &root, ..)
+        .expect("scan")
+        .map(|item| item.expect("entry").0.to_vec())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "one resolved index entry, got {entries:?}"
+    );
 }
