@@ -273,7 +273,12 @@ fn convert_map(properties: &BTreeMap<String, ModelValue>) -> BTreeMap<String, Va
 /// (spec §5.1) defers temporal and byte types; rather than make a whole
 /// node unqueryable, those render to strings (lossy, but property access
 /// still works and temporal *arithmetic* is out of scope anyway).
-fn convert_value(value: &ModelValue) -> Value {
+///
+/// The rendering is lossy, so a read→write round-trip cannot naively re-persist
+/// it (that would retype the property to a string). The write path
+/// (`persist`) uses this same function to detect an *unchanged* deferred
+/// property and preserve its stored value verbatim (ADR-0029).
+pub(crate) fn convert_value(value: &ModelValue) -> Value {
     match value {
         ModelValue::Null => Value::Null,
         ModelValue::Bool(b) => Value::Bool(*b),

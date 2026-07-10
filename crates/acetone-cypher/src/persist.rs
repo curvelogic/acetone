@@ -108,12 +108,19 @@ pub fn persist_changes(
         .collect();
 
     for node in &changes.upserted_nodes {
-        let (key, record) = node_key_and_record(node, catalogue)?;
-
         // A created node carries an overlay id (its key does not decode); a
-        // modified base node carries its storage id (which decodes back to
-        // its original, immutable key).
-        match NodeKey::decode(node.id.0.as_ref()) {
+        // modified base node carries its storage id (which decodes back to its
+        // original, immutable key). For a modified base node, fetch its stored
+        // record so unchanged deferred-typed properties are preserved verbatim
+        // (ADR-0029 / U2), not retyped to string on write-back.
+        let decoded_id = NodeKey::decode(node.id.0.as_ref());
+        let base_record = match &decoded_id {
+            Ok(original) => base.get_node(original)?,
+            Err(_) => None,
+        };
+        let (key, record) = node_key_and_record(node, catalogue, base_record.as_ref())?;
+
+        match &decoded_id {
             Err(_) => {
                 // Created: its key must not already exist (CREATE is not an
                 // upsert — that is MERGE), unless that node is being deleted
@@ -178,6 +185,7 @@ pub fn persist_changes(
 fn node_key_and_record(
     node: &NodeValue,
     catalogue: &Catalogue,
+    base_record: Option<&NodeRecord>,
 ) -> Result<(NodeKey, NodeRecord), PersistError> {
     // Primary label: the one that declares a (non-empty) key.
     let mut keyed = node.labels.iter().filter(|label| {
@@ -227,9 +235,44 @@ fn node_key_and_record(
         if key_names.iter().any(|k| k == name) {
             continue;
         }
-        properties.insert(name.clone(), convert_value(value)?);
+        // Preserve an unchanged property's stored value verbatim (ADR-0029 / U2):
+        // the read path renders deferred types (Bytes/temporal) lossily to
+        // strings, so re-persisting the runtime value would retype them. If the
+        // property came from a modified base node and its runtime value is
+        // exactly the adapter's rendering of the stored value, it was read and
+        // written back unchanged — keep the stored `ModelValue`. Otherwise it was
+        // added or changed, so convert (lossless for non-deferred types, so this
+        // is a no-op for them).
+        let model = match base_record.and_then(|r| r.properties().get(name)) {
+            Some(stored) if same_rendering(&crate::exec::adapter::convert_value(stored), value) => {
+                stored.clone()
+            }
+            _ => convert_value(value)?,
+        };
+        properties.insert(name.clone(), model);
     }
     Ok((node_key, NodeRecord::new(secondary, properties)))
+}
+
+/// Structural equality on the runtime-value subset a stored node property can
+/// take once the read adapter has rendered deferred types (Bytes/temporal) to
+/// strings. The runtime [`Value`] has no `PartialEq` (openCypher equality is
+/// deliberately three-valued), so this is a plain structural compare used only
+/// to decide whether a property was written back unchanged. Any value shape a
+/// stored property cannot hold (Node/Rel/Path/Map) compares unequal, which
+/// correctly treats it as a change.
+fn same_rendering(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Float(x), Value::Float(y)) => x == y,
+        (Value::String(x), Value::String(y)) => x == y,
+        (Value::List(x), Value::List(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| same_rendering(a, b))
+        }
+        _ => false,
+    }
 }
 
 /// Enforce the schema's existence and UNIQUE constraints (spec §2) for one
@@ -346,4 +389,112 @@ fn convert_value(value: &Value) -> Result<ModelValue, PersistError> {
         Value::Relationship(_) => return Err(PersistError::Value("relationship")),
         Value::Path(_) => return Err(PersistError::Value("path")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acetone_model::DateTime;
+    use acetone_model::schema::{LabelDef, SchemaEntry};
+    use std::collections::BTreeMap;
+
+    /// A catalogue with a single label `L` keyed on `id`.
+    fn catalogue() -> Catalogue {
+        let def =
+            LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("label def");
+        crate::exec::catalogue_from_schema(vec![SchemaEntry::Label {
+            name: "L".to_string(),
+            def,
+        }])
+    }
+
+    fn runtime(props: &[(&str, Value)]) -> NodeValue {
+        NodeValue {
+            id: EntityId::from_bytes(b"storage-id".to_vec()),
+            labels: vec!["L".to_string()],
+            properties: props
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn write_back_preserves_unchanged_deferred_properties() {
+        // U2 (ADR-0029): the read path renders Bytes/temporal to strings, so a
+        // read→modify→write cycle must not retype the untouched ones. `name` is
+        // genuinely changed; `data` (Bytes) and `when` (DateTime) are read back
+        // exactly as the adapter rendered them.
+        let data = ModelValue::Bytes(vec![0xAB, 0xCD, 0xEF]);
+        let when = ModelValue::DateTime(DateTime {
+            epoch_nanos: 1_600_000_000_000_000_000,
+            offset_minutes: 60,
+        });
+        let base = NodeRecord::new(
+            Vec::<String>::new(),
+            BTreeMap::from([
+                ("name".to_string(), ModelValue::String("old".into())),
+                ("data".to_string(), data.clone()),
+                ("when".to_string(), when.clone()),
+            ]),
+        );
+        let node = runtime(&[
+            ("id", Value::Int(1)),
+            ("name", Value::String("new".into())), // changed
+            ("data", crate::exec::adapter::convert_value(&data)), // read back unchanged
+            ("when", crate::exec::adapter::convert_value(&when)), // read back unchanged
+        ]);
+
+        let (key, record) = node_key_and_record(&node, &catalogue(), Some(&base)).expect("persist");
+        assert_eq!(
+            key,
+            NodeKey::new("L", vec![ModelValue::Int(1)]).expect("key")
+        );
+        assert_eq!(
+            record.properties().get("data"),
+            Some(&data),
+            "unchanged Bytes must keep its stored type, not become a hex string"
+        );
+        assert_eq!(
+            record.properties().get("when"),
+            Some(&when),
+            "unchanged DateTime must keep its stored type, not become a debug string"
+        );
+        assert_eq!(
+            record.properties().get("name"),
+            Some(&ModelValue::String("new".into())),
+            "a genuinely changed property is stored as written"
+        );
+    }
+
+    #[test]
+    fn write_back_of_a_changed_deferred_property_stores_the_new_value() {
+        // Setting a deferred property to a different value must store the new
+        // value, not silently preserve the old one.
+        let data = ModelValue::Bytes(vec![0xAB, 0xCD]);
+        let base = NodeRecord::new(
+            Vec::<String>::new(),
+            BTreeMap::from([("data".to_string(), data)]),
+        );
+        let node = runtime(&[
+            ("id", Value::Int(1)),
+            ("data", Value::String("changed".into())),
+        ]);
+        let (_key, record) =
+            node_key_and_record(&node, &catalogue(), Some(&base)).expect("persist");
+        assert_eq!(
+            record.properties().get("data"),
+            Some(&ModelValue::String("changed".into()))
+        );
+    }
+
+    #[test]
+    fn a_created_node_has_no_base_and_converts_directly() {
+        let node = runtime(&[("id", Value::Int(1)), ("name", Value::String("x".into()))]);
+        let (_key, record) = node_key_and_record(&node, &catalogue(), None).expect("persist");
+        assert_eq!(
+            record.properties().get("name"),
+            Some(&ModelValue::String("x".into()))
+        );
+    }
 }
