@@ -9,7 +9,10 @@ The section for each released version below **is** that GitHub release's notes
 summarised: group related work, say what changed and why it matters, and leave
 the commit-by-commit detail to git history. Add new entries under
 `[Unreleased]` as work merges; move them under a new version heading when a
-release is cut.
+release is cut. (One extractor caveat: don't begin an entry line with a
+reference-style link definition — `[label]: url` at column 0 — as the release
+workflow reads that as the end of the section. Inline `[text](url)` links are
+fine.)
 
 ## [Unreleased]
 
@@ -48,8 +51,8 @@ diffs become change reports, and any git remote is backup and transport.
   `DETACH DELETE`, batched into workspace commits. `MERGE`-based re-imports are
   idempotent — re-loading identical data leaves the root unchanged and `commit`
   reports nothing to commit.
-- `query` for one-shot queries and an interactive `shell` REPL, both with table
-  and JSON output.
+- `query` for one-shot queries and an interactive `shell` REPL, both with table,
+  JSON and CSV output.
 
 ### Versioning, diff and merge
 
