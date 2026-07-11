@@ -62,7 +62,7 @@ Write semantics interact with identity: `CREATE` of a node whose key already exi
 
 ### 5.2 Versioning surface
 
-Session state includes the checked-out ref; queries address that state by default. Time travel: `AT <refspec>` may suffix a `MATCH` clause group (`MATCH (n:Host) AT 'main~5' RETURN n`), resolving any git refspec. History procedures: `CALL acetone.log([ref])`, `CALL acetone.diff(from, to)` (yielding change rows and, in graph form, `_Added`/`_Removed`/`_Modified` virtual elements), `CALL acetone.blame(label, key)`, `CALL acetone.conflicts()`. Procedures are read-only; repository mutations (branch, merge, commit) are CLI/library operations, not query-language operations, in v0.1.
+Session state includes the checked-out ref; queries address that state by default. Time travel: `AT <refspec>` may suffix a `MATCH` clause group (`MATCH (n:Host) AT 'import/2026-06' RETURN n`), resolving a branch, tag, full ref name or commit hash. (Git *ancestry* refspecs — `main~5`, `HEAD^` — are a planned convenience, `acetone-bvq`, not yet resolved by v0.1.) History procedures: `CALL acetone.log([ref])`, `CALL acetone.diff(from, to)` (yielding change rows and, in graph form, `_Added`/`_Removed`/`_Modified` virtual elements), `CALL acetone.blame(label, key)`, `CALL acetone.conflicts()`. Procedures are read-only; repository mutations (branch, merge, commit) are CLI/library operations, not query-language operations, in v0.1.
 
 ### 5.3 Execution model
 
@@ -78,7 +78,7 @@ Parser (decypher or equivalent, producing a spanned AST) → binder (resolves la
 
 ## 8. Crate layout
 
-`acetone-store` (ChunkStore trait; git backend; refs/commits) · `acetone-prolly` (trees, diff, merge; property-tested for history independence) · `acetone-model` (keys, records, encodings, schema, manifest) · `acetone-graph` (graph mutations, constraints, validation, merge orchestration) · `acetone-cypher` (front end, planner, executor; TCK harness) · `acetone-core` (the façade re-exporting the above as the single library API — **the real product surface** of §7, ADR-0026) · `acetone-cli` (the thin CLI client). Dependency direction is strictly downward in that list.
+`acetone-store` (ChunkStore trait; git backend; refs/commits) · `acetone-prolly` (trees, diff, merge; property-tested for history independence) · `acetone-model` (keys, records, encodings, schema, manifest) · `acetone-graph` (graph mutations, constraints, validation, merge orchestration) · `acetone-cypher` (front end, heuristic planner, executor; TCK harness) · `acetone-core` (the façade re-exporting the above as the single library API, whose public surface stabilises at 0.2 — §7, ADR-0026) · `acetone-cli` (the CLI client — the v0.1 product surface). Dependency direction is strictly downward in that list.
 
 ## 9. Reserved for future layers
 
