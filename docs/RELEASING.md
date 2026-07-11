@@ -17,6 +17,12 @@ The flow:
    and the `acetone-*` path-dependency pins in `[workspace.dependencies]`, on
    `main`. `acetone --version` and the binaries then report it. (Already `0.1.0`
    for the first release.)
+1b. **Write the changelog section.** Move the accumulated `## [Unreleased]`
+   entries in `CHANGELOG.md` under a new `## [<version>] - <date>` heading (Keep
+   a Changelog format). **This section is the release body** — the workflow
+   reads it verbatim via `body_path` and fails if it is missing — so make it a
+   human-readable, summarised changelog, not a commit dump. Add new entries
+   under `[Unreleased]` as PRs merge so this step is just a rename.
 2. **Build the candidate.** Run the **Release** workflow from the Actions tab
    (`workflow_dispatch`). It builds `--release` (the workspace
    `[profile.release]`: `strip`, `lto`, one codegen unit) for each target and
