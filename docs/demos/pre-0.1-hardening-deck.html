@@ -1,0 +1,342 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck { height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .card.lead { border-left: 3px solid var(--accent); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  .term {
+    background: var(--ink); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65;
+  }
+  @media (prefers-color-scheme: dark) { .term { border: 1px solid var(--line); } }
+  :root[data-theme="dark"] .term { border: 1px solid var(--line); }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term .p { color: #2dd4bf; }
+  .term .c { color: #e8eef0; }
+  .term .o { color: #8b9aa2; }
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+</style>
+<title>Acetone · Pre-0.1 hardening sprint</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="The gate"></a>
+  <a href="#s3" aria-label="The verdict"></a>
+  <a href="#s4" aria-label="What we fixed"></a>
+  <a href="#s5" aria-label="The decisions"></a>
+  <a href="#s6" aria-label="Beyond the fixes"></a>
+  <a href="#s7" aria-label="Live demo"></a>
+  <a href="#s8" aria-label="For Greg"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · Pre-0.1 hardening</p>
+      <h1>The gate before<br>the tag.</h1>
+      <p class="lede">Before tagging 0.1 you asked for a complete adversarial review — the whole architecture, code, docs and roadmap, on Fable. It found <strong>fourteen urgent defects</strong>, all in one place. This sprint fixed every one, each behind its own red→green test and a fresh adversarial review. The result: an honest, tag-ready 0.1.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>13 beads · 15 PRs · #80–#94</span>
+        <span class="chip good"><span class="dot"></span>14 urgent defects · fixed</span>
+        <span class="chip good"><span class="dot"></span>4 ADRs · 0028–0031</span>
+        <span class="chip good"><span class="dot"></span>version 0.1.0</span>
+        <span class="chip good"><span class="dot"></span>main green</span>
+      </div>
+    </div>
+    <div class="foot">epic acetone-hrd · 2026-07-11 · main @ b4a3ed9</div>
+    <div class="num">01 / 08</div>
+  </section>
+
+  <!-- 2 · The gate -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">The review gate · "step 2.5"</p>
+      <h2>Four fresh reviewers, no implementation context.</h2>
+      <p class="lede">One adversarial reviewer per dimension, each reading the frozen-format codebase cold — prompted to break it, not bless it. Their findings were deduplicated, severity-ranked and phase-mapped into <code>docs/reports/pre-0.1-review.md</code>, then filed as beads.</p>
+      <div class="grid cols-2" style="margin-top:22px">
+        <div class="card"><div class="tag">ARCHITECTURE · 18 findings</div><h3>Conceptual integrity &amp; seams</h3><p>The verdict that framed everything else — and the value-domain and rel-identity finds the code review didn't have.</p></div>
+        <div class="card"><div class="tag">CODE · 25 findings</div><h3>Correctness, line by line</h3><p>10 urgent. Read prolly + model exhaustively: "some of the most disciplined storage code I've reviewed — no urgent defect."</p></div>
+        <div class="card"><div class="tag">SECURITY · 13 findings</div><h3>Hostile input &amp; distribution</h3><p>The hostile-repo decode path is "exceptionally hardened." Verdict: the CLI is responsible to ship via Homebrew after the pre-tag fixes.</p></div>
+        <div class="card"><div class="tag">FITNESS · 22 findings</div><h3>Docs, UX &amp; positioning</h3><p>Where the docs contradict the binary in the first hour, and what 0.1 honestly is.</p></div>
+      </div>
+    </div>
+    <div class="num">02 / 08</div>
+  </section>
+
+  <!-- 3 · The verdict -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">The diagnosis</p>
+      <h2>Two systems of different maturity<br>wearing one name.</h2>
+      <p class="lede">Below the manifest: a genuinely rigorous content-addressed storage engine — history-independent, golden-pinned, conflicts-as-data. Above it: a younger query/runtime layer that treated the frozen value domain as debug strings, edge identity as improvised, the whole version as something to load per statement.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card lead"><div class="tag">THE THROUGH-LINE</div><h3>Every urgent defect lived at that boundary</h3><p>Where the storage layer's invariants stop being <em>enforced</em> and start being <em>assumed</em>. Each feature had been reviewed within its phase — never against the running product — so the bugs concentrated at the Phase-4×Phase-5 seams.</p></div>
+        <div class="card"><div class="tag">THE REASSURING HALF</div><h3>The invariant core is sound</h3><p>The Gate-D freeze is <strong>not</strong> reopened. History independence, deterministic encodings, node identity, merge determinism, derived-map reproducibility — all intact. <code>format_version 1</code> holds; golden pins unchanged.</p></div>
+      </div>
+    </div>
+    <div class="num">03 / 08</div>
+  </section>
+
+  <!-- 4 · What we fixed -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">The hardening sprint · 14 urgent fixes</p>
+      <h2>Prevent the loss. Detect the damage.</h2>
+      <div class="table-wrap" style="margin-top:6px">
+        <table>
+          <thead><tr><th>#</th><th>The defect</th><th>Bead</th><th>PR</th></tr></thead>
+          <tbody>
+            <tr><td class="pr">U1</td><td><code>gc</code> run twice truncated the live pack — repo destruction on crash</td><td><code>h4a</code></td><td class="pr">#81</td></tr>
+            <tr><td class="pr">U5·6·7</td><td>Dangling edges: merge + import committed invalid graphs; fsck couldn't see them</td><td><code>3xd</code></td><td class="pr">#82</td></tr>
+            <tr><td class="pr">U2</td><td><code>SET</code> silently retyped temporal / <code>Bytes</code> properties to strings</td><td><code>2vr</code></td><td class="pr">#83</td></tr>
+            <tr><td class="pr">U9</td><td>Merge was impossible on <em>any</em> indexed repository</td><td><code>mk7</code></td><td class="pr">#84</td></tr>
+            <tr><td class="pr">U8</td><td>Index redeclaration left a stale map — silent wrong-empty seeks</td><td><code>fq2</code></td><td class="pr">#85</td></tr>
+            <tr><td class="pr">U14</td><td><code>write_ref</code> value-equal create broke the create-CAS contract</td><td><code>0ej</code></td><td class="pr">#86</td></tr>
+            <tr><td class="pr">U4</td><td>The <code>shell</code> silently discarded write queries</td><td><code>c8b</code></td><td class="pr">#88</td></tr>
+            <tr><td class="pr">U10</td><td>Edge property named <code>src</code>/<code>dst</code>/<code>disc</code> corrupted export</td><td><code>wj4</code></td><td class="pr">#89</td></tr>
+            <tr><td class="pr">U3</td><td>Redeclaring a label's key tuple over live data corrupted identity</td><td><code>9kp</code></td><td class="pr">#90</td></tr>
+            <tr><td class="pr">U12·13</td><td>Var-length walk stack-overflow (SIGABRT) + <code>range()</code> overflow / OOM</td><td><code>6qd</code></td><td class="pr">#91</td></tr>
+            <tr><td class="pr">U11</td><td><code>CREATE</code> of an existing / parallel edge silently upserted</td><td><code>8yn</code></td><td class="pr">#92</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="clean" style="margin-top:16px">
+        <li><b>Every fix TDD'd red→green</b> — the reproducing test failed on the old code (verified by stashing the fix) before it passed on the new.</li>
+        <li><b>Plus <code>forbid(unsafe_code)</code></b> across the shipping crates (<code>uf0</code>) and the doc/UX honesty sweep (<code>do1</code>).</li>
+      </ul>
+    </div>
+    <div class="num">04 / 08</div>
+  </section>
+
+  <!-- 5 · The decisions -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions taken · for ratification</p>
+      <h2>Four ADRs the fixes forced.</h2>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card lead"><div class="tag">ADR-0028</div><h3>Referential integrity at the transaction boundary</h3><p>One check, in <code>save_in_place</code>, that no writer — import, Cypher, merge completion — can leave an edge without its endpoints. The naive dangling-merge became <em>structurally impossible</em>.</p></div>
+        <div class="card lead"><div class="tag">ADR-0029</div><h3>Preserve deferred property types on write-back</h3><p>Targeted fix for U2; the full typed value channel is Phase-7 (<code>vdc</code>). An unchanged Bytes/temporal property keeps its stored value verbatim.</p></div>
+        <div class="card lead"><div class="tag">ADR-0030</div><h3>No parallel edges in v0.1</h3><p><code>CREATE</code> of a duplicate edge is rejected, not silently collapsed. The format reserves the discriminator, so query-reachable edge identity (<code>rid</code>, Phase 7) needs no migration.</p></div>
+        <div class="card lead"><div class="tag">ADR-0031</div><h3>Pre-0.1 spec-drift corrections</h3><p>Removed phantom <code>push/pull/clone</code> and <code>:diff</code>; corrected §5.3 to the materialised pipeline; documented SHA-1 as the deliberate default; sharpened the 0.1 positioning.</p></div>
+      </div>
+      <p style="margin-top:16px">Also queued for the boundary: ratify <strong>ADR-0023–0027</strong> (Phase 6 + composite index keys), and the two Gate-D-flagged decisions.</p>
+    </div>
+    <div class="num">05 / 08</div>
+  </section>
+
+  <!-- 6 · Beyond the fixes -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">Beyond the fixes</p>
+      <h2>The gate did its job — every time.</h2>
+      <p class="lede">Each PR went to a fresh, strongest-tier adversarial reviewer with no implementation context. On fixes I had already verified red→green, they still found real improvements: a durability-ordering fsync, a false-preservation edge case, a §8 the honesty sweep had missed. Nothing shipped on self-certification.</p>
+      <div class="grid cols-3" style="margin-top:20px">
+        <div class="card"><div class="tag">HONEST</div><h3>version 0.1.0</h3><p><code>acetone --version</code> no longer claims 0.0.1; help text and spec no longer contradict the binary.</p></div>
+        <div class="card"><div class="tag">SCOPED</div><h3>2 follow-ups filed</h3><p>Git-identity authorship (<code>gid</code>) and merge index property-tests (<code>mqz</code>) — deferred deliberately, not dropped.</p></div>
+        <div class="card"><div class="tag">FRAMED</div><h3>Phase 7 reframed</h3><p>Not ergonomics — <em>extend the storage layer's discipline upward</em>: governor, lazy seek, rel identity, cell-level merge.</p></div>
+      </div>
+    </div>
+    <div class="num">06 / 08</div>
+  </section>
+
+  <!-- 7 · Live demo -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo · one step per turn</p>
+      <h2>Watch the fixes bite.</h2>
+      <p class="lede">Driving the actual 0.1 binary against a fresh repo — I'll show the guards catching what used to be silent data loss, and the honest 0.1 surface. One step at a time, output quoted, discussed before the next.</p>
+      <div class="term" style="margin-top:22px">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+        <div class="term-body">
+<div class="l"><span class="o"># the tag-ready binary</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone --version</span></div>
+<div class="l"><span class="ok">acetone 0.1.0</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># CREATE the same edge twice — no longer a silent overwrite (U11 / ADR-0030)</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query "MATCH (a:Host {name:'a'}),(b:Host {name:'b'}) CREATE (a)-[:RUNS]-&gt;(b)"</span></div>
+<div class="l"><span class="no">error: cannot add the RUNS relationship … it conflicts with an existing edge …</span></div>
+        </div>
+      </div>
+      <p style="margin-top:14px; font-size:13.5px; color:var(--faint)">A representative taste — the live walkthrough runs the real commands.</p>
+    </div>
+    <div class="num">07 / 08</div>
+  </section>
+
+  <!-- 8 · For Greg -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">For Greg · the boundary</p>
+      <h2>Ratify, then tag.</h2>
+      <div class="grid cols-2" style="margin-top:8px">
+        <div>
+          <ul class="clean">
+            <li><b>Review the record</b> — <code>docs/reports/pre-0.1-review.md</code> and ADRs 0028–0031, at your pace.</li>
+            <li><b>Ratify the decisions</b> — 0023–0031, and the Gate-D-flagged choices.</li>
+            <li><b>Tag <code>v0.1.0</code></b> — the ruleset restricts <code>v*</code> to you; the binary is honest and main is green.</li>
+            <li><b>Then the release</b> — I drive GHA binaries → the binary formula in <code>curvelogic/homebrew-tap</code> (<code>acetone-wpx</code>).</li>
+          </ul>
+        </div>
+        <div class="card lead">
+          <div class="tag">THE 0.1, HONESTLY</div>
+          <h3>A solo, git-native workbench for a version-controlled asset registry</h3>
+          <p>Imports become audited commits; <code>diff</code> becomes a change report; any git remote is backup and transport. The CLI is the product; the library API stabilises at 0.2, gated on the resource governor.</p>
+          <div class="chips" style="margin-top:14px">
+            <span class="chip good"><span class="dot"></span>format frozen</span>
+            <span class="chip good"><span class="dot"></span>14/14 fixed</span>
+            <span class="chip accent"><span class="dot"></span>ready to tag</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">acetone-hrd complete · review gate acetone-upq (yours to close)</div>
+    <div class="num">08 / 08</div>
+  </section>
+
+</main>
