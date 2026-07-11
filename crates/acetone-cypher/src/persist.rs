@@ -56,8 +56,9 @@ pub enum PersistError {
     )]
     DuplicateKey { label: String, key: String },
     #[error(
-        "CREATE of {rtype} relationship {src} -> {dst} conflicts with an existing edge; acetone \
-         v0.1 has no parallel-edge discriminator (ADR-0030) — use MERGE to upsert, or SET to modify"
+        "cannot add the {rtype} relationship {src} -> {dst}: it conflicts with an existing edge \
+         and acetone v0.1 has no parallel-edge discriminator (ADR-0030) — modify the existing edge \
+         with SET, or delete it first"
     )]
     DuplicateEdge {
         /// The relationship type.

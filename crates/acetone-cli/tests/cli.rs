@@ -1784,4 +1784,35 @@ fn create_of_a_duplicate_edge_is_rejected() {
         "SET on a matched edge must succeed: {}",
         stderr(&out)
     );
+
+    // DELETE then re-CREATE the same edge in one statement frees the key — allowed.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (a:Host {name:'a'})-[r:RUNS]->(b:Host {name:'b'}) \
+             DELETE r CREATE (a)-[:RUNS]->(b)",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "delete-then-recreate must succeed: {}",
+        stderr(&out)
+    );
+
+    // A self-loop is a distinct edge and creates fine; a duplicate self-loop is
+    // rejected like any other duplicate.
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (a:Host {name:'a'}) CREATE (a)-[:RUNS]->(a)"],
+    );
+    assert!(out.status.success(), "self-loop create: {}", stderr(&out));
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (a:Host {name:'a'}) CREATE (a)-[:RUNS]->(a)"],
+    );
+    assert!(
+        !out.status.success(),
+        "duplicate self-loop must be rejected"
+    );
 }

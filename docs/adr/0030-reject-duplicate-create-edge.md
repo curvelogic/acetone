@@ -42,10 +42,19 @@ To distinguish the cases, `WriteChanges` now carries relationships in two lists:
   definition; they are updates and are always put.
 
 A `MERGE` that *matched* an existing edge never reaches persistence as a create
-(it binds the existing relationship), so **`MERGE` upsert semantics are
-unchanged** — `MERGE (a)-[:R]->(b)` on an existing edge is a no-op/`ON MATCH`,
-and on an absent edge creates it. `SET r.x = …` on a matched edge continues to
-update it.
+(it binds the existing relationship), so its upsert semantics are unchanged —
+`MERGE (a)-[:R]->(b)` on an existing edge is a no-op/`ON MATCH`, and on an absent
+edge creates it. `SET r.x = …` on a matched edge continues to update it.
+
+One `MERGE` case *does* change, in the same safe direction: `MERGE (a)-[:R
+{v:2}]->(b)` when `(a)-[:R {v:1}]->(b)` already exists does **not** match (the
+inline `{v:2}` filter fails), so `MERGE` tries to *create* a second `R` edge
+between the same pair — which openCypher would make a parallel relationship but
+acetone cannot key distinctly. This now **errors** (`DuplicateEdge`) instead of
+silently overwriting `v:1` with `v:2` — another silent-data-loss path closed. To
+change an existing edge's properties, use `SET`. The error is raised generically
+at persistence (it does not distinguish a `CREATE` origin from a non-matching
+`MERGE`), so its wording points at `SET`/deletion rather than at `MERGE`.
 
 ## Consequences
 
