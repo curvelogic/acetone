@@ -1,6 +1,6 @@
 # ADR-0008: Map layouts and manifest encoding
 
-*Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-04 · Bead: acetone-63m.4 · PR: #15*
+*Status: accepted — ratified by Greg at the pre-0.1 boundary review (2026-07-11); originally an agent decision flagged for phase-boundary review · Date: 2026-07-04 · Bead: acetone-63m.4 · PR: #15*
 
 ## Context
 

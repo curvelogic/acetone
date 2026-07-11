@@ -1,6 +1,6 @@
 # ADR-0018: Diff virtual-graph query surface
 
-*Status: accepted (Greg-chosen 2026-07-07, provisional — revisit at the Phase 4 boundary) · Date: 2026-07-07 · Bead: acetone-14c.1*
+*Status: accepted (Greg-chosen 2026-07-07); ratified by Greg at the pre-0.1 boundary review (2026-07-11) · Date: 2026-07-07 · Bead: acetone-14c.1*
 
 ## Context
 

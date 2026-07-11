@@ -1,8 +1,7 @@
 # ADR-0030: `CREATE` of a duplicate/parallel edge is rejected in v0.1
 
 *Status: accepted — decided by ADR under the Autonomous Protocol (pre-0.1
-hardening sprint); flagged in the pre-0.1 review report for Greg's retrospective
-review · Date: 2026-07-11 · Bead: acetone-8yn*
+hardening sprint); ratified by Greg at the pre-0.1 boundary review (2026-07-11) · Date: 2026-07-11 · Bead: acetone-8yn*
 
 ## Context
 

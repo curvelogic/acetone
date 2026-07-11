@@ -1,6 +1,6 @@
 # ADR-0025: History-rewrite engine (`acetone migrate`)
 
-*Status: proposed · Date: 2026-07-09 · Bead: acetone-hsg*
+*Status: accepted — ratified by Greg at the pre-0.1 boundary review (2026-07-11) · Date: 2026-07-09 · Bead: acetone-hsg*
 
 ## Context
 
