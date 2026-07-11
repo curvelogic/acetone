@@ -1,8 +1,7 @@
 # ADR-0028: Enforce referential integrity at the transaction boundary
 
 *Status: accepted — decided by ADR under the Autonomous Protocol (pre-0.1
-hardening sprint); flagged in the pre-0.1 review report for Greg's retrospective
-review · Date: 2026-07-10 · Bead: acetone-3xd*
+hardening sprint); ratified by Greg at the pre-0.1 boundary review (2026-07-11) · Date: 2026-07-10 · Bead: acetone-3xd*
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR-0017: Procedure-provider seam and the 8c3 split
 
-*Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-07 · Beads: acetone-8c3, acetone-b1v*
+*Status: accepted — ratified by Greg at the pre-0.1 boundary review (2026-07-11); originally an agent decision flagged for phase-boundary review · Date: 2026-07-07 · Beads: acetone-8c3, acetone-b1v*
 
 ## Context
 

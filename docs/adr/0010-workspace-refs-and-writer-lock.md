@@ -1,6 +1,6 @@
 # ADR-0010: Workspace refs, writer lock and Phase 1 plumbing scope
 
-*Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-04 · Bead: acetone-63m.5 · PR: pending*
+*Status: accepted — ratified by Greg at the pre-0.1 boundary review (2026-07-11); originally an agent decision flagged for phase-boundary review · Date: 2026-07-04 · Bead: acetone-63m.5 · PR: pending*
 
 ## Context
 

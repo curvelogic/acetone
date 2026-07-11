@@ -1,6 +1,6 @@
 # ADR-0019: Node blame follows the first-parent chain
 
-*Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-07 · Bead: acetone-14c.6*
+*Status: accepted — ratified by Greg at the pre-0.1 boundary review (2026-07-11); originally an agent decision flagged for phase-boundary review · Date: 2026-07-07 · Bead: acetone-14c.6*
 
 ## Context
 

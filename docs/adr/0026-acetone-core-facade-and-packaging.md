@@ -1,6 +1,6 @@
 # ADR-0026: `acetone-core` façade crate and release packaging
 
-*Status: proposed · Date: 2026-07-09 · Beads: acetone-cbl.7, acetone-cbl.5*
+*Status: accepted — ratified by Greg at the pre-0.1 boundary review (2026-07-11) · Date: 2026-07-09 · Beads: acetone-cbl.7, acetone-cbl.5*
 
 ## Context
 

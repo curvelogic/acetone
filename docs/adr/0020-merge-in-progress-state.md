@@ -1,6 +1,6 @@
 # ADR-0020: Merge-in-progress state and conflict persistence
 
-*Status: accepted (agent decision, flagged for phase-boundary review) · Date: 2026-07-07 · Bead: acetone-14c.4 (part a)*
+*Status: accepted — ratified by Greg at the pre-0.1 boundary review (2026-07-11); originally an agent decision flagged for phase-boundary review · Date: 2026-07-07 · Bead: acetone-14c.4 (part a)*
 
 ## Context
 
