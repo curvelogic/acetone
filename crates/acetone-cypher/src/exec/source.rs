@@ -180,7 +180,7 @@ impl MemoryGraph {
                 None => self.nodes.push(value),
             }
         }
-        for rel in &changes.upserted_rels {
+        for rel in changes.created_rels.iter().chain(&changes.modified_rels) {
             let id = stable(&rel.id, &mut self.next_id);
             let value = RelValue {
                 id: id.clone(),
