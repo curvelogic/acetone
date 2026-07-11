@@ -1816,3 +1816,52 @@ fn create_of_a_duplicate_edge_is_rejected() {
         "duplicate self-loop must be rejected"
     );
 }
+
+/// acetone-do1: --version must report the real crate version, not the 0.0.1
+/// placeholder (the tagged binary must not claim to be 0.0.1).
+#[test]
+fn version_flag_reports_the_crate_version() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_acetone"))
+        .arg("--version")
+        .output()
+        .expect("run --version");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "--version output {text:?} should contain the crate version {}",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(
+        !text.contains("0.0.1"),
+        "--version must not report the 0.0.1 placeholder: {text:?}"
+    );
+}
+
+/// acetone-do1: help text must not contradict the shipped behaviour (merge
+/// conflict resolution exists; the shell has no :diff).
+#[test]
+fn help_text_matches_shipped_behaviour() {
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let merge = std::process::Command::new(bin)
+        .args(["merge", "--help"])
+        .output()
+        .expect("merge --help");
+    let merge_text = String::from_utf8_lossy(&merge.stdout);
+    assert!(
+        !merge_text.contains("not yet available"),
+        "merge --help still claims conflict resolution is unavailable"
+    );
+    assert!(
+        merge_text.contains("resolve"),
+        "merge --help should mention `acetone resolve`"
+    );
+
+    let shell = std::process::Command::new(bin)
+        .args(["shell", "--help"])
+        .output()
+        .expect("shell --help");
+    assert!(
+        !String::from_utf8_lossy(&shell.stdout).contains(":diff"),
+        "shell --help still promises a :diff that does not exist"
+    );
+}
