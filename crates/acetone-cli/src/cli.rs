@@ -59,12 +59,13 @@ pub enum Command {
         /// Branch to switch to.
         branch: String,
     },
-    /// Merge another version into the current branch, creating a merge
-    /// commit on a clean three-way merge (spec §7). The workspace must be
-    /// clean and a branch checked out. Fast-forwards when possible. A clean
-    /// merge is graph-validated (dangling edges and schema constraints); any
-    /// breach — like a cell-level clash — is reported as a conflict and makes
-    /// no commit (conflict resolution is not yet available).
+    /// Merge another version into the current branch (spec §7). The workspace
+    /// must be clean and a branch checked out; fast-forwards when possible,
+    /// otherwise a clean three-way merge writes a two-parent merge commit.
+    /// Cell-level conflicts enter a merge-in-progress state: resolve them with
+    /// `acetone resolve --all-ours|--all-theirs` (or by editing the graph), then
+    /// `acetone commit` to complete. Graph-level breaches (a dangling edge or a
+    /// broken schema constraint) are reported and make no commit.
     Merge {
         /// The version to merge in (branch short name, full ref name or
         /// commit hash).
@@ -220,10 +221,10 @@ pub enum Command {
     },
     /// Start an interactive Cypher shell (readline REPL).
     ///
-    /// Enter queries to run them against the current workspace state.
-    /// Conveniences: `:checkout <ref>`, `:log`, `:format <table|json|csv>`,
-    /// `:quit`. (`:diff` from spec §7 arrives with the Phase 4 diff
-    /// machinery.)
+    /// Enter queries — read or write — to run them against the current
+    /// workspace state; a write advances the workspace (commit separately with
+    /// `acetone commit`). Conveniences: `:checkout <ref>`, `:log`,
+    /// `:format <table|json|csv>`, `:quit`.
     Shell,
     /// Verify repository integrity: manifest decode, chunk reachability
     /// and prolly-tree structure for every version reachable from
