@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use acetone_graph::GraphError;
 use acetone_graph::repo::{Snapshot, Transaction};
 use acetone_model::Value as ModelValue;
+use acetone_model::display::{format_key_tuple, format_node_identity};
 use acetone_model::graph_keys::{EdgeKey, GraphKeyError, NodeKey};
 use acetone_model::records::{EdgeRecord, NodeRecord};
 
@@ -52,7 +53,7 @@ pub enum PersistError {
         second: String,
     },
     #[error(
-        "CREATE of {label:?} {key:?} conflicts with an existing node; identity must be unique (use MERGE to upsert)"
+        "CREATE of {label:?} {key} conflicts with an existing node; identity must be unique (use MERGE to upsert)"
     )]
     DuplicateKey { label: String, key: String },
     #[error(
@@ -72,7 +73,7 @@ pub enum PersistError {
         "SET must not change the key property of {label:?} (node identity is immutable; a key change is a delete-plus-create — see rekey)"
     )]
     KeyImmutable { label: String },
-    #[error("node {label:?} {key:?} is missing required property {property:?}")]
+    #[error("node {label:?} {key} is missing required property {property:?}")]
     MissingRequired {
         label: String,
         key: String,
@@ -142,7 +143,7 @@ pub fn persist_changes(
                 if base.get_node(&key)?.is_some() && !deleted_keys.contains(&key.encode()?) {
                     return Err(PersistError::DuplicateKey {
                         label: key.label().to_string(),
-                        key: format!("{:?}", key.key()),
+                        key: format_key_tuple(key.key()),
                     });
                 }
             }
@@ -160,7 +161,7 @@ pub fn persist_changes(
         if !written_keys.insert(key.encode()?) {
             return Err(PersistError::DuplicateKey {
                 label: key.label().to_string(),
-                key: format!("{:?}", key.key()),
+                key: format_key_tuple(key.key()),
             });
         }
         check_constraints(node, &key, catalogue, base, &deleted_keys)?;
@@ -210,8 +211,8 @@ pub fn persist_changes(
             if !existing.insert(edge.encode_fwd()?) {
                 return Err(PersistError::DuplicateEdge {
                     rtype: edge.rtype().to_string(),
-                    src: format!("{}{:?}", edge.src().label(), edge.src().key()),
-                    dst: format!("{}{:?}", edge.dst().label(), edge.dst().key()),
+                    src: format_node_identity(edge.src().label(), edge.src().key()),
+                    dst: format_node_identity(edge.dst().label(), edge.dst().key()),
                 });
             }
             let record = EdgeRecord::new(convert_map(&rel.properties)?);
@@ -341,7 +342,7 @@ fn check_constraints(
         if !node.properties.contains_key(property) {
             return Err(PersistError::MissingRequired {
                 label: key.label().to_string(),
-                key: format!("{:?}", key.key()),
+                key: format_key_tuple(key.key()),
                 property: property.clone(),
             });
         }

@@ -136,6 +136,11 @@ fn failure_output_snapshot() {
         ),
         ("duplicate-key", &["query", "CREATE (:Topic {name: 'x'});"]),
         ("get-node-not-found", &["get-node", "Topic", "missing"]),
+        // NoSuchNode via the graph layer's key renderer (rekey a missing node).
+        (
+            "rekey-missing-node",
+            &["rekey", "Topic", "absent", "present", "-m", "r"],
+        ),
     ];
 
     let mut combined = String::new();

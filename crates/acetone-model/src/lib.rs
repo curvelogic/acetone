@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod cbor;
+pub mod display;
 pub mod graph_keys;
 pub mod keys;
 pub mod manifest;

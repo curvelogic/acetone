@@ -983,10 +983,11 @@ impl Repository {
     }
 }
 
-/// Render a node key's values for an error message (`[a, 1]`-style).
+/// Render a node key's values for an error message (`[a, 1]`-style),
+/// escaping string values so attacker-writable keys cannot leak terminal
+/// control sequences or Rust `Debug` internals.
 fn render_node_key(key: &NodeKey) -> String {
-    let parts: Vec<String> = key.key().iter().map(|v| format!("{v:?}")).collect();
-    format!("[{}]", parts.join(", "))
+    acetone_model::display::format_key_tuple(key.key())
 }
 
 /// Reject a schema change that alters a label's key tuple while nodes bearing
@@ -1035,7 +1036,7 @@ fn dangling_edge(rtype: &str, role: &'static str, endpoint: &NodeKey) -> GraphEr
     GraphError::DanglingEdge {
         rtype: rtype.to_owned(),
         role,
-        endpoint: format!("{}{}", endpoint.label(), render_node_key(endpoint)),
+        endpoint: acetone_model::display::format_node_identity(endpoint.label(), endpoint.key()),
     }
 }
 
