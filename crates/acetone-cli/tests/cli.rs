@@ -161,10 +161,12 @@ fn scripted_session_exercises_every_command() {
     assert!(text.contains("\"age\": 30"));
     assert!(text.contains("\"name\": \"Alice\""));
 
-    // get-node: not found is a clean result, not an error.
+    // get-node: a miss exits non-zero (so scripts can detect absence), with
+    // the message on stderr and stdout empty.
     let out = acetone(&repo, &["get-node", "Person", "99"]);
-    assert!(out.status.success());
-    assert_eq!(stdout(&out).trim(), "not found");
+    assert!(!out.status.success());
+    assert!(stdout(&out).trim().is_empty());
+    assert!(stderr(&out).contains("not found"));
 
     // list-nodes, unfiltered and filtered.
     let out = acetone(&repo, &["list-nodes"]);

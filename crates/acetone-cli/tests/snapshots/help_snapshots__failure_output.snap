@@ -3,11 +3,20 @@ source: crates/acetone-cli/tests/help_snapshots.rs
 expression: combined
 ---
 ### unknown-subcommand
-argv:   acetone st
+argv:   acetone nonesuch
 status: 2
-stderr: error: unrecognized subcommand 'st'
+stderr: error: unrecognized subcommand 'nonesuch'
 
-  tip: some similar subcommands exist: 'list-nodes', 'status'
+Usage: acetone [OPTIONS] <COMMAND>
+
+For more information, try '--help'.
+
+### ambiguous-prefix
+argv:   acetone c
+status: 2
+stderr: error: unrecognized subcommand 'c'
+
+  tip: some similar subcommands exist: 'checkout', 'commit', 'cypher'
 
 Usage: acetone [OPTIONS] <COMMAND>
 
@@ -55,8 +64,8 @@ stderr: error: CREATE creates the node "Topic" ["y"] twice in the same statement
 
 ### get-node-not-found
 argv:   acetone get-node Topic missing
-status: 0
-stdout: not found
+status: 1
+stderr: error: not found
 
 ### rekey-missing-node
 argv:   acetone rekey Topic absent present -m r

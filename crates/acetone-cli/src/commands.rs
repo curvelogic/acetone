@@ -633,7 +633,9 @@ fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
     let node_key = single_key(label, key)?;
     let snapshot = repo.workspace_snapshot()?;
     match snapshot.get_node(&node_key)? {
-        None => outln!("not found"),
+        // Absence is a non-zero exit so scripts can detect it: the error goes
+        // to stderr (as `error: not found`), leaving stdout empty.
+        None => bail!("not found"),
         Some(record) => {
             // Echo the canonical parsed key, not the raw argument: the two
             // agree today (single-column keys only), but this stays

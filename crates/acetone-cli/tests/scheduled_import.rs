@@ -37,6 +37,7 @@ fn import_snapshot(repo: &Path, dir: &Path, name: &str, body: &str) -> Option<St
         repo,
         &[
             "import",
+            "--format",
             "ndjson",
             path.to_str().unwrap(),
             "--label",
