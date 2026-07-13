@@ -511,10 +511,26 @@ fn reindex(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn migrate(repo_path: &Path, min_bytes: u32, mask_bits: u32, max_bytes: u32) -> Result<()> {
+fn migrate(
+    repo_path: &Path,
+    min_bytes: Option<u32>,
+    mask_bits: Option<u32>,
+    max_bytes: Option<u32>,
+) -> Result<()> {
     use acetone_graph::{Rechunk, rewrite_history};
 
     let repo = open(repo_path)?;
+    // Each unspecified parameter defaults to the repo's current value, so a
+    // no-flag `migrate` re-chunks under the same parameters — a repair that
+    // leaves every hash unchanged (history-independence), never a silent
+    // profile change.
+    let current = repo
+        .workspace_manifest()
+        .context("reading the current chunk parameters")?
+        .chunk_params;
+    let min_bytes = min_bytes.unwrap_or(current.min_bytes());
+    let mask_bits = mask_bits.unwrap_or(current.mask_bits());
+    let max_bytes = max_bytes.unwrap_or(current.max_bytes());
     let transform = Rechunk::from_raw(min_bytes, mask_bits, max_bytes)
         .context("invalid target chunk parameters")?;
     let report = rewrite_history(&repo, &transform).context("rewriting history")?;

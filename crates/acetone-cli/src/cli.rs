@@ -299,19 +299,20 @@ pub enum Command {
     /// each commit's message, author and committer (identity and timestamp).
     /// This is the generic history-rewrite engine; a future `format_version`
     /// bump plugs into the same command. Requires a clean, non-merging
-    /// workspace, which it resets to the rewritten head. The chunk-parameter
-    /// flags default to the released format's profile; override a subset to
-    /// re-chunk.
+    /// workspace, which it resets to the rewritten head. Each chunk-parameter
+    /// flag defaults to the repo's current value, so a no-flag `migrate`
+    /// re-chunks under the same parameters (a repair that leaves hashes
+    /// unchanged by history-independence); override a subset to re-chunk.
     Migrate {
-        /// Target minimum chunk size in bytes.
-        #[arg(long, default_value_t = 1024)]
-        min_bytes: u32,
-        /// Target rolling-hash mask bits (mean chunk size ≈ 2^mask_bits).
-        #[arg(long, default_value_t = 12)]
-        mask_bits: u32,
-        /// Target maximum chunk size in bytes.
-        #[arg(long, default_value_t = 16384)]
-        max_bytes: u32,
+        /// Target minimum chunk size in bytes (default: the repo's current value).
+        #[arg(long)]
+        min_bytes: Option<u32>,
+        /// Target rolling-hash mask bits, mean chunk size ≈ 2^mask_bits (default: the repo's current value).
+        #[arg(long)]
+        mask_bits: Option<u32>,
+        /// Target maximum chunk size in bytes (default: the repo's current value).
+        #[arg(long)]
+        max_bytes: Option<u32>,
     },
 
     // ---- Plumbing ----

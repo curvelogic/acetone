@@ -1867,3 +1867,40 @@ fn help_text_matches_shipped_behaviour() {
         "shell --help still promises a :diff that does not exist"
     );
 }
+
+/// A no-flag `migrate` must re-chunk under the repo's *current* parameters, so
+/// it leaves every commit hash unchanged (history-independence) rather than
+/// silently imposing a different chunk profile. Regression test for the
+/// migrate-defaults foot-gun (acetone-7bn.7 review).
+#[test]
+fn migrate_with_no_flags_preserves_history() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = dir.path();
+    assert!(init(repo).status.success(), "init");
+    assert!(
+        acetone(repo, &["put-node", "Host", "web-01", "--prop", "os=linux"])
+            .status
+            .success(),
+        "put-node"
+    );
+    assert!(
+        acetone(repo, &["commit", "-m", "seed"]).status.success(),
+        "commit"
+    );
+
+    let log_before = stdout(&acetone(repo, &["log"]));
+
+    let migrated = acetone(repo, &["migrate"]);
+    assert!(migrated.status.success(), "no-flag migrate should succeed");
+
+    let log_after = stdout(&acetone(repo, &["log"]));
+    assert_eq!(
+        log_before, log_after,
+        "no-flag migrate changed the history/hashes; it must preserve the current chunk profile"
+    );
+    // And integrity still holds.
+    assert!(
+        acetone(repo, &["fsck"]).status.success(),
+        "fsck after no-flag migrate"
+    );
+}

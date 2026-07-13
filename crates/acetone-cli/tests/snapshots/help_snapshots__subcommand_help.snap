@@ -399,15 +399,13 @@ Options:
 ========== acetone migrate --help ==========
 Rewrite all history under new chunk parameters.
 
-Produces new hashes (ADR-0025). A version-preserving re-chunk — `format_version` is unchanged (chunk parameters are manifest data) — that re-encodes every version and rebuilds the commit graph, preserving each commit's message, author and committer (identity and timestamp). This is the generic history-rewrite engine; a future `format_version` bump plugs into the same command. Requires a clean, non-merging workspace, which it resets to the rewritten head. The chunk-parameter flags default to the released format's profile; override a subset to re-chunk.
+Produces new hashes (ADR-0025). A version-preserving re-chunk — `format_version` is unchanged (chunk parameters are manifest data) — that re-encodes every version and rebuilds the commit graph, preserving each commit's message, author and committer (identity and timestamp). This is the generic history-rewrite engine; a future `format_version` bump plugs into the same command. Requires a clean, non-merging workspace, which it resets to the rewritten head. Each chunk-parameter flag defaults to the repo's current value, so a no-flag `migrate` re-chunks under the same parameters (a repair that leaves hashes unchanged by history-independence); override a subset to re-chunk.
 
 Usage: acetone migrate [OPTIONS]
 
 Options:
       --min-bytes <MIN_BYTES>
-          Target minimum chunk size in bytes
-          
-          [default: 1024]
+          Target minimum chunk size in bytes (default: the repo's current value)
 
       --repo <REPO>
           Path to the repository. Ignored by `init` when it is given its own PATH argument
@@ -415,14 +413,10 @@ Options:
           [default: .]
 
       --mask-bits <MASK_BITS>
-          Target rolling-hash mask bits (mean chunk size ≈ 2^mask_bits)
-          
-          [default: 12]
+          Target rolling-hash mask bits, mean chunk size ≈ 2^mask_bits (default: the repo's current value)
 
       --max-bytes <MAX_BYTES>
-          Target maximum chunk size in bytes
-          
-          [default: 16384]
+          Target maximum chunk size in bytes (default: the repo's current value)
 
   -h, --help
           Print help (see a summary with '-h')
