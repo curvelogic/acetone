@@ -6,27 +6,29 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ParseError {
-    #[error("{message} at bytes {}..{}", span.start, span.end)]
+    #[error("{message}")]
     Lex { message: String, span: Span },
 
-    #[error("expected {expected}, found {found} at bytes {}..{}", span.start, span.end)]
+    #[error("expected {expected}, found {found}")]
     Unexpected {
         expected: String,
         found: String,
         span: Span,
     },
 
-    #[error("'{word}' is a reserved word and cannot be used as {usage} at bytes {}..{} (backquote it to use it as a name)", span.start, span.end)]
+    #[error(
+        "'{word}' is a reserved word and cannot be used as {usage} (backquote it to use it as a name)"
+    )]
     ReservedWord {
         word: String,
         usage: &'static str,
         span: Span,
     },
 
-    #[error("expression nesting exceeds the depth limit ({limit}) at bytes {}..{}", span.start, span.end)]
+    #[error("expression nesting exceeds the depth limit ({limit})")]
     RecursionLimit { limit: usize, span: Span },
 
-    #[error("{message} at bytes {}..{}", span.start, span.end)]
+    #[error("{message}")]
     QueryStructure { message: String, span: Span },
 }
 

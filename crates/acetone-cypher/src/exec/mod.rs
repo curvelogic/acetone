@@ -48,6 +48,19 @@ pub enum QueryError {
     Exec(ExecError),
 }
 
+impl QueryError {
+    /// Render with 1-based line/column against the source, delegating to the
+    /// wrapped layer's `render` so a read query's parse, bind and execution
+    /// errors are all located the same way.
+    pub fn render(&self, source: &str) -> String {
+        match self {
+            QueryError::Parse(e) => e.render(source),
+            QueryError::Bind(e) => e.render(source),
+            QueryError::Exec(e) => e.render(source),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

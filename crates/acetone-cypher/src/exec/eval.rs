@@ -17,23 +17,48 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExecError {
-    #[error("type error: {message} at bytes {}..{}", span.start, span.end)]
+    #[error("type error: {message}")]
     Type { message: String, span: Span },
 
-    #[error("integer overflow at bytes {}..{}", span.start, span.end)]
+    #[error("integer overflow")]
     Overflow { span: Span },
 
-    #[error("division by zero at bytes {}..{}", span.start, span.end)]
+    #[error("division by zero")]
     DivisionByZero { span: Span },
 
-    #[error("missing parameter '{name}' at bytes {}..{}", span.start, span.end)]
+    #[error("missing parameter '{name}'")]
     MissingParameter { name: String, span: Span },
 
-    #[error("{feature} is not implemented yet at bytes {}..{}", span.start, span.end)]
+    #[error("{feature} is not implemented yet")]
     Unsupported { feature: &'static str, span: Span },
 
-    #[error("invalid argument: {message} at bytes {}..{}", span.start, span.end)]
+    #[error("invalid argument: {message}")]
     InvalidArgument { message: String, span: Span },
+}
+
+impl ExecError {
+    /// The source span this error points at. Every execution error carries a
+    /// span so it can be located in the query the same way parse and bind
+    /// errors are.
+    pub fn span(&self) -> Span {
+        match self {
+            ExecError::Type { span, .. }
+            | ExecError::Overflow { span }
+            | ExecError::DivisionByZero { span }
+            | ExecError::MissingParameter { span, .. }
+            | ExecError::Unsupported { span, .. }
+            | ExecError::InvalidArgument { span, .. } => *span,
+        }
+    }
+
+    /// Render the error with 1-based line/column against the source it came
+    /// from, matching [`crate::error::ParseError::render`] and
+    /// [`crate::bind::BindError::render`] so every layer locates errors the
+    /// same way.
+    pub fn render(&self, source: &str) -> String {
+        let (line, col) = self.span().line_col(source);
+        format!("line {line}, column {col}: {self}")
+    }
 }
 
 /// One result row: values indexed by VarId.
