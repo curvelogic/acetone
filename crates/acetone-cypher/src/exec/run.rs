@@ -1405,7 +1405,10 @@ fn usize_bound(value: Value, span: crate::span::Span) -> Result<usize, ExecError
     match value {
         Value::Int(n) if n >= 0 => Ok(n as usize),
         other => Err(ExecError::InvalidArgument {
-            message: format!("SKIP/LIMIT needs a non-negative integer, got {other:?}"),
+            message: format!(
+                "SKIP/LIMIT needs a non-negative integer, got {}",
+                other.format()
+            ),
             span,
         }),
     }

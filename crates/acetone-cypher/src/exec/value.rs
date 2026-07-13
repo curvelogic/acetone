@@ -88,6 +88,45 @@ impl Value {
         matches!(self, Value::Null)
     }
 
+    /// A human-readable rendering for user-facing error messages.
+    ///
+    /// Mirrors [`acetone_model::display::format_value`]: [`Value::String`] is
+    /// escaped with `{:?}` so control characters and ANSI escapes from a
+    /// hostile clone are neutralised rather than reaching the terminal raw
+    /// (a bare `{other:?}` would leak `String("…")` *and* the raw bytes).
+    /// Every variant is handled so a runtime value can never panic the error
+    /// path.
+    pub fn format(&self) -> String {
+        match self {
+            Value::Null => "null".to_owned(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(x) => x.to_string(),
+            Value::String(s) => format!("{s:?}"),
+            Value::List(items) => {
+                let parts: Vec<String> = items.iter().map(Value::format).collect();
+                format!("[{}]", parts.join(", "))
+            }
+            Value::Map(entries) => {
+                let parts: Vec<String> = entries
+                    .iter()
+                    .map(|(key, value)| format!("{key:?}: {}", value.format()))
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            }
+            Value::Node(node) => {
+                let labels: Vec<String> = node
+                    .labels
+                    .iter()
+                    .map(|label| format!("{label:?}"))
+                    .collect();
+                format!("node({})", labels.join(":"))
+            }
+            Value::Relationship(rel) => format!("relationship({:?})", rel.rel_type),
+            Value::Path(path) => format!("path(length {})", path.rels.len()),
+        }
+    }
+
     fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Int(n) => Some(*n as f64),
@@ -320,6 +359,29 @@ mod tests {
         );
         // NaN sorts after ordinary numbers, before null.
         assert!(matches!(values[5], Value::Float(x) if x.is_nan()));
+    }
+
+    #[test]
+    fn format_escapes_strings_and_renders_scalars() {
+        assert_eq!(int(42).format(), "42");
+        assert_eq!(Value::Bool(true).format(), "true");
+        assert_eq!(Value::Null.format(), "null");
+        // A plain string is escaped (quoted), never leaking `String(…)`.
+        assert_eq!(Value::String("x".into()).format(), "\"x\"");
+        assert_eq!(
+            Value::List(vec![int(1), Value::String("a".into())]).format(),
+            "[1, \"a\"]"
+        );
+    }
+
+    #[test]
+    fn format_neutralises_control_characters() {
+        // A hostile string bound (e.g. `SKIP '…'`) must never reach the
+        // terminal raw — the whole reason this formatter exists.
+        let rendered = Value::String("a\x1b[31mb\nc".into()).format();
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\n'));
+        assert_eq!(rendered, "\"a\\u{1b}[31mb\\nc\"");
     }
 
     #[test]

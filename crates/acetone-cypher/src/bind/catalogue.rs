@@ -53,6 +53,32 @@ impl Catalogue {
         self.rel_types.get(name)
     }
 
+    /// Declared label names, for "did you mean" suggestions on an unknown
+    /// label. Read-only; the order is the map's (sorted) key order.
+    pub fn label_names(&self) -> impl Iterator<Item = &str> {
+        self.labels.keys().map(String::as_str)
+    }
+
+    /// Declared relationship-type names, for suggestions on an unknown type.
+    pub fn rel_type_names(&self) -> impl Iterator<Item = &str> {
+        self.rel_types.keys().map(String::as_str)
+    }
+
+    /// The property names a `label` declares — its key tuple plus any typed
+    /// (shape) properties — for suggestions on an unknown property. Empty if
+    /// the label is undeclared.
+    pub fn property_names(&self, label: &str) -> Vec<&str> {
+        match self.labels.get(label) {
+            Some(def) => def
+                .key()
+                .iter()
+                .map(String::as_str)
+                .chain(def.types().keys().map(String::as_str))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// A declared **single-property** secondary index over `(label, property)`,
     /// if any. Composite (multi-property) indexes are not yet consulted for
     /// seek planning — a query pinning all their properties falls back to a

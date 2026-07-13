@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use crate::ast;
 use crate::bind::bound::*;
 use crate::bind::catalogue::Catalogue;
-use crate::bind::error::BindError;
+use crate::bind::error::{BindError, Suggestion};
 use crate::span::Span;
+use crate::suggest::nearest;
 
 /// How unknown labels, relationship types and properties are treated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +93,25 @@ impl<'a> Binder<'a> {
 
     fn kind_of(&self, id: VarId) -> EntityKind {
         self.variables[id.0 as usize].kind
+    }
+
+    /// The closest declared label to a mistyped one, for a "did you mean"
+    /// hint. `None` when nothing is close.
+    fn label_suggestion(&self, name: &str) -> Suggestion {
+        Suggestion(nearest(name, self.catalogue.label_names()))
+    }
+
+    /// The closest declared relationship type to a mistyped one.
+    fn rel_type_suggestion(&self, name: &str) -> Suggestion {
+        Suggestion(nearest(name, self.catalogue.rel_type_names()))
+    }
+
+    /// The closest property declared by `label` to a mistyped one.
+    fn property_suggestion(&self, label: &str, name: &str) -> Suggestion {
+        Suggestion(nearest(
+            name,
+            self.catalogue.property_names(label).into_iter(),
+        ))
     }
 
     /// Restore a name to its pre-shadow binding (or remove it) after a
@@ -246,6 +266,7 @@ impl<'a> Binder<'a> {
                             return Err(BindError::UnknownLabel {
                                 name: label.clone(),
                                 span: *span,
+                                suggestion: self.label_suggestion(label),
                             });
                         }
                     }
@@ -440,7 +461,9 @@ impl<'a> Binder<'a> {
                 if self.catalogue.rel_type(rel_type).is_none() {
                     return Err(BindError::UnknownRelType {
                         name: rel_type.clone(),
+                        declare_cmd: acetone_model::display::format_label(rel_type),
                         span: rel.span,
+                        suggestion: self.rel_type_suggestion(rel_type),
                     });
                 }
             }
@@ -754,6 +777,7 @@ impl<'a> Binder<'a> {
                     return Err(BindError::UnknownLabel {
                         name: label.clone(),
                         span: node.span,
+                        suggestion: self.label_suggestion(label),
                     });
                 }
             }
@@ -824,7 +848,9 @@ impl<'a> Binder<'a> {
                 if self.catalogue.rel_type(rel_type).is_none() {
                     return Err(BindError::UnknownRelType {
                         name: rel_type.clone(),
+                        declare_cmd: acetone_model::display::format_label(rel_type),
                         span: rel.span,
+                        suggestion: self.rel_type_suggestion(rel_type),
                     });
                 }
             }
@@ -923,6 +949,7 @@ impl<'a> Binder<'a> {
                         label: label.clone(),
                         property: property.clone(),
                         span: *span,
+                        suggestion: self.property_suggestion(label, property),
                     });
                 }
             }
@@ -1238,7 +1265,12 @@ impl<'a> Binder<'a> {
         }
 
         let Some(def) = lookup_function(&name) else {
-            return Err(BindError::UnknownFunction { name, span });
+            let suggestion = Suggestion(nearest(&name, function_names()));
+            return Err(BindError::UnknownFunction {
+                name,
+                span,
+                suggestion,
+            });
         };
         if star || distinct {
             // `f(*)` and `f(DISTINCT x)` are aggregate-only forms.
