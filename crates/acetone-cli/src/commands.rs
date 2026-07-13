@@ -47,6 +47,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             property,
         } => declare_index(repo_path, &name, &label, &property),
         Command::Reindex => reindex(repo_path),
+        Command::Schema { at } => schema(repo_path, at.as_deref()),
         Command::Migrate {
             min_bytes,
             mask_bits,
@@ -508,6 +509,109 @@ fn reindex(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
     repo.reindex().context("reindexing")?;
     outln!("reindexed");
+    Ok(())
+}
+
+fn schema(repo_path: &Path, at: Option<&str>) -> Result<()> {
+    use acetone_model::schema::SchemaEntry;
+
+    let repo = open(repo_path)?;
+    let snapshot = match at {
+        Some(refspec) => repo
+            .snapshot(refspec)
+            .with_context(|| format!("reading schema at {refspec:?}"))?,
+        None => repo.workspace_snapshot()?,
+    };
+    let entries = snapshot.schema_entries()?;
+
+    // Partition the entries by kind. `schema_entries()` returns them in the
+    // schema map's key order, which is grouped and sorted by (kind, name); we
+    // keep that order within each group.
+    let mut labels: Vec<(&str, &acetone_model::schema::LabelDef)> = Vec::new();
+    let mut rel_types: Vec<&str> = Vec::new();
+    let mut indexes: Vec<(&str, &acetone_model::schema::IndexDef)> = Vec::new();
+    for entry in &entries {
+        match entry {
+            SchemaEntry::Label { name, def } => labels.push((name, def)),
+            SchemaEntry::RelType { name, .. } => rel_types.push(name),
+            SchemaEntry::Index { name, def } => indexes.push((name, def)),
+        }
+    }
+
+    if entries.is_empty() {
+        outln!("(no schema declared)");
+        return Ok(());
+    }
+
+    // A parenthesised, comma-separated list of names, each escaped through
+    // format_label — schema names can be hostile-clone data.
+    let name_list = |names: &[String]| -> String {
+        let parts: Vec<String> = names.iter().map(|n| format_label(n)).collect();
+        format!("({})", parts.join(", "))
+    };
+
+    outln!("Labels");
+    if labels.is_empty() {
+        outln!("  (none)");
+    } else {
+        // Pad the (escaped) label names to a common width so the clauses line
+        // up; cap the padding so one long name cannot push everything out.
+        let width = labels
+            .iter()
+            .map(|(name, _)| format_label(name).chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(24);
+        for (name, def) in &labels {
+            let mut clauses = vec![format!("key {}", name_list(def.key()))];
+            if def.is_surrogate() {
+                clauses.push("surrogate".to_owned());
+            }
+            if !def.exists().is_empty() {
+                clauses.push(format!("required {}", name_list(def.exists())));
+            }
+            if !def.unique().is_empty() {
+                clauses.push(format!("unique {}", name_list(def.unique())));
+            }
+            outln!(
+                "  {:<width$}  {}",
+                format_label(name),
+                clauses.join("  "),
+                width = width
+            );
+        }
+    }
+
+    outln!("Relationship types");
+    if rel_types.is_empty() {
+        outln!("  (none)");
+    } else {
+        for name in &rel_types {
+            outln!("  {}", format_label(name));
+        }
+    }
+
+    outln!("Indexes");
+    if indexes.is_empty() {
+        outln!("  (none)");
+    } else {
+        let width = indexes
+            .iter()
+            .map(|(name, _)| format_label(name).chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(24);
+        for (name, def) in &indexes {
+            outln!(
+                "  {:<width$}  on {} {}",
+                format_label(name),
+                format_label(def.label()),
+                name_list(def.properties()),
+                width = width
+            );
+        }
+    }
+
     Ok(())
 }
 

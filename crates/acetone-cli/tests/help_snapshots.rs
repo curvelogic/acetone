@@ -53,6 +53,7 @@ const SUBCOMMANDS: &[&str] = &[
     "declare-rel-type",
     "declare-index",
     "reindex",
+    "schema",
     "export",
     "put-node",
     "rekey",

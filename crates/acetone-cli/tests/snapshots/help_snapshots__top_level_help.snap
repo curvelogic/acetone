@@ -20,6 +20,7 @@ Commands:
   declare-rel-type  Declare a relationship type (schema)
   declare-index     Declare a property index over `(label, properties)`
   reindex           Rebuild every declared index from the nodes map
+  schema            Show the declared schema — labels and keys, relationship types and indexes
   import            Import a source file into the graph
   export            Export a graph version as per-label and per-type tables
   query             Run an openCypher read query against the graph [aliases: cypher]
@@ -48,7 +49,7 @@ Options:
 
 Command groups:
   Everyday      init, status, commit, log, branch, checkout, diff, merge, resolve
-  Schema        declare-label, declare-rel-type, declare-index, reindex
+  Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate
   Plumbing      put-node, get-node, put-edge, list-nodes, rekey

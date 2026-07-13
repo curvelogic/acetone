@@ -193,6 +193,25 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+========== acetone schema --help ==========
+Show the declared schema — labels and keys, relationship types and indexes.
+
+Prints the repository's declared schema, grouped into labels (with their ordered key tuple and existence/unique constraints), relationship types, and property indexes. Read-only. `--at <ref>` inspects any version — a branch short name, full ref name or commit hash — without checking it out; with no `--at`, the current workspace's schema is shown.
+
+Usage: acetone schema [OPTIONS]
+
+Options:
+      --at <AT>
+          Read the schema at a specific ref (branch, tag or commit hash) instead of the current workspace state
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
 ========== acetone export --help ==========
 Export a graph version as per-label and per-type tables.
 
