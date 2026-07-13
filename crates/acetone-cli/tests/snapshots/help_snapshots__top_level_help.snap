@@ -13,28 +13,51 @@ Commands:
   log               Show commit history, newest first
   branch            List branches, or create one
   checkout          Switch the checked-out branch
-  merge             Merge another version into the current branch (spec §7). The workspace must be clean and a branch checked out; fast-forwards when possible, otherwise a clean three-way merge writes a two-parent merge commit. Cell-level conflicts enter a merge-in-progress state: resolve them with `acetone resolve --all-ours|--all-theirs` (or by editing the graph), then `acetone commit` to complete. Graph-level breaches (a dangling edge or a broken schema constraint) are reported and make no commit
-  declare-label     Declare a primary label's key (schema): the ordered key property names that give nodes of this label their identity. Required before Cypher `CREATE`/`MERGE` can persist nodes of the label (Invariant #3)
-  declare-rel-type  Declare a relationship type (schema). Required before Cypher can create relationships of this type under a declared schema
-  declare-index     Declare a property index `idx/<name>` over `(label, properties)` (spec §3.3). The index is built from the current nodes and maintained transactionally thereafter; it accelerates equality lookups. Repeat `--property` for a **composite** index — its key is the ordered tuple of those property values. Indexes are null- and NaN-blind
-  reindex           Rebuild every declared index from the nodes map (spec §3.3). A no-op when the indexes are already consistent; repairs any divergence `fsck` reports
-  export            Export a graph version as per-label node tables and per-type edge tables (spec §7, §9). The inverse of `import`: exporting then importing into a fresh repo with the same schema reproduces identical map roots
+  diff              Show the graph-level difference between two versions
+  merge             Merge another version into the current branch
+  resolve           Resolve a merge in progress by taking one whole side
+  declare-label     Declare a primary label's key and constraints (schema)
+  declare-rel-type  Declare a relationship type (schema)
+  declare-index     Declare a property index over `(label, properties)`
+  reindex           Rebuild every declared index from the nodes map
+  import            Import a source file into the graph
+  export            Export a graph version as per-label and per-type tables
+  query             Run an openCypher read query against the graph [aliases: cypher]
+  shell             Start an interactive Cypher shell (readline REPL)
+  fsck              Verify repository integrity
+  gc                Consolidate the object store into a packfile
+  migrate           Rewrite all history under new chunk parameters
   put-node          Insert or replace a node (plumbing; single-column keys only)
-  rekey             Change a node's key (single-column keys). A key change is modelled as delete-plus-create in one commit (Invariant #3); incident edges are rewritten onto the new key. `SET` cannot change a key
-  resolve           Resolve the conflicts of a merge in progress by taking one whole side, then `commit` to complete the merge (spec §6). Cell conflicts only; graph-level violations and per-key resolution arrive later
-  diff              Show the graph-level difference between two versions (branch short names, full ref names or commit hashes): the nodes and relationships added (`+`), removed (`-`) or modified (`~`) from `from` to `to`
   get-node          Look up a node by label and key
   put-edge          Insert or replace an edge (plumbing; no properties, no discriminator)
   list-nodes        List nodes, in key order
-  query             Run an openCypher read query against the graph
-  shell             Start an interactive Cypher shell (readline REPL)
-  fsck              Verify repository integrity: manifest decode, chunk reachability and prolly-tree structure for every version reachable from workspaces, branches and tags; edge-map symmetry and index consistency as advisories, and a history-independence spot-check (a non-canonical map is an error). Exits non-zero when any error-severity finding exists
-  gc                Consolidate the object store into a self-contained packfile (spec §3.1, ADR-0011): delta rewritten chunks against their predecessors and prune superseded loose objects and packs. Representation-only — preserves every object exactly. Run periodically after churn to reclaim space
-  migrate           Rewrite all history under new chunk parameters, producing new hashes (ADR-0025). A version-preserving re-chunk — `format_version` is unchanged (chunk parameters are manifest data) — that re-encodes every version and rebuilds the commit graph, preserving each commit's message, author and committer (identity and timestamp). This is the generic history-rewrite engine; a future `format_version` bump plugs into the same command. Requires a clean, non-merging workspace, which it resets to the rewritten head
-  import            Import a source file into the graph, recording provenance trailers (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op when the source is unchanged (spec §7). Node mode (`--label`) maps each row to a node; edge mode (`--edge`) maps each row to a relationship. Requires a clean workspace — declare and `commit` the target label's schema (and any relationship type) before importing
+  rekey             Change a node's key (single-column keys)
   help              Print this message or the help of the given subcommand(s)
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
-  -V, --version      Print version
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Command groups:
+  Everyday      init, status, commit, log, branch, checkout, diff, merge, resolve
+  Schema        declare-label, declare-rel-type, declare-index, reindex
+  Data & query  import, export, query, shell
+  Maintenance   fsck, gc, migrate
+  Plumbing      put-node, get-node, put-edge, list-nodes, rekey
+
+Relationship to git (an acetone version IS a git commit):
+  Use acetone, not git   commit, merge, resolve, checkout, declare-*, reindex,
+                         import, export, fsck, gc, migrate — the git equivalents
+                         would write commits acetone cannot read.
+  Either works           log, status, diff, branch — acetone's are graph-aware;
+                         plain git still works on the same repo.
+  Git only (transport)   clone, fetch, push, pull, remote — no acetone command;
+                         any git remote is backup and transport.

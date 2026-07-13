@@ -50,7 +50,14 @@ fn csv_import_records_trailers_and_detects_noop() {
     // First import: two nodes, provenance trailers on the commit.
     let out = acetone(
         &repo,
-        &["import", "csv", csv.to_str().unwrap(), "--label", "Host"],
+        &[
+            "import",
+            "--format",
+            "csv",
+            csv.to_str().unwrap(),
+            "--label",
+            "Host",
+        ],
     );
     assert!(out.status.success(), "import: {}", stderr(&out));
     assert!(
@@ -68,7 +75,14 @@ fn csv_import_records_trailers_and_detects_noop() {
     // Second import of the identical source: a detected no-op, no new commit.
     let out = acetone(
         &repo,
-        &["import", "csv", csv.to_str().unwrap(), "--label", "Host"],
+        &[
+            "import",
+            "--format",
+            "csv",
+            csv.to_str().unwrap(),
+            "--label",
+            "Host",
+        ],
     );
     assert!(out.status.success(), "reimport: {}", stderr(&out));
     assert!(
@@ -94,7 +108,14 @@ fn ndjson_import_commits_new_nodes() {
 
     let out = acetone(
         &repo,
-        &["import", "ndjson", nd.to_str().unwrap(), "--label", "Host"],
+        &[
+            "import",
+            "--format",
+            "ndjson",
+            nd.to_str().unwrap(),
+            "--label",
+            "Host",
+        ],
     );
     assert!(out.status.success(), "ndjson import: {}", stderr(&out));
     assert!(
@@ -120,7 +141,14 @@ fn edge_import_creates_relationships() {
     fs::write(&nodes, "name\nweb1\ndb1\n").expect("write");
     let out = acetone(
         &repo,
-        &["import", "csv", nodes.to_str().unwrap(), "--label", "Host"],
+        &[
+            "import",
+            "--format",
+            "csv",
+            nodes.to_str().unwrap(),
+            "--label",
+            "Host",
+        ],
     );
     assert!(out.status.success(), "node import: {}", stderr(&out));
 
@@ -137,6 +165,7 @@ fn edge_import_creates_relationships() {
         &repo,
         &[
             "import",
+            "--format",
             "csv",
             edges.to_str().unwrap(),
             "--edge",
@@ -181,6 +210,7 @@ fn branch_import_leaves_the_current_branch_unchanged() {
         &repo,
         &[
             "import",
+            "--format",
             "csv",
             csv.to_str().unwrap(),
             "--label",
@@ -227,7 +257,14 @@ fn dirty_workspace_import_is_refused() {
     fs::write(&csv, "name\nweb1\n").expect("write");
     let out = acetone(
         &repo,
-        &["import", "csv", csv.to_str().unwrap(), "--label", "Host"],
+        &[
+            "import",
+            "--format",
+            "csv",
+            csv.to_str().unwrap(),
+            "--label",
+            "Host",
+        ],
     );
     assert!(!out.status.success());
     assert!(

@@ -75,6 +75,7 @@ fn populate(repo: &Path, dir: &Path) {
             repo,
             &[
                 "import",
+                "--format",
                 "ndjson",
                 hosts.to_str().unwrap(),
                 "--label",
@@ -91,6 +92,7 @@ fn populate(repo: &Path, dir: &Path) {
             repo,
             &[
                 "import",
+                "--format",
                 "ndjson",
                 sw.to_str().unwrap(),
                 "--label",
@@ -107,6 +109,7 @@ fn populate(repo: &Path, dir: &Path) {
             repo,
             &[
                 "import",
+                "--format",
                 "ndjson",
                 edges.to_str().unwrap(),
                 "--edge",
@@ -130,6 +133,7 @@ fn import_exported(repo: &Path, exp: &Path, ext: &str) {
             repo,
             &[
                 "import",
+                "--format",
                 fmt,
                 node("Host").to_str().unwrap(),
                 "--label",
@@ -143,6 +147,7 @@ fn import_exported(repo: &Path, exp: &Path, ext: &str) {
             repo,
             &[
                 "import",
+                "--format",
                 fmt,
                 node("Software").to_str().unwrap(),
                 "--label",
@@ -156,6 +161,7 @@ fn import_exported(repo: &Path, exp: &Path, ext: &str) {
             repo,
             &[
                 "import",
+                "--format",
                 fmt,
                 exp.join(format!("rel-RUNS.{ext}")).to_str().unwrap(),
                 "--edge",
@@ -199,7 +205,10 @@ fn round_trip(ext: &str) {
     let exp = src.path().join("export");
     fs::create_dir_all(&exp).expect("mkdir");
     ok(
-        acetone(&src_repo, &["export", ext, "--out", exp.to_str().unwrap()]),
+        acetone(
+            &src_repo,
+            &["export", "--format", ext, "--out", exp.to_str().unwrap()],
+        ),
         "export",
     );
 
@@ -238,7 +247,14 @@ fn csv_round_trip_reproduces_identical_map_roots_for_string_properties() {
     ok(
         acetone(
             &src_repo,
-            &["import", "csv", hosts.to_str().unwrap(), "--label", "Host"],
+            &[
+                "import",
+                "--format",
+                "csv",
+                hosts.to_str().unwrap(),
+                "--label",
+                "Host",
+            ],
         ),
         "import hosts",
     );
@@ -247,7 +263,14 @@ fn csv_round_trip_reproduces_identical_map_roots_for_string_properties() {
     ok(
         acetone(
             &src_repo,
-            &["import", "csv", sw.to_str().unwrap(), "--label", "Software"],
+            &[
+                "import",
+                "--format",
+                "csv",
+                sw.to_str().unwrap(),
+                "--label",
+                "Software",
+            ],
         ),
         "import sw",
     );
@@ -258,6 +281,7 @@ fn csv_round_trip_reproduces_identical_map_roots_for_string_properties() {
             &src_repo,
             &[
                 "import",
+                "--format",
                 "csv",
                 edges.to_str().unwrap(),
                 "--edge",
@@ -276,7 +300,7 @@ fn csv_round_trip_reproduces_identical_map_roots_for_string_properties() {
     ok(
         acetone(
             &src_repo,
-            &["export", "csv", "--out", exp.to_str().unwrap()],
+            &["export", "--format", "csv", "--out", exp.to_str().unwrap()],
         ),
         "export",
     );

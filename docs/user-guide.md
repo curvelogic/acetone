@@ -78,10 +78,10 @@ merging state with a queryable `conflicts` map; resolve with ordinary writes or
 ## Import and export
 
 ```sh
-acetone import csv hosts.csv --label Host          # a row per node
-acetone import csv links.csv --edge DEPENDS_ON --from src --to dst
-acetone export csv --label Host --out hosts.csv    # round-trips to identical roots
-acetone export json --out export/   # no --label/--edge: a directory, one file per label/type
+acetone import --format csv hosts.csv --label Host          # a row per node
+acetone import --format csv links.csv --edge DEPENDS_ON --from src --to dst
+acetone export --format csv --label Host --out hosts.csv    # round-trips to identical roots
+acetone export --format json --out export/  # no --label/--edge: a directory, one file per label/type
 ```
 
 Import records provenance trailers (`Acetone-Source`, `-Extractor`,

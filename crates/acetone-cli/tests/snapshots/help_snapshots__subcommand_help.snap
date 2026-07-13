@@ -80,82 +80,148 @@ Options:
   -h, --help         Print help
 
 ========== acetone merge --help ==========
-Merge another version into the current branch (spec §7). The workspace must be clean and a branch checked out; fast-forwards when possible, otherwise a clean three-way merge writes a two-parent merge commit. Cell-level conflicts enter a merge-in-progress state: resolve them with `acetone resolve --all-ours|--all-theirs` (or by editing the graph), then `acetone commit` to complete. Graph-level breaches (a dangling edge or a broken schema constraint) are reported and make no commit
+Merge another version into the current branch.
+
+Merges another version (spec §7). The workspace must be clean and a branch checked out; fast-forwards when possible, otherwise a clean three-way merge writes a two-parent merge commit. Cell-level conflicts enter a merge-in-progress state: resolve them with `acetone resolve --all-ours|--all-theirs` (or by editing the graph), then `acetone commit` to complete. Graph-level breaches (a dangling edge or a broken schema constraint) are reported and make no commit.
 
 Usage: acetone merge [OPTIONS] <REF>
 
 Arguments:
-  <REF>  The version to merge in (branch short name, full ref name or commit hash)
+  <REF>
+          The version to merge in (branch short name, full ref name or commit hash)
 
 Options:
-  -m, --message <MESSAGE>  Commit message for the merge commit (default: `Merge <ref>`)
-      --repo <REPO>        Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help               Print help
+  -m, --message <MESSAGE>
+          Commit message for the merge commit (default: `Merge <ref>`)
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone declare-label --help ==========
-Declare a primary label's key (schema): the ordered key property names that give nodes of this label their identity. Required before Cypher `CREATE`/`MERGE` can persist nodes of the label (Invariant #3)
+Declare a primary label's key and constraints (schema).
+
+Declares the ordered key property names that give nodes of this label their identity. Required before Cypher `CREATE`/`MERGE` can persist nodes of the label (Invariant #3).
 
 Usage: acetone declare-label [OPTIONS] --key <KEY> <LABEL>
 
 Arguments:
-  <LABEL>  The primary label
+  <LABEL>
+          The primary label
 
 Options:
-      --key <KEY>          A key property name; repeat for a composite key, in order
-      --repo <REPO>        Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-      --require <REQUIRE>  A property that must be present (existence constraint); repeat
-      --unique <UNIQUE>    A non-key property that must be unique across nodes of this label (UNIQUE constraint); repeat
-  -h, --help               Print help
+      --key <KEY>
+          A key property name; repeat for a composite key, in order
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+      --require <REQUIRE>
+          A property that must be present (existence constraint); repeat
+
+      --unique <UNIQUE>
+          A non-key property that must be unique across nodes of this label (UNIQUE constraint); repeat
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone declare-rel-type --help ==========
-Declare a relationship type (schema). Required before Cypher can create relationships of this type under a declared schema
+Declare a relationship type (schema).
+
+Required before Cypher can create relationships of this type under a declared schema.
 
 Usage: acetone declare-rel-type [OPTIONS] <RTYPE>
 
 Arguments:
-  <RTYPE>  The relationship type
+  <RTYPE>
+          The relationship type
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone declare-index --help ==========
-Declare a property index `idx/<name>` over `(label, properties)` (spec §3.3). The index is built from the current nodes and maintained transactionally thereafter; it accelerates equality lookups. Repeat `--property` for a **composite** index — its key is the ordered tuple of those property values. Indexes are null- and NaN-blind
+Declare a property index over `(label, properties)`.
+
+Declares a property index `idx/<name>` (spec §3.3). The index is built from the current nodes and maintained transactionally thereafter; it accelerates equality lookups. Repeat `--property` for a **composite** index — its key is the ordered tuple of those property values. Indexes are null- and NaN-blind.
 
 Usage: acetone declare-index [OPTIONS] --label <LABEL> --property <PROPERTY> <NAME>
 
 Arguments:
-  <NAME>  The index name (the `idx/<name>` map)
+  <NAME>
+          The index name (the `idx/<name>` map)
 
 Options:
-      --label <LABEL>        The indexed primary label
-      --repo <REPO>          Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-      --property <PROPERTY>  An indexed property; repeat, in order, for a composite index
-  -h, --help                 Print help
+  -l, --label <LABEL>
+          The indexed primary label
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+      --property <PROPERTY>
+          An indexed property; repeat, in order, for a composite index
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone reindex --help ==========
-Rebuild every declared index from the nodes map (spec §3.3). A no-op when the indexes are already consistent; repairs any divergence `fsck` reports
+Rebuild every declared index from the nodes map.
+
+Rebuilds every declared index (spec §3.3). A no-op when the indexes are already consistent; repairs any divergence `fsck` reports.
 
 Usage: acetone reindex [OPTIONS]
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone export --help ==========
-Export a graph version as per-label node tables and per-type edge tables (spec §7, §9). The inverse of `import`: exporting then importing into a fresh repo with the same schema reproduces identical map roots
+Export a graph version as per-label and per-type tables.
 
-Usage: acetone export [OPTIONS] <FORMAT>
+Exports node tables per label and edge tables per type (spec §7, §9). The inverse of `import`: exporting then importing into a fresh repo with the same schema reproduces identical map roots.
 
-Arguments:
-  <FORMAT>  Output format [possible values: csv, json, ndjson]
+Usage: acetone export [OPTIONS] --format <FORMAT>
 
 Options:
-      --label <LABEL>  Export only this label's nodes
-      --repo <REPO>    Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-      --edge <EDGE>    Export only this relationship type's edges
-      --out <OUT>      Output file (single table) or, with neither `--label` nor `--edge`, the directory to write one table per label and type into. A single table with no `--out` goes to stdout
-  -h, --help           Print help
+  -f, --format <FORMAT>
+          Output format
+          
+          [possible values: csv, json, ndjson]
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -l, --label <LABEL>
+          Export only this label's nodes
+
+      --edge <EDGE>
+          Export only this relationship type's edges
+
+  -o, --out <OUT>
+          Output file (single table) or, with neither `--label` nor `--edge`, the directory to write one table per label and type into. A single table with no `--out` goes to stdout
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone put-node --help ==========
 Insert or replace a node (plumbing; single-column keys only)
@@ -172,43 +238,78 @@ Options:
   -h, --help         Print help
 
 ========== acetone rekey --help ==========
-Change a node's key (single-column keys). A key change is modelled as delete-plus-create in one commit (Invariant #3); incident edges are rewritten onto the new key. `SET` cannot change a key
+Change a node's key (single-column keys).
+
+A key change is modelled as delete-plus-create in one commit (Invariant #3); incident edges are rewritten onto the new key. `SET` cannot change a key.
 
 Usage: acetone rekey [OPTIONS] --message <MESSAGE> <LABEL> <OLD_KEY> <NEW_KEY>
 
 Arguments:
-  <LABEL>    The node's primary label
-  <OLD_KEY>  The current key value
-  <NEW_KEY>  The new key value
+  <LABEL>
+          The node's primary label
+
+  <OLD_KEY>
+          The current key value
+
+  <NEW_KEY>
+          The new key value
 
 Options:
-  -m, --message <MESSAGE>  Commit message
-      --repo <REPO>        Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help               Print help
+  -m, --message <MESSAGE>
+          Commit message
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone resolve --help ==========
-Resolve the conflicts of a merge in progress by taking one whole side, then `commit` to complete the merge (spec §6). Cell conflicts only; graph-level violations and per-key resolution arrive later
+Resolve a merge in progress by taking one whole side.
+
+Resolves the conflicts of a merge in progress, then `commit` to complete the merge (spec §6). Cell conflicts only; graph-level violations and per-key resolution arrive later.
 
 Usage: acetone resolve [OPTIONS]
 
 Options:
-      --all-ours     Take the current branch's value for every conflict
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-      --all-theirs   Take the merged-in version's value for every conflict
-  -h, --help         Print help
+      --all-ours
+          Take the current branch's value for every conflict
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+      --all-theirs
+          Take the merged-in version's value for every conflict
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone diff --help ==========
-Show the graph-level difference between two versions (branch short names, full ref names or commit hashes): the nodes and relationships added (`+`), removed (`-`) or modified (`~`) from `from` to `to`
+Show the graph-level difference between two versions.
+
+Compares two versions (branch short names, full ref names or commit hashes): the nodes and relationships added (`+`), removed (`-`) or modified (`~`) from `from` to `to`.
 
 Usage: acetone diff [OPTIONS] <FROM> <TO>
 
 Arguments:
-  <FROM>  The base version
-  <TO>    The target version
+  <FROM>
+          The base version
+
+  <TO>
+          The target version
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone get-node --help ==========
 Look up a node by label and key
@@ -245,7 +346,7 @@ List nodes, in key order
 Usage: acetone list-nodes [OPTIONS]
 
 Options:
-      --label <LABEL>  Restrict to one primary label
+  -l, --label <LABEL>  Restrict to one primary label
       --repo <REPO>    Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help           Print help
 
@@ -260,55 +361,108 @@ Arguments:
 Options:
       --at <AT>          Read at a specific ref (branch, tag or commit hash) instead of the current workspace state — whole-query time travel
       --repo <REPO>      Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-      --format <FORMAT>  Output format [default: table] [possible values: table, json, csv]
+  -f, --format <FORMAT>  Output format [default: table] [possible values: table, json, csv]
   -h, --help             Print help
 
 ========== acetone fsck --help ==========
-Verify repository integrity: manifest decode, chunk reachability and prolly-tree structure for every version reachable from workspaces, branches and tags; edge-map symmetry and index consistency as advisories, and a history-independence spot-check (a non-canonical map is an error). Exits non-zero when any error-severity finding exists
+Verify repository integrity.
+
+Checks manifest decode, chunk reachability and prolly-tree structure for every version reachable from workspaces, branches and tags; edge-map symmetry and index consistency as advisories, and a history-independence spot-check (a non-canonical map is an error). Exits non-zero when any error-severity finding exists.
 
 Usage: acetone fsck [OPTIONS]
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone gc --help ==========
-Consolidate the object store into a self-contained packfile (spec §3.1, ADR-0011): delta rewritten chunks against their predecessors and prune superseded loose objects and packs. Representation-only — preserves every object exactly. Run periodically after churn to reclaim space
+Consolidate the object store into a packfile.
+
+Packs the object store into a self-contained packfile (spec §3.1, ADR-0011): delta rewritten chunks against their predecessors and prune superseded loose objects and packs. Representation-only — preserves every object exactly. Run periodically after churn to reclaim space.
 
 Usage: acetone gc [OPTIONS]
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone migrate --help ==========
-Rewrite all history under new chunk parameters, producing new hashes (ADR-0025). A version-preserving re-chunk — `format_version` is unchanged (chunk parameters are manifest data) — that re-encodes every version and rebuilds the commit graph, preserving each commit's message, author and committer (identity and timestamp). This is the generic history-rewrite engine; a future `format_version` bump plugs into the same command. Requires a clean, non-merging workspace, which it resets to the rewritten head
+Rewrite all history under new chunk parameters.
 
-Usage: acetone migrate [OPTIONS] --min-bytes <MIN_BYTES> --mask-bits <MASK_BITS> --max-bytes <MAX_BYTES>
+Produces new hashes (ADR-0025). A version-preserving re-chunk — `format_version` is unchanged (chunk parameters are manifest data) — that re-encodes every version and rebuilds the commit graph, preserving each commit's message, author and committer (identity and timestamp). This is the generic history-rewrite engine; a future `format_version` bump plugs into the same command. Requires a clean, non-merging workspace, which it resets to the rewritten head. Each chunk-parameter flag defaults to the repo's current value, so a no-flag `migrate` re-chunks under the same parameters (a repair that leaves hashes unchanged by history-independence); override a subset to re-chunk.
+
+Usage: acetone migrate [OPTIONS]
 
 Options:
-      --min-bytes <MIN_BYTES>  Target minimum chunk size in bytes
-      --repo <REPO>            Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-      --mask-bits <MASK_BITS>  Target rolling-hash mask bits (mean chunk size ≈ 2^mask_bits)
-      --max-bytes <MAX_BYTES>  Target maximum chunk size in bytes
-  -h, --help                   Print help
+      --min-bytes <MIN_BYTES>
+          Target minimum chunk size in bytes (default: the repo's current value)
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+      --mask-bits <MASK_BITS>
+          Target rolling-hash mask bits, mean chunk size ≈ 2^mask_bits (default: the repo's current value)
+
+      --max-bytes <MAX_BYTES>
+          Target maximum chunk size in bytes (default: the repo's current value)
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 ========== acetone import --help ==========
-Import a source file into the graph, recording provenance trailers (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op when the source is unchanged (spec §7). Node mode (`--label`) maps each row to a node; edge mode (`--edge`) maps each row to a relationship. Requires a clean workspace — declare and `commit` the target label's schema (and any relationship type) before importing
+Import a source file into the graph.
 
-Usage: acetone import [OPTIONS] <FORMAT> <SOURCE>
+Imports a source file, recording provenance trailers (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op when the source is unchanged (spec §7). Node mode (`--label`) maps each row to a node; edge mode (`--edge`) maps each row to a relationship. Requires a clean workspace — declare and `commit` the target label's schema (and any relationship type) before importing.
+
+Usage: acetone import [OPTIONS] --format <FORMAT> <SOURCE>
 
 Arguments:
-  <FORMAT>  Source format [possible values: csv, json, ndjson]
-  <SOURCE>  Path to the source file
+  <SOURCE>
+          Path to the source file
 
 Options:
-      --label <LABEL>      Node mode: the primary label for every imported row. The label's declared key selects which fields form the node key
-      --repo <REPO>        Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
-      --edge <EDGE>        Edge mode: the relationship type for every imported row. Requires `--from` and `--to`
-      --from <FROM>        Edge mode: the source endpoint, as `LABEL=field[,field...]` (the fields carry the endpoint's key, in key order)
-      --to <TO>            Edge mode: the destination endpoint, as `LABEL=field[,field...]`
-      --disc <DISC>        Edge mode: the field carrying the discriminator (optional)
-      --branch <BRANCH>    Import onto this branch in isolation, leaving the current branch unchanged (created if absent, appended to if present)
-  -m, --message <MESSAGE>  Commit message (default synthesised from the source and counts)
-  -h, --help               Print help
+  -f, --format <FORMAT>
+          Source format
+          
+          [possible values: csv, json, ndjson]
+
+      --repo <REPO>
+          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -l, --label <LABEL>
+          Node mode: the primary label for every imported row. The label's declared key selects which fields form the node key
+
+      --edge <EDGE>
+          Edge mode: the relationship type for every imported row. Requires `--from` and `--to`
+
+      --from <FROM>
+          Edge mode: the source endpoint, as `LABEL=field[,field...]` (the fields carry the endpoint's key, in key order)
+
+      --to <TO>
+          Edge mode: the destination endpoint, as `LABEL=field[,field...]`
+
+      --disc <DISC>
+          Edge mode: the field carrying the discriminator (optional)
+
+      --branch <BRANCH>
+          Import onto this branch in isolation, leaving the current branch unchanged (created if absent, appended to if present)
+
+  -m, --message <MESSAGE>
+          Commit message (default synthesised from the source and counts)
+
+  -h, --help
+          Print help (see a summary with '-h')

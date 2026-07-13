@@ -27,7 +27,7 @@ cat > "$SRC/snap1.ndjson" <<'JSON'
 {"name":"db1","os":"linux"}
 {"name":"cache1","os":"linux"}
 JSON
-run import ndjson "$SRC/snap1.ndjson" --label Host
+run import --format ndjson "$SRC/snap1.ndjson" --label Host
 
 echo "== 3. Snapshot 2 — the source mutated (web1 re-imaged; a host added) =="
 cat > "$SRC/snap2.ndjson" <<'JSON'
@@ -36,7 +36,7 @@ cat > "$SRC/snap2.ndjson" <<'JSON'
 {"name":"cache1","os":"linux"}
 {"name":"new1","os":"linux"}
 JSON
-run import ndjson "$SRC/snap2.ndjson" --label Host
+run import --format ndjson "$SRC/snap2.ndjson" --label Host
 
 echo "== 4. The change report between the two runs is 'diff' =="
 run log
@@ -48,7 +48,7 @@ run diff "$FROM" "$TO"
 
 echo "== 5. Re-import an UNCHANGED snapshot — detected no-op, no commit =="
 cp "$SRC/snap2.ndjson" "$SRC/snap3.ndjson"
-run import ndjson "$SRC/snap3.ndjson" --label Host
+run import --format ndjson "$SRC/snap3.ndjson" --label Host
 
 echo "== 6. The index tracked the mutation: web1 is now found under os=windows =="
 run query "MATCH (h:Host {os: 'windows'}) RETURN h.name"

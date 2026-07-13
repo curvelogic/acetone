@@ -124,7 +124,12 @@ fn failure_output_snapshot() {
 
     // Each case: a short label and the argv (after the implicit --repo) to run.
     let cases: &[(&str, &[&str])] = &[
-        ("unknown-subcommand", &["st"]),
+        // A genuinely unknown command (a unique prefix like `st` now resolves
+        // to `status` via infer_subcommands, so it is no longer an error).
+        ("unknown-subcommand", &["nonesuch"]),
+        // An ambiguous prefix errors with the candidate commands (`c` matches
+        // checkout, commit and the `cypher` alias of query).
+        ("ambiguous-prefix", &["c"]),
         (
             "missing-colon-label",
             &["query", "CREATE (Topic {name: 'First'});"],
