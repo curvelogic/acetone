@@ -46,7 +46,7 @@ stderr: error: line 1, column 28: unknown relationship type 'NOPE' — declare i
 ### duplicate-key
 argv:   acetone query CREATE (:Topic {name: 'x'});
 status: 1
-stderr: error: CREATE of "Topic" ["x"] conflicts with an existing node; CREATE always makes a new node, so identity collides (a MERGE on a multi-element pattern also CREATEs its nodes when the whole pattern doesn't match). To match-or-create, MERGE each node on its own before MERGEing a relationship between them: `MERGE (a:Topic {…}) MERGE (b:…) MERGE (a)-[:…]->(b)`
+stderr: error: CREATE of "Topic" ["x"] conflicts with an existing node; CREATE always makes a new node, so identity collides (a MERGE on a multi-element pattern also CREATEs its nodes when the whole pattern doesn't match). To match-or-create, MERGE each node on its own before MERGEing a relationship between them: `MERGE (a:Label {…}) MERGE (b:…) MERGE (a)-[:…]->(b)`
 
 ### duplicate-key-in-statement
 argv:   acetone query CREATE (:Topic {name: 'y'}) CREATE (:Topic {name: 'y'});

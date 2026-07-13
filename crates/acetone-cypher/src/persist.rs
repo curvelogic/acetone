@@ -57,7 +57,7 @@ pub enum PersistError {
          node, so identity collides (a MERGE on a multi-element pattern also CREATEs its nodes \
          when the whole pattern doesn't match). To match-or-create, MERGE each node on its own \
          before MERGEing a relationship between them: \
-         `MERGE (a:{label} {{…}}) MERGE (b:…) MERGE (a)-[:…]->(b)`"
+         `MERGE (a:Label {{…}}) MERGE (b:…) MERGE (a)-[:…]->(b)`"
     )]
     DuplicateKey { label: String, key: String },
     #[error(
@@ -147,8 +147,9 @@ pub fn persist_changes(
             Err(_) => {
                 // Created: its key must not already exist (CREATE is not an
                 // upsert — that is MERGE), unless that node is being deleted
-                // in the same transaction. MERGE-created nodes never reach a
-                // pre-existing key, so a collision here is a CREATE conflict.
+                // in the same transaction. A MERGE on a multi-element pattern
+                // that fails to match as a whole also CREATEs its nodes, so it
+                // too can reach a pre-existing key here.
                 if base.get_node(&key)?.is_some() && !deleted_keys.contains(&key.encode()?) {
                     return Err(PersistError::DuplicateKey {
                         label: key.label().to_string(),
