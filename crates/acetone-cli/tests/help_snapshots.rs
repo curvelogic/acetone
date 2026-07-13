@@ -134,7 +134,28 @@ fn failure_output_snapshot() {
                 "CREATE (:Topic {name: 'a'})-[LINK]->(:Topic {name: 'b'});",
             ],
         ),
+        (
+            "rel-multiple-types",
+            &[
+                "query",
+                "CREATE (:Topic {name: 'a'})-[:LINK|OTHER]->(:Topic {name: 'b'});",
+            ],
+        ),
+        (
+            "rel-unknown-type",
+            &[
+                "query",
+                "CREATE (:Topic {name: 'a'})-[:NOPE]->(:Topic {name: 'b'});",
+            ],
+        ),
         ("duplicate-key", &["query", "CREATE (:Topic {name: 'x'});"]),
+        (
+            "duplicate-key-in-statement",
+            &[
+                "query",
+                "CREATE (:Topic {name: 'y'}) CREATE (:Topic {name: 'y'});",
+            ],
+        ),
         ("get-node-not-found", &["get-node", "Topic", "missing"]),
         // NoSuchNode via the graph layer's key renderer (rekey a missing node).
         (
@@ -167,5 +188,30 @@ fn failure_output_snapshot() {
         }
         combined.push('\n');
     }
+
+    // The `none of the labels … declares a key` path needs a schema-free repo
+    // (lenient binding, so the label reaches persist unvalidated); it cannot be
+    // reached in the schema'd repo above, where an undeclared label is a
+    // bind-time UnknownLabel. Run it against a fresh repo.
+    {
+        let schemaless_dir = tempfile::tempdir().expect("tmp");
+        let schemaless = schemaless_dir.path();
+        assert!(init(schemaless).status.success(), "init schemaless");
+        let args: &[&str] = &["query", "CREATE (:Solo {x: 1});"];
+        let out = acetone(schemaless, args);
+        combined.push_str("### labelled-no-key\n");
+        combined.push_str("argv:   acetone ");
+        combined.push_str(&args.join(" "));
+        combined.push('\n');
+        combined.push_str(&format!("status: {}\n", out.status.code().unwrap_or(-1)));
+        let err = stderr(&out);
+        if !err.is_empty() {
+            combined.push_str("stderr: ");
+            combined.push_str(err.trim_end());
+            combined.push('\n');
+        }
+        combined.push('\n');
+    }
+
     insta::assert_snapshot!("failure_output", combined);
 }

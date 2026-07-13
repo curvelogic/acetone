@@ -53,3 +53,11 @@ error:  line 1, column 17: undefined variable 'm'
 ### bind/order-by-undefined
 input:  MATCH (n) RETURN n.x ORDER BY nope
 error:  line 1, column 31: undefined variable 'nope'
+
+### bind/create-rel-missing-type
+input:  CREATE (:A)-[]->(:B)
+error:  line 1, column 12: CREATE requires a relationship type — write it with a colon, e.g. `[:LINK]`; a bare `[LINK]` is a variable, not a type
+
+### bind/create-rel-multiple-types
+input:  CREATE (:A)-[:X|Y]->(:B)
+error:  line 1, column 12: CREATE requires exactly one relationship type
