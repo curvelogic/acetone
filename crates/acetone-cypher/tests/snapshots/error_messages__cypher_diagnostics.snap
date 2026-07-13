@@ -61,3 +61,35 @@ error:  line 1, column 12: CREATE requires a relationship type — write it with
 ### bind/create-rel-multiple-types
 input:  CREATE (:A)-[:X|Y]->(:B)
 error:  line 1, column 12: CREATE requires exactly one relationship type
+
+### bind/unknown-function-typo
+input:  RETURN toUppr('a')
+error:  line 1, column 8: unknown function 'toUppr' — did you mean "toUpper"?
+
+### bind/unknown-function-nonsense
+input:  RETURN frobnicate(1)
+error:  line 1, column 8: unknown function 'frobnicate'
+
+### bind/unknown-label-typo (strict)
+input:  MATCH (n:Hst) RETURN n
+error:  line 1, column 7: unknown label 'Hst' (declared labels come from the schema map) — did you mean "Host"?
+
+### bind/unknown-label-nonsense (strict)
+input:  MATCH (n:Zzzzzz) RETURN n
+error:  line 1, column 7: unknown label 'Zzzzzz' (declared labels come from the schema map)
+
+### bind/unknown-rel-type-typo (strict)
+input:  MATCH (h:Host)-[:RUNZ]->(x:Host) RETURN h
+error:  line 1, column 15: unknown relationship type 'RUNZ' — declare it first with `acetone declare-rel-type "RUNZ"` — did you mean "RUNS"?
+
+### bind/unknown-rel-type-nonsense (strict)
+input:  MATCH (h:Host)-[:ZZZZZZ]->(x:Host) RETURN h
+error:  line 1, column 15: unknown relationship type 'ZZZZZZ' — declare it first with `acetone declare-rel-type "ZZZZZZ"`
+
+### bind/unknown-property-typo (strict)
+input:  MATCH (h:Host {hstname: 'a'}) RETURN h
+error:  line 1, column 15: unknown property 'hstname' on label 'Host' — did you mean "hostname"?
+
+### bind/unknown-property-nonsense (strict)
+input:  MATCH (h:Host {zzzzzzz: 1}) RETURN h
+error:  line 1, column 15: unknown property 'zzzzzzz' on label 'Host'

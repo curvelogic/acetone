@@ -13,6 +13,8 @@
 
 use acetone_cypher::bind::{BindMode, Catalogue, bind};
 use acetone_cypher::parse;
+use acetone_model::schema::{LabelDef, PropertyType, RelTypeDef, SchemaEntry};
+use std::collections::BTreeMap;
 
 /// Render the diagnostic a user would see for a read query: parse, then bind
 /// in lenient mode (the CLI's mode when no schema is declared). Returns the
@@ -23,6 +25,39 @@ fn diagnose(query: &str) -> String {
         Err(e) => return e.render(query),
     };
     match bind(query, &parsed, &Catalogue::empty(), BindMode::Lenient) {
+        Ok(_) => "(*no diagnostic: parses and binds cleanly*)".to_string(),
+        Err(e) => e.render(query),
+    }
+}
+
+/// A small catalogue for the strict-mode "did you mean" cases: a shaped `Host`
+/// label and a `RUNS` relationship type give the label/property/rel-type
+/// suggestions something to match against.
+fn suggestion_catalogue() -> Catalogue {
+    let mut types = BTreeMap::new();
+    types.insert("hostname".to_string(), PropertyType::String);
+    let label = LabelDef::new(vec!["hostname".to_string()], types, [], []).unwrap();
+    Catalogue::from_entries([
+        SchemaEntry::Label {
+            name: "Host".into(),
+            def: label,
+        },
+        SchemaEntry::RelType {
+            name: "RUNS".into(),
+            def: RelTypeDef::new(None, BTreeMap::new(), []).unwrap(),
+        },
+    ])
+}
+
+/// As [`diagnose`], but binds in strict mode against [`suggestion_catalogue`],
+/// so unknown labels, relationship types and properties are hard errors that
+/// carry near-match suggestions.
+fn diagnose_strict(query: &str) -> String {
+    let parsed = match parse(query) {
+        Ok(p) => p,
+        Err(e) => return e.render(query),
+    };
+    match bind(query, &parsed, &suggestion_catalogue(), BindMode::Strict) {
         Ok(_) => "(*no diagnostic: parses and binds cleanly*)".to_string(),
         Err(e) => e.render(query),
     }
@@ -61,6 +96,33 @@ const DIAGNOSTICS: &[(&str, &str)] = &[
     ("bind/create-rel-missing-type", "CREATE (:A)-[]->(:B)"),
     // Two types on one created relationship: identity would be ambiguous.
     ("bind/create-rel-multiple-types", "CREATE (:A)-[:X|Y]->(:B)"),
+    // Unknown function: a near typo gets a "did you mean", nonsense does not.
+    // (Function resolution is schema-independent, so it fires in lenient mode.)
+    ("bind/unknown-function-typo", "RETURN toUppr('a')"),
+    ("bind/unknown-function-nonsense", "RETURN frobnicate(1)"),
+];
+
+/// Strict-mode inputs whose diagnostics we pin: unknown labels, relationship
+/// types and properties, each with a near typo (suggested) and nonsense (not).
+const STRICT_DIAGNOSTICS: &[(&str, &str)] = &[
+    ("bind/unknown-label-typo", "MATCH (n:Hst) RETURN n"),
+    ("bind/unknown-label-nonsense", "MATCH (n:Zzzzzz) RETURN n"),
+    (
+        "bind/unknown-rel-type-typo",
+        "MATCH (h:Host)-[:RUNZ]->(x:Host) RETURN h",
+    ),
+    (
+        "bind/unknown-rel-type-nonsense",
+        "MATCH (h:Host)-[:ZZZZZZ]->(x:Host) RETURN h",
+    ),
+    (
+        "bind/unknown-property-typo",
+        "MATCH (h:Host {hstname: 'a'}) RETURN h",
+    ),
+    (
+        "bind/unknown-property-nonsense",
+        "MATCH (h:Host {zzzzzzz: 1}) RETURN h",
+    ),
 ];
 
 #[test]
@@ -75,6 +137,17 @@ fn cypher_diagnostics_snapshot() {
         out.push('\n');
         out.push_str("error:  ");
         out.push_str(&diagnose(query));
+        out.push_str("\n\n");
+    }
+    for (label, query) in STRICT_DIAGNOSTICS {
+        out.push_str("### ");
+        out.push_str(label);
+        out.push_str(" (strict)\n");
+        out.push_str("input:  ");
+        out.push_str(query);
+        out.push('\n');
+        out.push_str("error:  ");
+        out.push_str(&diagnose_strict(query));
         out.push_str("\n\n");
     }
     insta::assert_snapshot!("cypher_diagnostics", out);

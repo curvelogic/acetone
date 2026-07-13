@@ -64,7 +64,9 @@ pub enum SchemaError {
     #[error("unknown schema entry kind {0:?}")]
     UnknownKind(String),
     /// A property type name that is not in the v0.1 vocabulary.
-    #[error("unknown property type {0:?}")]
+    #[error(
+        "unknown property type {0:?} (valid types: bool, int, float, string, bytes, date, time, datetime, duration, list)"
+    )]
     UnknownType(String),
 }
 

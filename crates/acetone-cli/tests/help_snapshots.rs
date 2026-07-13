@@ -103,6 +103,13 @@ fn failure_output_snapshot() {
             .success(),
         "declare-label"
     );
+    // A second label so the "did you mean" case has a near-match candidate.
+    assert!(
+        acetone(repo, &["declare-label", "Host", "--key", "name"])
+            .status
+            .success(),
+        "declare-label Host"
+    );
     assert!(
         acetone(repo, &["commit", "-m", "schema"]).status.success(),
         "commit schema"
@@ -161,6 +168,20 @@ fn failure_output_snapshot() {
         (
             "rekey-missing-node",
             &["rekey", "Topic", "absent", "present", "-m", "r"],
+        ),
+        // A mistyped label suggests the closest declared one (7bn.4).
+        ("label-did-you-mean", &["query", "MATCH (n:Hsot) RETURN n"]),
+        // A mistyped function suggests the closest known function (7bn.4).
+        ("function-did-you-mean", &["query", "RETURN toUppr('a')"]),
+        // A non-integer SKIP/LIMIT bound reports the value via the escaping
+        // formatter, not a raw Debug leak (7bn.14).
+        (
+            "skip-string-bound",
+            &["query", "MATCH (n:Topic) RETURN n SKIP 'x'"],
+        ),
+        (
+            "limit-string-bound",
+            &["query", "MATCH (n:Topic) RETURN n LIMIT 'x'"],
         ),
     ];
 

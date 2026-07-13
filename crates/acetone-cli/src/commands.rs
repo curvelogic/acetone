@@ -383,7 +383,7 @@ fn render_conflict(c: &MergeConflict) -> String {
             // an added edge references a node that is not present — "absent"
             // covers both.
             format!(
-                "dangling edge {}: {end} node {} is absent",
+                "dangling relationship {}: {end} node {} is absent",
                 render_edge_key(edge),
                 render_node_key(endpoint)
             )

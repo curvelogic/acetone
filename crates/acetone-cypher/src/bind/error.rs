@@ -4,7 +4,41 @@
 //! guessing from the fact of rejection.
 
 use crate::span::Span;
+use std::fmt;
 use thiserror::Error;
+
+/// An optional "did you mean …?" suffix appended to an "unknown X" error.
+///
+/// It holds the raw closest candidate (or `None`). Its `Display` renders the
+/// candidate through [`acetone_model::display::format_label`] — candidates come
+/// from the schema catalogue, which a hostile clone can write, so the name is
+/// escaped rather than emitted raw. When there is no suggestion it renders as
+/// the empty string, so the variant's `#[error(...)]` can interpolate it
+/// unconditionally.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Suggestion(pub Option<String>);
+
+impl Suggestion {
+    /// No near match.
+    pub fn none() -> Self {
+        Suggestion(None)
+    }
+}
+
+impl fmt::Display for Suggestion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Some(name) => {
+                write!(
+                    f,
+                    " — did you mean {}?",
+                    acetone_model::display::format_label(name)
+                )
+            }
+            None => Ok(()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BindError {
@@ -22,8 +56,12 @@ pub enum BindError {
         span: Span,
     },
 
-    #[error("unknown function '{name}'")]
-    UnknownFunction { name: String, span: Span },
+    #[error("unknown function '{name}'{suggestion}")]
+    UnknownFunction {
+        name: String,
+        span: Span,
+        suggestion: Suggestion,
+    },
 
     #[error("wrong number of arguments for '{name}': got {got}, expected {expected}")]
     InvalidNumberOfArguments {
@@ -48,19 +86,32 @@ pub enum BindError {
     #[error("expressions in a projection must be aliased before reuse")]
     NoExpressionAlias { span: Span },
 
-    #[error("unknown label '{name}' (declared labels come from the schema map)")]
-    UnknownLabel { name: String, span: Span },
+    #[error("unknown label '{name}' (declared labels come from the schema map){suggestion}")]
+    UnknownLabel {
+        name: String,
+        span: Span,
+        suggestion: Suggestion,
+    },
 
+    // The relationship type is echoed into a suggested shell command, so it is
+    // escaped (`declare_cmd`) — a backtick-quoted Cypher identifier can carry
+    // control characters, which must never reach the terminal raw.
     #[error(
-        "unknown relationship type '{name}' — declare it first with `acetone declare-rel-type {name}`"
+        "unknown relationship type '{name}' — declare it first with `acetone declare-rel-type {declare_cmd}`{suggestion}"
     )]
-    UnknownRelType { name: String, span: Span },
+    UnknownRelType {
+        name: String,
+        declare_cmd: String,
+        span: Span,
+        suggestion: Suggestion,
+    },
 
-    #[error("unknown property '{property}' on label '{label}'")]
+    #[error("unknown property '{property}' on label '{label}'{suggestion}")]
     UnknownProperty {
         label: String,
         property: String,
         span: Span,
+        suggestion: Suggestion,
     },
 
     #[error("unknown procedure '{name}'")]

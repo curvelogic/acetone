@@ -21,6 +21,7 @@ pub mod lex;
 pub mod parser;
 pub mod persist;
 pub mod span;
+pub mod suggest;
 
 pub use error::ParseError;
 pub use parser::parse;

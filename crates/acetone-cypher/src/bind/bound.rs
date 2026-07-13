@@ -577,6 +577,15 @@ pub const PROCEDURES: &[ProcedureDef] = &[
     },
 ];
 
+/// Every callable name — scalar/list/string functions and aggregates — for
+/// "did you mean" suggestions on an unknown function call.
+pub fn function_names() -> impl Iterator<Item = &'static str> {
+    FUNCTIONS
+        .iter()
+        .map(|f| f.name)
+        .chain(AGGREGATES.iter().map(|a| a.name))
+}
+
 pub fn lookup_function(name: &str) -> Option<&'static FunctionDef> {
     FUNCTIONS.iter().find(|f| f.name.eq_ignore_ascii_case(name))
 }

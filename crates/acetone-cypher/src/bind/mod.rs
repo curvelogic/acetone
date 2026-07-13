@@ -207,6 +207,95 @@ mod tests {
         assert!(bind_lenient("MATCH (x:Rogue {shoe_size: 9})-[:GLUES]->(y) RETURN x").is_ok());
     }
 
+    fn suggestion_of(err: &BindError) -> Option<String> {
+        match err {
+            BindError::UnknownLabel { suggestion, .. }
+            | BindError::UnknownRelType { suggestion, .. }
+            | BindError::UnknownProperty { suggestion, .. }
+            | BindError::UnknownFunction { suggestion, .. } => suggestion.0.clone(),
+            other => panic!("not a suggestion-bearing error: {other}"),
+        }
+    }
+
+    /// A catalogue with a label, a typed property and a relationship type, so
+    /// every "unknown X" suggestion has a candidate to match against.
+    fn suggestion_catalogue() -> Catalogue {
+        let mut types = BTreeMap::new();
+        types.insert(
+            "hostname".to_string(),
+            acetone_model::schema::PropertyType::String,
+        );
+        let label = LabelDef::new(vec!["hostname".to_string()], types, [], []).unwrap();
+        Catalogue::from_entries([
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: label,
+            },
+            SchemaEntry::RelType {
+                name: "RUNS".into(),
+                def: acetone_model::schema::RelTypeDef::new(None, BTreeMap::new(), []).unwrap(),
+            },
+        ])
+    }
+
+    fn bind_suggest(query: &str) -> BindError {
+        let parsed = parse(query).expect("query must parse");
+        bind(query, &parsed, &suggestion_catalogue(), BindMode::Strict).unwrap_err()
+    }
+
+    #[test]
+    fn near_typos_get_a_did_you_mean_and_nonsense_does_not() {
+        // Label: a one-edit typo suggests the declared label; nonsense does not.
+        let err = bind_suggest("MATCH (x:Hst) RETURN x");
+        assert!(matches!(err, BindError::UnknownLabel { .. }));
+        assert_eq!(suggestion_of(&err), Some("Host".to_owned()));
+        assert!(err.to_string().contains("did you mean \"Host\"?"));
+        assert_eq!(
+            suggestion_of(&bind_suggest("MATCH (x:Zzzzzz) RETURN x")),
+            None
+        );
+
+        // Relationship type.
+        let err = bind_suggest("MATCH (h:Host)-[:RUNZ]->(x) RETURN h");
+        assert!(matches!(err, BindError::UnknownRelType { .. }));
+        assert_eq!(suggestion_of(&err), Some("RUNS".to_owned()));
+        assert_eq!(
+            suggestion_of(&bind_suggest("MATCH (h:Host)-[:ZZZZZ]->(x) RETURN h")),
+            None
+        );
+
+        // Property on a shaped label.
+        let err = bind_suggest("MATCH (h:Host {hstname: 'a'}) RETURN h");
+        assert!(matches!(err, BindError::UnknownProperty { .. }));
+        assert_eq!(suggestion_of(&err), Some("hostname".to_owned()));
+        assert_eq!(
+            suggestion_of(&bind_suggest("MATCH (h:Host {zzzzzzz: 1}) RETURN h")),
+            None
+        );
+
+        // Function (mode-independent).
+        let err = bind_suggest("RETURN toUppr('a')");
+        assert!(matches!(err, BindError::UnknownFunction { .. }));
+        assert_eq!(suggestion_of(&err), Some("toUpper".to_owned()));
+        assert_eq!(suggestion_of(&bind_suggest("RETURN frobnicate(1)")), None);
+    }
+
+    #[test]
+    fn suggested_rel_type_command_escapes_the_typed_name() {
+        // The relationship type is echoed into a copy-pasteable
+        // `acetone declare-rel-type …` command; a backtick-quoted
+        // control-character name must be escaped there so the suggested
+        // command carries no raw control bytes.
+        let err = bind_suggest("MATCH (h:Host)-[:`ev\u{1b}il`]->(x) RETURN h");
+        let rendered = err.to_string();
+        let command = &rendered[rendered.find("declare-rel-type").expect("command present")..];
+        assert!(
+            !command.contains('\u{1b}'),
+            "escape leaked into suggested command: {command:?}"
+        );
+        assert!(command.contains("declare-rel-type \"ev"));
+    }
+
     #[test]
     fn index_hints_cover_key_and_secondary_indexes() {
         let bound = bind_strict("MATCH (h:Host {hostname: 'web-01'}) RETURN h").unwrap();
