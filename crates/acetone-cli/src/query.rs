@@ -88,7 +88,7 @@ fn run_write(repo: &Repository, cypher: &str, format: Format) -> Result<()> {
     let resolver = RepoResolver { repo, base };
     let (result, changes) =
         acetone_cypher::exec::execute_write(&bound, &resolver, &BTreeMap::new())
-            .map_err(|e| anyhow!("{e}"))?;
+            .map_err(|e| anyhow!("{}", e.render(cypher)))?;
 
     acetone_cypher::persist::persist_changes(&changes, &mut txn, &catalogue, &snapshot)
         .map_err(|e| anyhow!("{e}"))?;
@@ -407,7 +407,7 @@ fn execute_query(
         &procedures,
         &BTreeMap::new(),
     )
-    .map_err(|e| anyhow!("{e}"))?;
+    .map_err(|e| anyhow!("{}", e.render(cypher)))?;
     Ok(result)
 }
 

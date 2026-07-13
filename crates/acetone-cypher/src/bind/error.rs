@@ -8,13 +8,13 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BindError {
-    #[error("undefined variable '{name}' at bytes {}..{}", span.start, span.end)]
+    #[error("undefined variable '{name}'")]
     UndefinedVariable { name: String, span: Span },
 
-    #[error("variable '{name}' is already bound at bytes {}..{}", span.start, span.end)]
+    #[error("variable '{name}' is already bound")]
     VariableAlreadyBound { name: String, span: Span },
 
-    #[error("variable '{name}' is a {actual}, expected a {expected} at bytes {}..{}", span.start, span.end)]
+    #[error("variable '{name}' is a {actual}, expected a {expected}")]
     VariableTypeConflict {
         name: String,
         expected: &'static str,
@@ -22,10 +22,10 @@ pub enum BindError {
         span: Span,
     },
 
-    #[error("unknown function '{name}' at bytes {}..{}", span.start, span.end)]
+    #[error("unknown function '{name}'")]
     UnknownFunction { name: String, span: Span },
 
-    #[error("wrong number of arguments for '{name}': got {got}, expected {expected} at bytes {}..{}", span.start, span.end)]
+    #[error("wrong number of arguments for '{name}': got {got}, expected {expected}")]
     InvalidNumberOfArguments {
         name: String,
         expected: String,
@@ -33,60 +33,62 @@ pub enum BindError {
         span: Span,
     },
 
-    #[error("aggregation is not allowed here at bytes {}..{}", span.start, span.end)]
+    #[error("aggregation is not allowed here")]
     InvalidAggregation { span: Span },
 
-    #[error("aggregate functions cannot be nested at bytes {}..{}", span.start, span.end)]
+    #[error("aggregate functions cannot be nested")]
     NestedAggregation { span: Span },
 
-    #[error("duplicate column name '{name}' at bytes {}..{}", span.start, span.end)]
+    #[error("duplicate column name '{name}'")]
     ColumnNameConflict { name: String, span: Span },
 
-    #[error("RETURN * requires at least one variable in scope at bytes {}..{}", span.start, span.end)]
+    #[error("RETURN * requires at least one variable in scope")]
     NoVariablesInScope { span: Span },
 
-    #[error("expressions in a projection must be aliased before reuse at bytes {}..{}", span.start, span.end)]
+    #[error("expressions in a projection must be aliased before reuse")]
     NoExpressionAlias { span: Span },
 
-    #[error("unknown label '{name}' at bytes {}..{} (declared labels come from the schema map)", span.start, span.end)]
+    #[error("unknown label '{name}' (declared labels come from the schema map)")]
     UnknownLabel { name: String, span: Span },
 
-    #[error("unknown relationship type '{name}' at bytes {}..{}", span.start, span.end)]
+    #[error("unknown relationship type '{name}'")]
     UnknownRelType { name: String, span: Span },
 
-    #[error("unknown property '{property}' on label '{label}' at bytes {}..{}", span.start, span.end)]
+    #[error("unknown property '{property}' on label '{label}'")]
     UnknownProperty {
         label: String,
         property: String,
         span: Span,
     },
 
-    #[error("unknown procedure '{name}' at bytes {}..{}", span.start, span.end)]
+    #[error("unknown procedure '{name}'")]
     ProcedureNotFound { name: String, span: Span },
 
-    #[error("procedure '{procedure}' does not yield '{column}' at bytes {}..{}", span.start, span.end)]
+    #[error("procedure '{procedure}' does not yield '{column}'")]
     UnknownYieldColumn {
         procedure: String,
         column: String,
         span: Span,
     },
 
-    #[error("pattern predicates cannot introduce new variables ('{name}') at bytes {}..{}", span.start, span.end)]
+    #[error("pattern predicates cannot introduce new variables ('{name}')")]
     NewVariableInPatternPredicate { name: String, span: Span },
 
-    #[error("CREATE requires a directed relationship at bytes {}..{}", span.start, span.end)]
+    #[error("CREATE requires a directed relationship")]
     CreateRequiresDirectedRelationship { span: Span },
 
-    #[error("CREATE requires exactly one relationship type at bytes {}..{}", span.start, span.end)]
+    #[error("CREATE requires exactly one relationship type")]
     CreateRequiresSingleRelType { span: Span },
 
-    #[error("variable-length relationships cannot be created at bytes {}..{}", span.start, span.end)]
+    #[error("variable-length relationships cannot be created")]
     CreateVarLengthRelationship { span: Span },
 
-    #[error("cannot create node '{name}' with labels or properties here; it is already bound at bytes {}..{}", span.start, span.end)]
+    #[error("cannot create node '{name}' with labels or properties here; it is already bound")]
     CreateBoundNodeWithProperties { name: String, span: Span },
 
-    #[error("cannot modify key property '{property}' of label '{label}' (node identity is immutable; SET/REMOVE must not touch key properties) at bytes {}..{}", span.start, span.end)]
+    #[error(
+        "cannot modify key property '{property}' of label '{label}' (node identity is immutable; SET/REMOVE must not touch key properties)"
+    )]
     SetKeyProperty {
         label: String,
         property: String,

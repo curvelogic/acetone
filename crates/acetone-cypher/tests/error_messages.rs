@@ -6,9 +6,10 @@
 //! diagnostic, so the 0.1.1 error-message beads land as visible snapshot
 //! diffs (`cargo insta review`) rather than silent rewordings.
 //!
-//! The baseline deliberately captures today's imperfect output — the doubled
-//! `at bytes …` location, terse messages, missing suggestions — so that the
-//! later beads' improvements are reviewed changes, not invisible ones.
+//! The baseline captures the current output — terse messages and missing
+//! suggestions still to be improved by later beads — so that those changes
+//! are reviewed diffs, not invisible ones. (The redundant `at bytes …`
+//! suffix has been removed in favour of the `line/column` location.)
 
 use acetone_cypher::bind::{BindMode, Catalogue, bind};
 use acetone_cypher::parse;

@@ -4,52 +4,52 @@ expression: out
 ---
 ### lex/unterminated-string
 input:  RETURN 'unterminated
-error:  line 1, column 8: unterminated string literal at bytes 7..20
+error:  line 1, column 8: unterminated string literal
 
 ### lex/unterminated-block-comment
 input:  RETURN /* open
-error:  line 1, column 8: unterminated block comment at bytes 7..14
+error:  line 1, column 8: unterminated block comment
 
 ### parse/unclosed-node-pattern
 input:  MATCH (n:Host RETURN n
-error:  line 1, column 15: expected ')' to close the node pattern, found 'RETURN' at bytes 14..20
+error:  line 1, column 15: expected ')' to close the node pattern, found 'RETURN'
 
 ### parse/expression-expected
 input:  MATCH (n:Host) WHERE n.x > RETURN n
-error:  line 1, column 28: 'RETURN' is a reserved word and cannot be used as a variable at bytes 27..33 (backquote it to use it as a name)
+error:  line 1, column 28: 'RETURN' is a reserved word and cannot be used as a variable (backquote it to use it as a name)
 
 ### parse/unknown-leading-keyword
 input:  MATCHX (n) RETURN n
-error:  line 1, column 1: expected a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL, CREATE, SET, REMOVE, DELETE or DETACH DELETE), found 'MATCHX' at bytes 0..6
+error:  line 1, column 1: expected a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL, CREATE, SET, REMOVE, DELETE or DETACH DELETE), found 'MATCHX'
 
 ### parse/incomplete-match
 input:  MATCH (n)
-error:  line 1, column 1: query must end with RETURN, a write clause, or a standalone CALL at bytes 0..9
+error:  line 1, column 1: query must end with RETURN, a write clause, or a standalone CALL
 
 ### parse/bare-return
 input:  RETURN
-error:  line 1, column 7: expected an expression, found end of input at bytes 6..6
+error:  line 1, column 7: expected an expression, found end of input
 
 ### parse/double-return
 input:  MATCH (n) RETURN n RETURN n
-error:  line 1, column 20: no clause may follow RETURN at bytes 19..25
+error:  line 1, column 20: no clause may follow RETURN
 
 ### parse/where-without-predicate
 input:  MATCH (n) WHERE RETURN n
-error:  line 1, column 17: 'RETURN' is a reserved word and cannot be used as a variable at bytes 16..22 (backquote it to use it as a name)
+error:  line 1, column 17: 'RETURN' is a reserved word and cannot be used as a variable (backquote it to use it as a name)
 
 ### parse/incomplete-return-expr
 input:  MATCH (n) RETURN
-error:  line 1, column 17: expected an expression, found end of input at bytes 16..16
+error:  line 1, column 17: expected an expression, found end of input
 
 ### bind/undefined-variable
 input:  MATCH (n) RETURN m
-error:  line 1, column 18: undefined variable 'm' at bytes 17..18
+error:  line 1, column 18: undefined variable 'm'
 
 ### bind/undefined-in-where
 input:  MATCH (n) WHERE m.x > 1 RETURN n
-error:  line 1, column 17: undefined variable 'm' at bytes 16..17
+error:  line 1, column 17: undefined variable 'm'
 
 ### bind/order-by-undefined
 input:  MATCH (n) RETURN n.x ORDER BY nope
-error:  line 1, column 31: undefined variable 'nope' at bytes 30..34
+error:  line 1, column 31: undefined variable 'nope'
