@@ -54,36 +54,15 @@ pub fn sanitise_line(s: &str) -> String {
 }
 
 /// Render a label, relationship type or other identifier-shaped string for
-/// output, escaping it the same way [`format_value`] escapes
-/// [`Value::String`]. Graph data is attacker-writable and reaches the
-/// terminal verbatim otherwise (control characters, ANSI escapes); Rust's
-/// `{:?}` string escaping neutralises that.
-pub fn format_label(s: &str) -> String {
-    format!("{s:?}")
-}
+/// output. Thin re-export of the canonical renderer in [`acetone_model`] so
+/// the CLI and every layer's error messages format identifiers identically
+/// (and escape attacker-writable control characters the same way).
+pub use acetone_model::display::format_label;
 
-/// Render a value for human-readable output (`get-node`, `list-nodes`).
-/// Only [`Value::Int`] and [`Value::String`] are reachable from this CLI's
-/// own input, but every variant is handled so a record written by another
-/// client never panics the display path.
-pub fn format_value(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_owned(),
-        Value::Bool(b) => b.to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::String(s) => format!("{s:?}"),
-        Value::Bytes(b) => format!("bytes({} B)", b.len()),
-        Value::Date(d) => format!("date({})", d.days),
-        Value::Time(t) => format!("time({})", t.nanos),
-        Value::DateTime(dt) => format!("datetime({}, {})", dt.epoch_nanos, dt.offset_minutes),
-        Value::Duration(d) => format!("duration({}mo {}d {}ns)", d.months, d.days, d.nanos),
-        Value::List(items) => {
-            let parts: Vec<String> = items.iter().map(format_value).collect();
-            format!("[{}]", parts.join(", "))
-        }
-    }
-}
+/// Render a value for human-readable output (`get-node`, `list-nodes`). Thin
+/// re-export of the canonical renderer in [`acetone_model`], shared with the
+/// error-message paths so a value never renders two different ways.
+pub use acetone_model::display::format_value;
 
 #[cfg(test)]
 mod tests {

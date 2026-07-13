@@ -36,9 +36,14 @@ stderr: error: line 1, column 28: CREATE requires exactly one relationship type 
 ### duplicate-key
 argv:   acetone query CREATE (:Topic {name: 'x'});
 status: 1
-stderr: error: CREATE of "Topic" "[String(\"x\")]" conflicts with an existing node; identity must be unique (use MERGE to upsert)
+stderr: error: CREATE of "Topic" ["x"] conflicts with an existing node; identity must be unique (use MERGE to upsert)
 
 ### get-node-not-found
 argv:   acetone get-node Topic missing
 status: 0
 stdout: not found
+
+### rekey-missing-node
+argv:   acetone rekey Topic absent present -m r
+status: 1
+stderr: error: rekeying "Topic" ["absent"]: no node "Topic" with key ["absent"]
