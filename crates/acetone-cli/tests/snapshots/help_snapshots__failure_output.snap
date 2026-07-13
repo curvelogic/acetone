@@ -1,0 +1,44 @@
+---
+source: crates/acetone-cli/tests/help_snapshots.rs
+expression: combined
+---
+### unknown-subcommand
+argv:   acetone st
+status: 2
+stderr: error: unrecognized subcommand 'st'
+
+  tip: some similar subcommands exist: 'list-nodes', 'status'
+
+Usage: acetone [OPTIONS] <COMMAND>
+
+For more information, try '--help'.
+
+### missing-colon-label
+argv:   acetone query CREATE (Topic {name: 'First'});
+status: 1
+stderr: error: cannot persist node: a node with labels [] has no label declaring a key; identity is undefined (Invariant #3)
+
+### schema-not-declared
+argv:   acetone query CREATE (:Widget {sku: 'a'});
+status: 1
+stderr: error: line 1, column 8: unknown label 'Widget' at bytes 7..27 (declared labels come from the schema map)
+
+### parse-error
+argv:   acetone query MATCH (n) RETRUN n
+status: 1
+stderr: error: line 1, column 11: expected a clause (MATCH, OPTIONAL MATCH, UNWIND, WITH, RETURN, CALL, CREATE, SET, REMOVE, DELETE or DETACH DELETE), found 'RETRUN' at bytes 10..16
+
+### rel-missing-colon
+argv:   acetone query CREATE (:Topic {name: 'a'})-[LINK]->(:Topic {name: 'b'});
+status: 1
+stderr: error: line 1, column 28: CREATE requires exactly one relationship type at bytes 27..36
+
+### duplicate-key
+argv:   acetone query CREATE (:Topic {name: 'x'});
+status: 1
+stderr: error: CREATE of "Topic" "[String(\"x\")]" conflicts with an existing node; identity must be unique (use MERGE to upsert)
+
+### get-node-not-found
+argv:   acetone get-node Topic missing
+status: 0
+stdout: not found

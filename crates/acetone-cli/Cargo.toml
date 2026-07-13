@@ -44,3 +44,4 @@ sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+insta.workspace = true
