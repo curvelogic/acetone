@@ -49,6 +49,11 @@ gix = { version = "0.85", default-features = false, features = [
 bytes = "1"
 # tempfile (dev): temporary repositories in tests. MIT/Apache-2.0.
 tempfile = "3"
+# insta (dev): snapshot testing for user-facing text — Cypher error messages
+# and CLI help/failure output — so wording changes surface as reviewable diffs
+# (`cargo insta review`) instead of passing silently. Widely used, dual
+# MIT/Apache-2.0, dev-only (no runtime footprint); default features only.
+insta = "1"
 
 # Version alongside path so the crates are publishable (`cargo publish`
 # requires a version on path dependencies).

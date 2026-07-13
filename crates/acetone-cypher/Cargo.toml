@@ -19,3 +19,6 @@ thiserror.workspace = true
 # proptest: parser fuzzing — no panics on arbitrary input, depth-limit
 # behaviour on generated deep nesting.
 proptest.workspace = true
+# insta: snapshot the rendered text of parser/binder diagnostics so message
+# improvements land as reviewed diffs rather than silent changes.
+insta.workspace = true
