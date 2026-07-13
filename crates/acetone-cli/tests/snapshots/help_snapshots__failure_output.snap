@@ -16,7 +16,7 @@ argv:   acetone c
 status: 2
 stderr: error: unrecognized subcommand 'c'
 
-  tip: some similar subcommands exist: 'checkout', 'commit', 'cypher'
+  tip: some similar subcommands exist: 'checkout', 'commit', 'schema', 'cypher'
 
 Usage: acetone [OPTIONS] <COMMAND>
 

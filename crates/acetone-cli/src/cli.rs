@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 const AFTER_HELP: &str = "\
 Command groups:
   Everyday      init, status, commit, log, branch, checkout, diff, merge, resolve
-  Schema        declare-label, declare-rel-type, declare-index, reindex
+  Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate
   Plumbing      put-node, get-node, put-edge, list-nodes, rekey
@@ -186,6 +186,19 @@ pub enum Command {
     /// Rebuilds every declared index (spec §3.3). A no-op when the indexes are
     /// already consistent; repairs any divergence `fsck` reports.
     Reindex,
+    /// Show the declared schema — labels and keys, relationship types and indexes.
+    ///
+    /// Prints the repository's declared schema, grouped into labels (with their
+    /// ordered key tuple and existence/unique constraints), relationship types,
+    /// and property indexes. Read-only. `--at <ref>` inspects any version — a
+    /// branch short name, full ref name or commit hash — without checking it
+    /// out; with no `--at`, the current workspace's schema is shown.
+    Schema {
+        /// Read the schema at a specific ref (branch, tag or commit hash)
+        /// instead of the current workspace state.
+        #[arg(long)]
+        at: Option<String>,
+    },
 
     // ---- Data & query ----
     /// Import a source file into the graph.

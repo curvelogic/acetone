@@ -1904,3 +1904,140 @@ fn migrate_with_no_flags_preserves_history() {
         "fsck after no-flag migrate"
     );
 }
+
+/// `acetone schema` dumps the declared schema grouped into labels,
+/// relationship types and indexes, and `--at <ref>` reads a past version's
+/// schema without checking it out (acetone-7bn.10).
+#[test]
+fn schema_command_shows_and_time_travels() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = dir.path();
+    assert!(init(repo).status.success(), "init");
+
+    // Empty case: a fresh repo has no declared schema.
+    let out = acetone(repo, &["schema"]);
+    assert!(out.status.success(), "schema (empty): {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("(no schema declared)"),
+        "empty schema should say so, got:\n{}",
+        stdout(&out)
+    );
+
+    // Declare a label with key/require/unique constraints, a relationship
+    // type, and an index; commit them.
+    assert!(
+        acetone(
+            repo,
+            &[
+                "declare-label",
+                "Host",
+                "--key",
+                "hostname",
+                "--require",
+                "os",
+                "--unique",
+                "mac",
+            ],
+        )
+        .status
+        .success(),
+        "declare-label Host"
+    );
+    assert!(
+        acetone(repo, &["declare-rel-type", "RUNS"])
+            .status
+            .success(),
+        "declare-rel-type RUNS"
+    );
+    assert!(
+        acetone(
+            repo,
+            &[
+                "declare-index",
+                "by_host",
+                "--label",
+                "Host",
+                "--property",
+                "hostname",
+            ],
+        )
+        .status
+        .success(),
+        "declare-index by_host"
+    );
+    assert!(
+        acetone(repo, &["commit", "-m", "schema v1"])
+            .status
+            .success(),
+        "commit schema v1"
+    );
+
+    // The first commit's hash — the ref we will time-travel back to.
+    let first_commit = stdout(&acetone(repo, &["log"]))
+        .lines()
+        .next()
+        .expect("a commit in the log")
+        .split_whitespace()
+        .next()
+        .expect("a hash")
+        .to_owned();
+
+    // Populated case: names the label, its key, the constraints, the type
+    // and the index.
+    let out = acetone(repo, &["schema"]);
+    assert!(out.status.success(), "schema (populated): {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("Labels"), "has a Labels heading:\n{text}");
+    assert!(text.contains("\"Host\""), "names Host:\n{text}");
+    assert!(text.contains("\"hostname\""), "shows the key:\n{text}");
+    assert!(
+        text.contains("\"os\""),
+        "shows the required property:\n{text}"
+    );
+    assert!(
+        text.contains("\"mac\""),
+        "shows the unique property:\n{text}"
+    );
+    assert!(
+        text.contains("Relationship types"),
+        "has a Relationship types heading:\n{text}"
+    );
+    assert!(text.contains("\"RUNS\""), "names RUNS:\n{text}");
+    assert!(text.contains("Indexes"), "has an Indexes heading:\n{text}");
+    assert!(text.contains("\"by_host\""), "names the index:\n{text}");
+
+    // Change the schema and commit again: add a second relationship type.
+    assert!(
+        acetone(repo, &["declare-rel-type", "DEPENDS_ON"])
+            .status
+            .success(),
+        "declare-rel-type DEPENDS_ON"
+    );
+    assert!(
+        acetone(repo, &["commit", "-m", "schema v2"])
+            .status
+            .success(),
+        "commit schema v2"
+    );
+
+    // The current workspace schema now includes the new type.
+    let now = stdout(&acetone(repo, &["schema"]));
+    assert!(
+        now.contains("\"DEPENDS_ON\""),
+        "current schema includes the new type:\n{now}"
+    );
+
+    // `--at` the first commit reads the EARLIER schema — without a checkout —
+    // so the later type is absent there.
+    let out = acetone(repo, &["schema", "--at", &first_commit]);
+    assert!(out.status.success(), "schema --at: {}", stderr(&out));
+    let past = stdout(&out);
+    assert!(
+        past.contains("\"RUNS\""),
+        "past schema still has RUNS:\n{past}"
+    );
+    assert!(
+        !past.contains("\"DEPENDS_ON\""),
+        "past schema must not show the later type:\n{past}"
+    );
+}
