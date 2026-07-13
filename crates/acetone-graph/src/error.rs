@@ -134,7 +134,7 @@ pub enum GraphError {
     /// (referential integrity — Invariant #3 / ADR-0028). The transaction is
     /// rejected before it can commit a structurally invalid graph.
     #[error(
-        "operation would leave a dangling {rtype} edge: its {role} endpoint node {endpoint} does not exist"
+        "operation would leave a dangling {rtype} relationship: its {role} endpoint node {endpoint} does not exist"
     )]
     DanglingEdge {
         /// The relationship type of the offending edge.

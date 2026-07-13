@@ -43,6 +43,13 @@ pub fn format_label(s: &str) -> String {
     format!("{s:?}")
 }
 
+/// Render a list of labels as `["A", "B"]`, each escaped like [`format_label`]
+/// so attacker-writable labels cannot inject terminal control sequences.
+pub fn format_labels(labels: &[String]) -> String {
+    let parts: Vec<String> = labels.iter().map(|l| format_label(l)).collect();
+    format!("[{}]", parts.join(", "))
+}
+
 /// Render a key tuple as `[a, b]`, each element via [`format_value`].
 pub fn format_key_tuple(key: &[Value]) -> String {
     let parts: Vec<String> = key.iter().map(format_value).collect();
@@ -90,6 +97,20 @@ mod tests {
         let key = [Value::String("web-01".into()), Value::Int(3)];
         assert_eq!(format_key_tuple(&key), "[\"web-01\", 3]");
         assert_eq!(format_key_tuple(&[]), "[]");
+    }
+
+    #[test]
+    fn labels_render_escaped_and_bracketed() {
+        assert_eq!(
+            format_labels(&["Topic".to_string(), "Draft".to_string()]),
+            "[\"Topic\", \"Draft\"]"
+        );
+        assert_eq!(format_labels(&[]), "[]");
+        assert_eq!(format_labels(&["Solo".to_string()]), "[\"Solo\"]");
+        // A control-char label must be escaped, never reaching the terminal raw.
+        let rendered = format_labels(&["evil\x1b[8m".to_string()]);
+        assert!(!rendered.contains('\x1b'));
+        assert_eq!(rendered, "[\"evil\\u{1b}[8m\"]");
     }
 
     #[test]

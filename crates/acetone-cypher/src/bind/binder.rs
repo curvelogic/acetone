@@ -429,6 +429,9 @@ impl<'a> Binder<'a> {
         if rel.direction == ast::Direction::Undirected {
             return Err(BindError::CreateRequiresDirectedRelationship { span: rel.span });
         }
+        if rel.types.is_empty() {
+            return Err(BindError::CreateRequiresRelType { span: rel.span });
+        }
         if rel.types.len() != 1 {
             return Err(BindError::CreateRequiresSingleRelType { span: rel.span });
         }

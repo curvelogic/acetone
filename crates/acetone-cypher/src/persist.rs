@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use acetone_graph::GraphError;
 use acetone_graph::repo::{Snapshot, Transaction};
 use acetone_model::Value as ModelValue;
-use acetone_model::display::{format_key_tuple, format_node_identity};
+use acetone_model::display::{format_key_tuple, format_label, format_labels, format_node_identity};
 use acetone_model::graph_keys::{EdgeKey, GraphKeyError, NodeKey};
 use acetone_model::records::{EdgeRecord, NodeRecord};
 
@@ -53,12 +53,21 @@ pub enum PersistError {
         second: String,
     },
     #[error(
-        "CREATE of {label:?} {key} conflicts with an existing node; identity must be unique (use MERGE to upsert)"
+        "CREATE of {label:?} {key} conflicts with an existing node; CREATE always makes a new \
+         node, so identity collides (a MERGE on a multi-element pattern also CREATEs its nodes \
+         when the whole pattern doesn't match). To match-or-create, MERGE each node on its own \
+         before MERGEing a relationship between them: \
+         `MERGE (a:{label} {{…}}) MERGE (b:…) MERGE (a)-[:…]->(b)`"
     )]
     DuplicateKey { label: String, key: String },
     #[error(
-        "cannot add the {rtype} relationship {src} -> {dst}: it conflicts with an existing edge \
-         and acetone v0.1 has no parallel-edge discriminator (ADR-0030) — modify the existing edge \
+        "CREATE creates the node {label:?} {key} twice in the same statement; each CREATE makes a \
+         new node and identity must be unique"
+    )]
+    DuplicateKeyInStatement { label: String, key: String },
+    #[error(
+        "cannot add the {rtype} relationship {src} -> {dst}: it conflicts with an existing relationship \
+         and acetone v0.1 has no parallel-edge discriminator (ADR-0030) — modify the existing relationship \
          with SET, or delete it first"
     )]
     DuplicateEdge {
@@ -159,7 +168,7 @@ pub fn persist_changes(
             }
         }
         if !written_keys.insert(key.encode()?) {
-            return Err(PersistError::DuplicateKey {
+            return Err(PersistError::DuplicateKeyInStatement {
                 label: key.label().to_string(),
                 key: format_key_tuple(key.key()),
             });
@@ -242,11 +251,27 @@ fn node_key_and_record(
             .is_some_and(|def| !def.key().is_empty())
     });
     let primary = keyed.next().ok_or_else(|| {
-        PersistError::Identity(format!(
-            "a node with labels {:?} has no label declaring a key; \
-             identity is undefined (Invariant #3)",
-            node.labels
-        ))
+        if node.labels.is_empty() {
+            // A bare `(Topic {…})` parses `Topic` as a variable, not a label,
+            // so the node reaches here with zero labels — almost always the
+            // missing-colon mistake.
+            PersistError::Identity(
+                "this node has no labels — in Cypher a label is written with a colon, \
+                 e.g. `(:Topic {…})`; a bare name like `(Topic {…})` is a variable, \
+                 not a label"
+                    .to_string(),
+            )
+        } else {
+            // Labels are present but none of them declares a key, so identity
+            // is undefined (Invariant #3): declare a key on one of them.
+            PersistError::Identity(format!(
+                "none of the labels {} declares a key, so this node has no identity \
+                 (Invariant #3) — declare one first, e.g. \
+                 `acetone declare-label {} --key <property>`",
+                format_labels(&node.labels),
+                format_label(&node.labels[0]),
+            ))
+        }
     })?;
     if let Some(second) = keyed.next() {
         return Err(PersistError::AmbiguousIdentity {
@@ -533,6 +558,46 @@ mod tests {
         assert_eq!(
             record.properties().get("data"),
             Some(&ModelValue::String("changed".into()))
+        );
+    }
+
+    #[test]
+    fn a_node_with_no_labels_gets_the_missing_colon_hint() {
+        // A bare `(Topic {…})` parses `Topic` as a variable, so the node
+        // reaches persist with zero labels: point at the missing colon.
+        let node = NodeValue {
+            id: EntityId::from_bytes(b"overlay".to_vec()),
+            labels: vec![],
+            properties: [("id".to_string(), Value::Int(1))].into_iter().collect(),
+        };
+        let err = node_key_and_record(&node, &catalogue(), None).expect_err("no identity");
+        let msg = err.to_string();
+        assert!(msg.contains("this node has no labels"), "{msg}");
+        assert!(msg.contains("`(:Topic {…})`"), "{msg}");
+        assert!(
+            !msg.contains("[]"),
+            "must not leak an empty label list: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_labelled_node_with_no_keyed_label_names_the_labels_and_the_fix() {
+        // `Ghost` is not in the catalogue (so declares no key): name the
+        // labels via the escaped renderer and give the declare-label fix.
+        let node = NodeValue {
+            id: EntityId::from_bytes(b"overlay".to_vec()),
+            labels: vec!["Ghost".to_string()],
+            properties: [("id".to_string(), Value::Int(1))].into_iter().collect(),
+        };
+        let err = node_key_and_record(&node, &catalogue(), None).expect_err("no identity");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("none of the labels [\"Ghost\"] declares a key"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("acetone declare-label \"Ghost\" --key <property>"),
+            "{msg}"
         );
     }
 

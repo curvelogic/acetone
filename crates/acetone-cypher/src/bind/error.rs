@@ -51,7 +51,9 @@ pub enum BindError {
     #[error("unknown label '{name}' (declared labels come from the schema map)")]
     UnknownLabel { name: String, span: Span },
 
-    #[error("unknown relationship type '{name}'")]
+    #[error(
+        "unknown relationship type '{name}' — declare it first with `acetone declare-rel-type {name}`"
+    )]
     UnknownRelType { name: String, span: Span },
 
     #[error("unknown property '{property}' on label '{label}'")]
@@ -76,6 +78,11 @@ pub enum BindError {
 
     #[error("CREATE requires a directed relationship")]
     CreateRequiresDirectedRelationship { span: Span },
+
+    #[error(
+        "CREATE requires a relationship type — write it with a colon, e.g. `[:LINK]`; a bare `[LINK]` is a variable, not a type"
+    )]
+    CreateRequiresRelType { span: Span },
 
     #[error("CREATE requires exactly one relationship type")]
     CreateRequiresSingleRelType { span: Span },
@@ -116,6 +123,7 @@ impl BindError {
             | BindError::UnknownYieldColumn { span, .. }
             | BindError::NewVariableInPatternPredicate { span, .. }
             | BindError::CreateRequiresDirectedRelationship { span }
+            | BindError::CreateRequiresRelType { span }
             | BindError::CreateRequiresSingleRelType { span }
             | BindError::CreateVarLengthRelationship { span }
             | BindError::CreateBoundNodeWithProperties { span, .. }
@@ -144,7 +152,8 @@ impl BindError {
             BindError::CreateRequiresDirectedRelationship { .. } => {
                 Some("RequiresDirectedRelationship")
             }
-            BindError::CreateRequiresSingleRelType { .. } => Some("NoSingleRelationshipType"),
+            BindError::CreateRequiresRelType { .. }
+            | BindError::CreateRequiresSingleRelType { .. } => Some("NoSingleRelationshipType"),
             BindError::CreateVarLengthRelationship { .. } => Some("CreatingVarLength"),
             // openCypher reports attaching labels/properties to an
             // already-bound variable in CREATE as VariableAlreadyBound.

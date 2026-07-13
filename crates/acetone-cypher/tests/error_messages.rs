@@ -57,6 +57,10 @@ const DIAGNOSTICS: &[(&str, &str)] = &[
         "bind/order-by-undefined",
         "MATCH (n) RETURN n.x ORDER BY nope",
     ),
+    // A bare `[LINK]` is a variable, not a type: CREATE has no type at all.
+    ("bind/create-rel-missing-type", "CREATE (:A)-[]->(:B)"),
+    // Two types on one created relationship: identity would be ambiguous.
+    ("bind/create-rel-multiple-types", "CREATE (:A)-[:X|Y]->(:B)"),
 ];
 
 #[test]

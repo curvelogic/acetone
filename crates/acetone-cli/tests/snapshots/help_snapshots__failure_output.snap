@@ -16,7 +16,7 @@ For more information, try '--help'.
 ### missing-colon-label
 argv:   acetone query CREATE (Topic {name: 'First'});
 status: 1
-stderr: error: cannot persist node: a node with labels [] has no label declaring a key; identity is undefined (Invariant #3)
+stderr: error: cannot persist node: this node has no labels — in Cypher a label is written with a colon, e.g. `(:Topic {…})`; a bare name like `(Topic {…})` is a variable, not a label
 
 ### schema-not-declared
 argv:   acetone query CREATE (:Widget {sku: 'a'});
@@ -31,12 +31,27 @@ stderr: error: line 1, column 11: expected a clause (MATCH, OPTIONAL MATCH, UNWI
 ### rel-missing-colon
 argv:   acetone query CREATE (:Topic {name: 'a'})-[LINK]->(:Topic {name: 'b'});
 status: 1
+stderr: error: line 1, column 28: CREATE requires a relationship type — write it with a colon, e.g. `[:LINK]`; a bare `[LINK]` is a variable, not a type
+
+### rel-multiple-types
+argv:   acetone query CREATE (:Topic {name: 'a'})-[:LINK|OTHER]->(:Topic {name: 'b'});
+status: 1
 stderr: error: line 1, column 28: CREATE requires exactly one relationship type
+
+### rel-unknown-type
+argv:   acetone query CREATE (:Topic {name: 'a'})-[:NOPE]->(:Topic {name: 'b'});
+status: 1
+stderr: error: line 1, column 28: unknown relationship type 'NOPE' — declare it first with `acetone declare-rel-type NOPE`
 
 ### duplicate-key
 argv:   acetone query CREATE (:Topic {name: 'x'});
 status: 1
-stderr: error: CREATE of "Topic" ["x"] conflicts with an existing node; identity must be unique (use MERGE to upsert)
+stderr: error: CREATE of "Topic" ["x"] conflicts with an existing node; CREATE always makes a new node, so identity collides (a MERGE on a multi-element pattern also CREATEs its nodes when the whole pattern doesn't match). To match-or-create, MERGE each node on its own before MERGEing a relationship between them: `MERGE (a:Topic {…}) MERGE (b:…) MERGE (a)-[:…]->(b)`
+
+### duplicate-key-in-statement
+argv:   acetone query CREATE (:Topic {name: 'y'}) CREATE (:Topic {name: 'y'});
+status: 1
+stderr: error: CREATE creates the node "Topic" ["y"] twice in the same statement; each CREATE makes a new node and identity must be unique
 
 ### get-node-not-found
 argv:   acetone get-node Topic missing
@@ -47,3 +62,8 @@ stdout: not found
 argv:   acetone rekey Topic absent present -m r
 status: 1
 stderr: error: rekeying "Topic" ["absent"]: no node "Topic" with key ["absent"]
+
+### labelled-no-key
+argv:   acetone query CREATE (:Solo {x: 1});
+status: 1
+stderr: error: cannot persist node: none of the labels ["Solo"] declares a key, so this node has no identity (Invariant #3) — declare one first, e.g. `acetone declare-label "Solo" --key <property>`

@@ -1241,7 +1241,7 @@ fn a_write_that_cannot_persist_leaves_the_workspace_untouched() {
     let out = acetone(&repo, &["query", "CREATE (a:Host {name: 'x'})"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("no label declaring a key"),
+        stderr(&out).contains("none of the labels") && stderr(&out).contains("declares a key"),
         "{}",
         stderr(&out)
     );
@@ -1741,7 +1741,7 @@ fn create_of_a_duplicate_edge_is_rejected() {
         "duplicate edge CREATE must fail, but it succeeded"
     );
     assert!(
-        stderr(&out).contains("existing edge"),
+        stderr(&out).contains("existing relationship"),
         "expected a duplicate-edge error, got: {}",
         stderr(&out)
     );
