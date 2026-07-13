@@ -13,9 +13,12 @@ use acetone_store::ObjectFormat;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::Command;
+use crate::json::{emit_json, key_tuple_to_json, value_to_json};
 use crate::value::{format_label, format_value, parse_kv, parse_value, sanitise_line};
 
 use crate::output::outln;
+
+use serde_json::{Value as Json, json};
 
 /// Dispatch one parsed command.
 pub fn run(repo_path: &Path, command: Command) -> Result<()> {
@@ -24,10 +27,10 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             object_format,
             path,
         } => init(repo_path, &object_format, path),
-        Command::Status => status(repo_path),
+        Command::Status { json } => status(repo_path, json),
         Command::Commit { message, trailer } => commit(repo_path, &message, &trailer),
-        Command::Log => log(repo_path),
-        Command::Branch { name } => branch(repo_path, name.as_deref()),
+        Command::Log { json } => log(repo_path, json),
+        Command::Branch { name, json } => branch(repo_path, name.as_deref(), json),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
         Command::Merge { refspec, message } => merge(repo_path, &refspec, message.as_deref()),
         Command::Resolve {
@@ -47,7 +50,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             property,
         } => declare_index(repo_path, &name, &label, &property),
         Command::Reindex => reindex(repo_path),
-        Command::Schema { at } => schema(repo_path, at.as_deref()),
+        Command::Schema { at, json } => schema(repo_path, at.as_deref(), json),
         Command::Migrate {
             min_bytes,
             mask_bits,
@@ -72,8 +75,8 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             new_key,
             message,
         } => rekey(repo_path, &label, &old_key, &new_key, &message),
-        Command::Diff { from, to } => diff(repo_path, &from, &to),
-        Command::GetNode { label, key } => get_node(repo_path, &label, &key),
+        Command::Diff { from, to, json } => diff(repo_path, &from, &to, json),
+        Command::GetNode { label, key, json } => get_node(repo_path, &label, &key, json),
         Command::PutEdge {
             src_label,
             src_key,
@@ -83,7 +86,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         } => put_edge(
             repo_path, &src_label, &src_key, &rtype, &dst_label, &dst_key,
         ),
-        Command::ListNodes { label } => list_nodes(repo_path, label.as_deref()),
+        Command::ListNodes { label, json } => list_nodes(repo_path, label.as_deref(), json),
         Command::Query { cypher, at, format } => {
             let format = crate::query::Format::parse(&format)?;
             crate::query::run(repo_path, &cypher, at.as_deref(), format)
@@ -163,28 +166,54 @@ pub(crate) fn open(repo_path: &Path) -> Result<Repository> {
         .with_context(|| format!("opening repository at {}", repo_path.display()))
 }
 
-fn status(repo_path: &Path) -> Result<()> {
+fn status(repo_path: &Path, json: bool) -> Result<()> {
     let repo = open(repo_path)?;
-    match repo.current_branch()? {
-        Some(branch) => {
-            let short = branch
-                .strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
-                .unwrap_or(&branch);
-            outln!("On branch {short}");
-        }
+    // Short branch name (None when detached), head hash, dirtiness, merge
+    // state and the workspace counts — the same facts both paths report.
+    let branch = repo.current_branch()?.map(|full| {
+        full.strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
+            .unwrap_or(&full)
+            .to_owned()
+    });
+    let head = repo.head_commit()?.map(|h| h.to_hex());
+    let dirty = repo.is_dirty()?;
+    let merge_remaining = if repo.merge_head()?.is_some() {
+        Some(repo.conflicts()?.len())
+    } else {
+        None
+    };
+    let snapshot = repo.workspace_snapshot()?;
+    let nodes = snapshot.nodes()?.len();
+    let edges = snapshot.edges()?.len();
+    let schema_entries = snapshot.schema_entries()?.len();
+
+    if json {
+        let merge = merge_remaining
+            .map(|remaining| json!({ "in_progress": true, "conflicts_remaining": remaining }))
+            .unwrap_or(Json::Null);
+        emit_json(&json!({
+            "branch": branch,
+            "head": head,
+            "workspace": if dirty { "dirty" } else { "clean" },
+            "nodes": nodes,
+            "edges": edges,
+            "schema_entries": schema_entries,
+            "merge": merge,
+        }));
+        return Ok(());
+    }
+
+    match &branch {
+        Some(short) => outln!("On branch {short}"),
         None => outln!("Not on any branch (detached)"),
     }
-    match repo.head_commit()? {
-        Some(head) => outln!("HEAD: {}", head.to_hex()),
+    match &head {
+        Some(hex) => outln!("HEAD: {hex}"),
         None => outln!("HEAD: (no commits yet)"),
     }
-    outln!(
-        "workspace: {}",
-        if repo.is_dirty()? { "dirty" } else { "clean" }
-    );
+    outln!("workspace: {}", if dirty { "dirty" } else { "clean" });
     // A merge in progress: show how many conflicts remain to resolve.
-    if repo.merge_head()?.is_some() {
-        let remaining = repo.conflicts()?.len();
+    if let Some(remaining) = merge_remaining {
         if remaining == 0 {
             outln!("merge: in progress, all conflicts resolved — run `acetone commit` to finish");
         } else {
@@ -195,13 +224,7 @@ fn status(repo_path: &Path) -> Result<()> {
             );
         }
     }
-    let snapshot = repo.workspace_snapshot()?;
-    outln!(
-        "nodes: {}, edges: {}, schema entries: {}",
-        snapshot.nodes()?.len(),
-        snapshot.edges()?.len(),
-        snapshot.schema_entries()?.len(),
-    );
+    outln!("nodes: {nodes}, edges: {edges}, schema entries: {schema_entries}");
     Ok(())
 }
 
@@ -237,9 +260,40 @@ fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn log(repo_path: &Path) -> Result<()> {
+fn log(repo_path: &Path, json: bool) -> Result<()> {
     let repo = open(repo_path)?;
-    for entry in repo.log(None)? {
+    let entries = repo.log(None)?;
+    if json {
+        // serde_json escapes control characters, so hostile-clone messages
+        // and trailers cannot inject raw terminal escapes here (no
+        // sanitise_line needed on the JSON path).
+        let rows: Vec<Json> = entries
+            .iter()
+            .map(|entry| {
+                let subject = entry.message.lines().next().unwrap_or("");
+                let trailers: Vec<Json> = entry
+                    .trailers
+                    .iter()
+                    .map(|(k, v)| json!({ "key": k, "value": v }))
+                    .collect();
+                let parents: Vec<Json> = entry
+                    .parents
+                    .iter()
+                    .map(|p| Json::String(p.to_hex()))
+                    .collect();
+                json!({
+                    "hash": entry.id.to_hex(),
+                    "subject": subject,
+                    "message": entry.message,
+                    "trailers": trailers,
+                    "parents": parents,
+                })
+            })
+            .collect();
+        emit_json(&Json::Array(rows));
+        return Ok(());
+    }
+    for entry in &entries {
         // Commit messages and trailers are raw bytes from potentially
         // hostile clones (lossily decoded, not constrained by git):
         // sanitise before they reach the terminal.
@@ -252,14 +306,30 @@ fn log(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn branch(repo_path: &Path, name: Option<&str>) -> Result<()> {
+fn branch(repo_path: &Path, name: Option<&str>, json: bool) -> Result<()> {
     let repo = open(repo_path)?;
     match name {
         None => {
             let current = repo.current_branch()?;
-            for (short, _hash) in repo.branches()? {
-                let full = format!("{}{short}", acetone_graph::repo::BRANCH_REF_PREFIX);
-                let marker = if current.as_deref() == Some(full.as_str()) {
+            let current_short = current.as_deref().map(|full| {
+                full.strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
+                    .unwrap_or(full)
+                    .to_owned()
+            });
+            let branches = repo.branches()?;
+            if json {
+                let names: Vec<Json> = branches
+                    .iter()
+                    .map(|(short, _hash)| Json::String(short.clone()))
+                    .collect();
+                emit_json(&json!({
+                    "current": current_short,
+                    "branches": names,
+                }));
+                return Ok(());
+            }
+            for (short, _hash) in branches {
+                let marker = if current_short.as_deref() == Some(short.as_str()) {
                     "*"
                 } else {
                     " "
@@ -271,6 +341,10 @@ fn branch(repo_path: &Path, name: Option<&str>) -> Result<()> {
             let target = repo
                 .create_branch(name, None)
                 .with_context(|| format!("creating branch {name:?}"))?;
+            if json {
+                emit_json(&json!({ "created": name, "hash": target.to_hex() }));
+                return Ok(());
+            }
             outln!("created branch {name:?} at {}", target.to_hex());
         }
     }
@@ -512,7 +586,7 @@ fn reindex(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn schema(repo_path: &Path, at: Option<&str>) -> Result<()> {
+fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<()> {
     use acetone_model::schema::SchemaEntry;
 
     let repo = open(repo_path)?;
@@ -536,6 +610,44 @@ fn schema(repo_path: &Path, at: Option<&str>) -> Result<()> {
             SchemaEntry::RelType { name, .. } => rel_types.push(name),
             SchemaEntry::Index { name, def } => indexes.push((name, def)),
         }
+    }
+
+    if json {
+        let strings = |names: &[String]| -> Json {
+            Json::Array(names.iter().map(|n| Json::String(n.clone())).collect())
+        };
+        let label_json: Vec<Json> = labels
+            .iter()
+            .map(|(name, def)| {
+                json!({
+                    "name": name,
+                    "key": strings(def.key()),
+                    "required": strings(def.exists()),
+                    "unique": strings(def.unique()),
+                    "surrogate": def.is_surrogate(),
+                })
+            })
+            .collect();
+        let rel_json: Vec<Json> = rel_types
+            .iter()
+            .map(|n| Json::String((*n).to_owned()))
+            .collect();
+        let index_json: Vec<Json> = indexes
+            .iter()
+            .map(|(name, def)| {
+                json!({
+                    "name": name,
+                    "label": def.label(),
+                    "properties": strings(def.properties()),
+                })
+            })
+            .collect();
+        emit_json(&json!({
+            "labels": label_json,
+            "relationship_types": rel_json,
+            "indexes": index_json,
+        }));
+        return Ok(());
     }
 
     if entries.is_empty() {
@@ -715,12 +827,58 @@ pub(crate) fn format_edge_key(key: &EdgeKey) -> String {
     }
 }
 
-fn diff(repo_path: &Path, from: &str, to: &str) -> Result<()> {
+fn diff(repo_path: &Path, from: &str, to: &str, json: bool) -> Result<()> {
     use acetone_graph::diff::ChangeKind;
     let repo = open(repo_path)?;
     let diff = repo
         .diff(from, to)
         .with_context(|| format!("diffing {from:?}..{to:?}"))?;
+
+    if json {
+        // Node changes first, then edge changes — the same deterministic
+        // order the human path prints, mirrored into the `changes` array.
+        let node_kind = |kind: ChangeKind| match kind {
+            ChangeKind::Added => "node_added",
+            ChangeKind::Removed => "node_removed",
+            ChangeKind::Modified => "node_modified",
+        };
+        let rel_kind = |kind: ChangeKind| match kind {
+            ChangeKind::Added => "rel_added",
+            ChangeKind::Removed => "rel_removed",
+            ChangeKind::Modified => "rel_modified",
+        };
+        let mut changes: Vec<Json> = Vec::new();
+        for change in &diff.nodes {
+            changes.push(json!({
+                "kind": node_kind(change.kind),
+                "label": change.key.label(),
+                "key": key_tuple_to_json(change.key.key()),
+            }));
+        }
+        for change in &diff.edges {
+            let key = &change.key;
+            changes.push(json!({
+                "kind": rel_kind(change.kind),
+                "rel_type": key.rtype(),
+                "src": json!({
+                    "label": key.src().label(),
+                    "key": key_tuple_to_json(key.src().key()),
+                }),
+                "dst": json!({
+                    "label": key.dst().label(),
+                    "key": key_tuple_to_json(key.dst().key()),
+                }),
+                "disc": value_to_json(key.disc()),
+            }));
+        }
+        emit_json(&json!({
+            "from": from,
+            "to": to,
+            "changes": changes,
+        }));
+        return Ok(());
+    }
+
     // `+` added, `-` removed, `~` modified — the sign is the change's own
     // meaning, so it reads at a glance and matches the diff graph's labels.
     let sign = |kind: ChangeKind| match kind {
@@ -748,15 +906,26 @@ fn diff(repo_path: &Path, from: &str, to: &str) -> Result<()> {
     Ok(())
 }
 
-fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
+fn get_node(repo_path: &Path, label: &str, key: &str, json: bool) -> Result<()> {
     let repo = open(repo_path)?;
     let node_key = single_key(label, key)?;
     let snapshot = repo.workspace_snapshot()?;
     match snapshot.get_node(&node_key)? {
-        // Absence is a non-zero exit so scripts can detect it: the error goes
-        // to stderr (as `error: not found`), leaving stdout empty.
-        None => bail!("not found"),
+        // Absence is a non-zero exit so scripts can detect it. On the JSON
+        // path, emit `null` to stdout first (so a script can parse it) and
+        // still exit non-zero; the human path leaves stdout empty. Either
+        // way the error goes to stderr as `error: not found`.
+        None => {
+            if json {
+                emit_json(&Json::Null);
+            }
+            bail!("not found");
+        }
         Some(record) => {
+            if json {
+                emit_json(&node_to_json(&node_key, &record));
+                return Ok(());
+            }
             // Echo the canonical parsed key, not the raw argument: the two
             // agree today (single-column keys only), but this stays
             // correct if a richer key grammar ever changes how a raw
@@ -777,6 +946,27 @@ fn get_node(repo_path: &Path, label: &str, key: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A node's identity and record as a JSON object, shared by `get-node` and
+/// `list-nodes`.
+fn node_to_json(key: &NodeKey, record: &NodeRecord) -> Json {
+    let secondary: Vec<Json> = record
+        .secondary_labels()
+        .iter()
+        .map(|l| Json::String(l.clone()))
+        .collect();
+    let properties: serde_json::Map<String, Json> = record
+        .properties()
+        .iter()
+        .map(|(name, value)| (name.clone(), value_to_json(value)))
+        .collect();
+    json!({
+        "label": key.label(),
+        "key": key_tuple_to_json(key.key()),
+        "secondary_labels": secondary,
+        "properties": Json::Object(properties),
+    })
 }
 
 fn put_edge(
@@ -804,14 +994,24 @@ fn put_edge(
     Ok(())
 }
 
-fn list_nodes(repo_path: &Path, label: Option<&str>) -> Result<()> {
+fn list_nodes(repo_path: &Path, label: Option<&str>, json: bool) -> Result<()> {
     let repo = open(repo_path)?;
     let snapshot = repo.workspace_snapshot()?;
-    for (key, _record) in snapshot.nodes()? {
+    let nodes = snapshot.nodes()?;
+    if json {
+        let rows: Vec<Json> = nodes
+            .iter()
+            .filter(|(key, _)| !label.is_some_and(|l| l != key.label()))
+            .map(|(key, record)| node_to_json(key, record))
+            .collect();
+        emit_json(&Json::Array(rows));
+        return Ok(());
+    }
+    for (key, _record) in &nodes {
         if label.is_some_and(|l| l != key.label()) {
             continue;
         }
-        outln!("{}", format_node_key(&key));
+        outln!("{}", format_node_key(key));
     }
     Ok(())
 }

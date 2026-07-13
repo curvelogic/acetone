@@ -6,6 +6,7 @@ mod cli;
 mod commands;
 mod export;
 mod import;
+mod json;
 mod output;
 mod query;
 mod value;

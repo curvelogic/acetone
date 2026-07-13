@@ -58,6 +58,26 @@ Cypher REPL with `:checkout`, `:log`, `:diff` conveniences.
 Plumbing commands (`put-node`, `put-edge`, `get-node`, `list-nodes`, `rekey`)
 manipulate single entities without Cypher — handy in scripts.
 
+## Machine-readable output
+
+The read commands take a `--json` flag for scripting: `status`, `log`,
+`branch`, `diff`, `list-nodes`, `get-node` and `schema`. Each prints a single
+JSON document (property values, labels and commit text are escaped, so hostile
+data never reaches the terminal raw). `get-node` prints `null` and exits
+non-zero on a miss, so a script can both parse the result and detect absence by
+exit code. `acetone query --format json` remains the way to shape arbitrary
+Cypher results.
+
+```sh
+acetone status --json
+acetone get-node Host web1 --json
+acetone schema --json | jq '.labels[].name'
+```
+
+> **Stability:** the JSON *shape* emitted by `--json` is **not** a
+> compatibility commitment at 0.1.1 and may change before 0.2. Do not pin
+> long-lived integrations to these exact field names or nesting yet.
+
 ## Commit, branch, merge, time-travel
 
 ```sh

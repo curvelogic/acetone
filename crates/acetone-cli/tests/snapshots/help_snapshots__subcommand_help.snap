@@ -21,6 +21,7 @@ Show the current branch, head commit and workspace state
 Usage: acetone status [OPTIONS]
 
 Options:
+      --json         Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
       --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
@@ -52,6 +53,7 @@ Show commit history, newest first
 Usage: acetone log [OPTIONS]
 
 Options:
+      --json         Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
       --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
@@ -64,6 +66,7 @@ Arguments:
   [NAME]  Name of a new branch to create at the current head commit. Omit to list existing branches
 
 Options:
+      --json         Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
       --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
@@ -209,6 +212,9 @@ Options:
           
           [default: .]
 
+      --json
+          Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -322,6 +328,9 @@ Arguments:
           The target version
 
 Options:
+      --json
+          Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
+
       --repo <REPO>
           Path to the repository. Ignored by `init` when it is given its own PATH argument
           
@@ -340,6 +349,7 @@ Arguments:
   <KEY>    Key value (same parsing rule as `put-node`)
 
 Options:
+      --json         Emit machine-readable JSON (the node object, or `null` on a miss with a non-zero exit). The JSON shape is unstable and may change before 0.2
       --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
@@ -367,6 +377,7 @@ Usage: acetone list-nodes [OPTIONS]
 Options:
   -l, --label <LABEL>  Restrict to one primary label
       --repo <REPO>    Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --json           Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
   -h, --help           Print help
 
 ========== acetone query --help ==========
