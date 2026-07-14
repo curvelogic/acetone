@@ -127,6 +127,18 @@ fn unknown_meta_command_does_not_end_the_session() {
 }
 
 #[test]
+fn unterminated_final_statement_runs_at_eof() {
+    // A piped query with no trailing ';' and no blank line must still execute
+    // (EOF flushes the pending statement) — the common scripting case.
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let o = shell(dir.path(), "RETURN 7 AS lucky");
+    let s = out(&o);
+    assert!(s.contains("lucky"), "column: {s}");
+    assert!(s.contains('7'), "value: {s}");
+}
+
+#[test]
 fn help_lists_the_meta_commands() {
     let dir = tempfile::tempdir().unwrap();
     init(dir.path());

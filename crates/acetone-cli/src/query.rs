@@ -684,6 +684,7 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
         loop {
             line.clear();
             if stdin.read_line(&mut line).context("reading input")? == 0 {
+                flush_pending(repo_path, &mut buffer, &mut format); // run an unterminated final statement
                 break; // EOF
             }
             if let Outcome::Quit = process_shell_line(repo_path, &mut buffer, &mut format, &line) {
@@ -723,8 +724,11 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
                 buffer.clear();
                 outln!("(cancelled — Ctrl-D to exit)");
             }
-            // Ctrl-D on an empty line: exit.
-            Err(rustyline::error::ReadlineError::Eof) => break,
+            // Ctrl-D: run an unterminated final statement, then exit.
+            Err(rustyline::error::ReadlineError::Eof) => {
+                flush_pending(repo_path, &mut buffer, &mut format);
+                break;
+            }
             Err(e) => {
                 outln!("error: {e}");
                 break;
@@ -766,7 +770,9 @@ fn shell_prompt(repo_path: &std::path::Path, fresh: bool) -> String {
             } else {
                 ""
             };
-            format!("acetone:{branch}{mark}> ")
+            // Ref-name validation already forbids control bytes, but sanitise
+            // the branch defensively — the prompt is repository-controlled text.
+            format!("acetone:{}{mark}> ", sanitise_line(&branch))
         }
         Err(_) => "acetone> ".to_string(),
     }
@@ -820,6 +826,16 @@ fn process_shell_line(
         outln!("error: {e:#}");
     }
     Outcome::Continue
+}
+
+/// Run any unterminated statement still in the buffer — called at EOF so a
+/// piped statement with no trailing `;` (e.g. `printf 'RETURN 1' | acetone
+/// shell`) still executes rather than being silently dropped.
+fn flush_pending(repo_path: &std::path::Path, buffer: &mut String, format: &mut Format) {
+    if !buffer.trim().is_empty() {
+        // A blank line is already a statement terminator; reuse that path.
+        let _ = process_shell_line(repo_path, buffer, format, "");
+    }
 }
 
 fn run_in_shell(repo_path: &std::path::Path, cypher: &str, format: Format) -> Result<()> {
