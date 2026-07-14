@@ -1,8 +1,9 @@
 //! Trojan-source hardening (bead acetone-7bn.19): a hostile-clone property
-//! value containing a bidirectional override (U+202E RIGHT-TO-LEFT OVERRIDE)
-//! must never reach the terminal raw — on the human table path, the
-//! `query --format json` path, or the `--json` read-command path — so it
-//! cannot visually reorder what the user sees. The escaped forms round-trip.
+//! value or branch name containing a bidirectional override (U+202E
+//! RIGHT-TO-LEFT OVERRIDE) must never reach the terminal raw — on the human
+//! table path, the `query --format json` path, the `--json` read-command path,
+//! or the `status`/`branch`-list branch-name paths — so it cannot visually
+//! reorder what the user sees. The escaped forms round-trip.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -106,5 +107,54 @@ fn override_is_escaped_on_every_output_path() {
     assert!(
         recovered.contains('\u{202e}'),
         "round-trip lost the original character: {recovered:?}"
+    );
+}
+
+#[test]
+fn override_in_a_branch_name_is_escaped_on_status_and_branch_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    repo_with_hostile_value(dir);
+    // A branch needs a commit to point at.
+    assert!(
+        acetone(dir, &["commit", "-m", "seed"]).status.success(),
+        "seed commit failed"
+    );
+
+    // Ref validation permits multibyte bidi, so a hostile clone can carry a
+    // branch name that reorders following terminal text. Build it from an
+    // escape (a raw U+202E in a string literal is denied by rustc's lint).
+    let hostile_branch = format!("evil{}hidden", '\u{202e}');
+    assert!(
+        acetone(dir, &["branch", &hostile_branch]).status.success(),
+        "creating the hostile branch failed"
+    );
+    assert!(
+        acetone(dir, &["checkout", &hostile_branch])
+            .status
+            .success(),
+        "checking out the hostile branch failed"
+    );
+
+    // `status` prints the current branch — must be escaped, never raw.
+    let status = stdout(&acetone(dir, &["status"]));
+    assert!(
+        !status.contains('\u{202e}'),
+        "status leaked a raw override in the branch name:\n{status}"
+    );
+    assert!(
+        status.contains("\\u{202e}"),
+        "status did not escape the branch-name override:\n{status}"
+    );
+
+    // `branch` (list) prints every branch name — same bar.
+    let list = stdout(&acetone(dir, &["branch"]));
+    assert!(
+        !list.contains('\u{202e}'),
+        "branch list leaked a raw override:\n{list}"
+    );
+    assert!(
+        list.contains("\\u{202e}"),
+        "branch list did not escape the override:\n{list}"
     );
 }
