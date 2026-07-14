@@ -24,6 +24,22 @@ macro_rules! outln {
 
 pub(crate) use outln;
 
+/// `eprintln!` that treats a closed stderr as clean process exit, mirroring
+/// [`outln!`]'s broken-pipe handling. Used for the interactive/piped shell's
+/// error lines, so they land on stderr and never interleave with result
+/// output on stdout.
+macro_rules! errln {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write;
+        let mut stderr = ::std::io::stderr().lock();
+        if let Err(e) = writeln!(stderr, $($arg)*) {
+            $crate::output::handle_stderr_error(e);
+        }
+    }};
+}
+
+pub(crate) use errln;
+
 /// Shared failure path for the macro: broken pipe is a quiet success,
 /// anything else is a hard error.
 ///
@@ -37,5 +53,18 @@ pub(crate) fn handle_stdout_error(error: std::io::Error) -> ! {
         std::process::exit(0);
     }
     eprintln!("error: cannot write to stdout: {error}");
+    std::process::exit(1);
+}
+
+/// Shared failure path for [`errln!`]: broken pipe (stderr consumer gone) is a
+/// quiet success, anything else is a hard error. Same Drop-safety caveat as
+/// [`handle_stdout_error`] — `process::exit` skips destructors.
+pub(crate) fn handle_stderr_error(error: std::io::Error) -> ! {
+    if error.kind() == std::io::ErrorKind::BrokenPipe {
+        std::process::exit(0);
+    }
+    // Fall back to the (unchecked) stdlib macro; if stderr itself is broken
+    // this is best-effort.
+    eprintln!("error: cannot write to stderr: {error}");
     std::process::exit(1);
 }

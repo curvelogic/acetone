@@ -41,6 +41,10 @@ fn out(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
+fn err(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
 #[test]
 fn a_query_runs_in_the_shell() {
     let dir = tempfile::tempdir().unwrap();
@@ -136,6 +140,107 @@ fn unterminated_final_statement_runs_at_eof() {
     let s = out(&o);
     assert!(s.contains("lucky"), "column: {s}");
     assert!(s.contains('7'), "value: {s}");
+}
+
+#[test]
+fn shell_query_errors_go_to_stderr_not_stdout() {
+    // A query that fails to parse must put its `error:` line on STDERR, so it
+    // does not interleave with result rows on STDOUT.
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let o = shell(dir.path(), "RETURN;\n:quit\n");
+    let stdout = out(&o);
+    let stderr = err(&o);
+    assert!(
+        stderr.contains("error:"),
+        "the error should be on stderr: stderr={stderr:?} stdout={stdout:?}"
+    );
+    assert!(
+        !stdout.contains("error:"),
+        "the error must not be on stdout: {stdout:?}"
+    );
+}
+
+#[test]
+fn shell_meta_command_errors_go_to_stderr() {
+    // A meta-command usage error (`:commit` with no message) is a real error →
+    // stderr; the informational `unknown command` message stays on stdout.
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let o = shell(dir.path(), ":commit\n:nope\n:quit\n");
+    let stdout = out(&o);
+    let stderr = err(&o);
+    assert!(
+        stderr.contains("error:") && stderr.contains("usage: :commit"),
+        "the :commit usage error should be on stderr: {stderr:?}"
+    );
+    assert!(
+        !stdout.contains("error:"),
+        "no error line on stdout: {stdout:?}"
+    );
+    // The unknown-command notice is informational and stays on stdout.
+    assert!(
+        stdout.contains("unknown command ':nope'"),
+        "informational meta output stays on stdout: {stdout:?}"
+    );
+}
+
+#[test]
+fn shell_null_and_string_null_render_distinctly() {
+    // A row with a genuine NULL beside the string "null": the NULL renders as
+    // the distinct `NULL` marker while the string renders as itself.
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let o = shell(dir.path(), "RETURN null AS a, 'null' AS b;\n:quit\n");
+    let s = out(&o);
+    assert!(s.contains("NULL"), "genuine NULL should show as NULL: {s}");
+    assert!(
+        s.contains("null"),
+        "the string 'null' should show as null: {s}"
+    );
+}
+
+#[test]
+fn shell_caps_large_result_and_reports_true_total() {
+    // The shell caps table output at SHELL_ROW_CAP (1000) rows and prints a
+    // notice for the remainder, while the `N rows` line reports the true total.
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let o = shell(dir.path(), "UNWIND range(1, 1500) AS n RETURN n;\n:quit\n");
+    let s = out(&o);
+    assert!(
+        s.contains("more rows (showing first 1000"),
+        "the cap notice should appear: {s}"
+    );
+    assert!(s.contains("500 more rows"), "true remainder reported: {s}");
+    assert!(s.contains("1500 rows"), "true total reported: {s}");
+    // The first row is shown; a row past the cap is not.
+    assert!(s.contains("│ 1 "), "first row shown: {s}");
+    assert!(!s.contains("│ 1200 "), "a row past the cap is hidden: {s}");
+}
+
+#[test]
+fn shell_wide_char_table_borders_align() {
+    // A CJK value is two terminal cells wide per character; the box-drawing
+    // borders must line up with the content when measured by display width.
+    use unicode_width::UnicodeWidthStr;
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let o = shell(dir.path(), "RETURN '你好世界' AS name;\n:quit\n");
+    let s = out(&o);
+    let border = s
+        .lines()
+        .find(|l| l.starts_with('┌'))
+        .expect("top border present");
+    let content = s
+        .lines()
+        .find(|l| l.contains("你好世界"))
+        .expect("content row present");
+    assert_eq!(
+        UnicodeWidthStr::width(border),
+        UnicodeWidthStr::width(content),
+        "border and content display widths must match:\n{s}"
+    );
 }
 
 #[test]

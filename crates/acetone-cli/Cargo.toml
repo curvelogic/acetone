@@ -47,6 +47,13 @@ sha2.workspace = true
 # — the library crates stay free of it. The non-TTY (piped) path bypasses
 # rustyline entirely, keeping the shell scriptable and testable.
 rustyline = "15"
+# unicode-width: the de-facto Rust implementation of Unicode TR#11 display
+# width (MIT/Apache-2.0, tiny). Used only to align the `--format table`
+# box-drawing borders correctly for CJK/emoji (2 cells) and combining marks
+# (0 cells). Already in the dependency tree transitively (via rustyline), so
+# this is a near-zero-cost direct adoption; confined to acetone-cli — the
+# library crates stay free of it.
+unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -478,6 +478,38 @@ fn closed_stdout_pipe_is_a_clean_exit_not_a_panic() {
     );
 }
 
+/// The one-shot `query --format table` command must never cap its output:
+/// a scripted query piped to a file has to receive every row (the row cap is
+/// interactive-shell-only).
+#[test]
+fn query_command_table_is_never_row_capped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "UNWIND range(1, 1500) AS n RETURN n",
+            "--format",
+            "table",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("1500 rows"), "true total reported: {text}");
+    assert!(
+        !text.contains("more rows"),
+        "one-shot table output must not be capped: {text}"
+    );
+    // A row beyond the shell cap of 1000 is present.
+    assert!(
+        text.contains("│ 1200 "),
+        "row past shell cap is shown: {text}"
+    );
+}
+
 /// The `query` command (acetone-yzc.6): parse → bind → execute an
 /// openCypher read query against the repository, in table/JSON/CSV.
 #[test]

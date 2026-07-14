@@ -11,8 +11,16 @@ use acetone_cypher::exec::{GraphSnapshot, QueryResult, catalogue_from_schema};
 use acetone_graph::Repository;
 use anyhow::{Context, Result, anyhow};
 
-use crate::output::outln;
+use unicode_width::UnicodeWidthStr;
+
+use crate::output::{errln, outln};
 use crate::value::sanitise_line;
+
+/// Row cap applied to `--format table` output **in the interactive shell
+/// only** (spec: a large `MATCH (n) RETURN n` should not flood the terminal).
+/// The one-shot `acetone query` command is never capped, so a scripted
+/// `query --format table` piped to a file gets every row.
+const SHELL_ROW_CAP: usize = 1000;
 
 /// Output format for query results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +58,9 @@ pub fn run(
                 "cannot write with --at: writes target the workspace, not a past version"
             ));
         }
-        return run_write(&repo, cypher, format);
+        // One-shot command: never cap (a scripted `query --format table`
+        // piped to a file must get every row).
+        return run_write(&repo, cypher, format, None);
     }
     let snapshot = match at {
         Some(refspec) => repo
@@ -59,7 +69,7 @@ pub fn run(
         None => repo.workspace_snapshot().context("reading the workspace")?,
     };
     let result = execute_query(&repo, &snapshot, cypher)?;
-    render(&result, format);
+    render(&result, format, None);
     Ok(())
 }
 
@@ -67,7 +77,12 @@ pub fn run(
 /// workspace, replay its net changes into the workspace and save (the user
 /// commits separately with `acetone commit`). The workspace advance is
 /// atomic — a failure leaves it untouched.
-fn run_write(repo: &Repository, cypher: &str, format: Format) -> Result<()> {
+fn run_write(
+    repo: &Repository,
+    cypher: &str,
+    format: Format,
+    max_rows: Option<usize>,
+) -> Result<()> {
     let mut txn = repo.begin_write().context("starting a write transaction")?;
     // Read the workspace the transaction locked, and run the query over it.
     let snapshot = repo.workspace_snapshot().context("reading the workspace")?;
@@ -94,7 +109,7 @@ fn run_write(repo: &Repository, cypher: &str, format: Format) -> Result<()> {
         .map_err(|e| anyhow!("{e}"))?;
     txn.save().context("saving the workspace")?;
 
-    render(&result, format);
+    render(&result, format, max_rows);
     render_write_summary(&result.stats);
     Ok(())
 }
@@ -413,15 +428,18 @@ fn execute_query(
 
 // --- Rendering ---------------------------------------------------------------
 
-fn render(result: &QueryResult, format: Format) {
+/// Render a result. `max_rows` caps how many rows the table renderer prints
+/// (with a notice for the remainder); `None` means "all rows". Only the
+/// interactive shell passes `Some(_)` — one-shot `acetone query` never caps.
+fn render(result: &QueryResult, format: Format, max_rows: Option<usize>) {
     match format {
-        Format::Table => render_table(result),
+        Format::Table => render_table(result, max_rows),
         Format::Json => render_json(result),
         Format::Csv => render_csv(result),
     }
 }
 
-fn render_table(result: &QueryResult) {
+fn render_table(result: &QueryResult, max_rows: Option<usize>) {
     if result.columns.is_empty() {
         outln!("(no columns)");
         return;
@@ -431,17 +449,24 @@ fn render_table(result: &QueryResult) {
         .iter()
         .map(|row| row.iter().map(render_value).collect())
         .collect();
+    // Only the first `shown` rows are printed; the true total drives the
+    // `N row(s)` line and the "more rows" notice.
+    let total = cells.len();
+    let shown = max_rows.map_or(total, |cap| total.min(cap));
+    // Column width is the maximum *display* width (Unicode TR#11) over the
+    // header and the visible cells — char count is wrong for CJK/emoji (2
+    // cells) and combining marks (0), which would misalign the borders.
     let widths: Vec<usize> = result
         .columns
         .iter()
         .enumerate()
         .map(|(col, name)| {
-            let body = cells
+            let body = cells[..shown]
                 .iter()
-                .map(|row| row[col].chars().count())
+                .map(|row| UnicodeWidthStr::width(row[col].as_str()))
                 .max()
                 .unwrap_or(0);
-            body.max(name.chars().count())
+            body.max(UnicodeWidthStr::width(name.as_str()))
         })
         .collect();
 
@@ -461,23 +486,30 @@ fn render_table(result: &QueryResult) {
     outln!("{}", separator("┌", "┬", "┐"));
     outln!("{}", format_row(&result.columns, &widths));
     outln!("{}", separator("├", "┼", "┤"));
-    for row in &cells {
+    for row in &cells[..shown] {
         outln!("{}", format_row(row, &widths));
     }
     outln!("{}", separator("└", "┴", "┘"));
-    outln!(
-        "{} row{}",
-        result.rows.len(),
-        if result.rows.len() == 1 { "" } else { "s" }
-    );
+    if shown < total {
+        outln!(
+            "… {} more row{} (showing first {}; use --format csv or json for all)",
+            total - shown,
+            if total - shown == 1 { "" } else { "s" },
+            shown
+        );
+    }
+    outln!("{total} row{}", if total == 1 { "" } else { "s" });
 }
 
 fn format_row(cells: &[String], widths: &[usize]) -> String {
     let mut line = String::from("│");
     for (cell, width) in cells.iter().zip(widths) {
+        // Pad to the *display* width: a cell of display-width `w` in a column
+        // of width `W` gets `W - w` trailing spaces (never a char-count diff).
+        let cell_width = UnicodeWidthStr::width(cell.as_str());
         line.push(' ');
         line.push_str(cell);
-        line.push_str(&" ".repeat(width - cell.chars().count()));
+        line.push_str(&" ".repeat(width.saturating_sub(cell_width)));
         line.push_str(" │");
     }
     line
@@ -540,7 +572,12 @@ fn render_json(result: &QueryResult) {
 /// output). JSON output escapes separately in `json_string`.
 fn render_value(value: &Value) -> String {
     match value {
-        Value::Null => "null".to_string(),
+        // A distinct marker so a genuine NULL is not confused with a string
+        // whose contents are "null" (which renders as itself). Trade-off: a
+        // string literally spelled "NULL" still collides with this marker —
+        // acceptable, and only in table/CSV; `--format json` uses unambiguous
+        // JSON `null` via `json_value` and is unaffected.
+        Value::Null => "NULL".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Int(n) => n.to_string(),
         Value::Float(x) => acetone_cypher::exec::functions::format_float(*x),
@@ -730,7 +767,7 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
                 break;
             }
             Err(e) => {
-                outln!("error: {e}");
+                errln!("error: {e}");
                 break;
             }
         }
@@ -798,7 +835,9 @@ fn process_shell_line(
             match handle_meta(repo_path, trimmed, format, buffer) {
                 Ok(true) => return Outcome::Quit,
                 Ok(false) => {}
-                Err(e) => outln!("error: {e:#}"),
+                // Errors go to stderr so they never interleave with result
+                // output on stdout (informational meta output stays on stdout).
+                Err(e) => errln!("error: {e:#}"),
             }
             return Outcome::Continue;
         }
@@ -823,7 +862,8 @@ fn process_shell_line(
         return Outcome::Continue;
     }
     if let Err(e) = run_in_shell(repo_path, &query, *format) {
-        outln!("error: {e:#}");
+        // Query errors go to stderr, keeping stdout as the pure result stream.
+        errln!("error: {e:#}");
     }
     Outcome::Continue
 }
@@ -847,11 +887,11 @@ fn run_in_shell(repo_path: &std::path::Path, cypher: &str, format: Format) -> Re
     // `acetone commit`.
     let parsed = acetone_cypher::parse(cypher).map_err(|e| anyhow!("{}", e.render(cypher)))?;
     if parsed.clauses.iter().any(|clause| clause.is_write()) {
-        return run_write(&repo, cypher, format);
+        return run_write(&repo, cypher, format, Some(SHELL_ROW_CAP));
     }
     let snapshot = repo.workspace_snapshot()?;
     let result = execute_query(&repo, &snapshot, cypher)?;
-    render(&result, format);
+    render(&result, format, Some(SHELL_ROW_CAP));
     Ok(())
 }
 
