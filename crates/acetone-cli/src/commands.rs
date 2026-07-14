@@ -166,7 +166,7 @@ pub(crate) fn open(repo_path: &Path) -> Result<Repository> {
         .with_context(|| format!("opening repository at {}", repo_path.display()))
 }
 
-fn status(repo_path: &Path, json: bool) -> Result<()> {
+pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     let repo = open(repo_path)?;
     // Short branch name (None when detached), head hash, dirtiness, merge
     // state and the workspace counts — the same facts both paths report.
@@ -228,7 +228,7 @@ fn status(repo_path: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
+pub(crate) fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
     let repo = open(repo_path)?;
     // Completing a merge always commits (it records the two-parent history)
     // even when the resolved result happens to match HEAD, so the no-change
@@ -495,7 +495,7 @@ fn single_key(label: &str, key: &str) -> Result<NodeKey> {
         .with_context(|| format!("building key for label {label:?}"))
 }
 
-fn declare_label(
+pub(crate) fn declare_label(
     repo_path: &Path,
     label: &str,
     key: &[String],
@@ -535,7 +535,7 @@ fn declare_label(
     Ok(())
 }
 
-fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
+pub(crate) fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
     use acetone_model::schema::{RelTypeDef, SchemaEntry};
     let def = RelTypeDef::new(None, BTreeMap::new(), [])
         .with_context(|| format!("declaring relationship type {rtype:?}"))?;
@@ -551,7 +551,12 @@ fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
     Ok(())
 }
 
-fn declare_index(repo_path: &Path, name: &str, label: &str, properties: &[String]) -> Result<()> {
+pub(crate) fn declare_index(
+    repo_path: &Path,
+    name: &str,
+    label: &str,
+    properties: &[String],
+) -> Result<()> {
     use acetone_model::schema::{IndexDef, SchemaEntry};
     let def = IndexDef::new(label, properties.to_vec())
         .with_context(|| format!("declaring index {name:?}"))?;
@@ -586,7 +591,7 @@ fn reindex(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<()> {
+pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<()> {
     use acetone_model::schema::SchemaEntry;
 
     let repo = open(repo_path)?;
