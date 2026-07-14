@@ -31,7 +31,9 @@ gone); unknown labels, properties, functions and relationship types suggest
 the nearest declared name (`did you mean "hostname"?`); a bare `(Topic {…})`
 or `[LINK]` explains the missing colon; and `DuplicateKey` gives the correct
 MERGE idiom instead of misadvising. All attacker-writable text reaching the
-terminal is escaped.
+terminal is escaped — including the bidirectional "Trojan-source" control
+characters, so a hostile clone's labels, values or branch names can't visually
+reorder your terminal.
 
 **A CLI that reads like one.** `acetone --help` is grouped by role (everyday /
 schema / data & query / maintenance / plumbing) with a note on how each
@@ -129,5 +131,6 @@ diffs become change reports, and any git remote is backup and transport.
 The authoritative design record — data model, storage, encodings, query
 language, diff/merge, and the phased roadmap — lives in `docs/`.
 
-[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/curvelogic/acetone/releases/tag/v0.1.1
 [0.1.0]: https://github.com/curvelogic/acetone/releases/tag/v0.1.0
