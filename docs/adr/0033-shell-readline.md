@@ -1,8 +1,8 @@
 # ADR-0033: Adopt `rustyline` for the interactive shell
 
-- Status: accepted (pending ratification at the 0.1.1 boundary)
+- Status: accepted
 - Date: 2026-07-14
-- Deciders: agent under the 0.1.1 autonomous mandate; ratified by Greg at the boundary
+- Deciders: agent under the 0.1.1 autonomous mandate; ratified by Greg at the 0.1.1 boundary (2026-07-14)
 
 ## Context
 
