@@ -30,7 +30,7 @@ stderr: error: cannot persist node: this node has no labels — in Cypher a labe
 ### schema-not-declared
 argv:   acetone query CREATE (:Widget {sku: 'a'});
 status: 1
-stderr: error: line 1, column 8: unknown label 'Widget' (declared labels come from the schema map)
+stderr: error: line 1, column 8: unknown label "Widget" (not declared in the schema)
 
 ### parse-error
 argv:   acetone query MATCH (n) RETRUN n
@@ -50,7 +50,7 @@ stderr: error: line 1, column 28: CREATE requires exactly one relationship type
 ### rel-unknown-type
 argv:   acetone query CREATE (:Topic {name: 'a'})-[:NOPE]->(:Topic {name: 'b'});
 status: 1
-stderr: error: line 1, column 28: unknown relationship type 'NOPE' — declare it first with `acetone declare-rel-type "NOPE"`
+stderr: error: line 1, column 28: unknown relationship type "NOPE" — declare it first with `acetone declare-rel-type "NOPE"`
 
 ### duplicate-key
 argv:   acetone query CREATE (:Topic {name: 'x'});
@@ -75,12 +75,12 @@ stderr: error: rekeying "Topic" ["absent"]: no node "Topic" with key ["absent"]
 ### label-did-you-mean
 argv:   acetone query MATCH (n:Hsot) RETURN n
 status: 1
-stderr: error: line 1, column 7: unknown label 'Hsot' (declared labels come from the schema map) — did you mean "Host"?
+stderr: error: line 1, column 7: unknown label "Hsot" (not declared in the schema) — did you mean "Host"?
 
 ### function-did-you-mean
 argv:   acetone query RETURN toUppr('a')
 status: 1
-stderr: error: line 1, column 8: unknown function 'toUppr' — did you mean "toUpper"?
+stderr: error: line 1, column 8: unknown function "toUppr" — did you mean "toUpper"?
 
 ### skip-string-bound
 argv:   acetone query MATCH (n:Topic) RETURN n SKIP 'x'

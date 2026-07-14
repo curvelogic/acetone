@@ -48,8 +48,14 @@ pub const MAX_CHUNK_MAX_BYTES: u32 = 1 << 20;
 /// every chunk hash.
 ///
 /// Construct via [`ChunkParams::new`], which range-checks every field; a
-/// `ChunkParams` value in existence is always valid. [`Default`] is the
-/// spec's ~4 KiB-mean profile (min 1 KiB, mask 12 bits, max 16 KiB).
+/// `ChunkParams` value in existence is always valid.
+///
+/// [`Default`] is the Phase 0 spike/test profile (min 1 KiB, mask 12 bits,
+/// max 16 KiB). NOTE: this is **not** the profile shipped repositories use —
+/// `acetone init` writes the repository default from
+/// `acetone_graph::repo::default_chunk_params()` (max 64 KiB). Code that
+/// creates or migrates a real repository must take its parameters from there
+/// (or the repo's own manifest), never from this `Default`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkParams {
     /// No cut before the chunk reaches this many bytes.
