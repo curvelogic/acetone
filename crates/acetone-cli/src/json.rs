@@ -7,12 +7,13 @@
 //!
 //! All emission goes through `serde_json`, so string escaping is correct: it
 //! handles quotes, backslashes and the C0 controls (`< 0x20`). But
-//! `serde_json` leaves DEL (`0x7f`) and the C1 range (`0x80..=0x9f`) raw, and
+//! `serde_json` leaves DEL (`0x7f`), the C1 range (`0x80..=0x9f`) and the
+//! bidirectional formatting overrides (Trojan source) raw, and
 //! graph property values, labels and commit messages are attacker-writable
 //! (a hostile clone). To meet the same terminal-safety bar the human paths
 //! meet with `sanitise_line` — and that the query engine's JSON path meets in
-//! `json_string` (Phase 2 security review MINOR-1) — [`emit_json`] escapes
-//! those remaining control characters to `\u…` on the way out. The escapes
+//! `json_string` (Phase 2 security review MINOR-1; bidi added in 7bn.19) —
+//! [`emit_json`] escapes those remaining characters to `\u…` on the way out. The escapes
 //! round-trip: a JSON parser reads `` back to the original byte.
 
 use acetone_model::Value;
@@ -31,27 +32,30 @@ pub fn emit_json(value: &Json) {
     }
 }
 
-/// Whether `serde_json`'s serialiser leaves this control character raw: DEL
-/// (`0x7f`) and the C1 range (`0x80..=0x9f`). The C0 controls (`< 0x20`) it
-/// already escapes inside strings, and it never emits a raw C0 in structure
-/// except the pretty-printer's layout newlines — which we must keep — so this
-/// deliberately excludes them.
-fn is_residual_control(c: char) -> bool {
-    c == '\u{7f}' || ('\u{80}'..='\u{9f}').contains(&c)
+/// Whether `serde_json`'s serialiser leaves this character raw where it is
+/// unsafe to reach the terminal: DEL (`0x7f`), the C1 range (`0x80..=0x9f`),
+/// and the bidirectional formatting overrides (Trojan source). The C0 controls
+/// (`< 0x20`) `serde_json` already escapes inside strings, and it never emits a
+/// raw C0 in structure except the pretty-printer's layout newlines — which we
+/// must keep — so this deliberately excludes them. The bidi characters never
+/// occur in JSON structure either, only in string content, so replacing them
+/// document-wide is safe.
+fn is_residual_unsafe(c: char) -> bool {
+    c == '\u{7f}' || ('\u{80}'..='\u{9f}').contains(&c) || crate::value::is_bidi_control(c)
 }
 
-/// Escape the control characters `serde_json` leaves raw ([`is_residual_control`])
-/// as `\uXXXX`. Those characters never occur in JSON structure, so replacing
-/// them across the whole document is safe, keeps it valid, and round-trips
-/// (a parser reads `` back to the original byte). The pretty-printer's
-/// structural newlines and indentation are untouched.
+/// Escape the characters `serde_json` leaves raw yet unsafe for the terminal
+/// ([`is_residual_unsafe`]) as `\uXXXX`. Those characters never occur in JSON
+/// structure, so replacing them across the whole document is safe, keeps it
+/// valid, and round-trips (a parser reads `` back to the original character).
+/// The pretty-printer's structural newlines and indentation are untouched.
 fn escape_residual_controls(text: &str) -> String {
-    if !text.chars().any(is_residual_control) {
+    if !text.chars().any(is_residual_unsafe) {
         return text.to_owned();
     }
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
-        if is_residual_control(c) {
+        if is_residual_unsafe(c) {
             out.push_str(&format!("\\u{:04x}", c as u32));
         } else {
             out.push(c);
@@ -105,4 +109,42 @@ pub fn value_to_json(value: &Value) -> Json {
 /// A key tuple as a JSON array of its element values.
 pub fn key_tuple_to_json(key: &[Value]) -> Json {
     Json::Array(key.iter().map(value_to_json).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn residual_pass_escapes_c1_del_and_bidi_but_keeps_layout() {
+        // serde_json leaves DEL, the C1 range and the bidirectional overrides
+        // raw in string content; the residual pass must escape all three while
+        // preserving the pretty-printer's structural newlines and indentation.
+        let doc = serde_json::to_string_pretty(&json!({
+            "subject": "safe\u{202e}reversed\u{202c}\u{7f}\u{85}",
+        }))
+        .unwrap();
+        let escaped = escape_residual_controls(&doc);
+
+        // None of the dangerous characters survive raw.
+        for c in ['\u{202e}', '\u{202c}', '\u{7f}', '\u{85}'] {
+            assert!(!escaped.contains(c), "{c:?} leaked raw");
+        }
+        // Their escaped forms are present, and the result still parses.
+        assert!(escaped.contains("\\u202e"));
+        assert!(escaped.contains("\\u007f"));
+        // Structural layout (newline + indentation) is untouched.
+        assert!(escaped.contains("\n  \"subject\""));
+        let reparsed: Json = serde_json::from_str(&escaped).unwrap();
+        assert_eq!(
+            reparsed["subject"],
+            json!("safe\u{202e}reversed\u{202c}\u{7f}\u{85}")
+        );
+    }
+
+    #[test]
+    fn clean_document_is_returned_unchanged() {
+        let doc = serde_json::to_string_pretty(&json!({ "os": "linux 👩‍👧" })).unwrap();
+        assert_eq!(escape_residual_controls(&doc), doc);
+    }
 }

@@ -204,7 +204,10 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     }
 
     match &branch {
-        Some(short) => outln!("On branch {short}"),
+        // Branch names are repository-controlled (a hostile clone's refs) and
+        // ref validation permits multibyte bidi, so sanitise before the
+        // terminal — as the shell prompt and `:log` already do.
+        Some(short) => outln!("On branch {}", sanitise_line(short)),
         None => outln!("Not on any branch (detached)"),
     }
     match &head {
@@ -334,7 +337,9 @@ fn branch(repo_path: &Path, name: Option<&str>, json: bool) -> Result<()> {
                 } else {
                     " "
                 };
-                outln!("{marker} {short}");
+                // Branch names are repository-controlled; sanitise (bidi and
+                // control characters) before the terminal.
+                outln!("{marker} {}", sanitise_line(&short));
             }
         }
         Some(name) => {

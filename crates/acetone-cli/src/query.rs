@@ -684,10 +684,13 @@ fn json_string(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
-            // Escape all control characters: C0 (< 0x20), DEL (0x7f) and
-            // the C1 range (0x80..=0x9f), matching sanitise_line's
-            // coverage so no format leaks a raw terminal control.
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            // Escape everything unsafe for the terminal: the C0 (< 0x20),
+            // DEL (0x7f) and C1 (0x80..=0x9f) controls, plus the bidirectional
+            // formatting overrides — matching `sanitise_line`'s coverage so no
+            // format leaks a raw terminal control or a Trojan-source reorder.
+            c if crate::value::is_unsafe_for_display(c) => {
+                out.push_str(&format!("\\u{:04x}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -1026,4 +1029,22 @@ fn handle_meta(
         other => outln!("unknown command ':{other}' (:help for the list)"),
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::json_string;
+
+    #[test]
+    fn json_string_escapes_controls_and_bidi() {
+        // Quotes/backslash/whitespace controls take their short escapes.
+        assert_eq!(json_string("a\"b\\c\n"), "\"a\\\"b\\\\c\\n\"");
+        // A right-to-left override (Trojan source) is not is_control(), but
+        // must still be escaped to the JSON \uXXXX form, never emitted raw.
+        let out = json_string("safe\u{202e}reversed");
+        assert!(!out.contains('\u{202e}'));
+        assert_eq!(out, "\"safe\\u202ereversed\"");
+        // Legitimate non-ASCII, including emoji ZWJ sequences, passes through.
+        assert_eq!(json_string("déjà 👩‍👧"), "\"déjà 👩‍👧\"");
+    }
 }

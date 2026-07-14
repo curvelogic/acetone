@@ -29,19 +29,49 @@ pub fn parse_kv<'a>(raw: &'a str, flag: &str) -> Result<(&'a str, &'a str)> {
     }
 }
 
-/// Neutralise control characters in a repository-controlled line of text
+/// Bidirectional / directional-formatting control characters that reorder how
+/// the surrounding text is displayed without being [`char::is_control`]
+/// (Unicode "Trojan Source", CVE-2021-42574). A hostile-clone commit subject,
+/// property value or branch name could otherwise rearrange what the terminal
+/// shows, so a line reads differently from the bytes it holds. These have no
+/// legitimate use in visible content, so they are escaped everywhere
+/// repository-controlled text reaches the terminal — matching the identifier
+/// renderer, whose `{:?}` already escapes them.
+///
+/// Scope is deliberately the *directional* set only, not zero-width or other
+/// format (Cf) characters: those enable invisibility/homoglyph confusion (a
+/// lesser, non-reordering concern) and escaping them would mangle legitimate
+/// data such as emoji zero-width-joiner sequences in property values.
+pub(crate) fn is_bidi_control(c: char) -> bool {
+    matches!(c,
+        '\u{061C}'                     // ARABIC LETTER MARK
+        | '\u{200E}' | '\u{200F}'      // LEFT-TO-RIGHT / RIGHT-TO-LEFT MARK
+        | '\u{202A}'..='\u{202E}'      // LRE, RLE, PDF, LRO, RLO
+        | '\u{2066}'..='\u{2069}'      // LRI, RLI, FSI, PDI
+    )
+}
+
+/// Whether a character must be escaped before it reaches the terminal in
+/// repository-controlled text: the C0/C1/DEL controls ([`char::is_control`])
+/// plus the bidirectional formatting characters ([`is_bidi_control`]).
+pub(crate) fn is_unsafe_for_display(c: char) -> bool {
+    c.is_control() || is_bidi_control(c)
+}
+
+/// Neutralise dangerous characters in a repository-controlled line of text
 /// destined for the terminal, leaving everything printable untouched.
 ///
 /// Unlike [`format_label`]'s `{:?}` (right for identifier-shaped strings,
 /// where the quotes aid reading), this is for sentence- or line-shaped
 /// output — commit subjects, trailers, fsck findings — where quoting the
-/// whole line would hurt readability but ANSI/C1 sequences from a hostile
-/// clone must never reach the terminal raw.
+/// whole line would hurt readability but ANSI/C1 sequences and bidirectional
+/// overrides from a hostile clone must never reach the terminal raw (see
+/// [`is_unsafe_for_display`]).
 pub fn sanitise_line(s: &str) -> String {
-    if s.chars().any(char::is_control) {
+    if s.chars().any(is_unsafe_for_display) {
         s.chars()
             .map(|c| {
-                if c.is_control() {
+                if is_unsafe_for_display(c) {
                     c.escape_default().to_string()
                 } else {
                     c.to_string()
@@ -103,11 +133,13 @@ mod tests {
     }
 
     #[test]
-    fn sanitise_line_neutralises_control_characters_only() {
-        // Printable text, including unicode and quotes, passes untouched.
+    fn sanitise_line_neutralises_control_characters() {
+        // Printable text, including unicode, quotes and emoji, passes
+        // untouched — even emoji built from zero-width-joiner sequences,
+        // which are deliberately out of the directional-control scope.
         assert_eq!(
-            sanitise_line("add web3 (\"fast\") — déjà vu"),
-            "add web3 (\"fast\") — déjà vu"
+            sanitise_line("add web3 (\"fast\") — déjà vu 👩‍👧"),
+            "add web3 (\"fast\") — déjà vu 👩‍👧"
         );
         // ANSI escape, bell, carriage return: escaped, never raw.
         let hostile = "ok\x1b[8m hidden\x07\rspoof";
@@ -121,5 +153,18 @@ mod tests {
                 .replace("{{", "{")
                 .replace("}}", "}")
         );
+    }
+
+    #[test]
+    fn sanitise_line_neutralises_bidi_overrides() {
+        // A right-to-left override (U+202E) reorders following text — the
+        // Trojan-source trick. It is not `char::is_control()`, so it must be
+        // caught by the bidi guard, not the control guard.
+        assert!(!'\u{202e}'.is_control());
+        let hostile = "safe\u{202e}txet_desrever\u{202c}";
+        let clean = sanitise_line(hostile);
+        assert!(!clean.contains('\u{202e}'));
+        assert!(!clean.contains('\u{202c}'));
+        assert_eq!(clean, "safe\\u{202e}txet_desrever\\u{202c}");
     }
 }
