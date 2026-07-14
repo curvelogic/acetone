@@ -8,11 +8,27 @@
 //! but unusable" or "could not tell".
 
 use crate::hash::Hash;
+use std::path::PathBuf;
 
 /// Errors from chunk, ref and commit operations.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
+    /// No git repository was found at the starting path or in any of its
+    /// parent directories, up to the discovery boundary (the filesystem
+    /// root, or a `GIT_CEILING_DIRECTORIES` entry). Raised only by the
+    /// discovering open path ([`crate::GitStore::open_discovering`]); an
+    /// exact open reports a plain [`StoreError::Backend`] instead.
+    #[error(
+        "no acetone repository at {start} or in any parent directory \
+         (searched up to the filesystem root or a ceiling directory) — \
+         run `acetone init` to create one"
+    )]
+    NotARepository {
+        /// The path discovery started from.
+        start: PathBuf,
+    },
+
     /// An object exceeds the store's size cap — either data handed to
     /// `put`, or a stored object whose header announces a size above the
     /// cap. On the read side this is checked *before* the object is

@@ -12,7 +12,7 @@ Arguments:
 
 Options:
       --object-format <OBJECT_FORMAT>  Object format (hash function) for the new repository [default: sha1] [possible values: sha1, sha256]
-      --repo <REPO>                    Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>                    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help                           Print help
 
 ========== acetone status --help ==========
@@ -22,7 +22,7 @@ Usage: acetone status [OPTIONS]
 
 Options:
       --json         Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
 ========== acetone commit --help ==========
@@ -37,7 +37,7 @@ Options:
           Commit message
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -54,7 +54,7 @@ Usage: acetone log [OPTIONS]
 
 Options:
       --json         Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
 ========== acetone branch --help ==========
@@ -67,7 +67,7 @@ Arguments:
 
 Options:
       --json         Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
 ========== acetone checkout --help ==========
@@ -79,7 +79,7 @@ Arguments:
   <BRANCH>  Branch to switch to
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
 ========== acetone merge --help ==========
@@ -98,7 +98,7 @@ Options:
           Commit message for the merge commit (default: `Merge <ref>`)
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -121,7 +121,7 @@ Options:
           A key property name; repeat for a composite key, in order
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -147,7 +147,7 @@ Arguments:
 
 Options:
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -170,7 +170,7 @@ Options:
           The indexed primary label
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -189,7 +189,7 @@ Usage: acetone reindex [OPTIONS]
 
 Options:
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -208,7 +208,7 @@ Options:
           Read the schema at a specific ref (branch, tag or commit hash) instead of the current workspace state
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -232,7 +232,7 @@ Options:
           [possible values: csv, json, ndjson]
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -259,7 +259,7 @@ Arguments:
 
 Options:
       --prop <PROP>  A `KEY=VALUE` non-key property; may be repeated
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
 ========== acetone rekey --help ==========
@@ -284,7 +284,7 @@ Options:
           Commit message
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -303,7 +303,7 @@ Options:
           Take the current branch's value for every conflict
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -332,7 +332,7 @@ Options:
           Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -350,7 +350,7 @@ Arguments:
 
 Options:
       --json         Emit machine-readable JSON (the node object, or `null` on a miss with a non-zero exit). The JSON shape is unstable and may change before 0.2
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
 ========== acetone put-edge --help ==========
@@ -366,7 +366,7 @@ Arguments:
   <DST_KEY>    Destination node's key value
 
 Options:
-      --repo <REPO>  Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -h, --help         Print help
 
 ========== acetone list-nodes --help ==========
@@ -376,7 +376,7 @@ Usage: acetone list-nodes [OPTIONS]
 
 Options:
   -l, --label <LABEL>  Restrict to one primary label
-      --repo <REPO>    Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
       --json           Emit machine-readable JSON. The JSON shape is unstable and may change before 0.2
   -h, --help           Print help
 
@@ -390,7 +390,7 @@ Arguments:
 
 Options:
       --at <AT>          Read at a specific ref (branch, tag or commit hash) instead of the current workspace state — whole-query time travel
-      --repo <REPO>      Path to the repository. Ignored by `init` when it is given its own PATH argument [default: .]
+      --repo <REPO>      Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -f, --format <FORMAT>  Output format [default: table] [possible values: table, json, csv]
   -h, --help             Print help
 
@@ -403,7 +403,7 @@ Usage: acetone fsck [OPTIONS]
 
 Options:
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -419,7 +419,7 @@ Usage: acetone gc [OPTIONS]
 
 Options:
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -438,7 +438,7 @@ Options:
           Target minimum chunk size in bytes (default: the repo's current value)
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 
@@ -469,7 +469,7 @@ Options:
           [possible values: csv, json, ndjson]
 
       --repo <REPO>
-          Path to the repository. Ignored by `init` when it is given its own PATH argument
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
 

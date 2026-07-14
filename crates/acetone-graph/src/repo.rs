@@ -161,11 +161,19 @@ impl Repository {
         })
     }
 
-    /// Open an existing acetone repository (its default workspace).
-    /// Errors with [`GraphError::NoWorkspace`] if the git repository was
-    /// never initialised by acetone.
+    /// Open an existing acetone repository (its default workspace),
+    /// discovering it by walking up from `path` — so `path` may be any
+    /// subdirectory of the repository, matching `git -C <path>` (ADR-0034).
+    /// The discovered repository is opened with the same reduced-trust
+    /// isolated options as an exact open; discovery changes only which
+    /// directory is opened, never the trust posture.
+    ///
+    /// Errors with [`StoreError::NotARepository`] if no repository encloses
+    /// `path` up to the discovery boundary (filesystem root or a
+    /// `GIT_CEILING_DIRECTORIES` entry), and with [`GraphError::NoWorkspace`]
+    /// if the discovered git repository was never initialised by acetone.
     pub fn open(path: &Path) -> Result<Repository, GraphError> {
-        let store = GitStore::open(path)?;
+        let store = GitStore::open_discovering(path)?;
         let repo = Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
