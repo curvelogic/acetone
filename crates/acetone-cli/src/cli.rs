@@ -42,8 +42,9 @@ Relationship to git (an acetone version IS a git commit):
     arg_required_else_help = true
 )]
 pub struct Cli {
-    /// Path to the repository. Ignored by `init` when it is given its own
-    /// PATH argument.
+    /// Path to the repository, or any subdirectory of it — the enclosing
+    /// repository is discovered by walking up parents (like `git -C`).
+    /// Ignored by `init` when it is given its own PATH argument.
     #[arg(long, global = true, default_value = ".")]
     pub repo: PathBuf,
 

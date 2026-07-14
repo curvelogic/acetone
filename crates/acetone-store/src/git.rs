@@ -28,7 +28,7 @@
 //! untrusted bytes — which is why every decode path here returns `Result`
 //! and object sizes are checked against a hard cap before materialisation.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
 
@@ -162,14 +162,123 @@ impl GitStore {
     }
 
     /// Open an existing git repository as a store.
+    ///
+    /// `path` is opened **exactly** — no upward discovery. This is the door
+    /// every internal open goes through (worktree opens, reopening a known
+    /// git dir, `create_with`'s reopen), so it must not wander to a parent.
+    /// User-facing opens that want `git -C` ergonomics use
+    /// [`Self::open_discovering`] instead.
     pub fn open_with(path: &Path, options: GitStoreOptions) -> Result<Self, StoreError> {
-        let open_options = gix::open::Options::isolated().with(gix::sec::Trust::Reduced);
-        let repo = gix::open_opts(path, open_options)
+        let repo = gix::open_opts(path, Self::isolated_open_options())
             .map_err(|e| StoreError::backend("opening repository", e))?;
         Ok(GitStore {
             repo,
             max_chunk_size: options.max_chunk_size,
         })
+    }
+
+    /// Open the git repository that **encloses** `path`, discovering it by
+    /// walking up parent directories (git's `git -C <path>` ergonomics), with
+    /// default options. See [`Self::open_discovering_with`].
+    pub fn open_discovering(path: &Path) -> Result<Self, StoreError> {
+        Self::open_discovering_with(path, GitStoreOptions::default())
+    }
+
+    /// Open the git repository that encloses `path`, discovering it by walking
+    /// up parent directories, then opening it with the **same** reduced-trust
+    /// isolated options as every other open (ADR-0034).
+    ///
+    /// If `path` is itself a repository it opens immediately (no walking);
+    /// otherwise the walk climbs parents until one is a repository, stopping
+    /// at the filesystem root and honouring `GIT_CEILING_DIRECTORIES`. When no
+    /// repository is found up to that boundary the error is
+    /// [`StoreError::NotARepository`], naming the starting path and pointing at
+    /// `acetone init`.
+    ///
+    /// Discovery changes only *which* directory is opened, never the trust or
+    /// config posture: the located directory is opened through
+    /// [`Self::open_with`], so a repository reached by walking up is treated
+    /// exactly as one named explicitly — its config, hooks and external
+    /// commands are still never loaded or run.
+    pub fn open_discovering_with(
+        path: &Path,
+        options: GitStoreOptions,
+    ) -> Result<Self, StoreError> {
+        let discovered = Self::discover_repository(path)?;
+        Self::open_with(&discovered, options)
+    }
+
+    /// The reduced-trust open options applied to **every** repository this
+    /// store opens (see the module docs). Isolated config, trust pinned to
+    /// [`gix::sec::Trust::Reduced`]; discovery never relaxes this posture.
+    fn isolated_open_options() -> gix::open::Options {
+        gix::open::Options::isolated().with(gix::sec::Trust::Reduced)
+    }
+
+    /// Walk up from `path` to the nearest enclosing git repository and return
+    /// the directory the caller should open (the worktree root when there is
+    /// one, otherwise the git dir — so a bare acetone repository resolves to
+    /// itself and a linked worktree to its work tree, matching what a user
+    /// passing that path directly would open).
+    ///
+    /// Uses `gix::discover::upwards`, which performs the upward walk — bounded
+    /// by the filesystem root and by `GIT_CEILING_DIRECTORIES` — but crucially
+    /// does **not** open the repository; the caller opens the returned path
+    /// through the one reduced-trust [`Self::open_with`] path, so the isolated
+    /// posture is preserved verbatim (ADR-0034). Trust computation is skipped
+    /// (`TrustPolicy::Assume(Reduced)`) because the store pins reduced trust
+    /// regardless of ownership, and non-matching ceiling directories are
+    /// ignored rather than treated as an error, matching git.
+    fn discover_repository(path: &Path) -> Result<PathBuf, StoreError> {
+        use gix::discover::upwards::{Error as DiscoverError, Options, TrustPolicy};
+
+        let options = Options {
+            // We open with our own isolated Reduced options regardless of the
+            // discovered directory's ownership, so skip the ownership syscalls
+            // and just assume Reduced; the returned trust value is ignored.
+            trust: TrustPolicy::Assume(gix::sec::Trust::Reduced),
+            // Git treats ceiling dirs that don't prefix the search path as
+            // ineffective, not an error; match that for compatibility.
+            match_ceiling_dir_or_error: false,
+            ..Default::default()
+        }
+        // Reads GIT_CEILING_DIRECTORIES (colon/`;`-separated absolute paths).
+        .apply_environment();
+
+        // Discover from an absolute start path. gix 0.85's upward walk has a
+        // debug-build assertion that a *bare* repository found while the start
+        // path was made absolute for it is named `.git` — which acetone's bare
+        // repositories are not — so it panics when handed a relative start
+        // (e.g. the `--repo .` default). Absolutising here keeps the walk on
+        // its already-absolute path and never trips that branch; gix still
+        // normalises the path internally, so semantics are unchanged.
+        let start = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        };
+
+        match gix::discover::upwards_opts(&start, options) {
+            Ok((repo_path, _trust)) => {
+                let (git_dir, worktree) = repo_path.into_repository_and_work_tree_directories();
+                Ok(worktree.unwrap_or(git_dir))
+            }
+            // "Nothing found up to the boundary" is the clear, actionable
+            // failure; other discovery errors (a path that does not exist or
+            // is unreadable, or the cwd being unobtainable) are genuine
+            // environmental faults reported as-is.
+            Err(
+                DiscoverError::NoGitRepository { .. }
+                | DiscoverError::NoGitRepositoryWithinCeiling { .. }
+                | DiscoverError::NoGitRepositoryWithinFs { .. }
+                | DiscoverError::NoMatchingCeilingDir,
+            ) => Err(StoreError::NotARepository {
+                start: path.to_path_buf(),
+            }),
+            Err(e) => Err(StoreError::backend("discovering repository", e)),
+        }
     }
 
     /// The repository's common git directory (shared by all worktrees,
