@@ -1,0 +1,427 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck { height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .card.lead { border-left: 3px solid var(--accent); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  .term {
+    background: var(--ink); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65;
+  }
+  @media (prefers-color-scheme: dark) { .term { border: 1px solid var(--line); } }
+  :root[data-theme="dark"] .term { border: 1px solid var(--line); }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term .p { color: #2dd4bf; }
+  .term .c { color: #e8eef0; }
+  .term .o { color: #8b9aa2; }
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .ba { display: grid; gap: 12px; }
+  .ba .row { display: grid; grid-template-columns: 76px 1fr; gap: 14px; align-items: start; }
+  .ba .row .side { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; padding-top: 12px; }
+  .ba .row.b .side { color: var(--warn); }
+  .ba .row.a .side { color: var(--good); }
+  .ba pre { margin: 0; font-family: var(--mono); font-size: 12.8px; line-height: 1.5; white-space: pre-wrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; color: var(--muted); overflow-x: auto; }
+  .ba .row.a pre { border-left: 3px solid var(--good); }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+</style>
+<title>Acetone · 0.1.1 sprint demo</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Where we are"></a>
+  <a href="#s3" aria-label="What shipped"></a>
+  <a href="#s4" aria-label="Errors that help"></a>
+  <a href="#s5" aria-label="A CLI that reads like one"></a>
+  <a href="#s6" aria-label="See it and script it"></a>
+  <a href="#s7" aria-label="A real shell"></a>
+  <a href="#s8" aria-label="The review gate"></a>
+  <a href="#s9" aria-label="Decisions and security"></a>
+  <a href="#s10" aria-label="Live demo"></a>
+  <a href="#s11" aria-label="For Greg"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · 0.1.1 boundary</p>
+      <h1>Pleasant<br>by hand.</h1>
+      <p class="lede">0.1.0 shipped as two systems of different maturity: a rigorous storage engine below the manifest, a younger runtime above, and the daily friction lived at the seam. 0.1.1 carries that discipline <strong>up into the things you actually touch</strong> — error messages, help, the shell, machine output — with <strong>no on-disk format change</strong>.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>22 beads · 12 PRs · #101–#112</span>
+        <span class="chip good"><span class="dot"></span>No format change · 0.1.0 compatible</span>
+        <span class="chip good"><span class="dot"></span>Security gate · ready</span>
+        <span class="chip good"><span class="dot"></span>Every wording pinned by snapshots</span>
+      </div>
+    </div>
+    <div class="foot">epic acetone-7bn · 2026-07-14 · main @ 960e8f6</div>
+    <div class="num">01 / 11</div>
+  </section>
+
+  <!-- 2 · Where we are -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>The Phase&nbsp;7 UX thread, shipped early.</h2>
+      <p class="lede">Phase 7 always had two threads — dogfood-UX polish and runtime hardening toward the 0.2 library freeze. 0.1.1 is the UX thread cut as a point release, so the workbench is pleasant now; Phase 7 proper stays the hardening.</p>
+      <div class="flow" style="margin-top:26px">
+        <div class="step"><div class="k">HARNESS</div><div class="v">snapshots</div><div class="d">pin every message · fixes are diffs</div></div>
+        <div class="step"><div class="k">ERRORS</div><div class="v">actionable</div><div class="d">location · suggestions · readable keys</div></div>
+        <div class="step"><div class="k">CLI</div><div class="v">reads like one</div><div class="d">grouped help · aliases · --json</div></div>
+        <div class="step"><div class="k">SHELL</div><div class="v">a real REPL</div><div class="d">readline · in-shell schema · prompt</div></div>
+        <div class="step"><div class="k">DISCOVER</div><div class="v">git&#8209;C&nbsp;style</div><div class="d">works from a subdirectory</div></div>
+      </div>
+    </div>
+    <div class="num">02 / 11</div>
+  </section>
+
+  <!-- 3 · What shipped -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">What shipped</p>
+      <h2>Twelve PRs, one ergonomics story.</h2>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>Theme</th><th>What it does</th><th>PRs</th></tr></thead>
+          <tbody>
+            <tr><td><code>harness</code></td><td>insta snapshots pin every error &amp; help string</td><td class="pr">#101</td></tr>
+            <tr><td><code>errors</code></td><td>readable keys · <code>line/column</code> everywhere · did-you-mean · clause-correct advice</td><td class="pr">#102–105</td></tr>
+            <tr><td><code>cli</code></td><td>grouped help + git note · <code>cypher</code> alias · prefix inference · unified <code>--format</code></td><td class="pr">#106</td></tr>
+            <tr><td><code>schema</code></td><td><code>acetone schema [--at]</code> — display the declared schema</td><td class="pr">#107</td></tr>
+            <tr><td><code>--json</code></td><td>machine output on the read commands (shape unstable)</td><td class="pr">#108</td></tr>
+            <tr><td><code>shell</code></td><td>readline · in-shell <code>:declare</code>/<code>:commit</code>/<code>:schema</code> · rendering</td><td class="pr">#109–110</td></tr>
+            <tr><td><code>discover</code></td><td>find the repo from a subdirectory, isolation intact</td><td class="pr">#112</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="clean" style="margin-top:20px">
+        <li><b>No on-disk format change.</b> Nothing in the whole sweep touches <code>format_version</code>, the encodings, or a Load-Bearing Invariant — a 0.1.0 repository is read and written unchanged.</li>
+        <li><b>Every user-facing string is now snapshot-pinned</b>, so it can't silently regress.</li>
+      </ul>
+    </div>
+    <div class="num">03 / 11</div>
+  </section>
+
+  <!-- 4 · Errors that help -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">Errors that help</p>
+      <h2>The storage engine's discipline, in the messages.</h2>
+      <p class="lede">Keys read like keys, every error has a place, and a typo is met with a suggestion instead of a dead end.</p>
+      <div class="ba" style="margin-top:20px">
+        <div class="row b"><div class="side">BEFORE</div><pre>CREATE of "Topic" "[String(\"x\")]" conflicts with an
+existing node; identity must be unique (use MERGE to upsert)</pre></div>
+        <div class="row a"><div class="side">AFTER</div><pre>CREATE of "Topic" ["x"] conflicts with an existing node;
+CREATE always makes a new node … MERGE each node on its own
+before MERGEing a relationship between them</pre></div>
+        <div class="row b"><div class="side">BEFORE</div><pre>division by zero at bytes 7..12
+unknown label 'Hsot' (declared labels come from the schema map)</pre></div>
+        <div class="row a"><div class="side">AFTER</div><pre>line 1, column 8: division by zero
+unknown label "Hsot" (not declared in the schema) — did you mean "Host"?</pre></div>
+      </div>
+      <p style="margin-top:16px">All attacker-writable text reaching the terminal is escaped — verified end to end by the security review.</p>
+    </div>
+    <div class="num">04 / 11</div>
+  </section>
+
+  <!-- 5 · A CLI that reads like one -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">A CLI that reads like one</p>
+      <h2>Grouped, forgiving, and honest about git.</h2>
+      <div class="grid cols-2" style="margin-top:8px">
+        <div class="card lead">
+          <div class="tag">HELP</div>
+          <h3>Grouped by role, with the git relationship</h3>
+          <p><code>acetone --help</code> is one line per command, grouped Everyday / Schema / Data &amp; query / Maintenance / Plumbing — and states which commands you use <em>instead of</em> git, which either works, and which are plain git (transport). Since an acetone version <em>is</em> a git commit, that was the hidden question.</p>
+        </div>
+        <div class="card">
+          <div class="tag">FORGIVING</div>
+          <h3>Aliases, prefixes, discovery</h3>
+          <p><code>cypher</code> aliases <code>query</code>; a unique prefix resolves (<code>acetone st</code> → status); <code>import</code>/<code>export</code> take a consistent <code>--format</code>; and <code>acetone</code> from any <strong>subdirectory</strong> finds the enclosing repo, <code>git -C</code>-style — while preserving the reduced-trust config-isolation boundary (ADR-0034).</p>
+        </div>
+      </div>
+    </div>
+    <div class="num">05 / 11</div>
+  </section>
+
+  <!-- 6 · See it and script it -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">See it and script it</p>
+      <h2>Read the schema. Script the graph.</h2>
+      <div class="grid cols-2" style="margin-top:8px">
+        <div class="card">
+          <div class="tag">acetone schema</div>
+          <h3>The one thing you couldn't see</h3>
+          <p>Schema is the load-bearing part of the model — identity keys — yet 0.1.0 only showed a count. <code>acetone schema [--at&nbsp;&lt;ref&gt;]</code> now lists labels + keys, relationship types and indexes for any version, without checking it out.</p>
+        </div>
+        <div class="card">
+          <div class="tag">--json</div>
+          <h3>Machine output, honestly labelled</h3>
+          <p><code>--json</code> on <code>status</code>, <code>log</code>, <code>branch</code>, <code>diff</code>, <code>list-nodes</code>, <code>get-node</code> and <code>schema</code> makes the read side scriptable. The shape is <strong>deliberately not frozen</strong> — it may change before 0.2, when the <code>acetone-core</code> facade can own it.</p>
+        </div>
+      </div>
+      <div class="term" style="margin-top:18px">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+        <div class="term-body">
+<div class="l"><span class="p">$</span> <span class="c">acetone schema</span></div>
+<div class="l"><span class="o">Labels</span></div>
+<div class="l">  "Host"  key ("hostname")  required ("os")</div>
+<div class="l"><span class="o">Relationship types</span></div>
+<div class="l">  "RUNS"</div>
+<div class="l"><span class="p">$</span> <span class="c">acetone status --json</span>   <span class="o"># {"branch":"main","nodes":1,"workspace":"clean", …}</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="num">06 / 11</div>
+  </section>
+
+  <!-- 7 · A real shell -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">A real shell</p>
+      <h2>Line editing, live schema, a prompt that knows where you are.</h2>
+      <p class="lede">The old shell read raw lines: arrow keys emitted escape sequences into the parser and there was no history. It's now a proper REPL — and stays scriptable when piped.</p>
+      <div class="grid cols-3" style="margin-top:20px">
+        <div class="card"><div class="tag">EDITING</div><h3>rustyline</h3><p>History, recall and in-line editing; Ctrl-C cancels a statement, Ctrl-D exits. Interactive-only — piped input falls back to plain reads. (ADR-0033.)</p></div>
+        <div class="card"><div class="tag">IN-SHELL</div><h3>Never leave to set up</h3><p><code>:declare-label/-rel-type/-index</code>, <code>:commit</code>, <code>:status</code>, <code>:schema</code>, <code>:cancel</code> — reusing the CLI's own code. Declared schema is picked up by the next query.</p></div>
+        <div class="card"><div class="tag">PROMPT</div><h3>acetone:main*&gt;</h3><p>Branch-aware, with a <code>*</code> dirty marker. Tables align on display width (CJK/emoji), <code>NULL</code> is distinct from the string, errors go to stderr.</p></div>
+      </div>
+    </div>
+    <div class="num">07 / 11</div>
+  </section>
+
+  <!-- 8 · The review gate -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">The review gate</p>
+      <h2>A fresh reviewer on every PR — and it caught the one that mattered.</h2>
+      <p class="lede">Every PR faced a fresh subagent with no implementation context, prompted to break it. It found real defects the implementer had missed.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card lead"><div class="tag">#106 · BLOCKER</div><p>A no-flag <code>acetone migrate</code> would have <strong>silently rewritten all history</strong> to a chunk profile no <code>init</code> produces — its defaults were taken from the wrong constant. Now it preserves the repo's current params (a hash-preserving repair). Fixed and re-reviewed.</p></div>
+        <div class="card"><div class="tag">#104 · INJECTION</div><p>A fix reintroduced an <strong>unescaped label</strong> into a suggestion — the exact terminal-injection class the module guards against. Caught, reduced to a generic placeholder.</p></div>
+        <div class="card"><div class="tag">#109 · DATA LOSS</div><p>A piped statement with no trailing <code>;</code> was <strong>silently dropped at EOF</strong> — a scripting foot-gun. Now flushed on EOF.</p></div>
+        <div class="card"><div class="tag">#108 · HARDENING</div><p><code>serde_json</code> leaves DEL/C1 control bytes raw; the implementer pre-empted it with a residual-control escape pass so hostile values can't reach the terminal.</p></div>
+      </div>
+    </div>
+    <div class="num">08 / 11</div>
+  </section>
+
+  <!-- 9 · Decisions & security -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions · security</p>
+      <h2>Two ADRs, and a clean security gate.</h2>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>ADR</th><th>Decision · for ratification</th></tr></thead>
+          <tbody>
+            <tr><td><code>0033</code></td><td>Adopt <code>rustyline</code> for the shell — a runtime dep, <code>acetone-cli</code>-only, TTY-gated with a scriptable fallback (one transitive BSL-1.0 licence allowed)</td></tr>
+            <tr><td><code>0034</code></td><td>Discover the repository from a subdirectory, preserving the <code>isolated().with(Trust::Reduced)</code> config-isolation boundary verbatim</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card lead" style="margin-top:18px">
+        <div class="tag">MILESTONE SECURITY REVIEW · GATE READY</div>
+        <h3>No blocker or high findings</h3>
+        <p>Every terminal-control class (C0, C1, DEL, ANSI/ESC) is neutralised on every new output path; discovery preserves the isolation boundary; <code>init</code> can't alias an enclosing repo; no new <code>unsafe</code>; deps confined and <code>cargo deny</code> clean. <strong>One open risk (LOW), <code>7bn.19</code></strong>: bidirectional-format (Trojan-source) characters still pass the sentence-shaped sanitiser raw — <em>pre-existing</em>, visual only, not a 0.1.1 regression. Your call to pull in or defer.</p>
+      </div>
+    </div>
+    <div class="num">09 / 11</div>
+  </section>
+
+  <!-- 10 · Live demo -->
+  <section class="slide" id="s10">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo</p>
+      <h2>Driving 0.1.1, one step at a time.</h2>
+      <p class="lede">The actual binary, step by step — help, an actionable error, the schema command, and the shell.</p>
+      <div class="term" style="margin-top:18px">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+        <div class="term-body">
+<div class="l"><span class="o"># the help now groups by role and explains the git relationship</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone --help</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># a typo is met with a suggestion, located precisely</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query 'MATCH (n:Hst) RETURN n'</span></div>
+<div class="l"><span class="no">   error: line 1, column 8: unknown label "Hst" … did you mean "Host"?</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># read the schema back, and drive the shell from a subdirectory</span></div>
+<div class="l"><span class="p">$</span> <span class="c">cd sub/dir && acetone schema</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone shell</span>   <span class="o"># readline · acetone:main*&gt; · :commit · :schema</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="num">10 / 11</div>
+  </section>
+
+  <!-- 11 · For Greg -->
+  <section class="slide" id="s11">
+    <div class="slide-inner">
+      <p class="eyebrow">At the boundary</p>
+      <h2>Yours to publish.</h2>
+      <p class="lede">The sweep is shipped and green on main; the version is bumped and the changelog curated. What remains is deliberately yours.</p>
+      <ul class="clean" style="margin-top:18px">
+        <li><b>Ratify</b> ADR-0033 (rustyline) and ADR-0034 (repo discovery), and rule on the LOW bidi open risk (<code>7bn.19</code>) — pull into 0.1.1 or defer.</li>
+        <li><b>Release:</b> dispatch the <code>Release</code> workflow to build the draft <code>v0.1.1</code>, review it, then <b>publish</b> — that creates the tag (the <code>v*</code> ruleset is yours). Then bump the Homebrew formula.</li>
+        <li><b>Deferred, none blocking:</b> the undeclared-label advisory (<code>7bn.5</code>) and the Gate-D golden reconciliation (<code>7bn.18</code>) return in Phase 7.</li>
+      </ul>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip good"><span class="dot"></span>main green @ 960e8f6</span>
+        <span class="chip good"><span class="dot"></span>Security gate ready</span>
+        <span class="chip accent"><span class="dot"></span>12 PRs · 2 ADRs · every one reviewed</span>
+      </div>
+    </div>
+    <div class="foot">docs/reports/0.1.1-sweep.md · docs/demos/0.1.1-deck.html</div>
+    <div class="num">11 / 11</div>
+  </section>
+
+</main>
