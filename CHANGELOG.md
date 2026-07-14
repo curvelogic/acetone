@@ -16,6 +16,42 @@ fine.)
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-14
+
+A CLI and Cypher **ergonomics** release — no on-disk format change, so 0.1.0
+repositories are read and written unchanged. It makes the workbench pleasant
+to drive by hand and gives error messages the same discipline the storage
+engine already had. Every user-facing wording change is now pinned by
+snapshot tests, so it can't silently regress.
+
+**Clearer, actionable errors.** Node keys render readably (`Person [alice]`)
+instead of leaking Rust internals; every Cypher error carries a `line L,
+column C:` location (execution errors gained it — the byte-offset noise is
+gone); unknown labels, properties, functions and relationship types suggest
+the nearest declared name (`did you mean "hostname"?`); a bare `(Topic {…})`
+or `[LINK]` explains the missing colon; and `DuplicateKey` gives the correct
+MERGE idiom instead of misadvising. All attacker-writable text reaching the
+terminal is escaped.
+
+**A CLI that reads like one.** `acetone --help` is grouped by role (everyday /
+schema / data & query / maintenance / plumbing) with a note on how each
+command relates to git; `cypher` is an alias for `query`; unique command
+prefixes resolve (`acetone st` → status); `import`/`export` take a consistent
+`--format` flag; and `acetone` from a **subdirectory** now finds the
+enclosing repository (like `git -C`), preserving the config-isolation
+boundary.
+
+**See and script the graph.** New `acetone schema [--at <ref>]` displays the
+declared labels, keys, relationship types and indexes for any version. A
+`--json` flag on `status`, `log`, `branch`, `diff`, `list-nodes`, `get-node`
+and `schema` makes the read commands scriptable (the JSON shape is not yet
+frozen — it may change before 0.2).
+
+**A real shell.** `acetone shell` now has readline line editing, history and
+recall; a branch-aware prompt with a dirty marker; in-shell `:declare-*`,
+`:commit`, `:status` and `:schema`; wide-character-aware table alignment; and
+errors routed to stderr. It stays scriptable when input is piped.
+
 ## [0.1.0] - 2026-07-11
 
 First release. Acetone is a **solo, git-native workbench for a

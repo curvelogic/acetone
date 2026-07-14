@@ -27,7 +27,7 @@ lto = true
 codegen-units = 1
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
@@ -57,12 +57,12 @@ insta = "1"
 
 # Version alongside path so the crates are publishable (`cargo publish`
 # requires a version on path dependencies).
-acetone-store = { path = "crates/acetone-store", version = "0.1.0" }
-acetone-prolly = { path = "crates/acetone-prolly", version = "0.1.0" }
-acetone-model = { path = "crates/acetone-model", version = "0.1.0" }
-acetone-graph = { path = "crates/acetone-graph", version = "0.1.0" }
-acetone-cypher = { path = "crates/acetone-cypher", version = "0.1.0" }
-acetone-core = { path = "crates/acetone-core", version = "0.1.0" }
+acetone-store = { path = "crates/acetone-store", version = "0.1.1" }
+acetone-prolly = { path = "crates/acetone-prolly", version = "0.1.1" }
+acetone-model = { path = "crates/acetone-model", version = "0.1.1" }
+acetone-graph = { path = "crates/acetone-graph", version = "0.1.1" }
+acetone-cypher = { path = "crates/acetone-cypher", version = "0.1.1" }
+acetone-core = { path = "crates/acetone-core", version = "0.1.1" }
 
 # thiserror: standard error-derive for library crates (CLAUDE.md conventions).
 thiserror = "2"
