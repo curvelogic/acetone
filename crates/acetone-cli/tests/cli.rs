@@ -2041,3 +2041,273 @@ fn schema_command_shows_and_time_travels() {
         "past schema must not show the later type:\n{past}"
     );
 }
+
+// --- `--json` machine output (acetone-7bn.11) --------------------------------
+//
+// Every case parses stdout with serde_json to prove it is valid JSON, then
+// asserts on the parsed value — never on brittle formatting. The JSON *shape*
+// is explicitly unstable at 0.1.1 (may change before 0.2); these tests pin
+// current behaviour, not a frozen contract.
+
+use serde_json::Value as Json;
+
+/// Parse a command's stdout as JSON, failing loudly if it is not valid.
+fn json_stdout(output: &Output) -> Json {
+    let text = stdout(output);
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}\n{text}"))
+}
+
+/// A seeded repository for the read-command JSON tests: a keyed `Host` label
+/// with a required and a unique constraint, an index, one relationship type,
+/// and a small committed graph exercising several value kinds.
+fn seed_json_repo(repo: &Path) {
+    assert!(init(repo).status.success());
+    for args in [
+        &[
+            "declare-label",
+            "Host",
+            "--key",
+            "name",
+            "--require",
+            "os",
+            "--unique",
+            "ip",
+        ][..],
+        &["declare-rel-type", "RUNS"][..],
+        &[
+            "declare-index",
+            "host_by_os",
+            "--label",
+            "Host",
+            "--property",
+            "os",
+        ][..],
+    ] {
+        assert!(
+            acetone(repo, args).status.success(),
+            "{}",
+            stderr(&acetone(repo, args))
+        );
+    }
+    let out = acetone(
+        repo,
+        &[
+            "query",
+            "CREATE (:Host {name:'web1', os:'linux', ip:'10.0.0.1', up:true, load:0.5, tags:['a','b']})",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(acetone(repo, &["commit", "-m", "seed"]).status.success());
+}
+
+#[test]
+fn status_json_reports_the_workspace_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    seed_json_repo(&repo);
+
+    let out = acetone(&repo, &["status", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    assert_eq!(v["branch"], "main");
+    assert_eq!(v["workspace"], "clean");
+    assert_eq!(v["nodes"], 1);
+    assert_eq!(v["edges"], 0);
+    assert_eq!(v["schema_entries"], 3);
+    assert!(v["head"].is_string(), "head is a hash string: {v}");
+    assert!(v["merge"].is_null(), "no merge in progress: {v}");
+}
+
+#[test]
+fn schema_json_lists_labels_types_and_indexes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    seed_json_repo(&repo);
+
+    let out = acetone(&repo, &["schema", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+
+    let label = &v["labels"][0];
+    assert_eq!(label["name"], "Host");
+    assert_eq!(label["key"], serde_json::json!(["name"]));
+    assert_eq!(label["required"], serde_json::json!(["os"]));
+    assert_eq!(label["unique"], serde_json::json!(["ip"]));
+    assert_eq!(label["surrogate"], false);
+    assert_eq!(v["relationship_types"], serde_json::json!(["RUNS"]));
+    let index = &v["indexes"][0];
+    assert_eq!(index["name"], "host_by_os");
+    assert_eq!(index["label"], "Host");
+    assert_eq!(index["properties"], serde_json::json!(["os"]));
+}
+
+#[test]
+fn get_node_json_hit_returns_the_node_object() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    seed_json_repo(&repo);
+
+    let out = acetone(&repo, &["get-node", "Host", "web1", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    assert_eq!(v["label"], "Host");
+    assert_eq!(v["key"], serde_json::json!(["web1"]));
+    assert_eq!(v["secondary_labels"], serde_json::json!([]));
+    // Value kinds map to their natural JSON forms.
+    assert_eq!(v["properties"]["os"], "linux");
+    assert_eq!(v["properties"]["up"], true);
+    assert_eq!(v["properties"]["load"], 0.5);
+    assert_eq!(v["properties"]["tags"], serde_json::json!(["a", "b"]));
+}
+
+#[test]
+fn get_node_json_miss_is_null_on_stdout_and_nonzero_exit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    seed_json_repo(&repo);
+
+    let out = acetone(&repo, &["get-node", "Host", "absent", "--json"]);
+    // Non-zero exit so a script can still detect the miss by status code…
+    assert!(!out.status.success(), "a miss must exit non-zero");
+    // …while stdout parses as JSON `null`.
+    assert_eq!(json_stdout(&out), Json::Null);
+    assert!(stderr(&out).contains("not found"));
+}
+
+#[test]
+fn list_nodes_json_is_an_array_of_node_objects() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    seed_json_repo(&repo);
+    assert!(
+        acetone(
+            &repo,
+            &["put-node", "Place", "paris", "--prop", "country=fr"]
+        )
+        .status
+        .success()
+    );
+
+    let out = acetone(&repo, &["list-nodes", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    let arr = v.as_array().expect("array");
+    assert_eq!(arr.len(), 2, "two nodes: {v}");
+
+    // The `--label` filter narrows the array.
+    let out = acetone(&repo, &["list-nodes", "--label", "Host", "--json"]);
+    let v = json_stdout(&out);
+    let arr = v.as_array().expect("array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["label"], "Host");
+    assert_eq!(arr[0]["key"], serde_json::json!(["web1"]));
+}
+
+#[test]
+fn log_and_branch_and_diff_json_shapes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    seed_json_repo(&repo);
+    let v1 = commit_hex_from_log(&repo);
+
+    // A second commit so diff has changes.
+    assert!(
+        acetone(
+            &repo,
+            &["query", "MATCH (h:Host {name:'web1'}) SET h.os='ubuntu'"]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "update os"])
+            .status
+            .success()
+    );
+
+    // log: array of commit objects, newest first.
+    let out = acetone(&repo, &["log", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    let entries = v.as_array().expect("array");
+    assert_eq!(entries.len(), 2, "two commits: {v}");
+    assert!(entries[0]["hash"].is_string());
+    assert_eq!(entries[0]["subject"], "update os");
+    assert!(entries[0]["trailers"].is_array());
+    assert!(entries[0]["parents"].is_array());
+
+    // branch (list): current plus the branch names.
+    assert!(acetone(&repo, &["branch", "feature"]).status.success());
+    let out = acetone(&repo, &["branch", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    assert_eq!(v["current"], "main");
+    let names = v["branches"].as_array().expect("array");
+    assert!(names.iter().any(|n| n == "main"));
+    assert!(names.iter().any(|n| n == "feature"));
+
+    // diff: from/to plus a changes array mirroring the human diff.
+    let out = acetone(&repo, &["diff", &v1, "main", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    assert_eq!(v["from"], v1);
+    assert_eq!(v["to"], "main");
+    let changes = v["changes"].as_array().expect("array");
+    assert!(
+        changes
+            .iter()
+            .any(|c| c["kind"] == "node_modified" && c["key"] == serde_json::json!(["web1"])),
+        "web1 modified: {v}"
+    );
+}
+
+/// Hostile property values are escaped by serde_json (never raw ANSI/C1),
+/// the same bar the human paths meet with `sanitise_line`.
+#[test]
+fn json_output_escapes_hostile_property_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    // ESC (C0), DEL (0x7f) and a C1 control (0x9b) in a property value.
+    assert!(
+        acetone(
+            &repo,
+            &[
+                "put-node",
+                "Host",
+                "1",
+                "--prop",
+                "note=ok\u{1b}[31m\u{7f}\u{9b}m"
+            ],
+        )
+        .status
+        .success()
+    );
+
+    let out = acetone(&repo, &["get-node", "Host", "1", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        !text.contains('\u{1b}'),
+        "raw ESC reached JSON output: {text:?}"
+    );
+    assert!(!text.contains('\u{7f}'), "raw DEL reached JSON output");
+    assert!(!text.contains('\u{9b}'), "raw C1 CSI reached JSON output");
+    // Still valid JSON that parses back to the original bytes.
+    let v = json_stdout(&out);
+    assert_eq!(v["properties"]["note"], "ok\u{1b}[31m\u{7f}\u{9b}m");
+}
+
+/// The `commit_hex` helper reads the "committed <hex>" line; this reads the
+/// first (newest) commit hash out of `log`.
+fn commit_hex_from_log(repo: &Path) -> String {
+    let out = acetone(repo, &["log"]);
+    stdout(&out)
+        .lines()
+        .next()
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap()
+        .to_string()
+}

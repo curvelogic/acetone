@@ -66,7 +66,12 @@ pub enum Command {
         path: Option<PathBuf>,
     },
     /// Show the current branch, head commit and workspace state.
-    Status,
+    Status {
+        /// Emit machine-readable JSON. The JSON shape is unstable and may
+        /// change before 0.2.
+        #[arg(long)]
+        json: bool,
+    },
     /// Turn the workspace's staged changes into a commit.
     ///
     /// Refuses when the workspace has no changes since HEAD — including,
@@ -81,12 +86,21 @@ pub enum Command {
         trailer: Vec<String>,
     },
     /// Show commit history, newest first.
-    Log,
+    Log {
+        /// Emit machine-readable JSON. The JSON shape is unstable and may
+        /// change before 0.2.
+        #[arg(long)]
+        json: bool,
+    },
     /// List branches, or create one.
     Branch {
         /// Name of a new branch to create at the current head commit.
         /// Omit to list existing branches.
         name: Option<String>,
+        /// Emit machine-readable JSON. The JSON shape is unstable and may
+        /// change before 0.2.
+        #[arg(long)]
+        json: bool,
     },
     /// Switch the checked-out branch.
     Checkout {
@@ -103,6 +117,10 @@ pub enum Command {
         from: String,
         /// The target version.
         to: String,
+        /// Emit machine-readable JSON. The JSON shape is unstable and may
+        /// change before 0.2.
+        #[arg(long)]
+        json: bool,
     },
     /// Merge another version into the current branch.
     ///
@@ -198,6 +216,10 @@ pub enum Command {
         /// instead of the current workspace state.
         #[arg(long)]
         at: Option<String>,
+        /// Emit machine-readable JSON. The JSON shape is unstable and may
+        /// change before 0.2.
+        #[arg(long)]
+        json: bool,
     },
 
     // ---- Data & query ----
@@ -346,6 +368,11 @@ pub enum Command {
         label: String,
         /// Key value (same parsing rule as `put-node`).
         key: String,
+        /// Emit machine-readable JSON (the node object, or `null` on a miss
+        /// with a non-zero exit). The JSON shape is unstable and may change
+        /// before 0.2.
+        #[arg(long)]
+        json: bool,
     },
     /// Insert or replace an edge (plumbing; no properties, no discriminator).
     PutEdge {
@@ -365,6 +392,10 @@ pub enum Command {
         /// Restrict to one primary label.
         #[arg(short = 'l', long)]
         label: Option<String>,
+        /// Emit machine-readable JSON. The JSON shape is unstable and may
+        /// change before 0.2.
+        #[arg(long)]
+        json: bool,
     },
     /// Change a node's key (single-column keys).
     ///
