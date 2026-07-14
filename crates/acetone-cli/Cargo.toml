@@ -41,6 +41,12 @@ clap = { version = "4", features = ["derive"] }
 csv.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# rustyline: line editing, history and arrow-key recall for the interactive
+# `acetone shell` REPL (ADR-0033). Mature, MIT-licensed, the conventional Rust
+# readline-alike; replaces the hand-rolled stdin loop. Confined to acetone-cli
+# — the library crates stay free of it. The non-TTY (piped) path bypasses
+# rustyline entirely, keeping the shell scriptable and testable.
+rustyline = "15"
 
 [dev-dependencies]
 tempfile.workspace = true

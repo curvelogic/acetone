@@ -3,7 +3,7 @@
 //! render the result.
 
 use std::collections::BTreeMap;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal};
 
 use acetone_cypher::bind::BindMode;
 use acetone_cypher::exec::value::{NodeValue, RelValue, Value};
@@ -660,57 +660,166 @@ fn json_string(text: &str) -> String {
 
 // --- Shell REPL --------------------------------------------------------------
 
-/// A minimal readline REPL. Reads whole lines; a query may span lines and
-/// is submitted when it ends in `;` or on a blank line.
+/// Whether processing an input line should end the session.
+enum Outcome {
+    Quit,
+    Continue,
+}
+
+/// The interactive Cypher REPL. When stdin is a terminal it uses `rustyline`
+/// for line editing, history and arrow-key recall; when stdin is piped (a
+/// script, or a test) it falls back to plain line reading so the shell stays
+/// scriptable. A query may span lines and is submitted when a line ends in
+/// `;` or on a blank line; meta-commands (`:help`, `:declare-*`, `:commit`,
+/// …) are handled at the start of a fresh statement, and `:quit`/`:cancel`
+/// work mid-statement too.
 pub fn shell(repo_path: &std::path::Path) -> Result<()> {
     let mut format = Format::Table;
-    let stdin = io::stdin();
     let mut buffer = String::new();
 
-    outln!("acetone shell — enter queries, ':quit' to exit, ':help' for commands");
-    loop {
-        let prompt = if buffer.is_empty() {
-            "acetone> "
-        } else {
-            "      -> "
-        };
-        print!("{prompt}");
-        io::stdout().flush().ok();
-
+    if !io::stdin().is_terminal() {
+        // Non-interactive: read lines plainly, no editing/history/prompts.
+        let stdin = io::stdin();
         let mut line = String::new();
-        if stdin.read_line(&mut line).context("reading input")? == 0 {
-            outln!(); // EOF (Ctrl-D)
-            break;
+        loop {
+            line.clear();
+            if stdin.read_line(&mut line).context("reading input")? == 0 {
+                break; // EOF
+            }
+            if let Outcome::Quit = process_shell_line(repo_path, &mut buffer, &mut format, &line) {
+                break;
+            }
         }
-        let trimmed = line.trim();
+        return Ok(());
+    }
 
-        // Meta-commands only at the start of a fresh query.
-        if buffer.is_empty() && trimmed.starts_with(':') {
-            match handle_meta(repo_path, trimmed, &mut format) {
-                Ok(true) => break,
+    outln!("acetone shell — enter queries, ':quit' to exit, ':help' for commands");
+    let config = rustyline::Config::builder()
+        .max_history_size(1000)
+        .context("configuring the line editor")?
+        .build();
+    let mut editor: rustyline::Editor<(), rustyline::history::FileHistory> =
+        rustyline::Editor::with_config(config)
+            .context("initialising the interactive line editor")?;
+    let history = shell_history_path();
+    if let Some(path) = &history {
+        let _ = editor.load_history(path);
+    }
+    loop {
+        let prompt = shell_prompt(repo_path, buffer.is_empty());
+        match editor.readline(&prompt) {
+            Ok(line) => {
+                if !line.trim().is_empty() {
+                    let _ = editor.add_history_entry(line.as_str());
+                }
+                if let Outcome::Quit =
+                    process_shell_line(repo_path, &mut buffer, &mut format, &line)
+                {
+                    break;
+                }
+            }
+            // Ctrl-C: abandon the current (partial) statement, stay in the shell.
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                buffer.clear();
+                outln!("(cancelled — Ctrl-D to exit)");
+            }
+            // Ctrl-D on an empty line: exit.
+            Err(rustyline::error::ReadlineError::Eof) => break,
+            Err(e) => {
+                outln!("error: {e}");
+                break;
+            }
+        }
+    }
+    if let Some(path) = &history {
+        let _ = editor.save_history(path);
+    }
+    Ok(())
+}
+
+/// Per-user history file for the interactive shell.
+fn shell_history_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".acetone_history"))
+}
+
+/// The prompt for the next line: branch-aware (with a `*` dirty marker) at the
+/// start of a statement, aligned continuation otherwise. Best-effort — falls
+/// back to a plain prompt if the repo cannot be read.
+fn shell_prompt(repo_path: &std::path::Path, fresh: bool) -> String {
+    if !fresh {
+        return "      -> ".to_string();
+    }
+    match Repository::open(repo_path) {
+        Ok(repo) => {
+            let branch = repo
+                .current_branch()
+                .ok()
+                .flatten()
+                .map(|full| {
+                    full.strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
+                        .unwrap_or(full.as_str())
+                        .to_owned()
+                })
+                .unwrap_or_else(|| "detached".to_string());
+            let mark = if repo.is_dirty().unwrap_or(false) {
+                "*"
+            } else {
+                ""
+            };
+            format!("acetone:{branch}{mark}> ")
+        }
+        Err(_) => "acetone> ".to_string(),
+    }
+}
+
+/// Process one input line against the accumulating statement buffer: dispatch
+/// a meta-command, accumulate a partial statement, or run a completed one.
+fn process_shell_line(
+    repo_path: &std::path::Path,
+    buffer: &mut String,
+    format: &mut Format,
+    raw: &str,
+) -> Outcome {
+    let line = raw.trim_end_matches(['\n', '\r']);
+    let trimmed = line.trim();
+
+    // Meta-commands: at the start of a fresh statement, or `:quit`/`:cancel`
+    // any time (so you can escape a half-typed statement).
+    if let Some(body) = trimmed.strip_prefix(':') {
+        let cmd = body.split_whitespace().next().unwrap_or("");
+        let escapes = matches!(cmd, "quit" | "q" | "exit" | "cancel");
+        if buffer.is_empty() || escapes {
+            match handle_meta(repo_path, trimmed, format, buffer) {
+                Ok(true) => return Outcome::Quit,
                 Ok(false) => {}
                 Err(e) => outln!("error: {e:#}"),
             }
-            continue;
-        }
-
-        buffer.push_str(&line);
-        let complete = trimmed.ends_with(';') || (trimmed.is_empty() && !buffer.trim().is_empty());
-        if !complete {
-            continue;
-        }
-
-        let query = buffer.trim().trim_end_matches(';').trim().to_string();
-        buffer.clear();
-        if query.is_empty() {
-            continue;
-        }
-        match run_in_shell(repo_path, &query, format) {
-            Ok(()) => {}
-            Err(e) => outln!("error: {e:#}"),
+            return Outcome::Continue;
         }
     }
-    Ok(())
+
+    // A whitespace-only line at a fresh prompt: ignore (do not enter a
+    // continuation with an empty pending statement).
+    if buffer.is_empty() && trimmed.is_empty() {
+        return Outcome::Continue;
+    }
+
+    buffer.push_str(line);
+    buffer.push('\n');
+    let complete = trimmed.ends_with(';') || (trimmed.is_empty() && !buffer.trim().is_empty());
+    if !complete {
+        return Outcome::Continue;
+    }
+
+    let query = buffer.trim().trim_end_matches(';').trim().to_string();
+    buffer.clear();
+    if query.is_empty() {
+        return Outcome::Continue;
+    }
+    if let Err(e) = run_in_shell(repo_path, &query, *format) {
+        outln!("error: {e:#}");
+    }
+    Outcome::Continue
 }
 
 fn run_in_shell(repo_path: &std::path::Path, cypher: &str, format: Format) -> Result<()> {
@@ -730,21 +839,120 @@ fn run_in_shell(repo_path: &std::path::Path, cypher: &str, format: Format) -> Re
     Ok(())
 }
 
-/// Returns Ok(true) to quit the shell.
-fn handle_meta(repo_path: &std::path::Path, line: &str, format: &mut Format) -> Result<bool> {
-    let mut parts = line[1..].split_whitespace();
-    let command = parts.next().unwrap_or("");
+/// Split a meta-command's argument string into leading positionals and
+/// `--flag value...` groups (a forgiving mini-parser mirroring the CLI verbs;
+/// values are whitespace-split, so identifiers only — no quoting).
+fn parse_meta_args(rest: &str) -> (Vec<String>, std::collections::BTreeMap<String, Vec<String>>) {
+    let mut positional = Vec::new();
+    let mut flags: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    let mut current: Option<String> = None;
+    for tok in rest.split_whitespace() {
+        if let Some(flag) = tok.strip_prefix("--") {
+            current = Some(flag.to_string());
+            flags.entry(flag.to_string()).or_default();
+        } else if let Some(flag) = &current {
+            flags.entry(flag.clone()).or_default().push(tok.to_string());
+        } else {
+            positional.push(tok.to_string());
+        }
+    }
+    (positional, flags)
+}
+
+/// Handle a `:meta` command. Returns Ok(true) to quit the shell. Errors are
+/// reported to the caller and never end the session. `buffer` is the
+/// accumulating statement (cleared by `:cancel`).
+fn handle_meta(
+    repo_path: &std::path::Path,
+    line: &str,
+    format: &mut Format,
+    buffer: &mut String,
+) -> Result<bool> {
+    let body = &line[1..];
+    let (command, rest) = match body.find(char::is_whitespace) {
+        Some(i) => (&body[..i], body[i..].trim()),
+        None => (body, ""),
+    };
     match command {
         "quit" | "q" | "exit" => return Ok(true),
-        "help" | "h" => {
-            outln!(":checkout <ref> | :log | :format <table|json|csv> | :quit | :help");
+        "cancel" => {
+            buffer.clear();
+            outln!("(cancelled)");
         }
-        "format" | "f" => match parts.next() {
-            Some(name) => *format = Format::parse(name)?,
-            None => outln!("current format: {format:?}"),
-        },
+        "help" | "h" => {
+            outln!("Meta-commands:");
+            outln!("  :help, :h                     show this help");
+            outln!("  :quit, :q, :exit              leave the shell (or Ctrl-D)");
+            outln!("  :cancel                       discard the half-typed statement (or Ctrl-C)");
+            outln!("  :status                       branch, head and workspace state");
+            outln!("  :commit <message>             commit the workspace");
+            outln!("  :checkout <ref>               switch to a branch or version");
+            outln!("  :log                          commit history, newest first");
+            outln!("  :schema [--at <ref>]          the declared schema");
+            outln!("  :declare-label <L> --key <p>... [--require <p>...] [--unique <p>...]");
+            outln!("  :declare-rel-type <TYPE>");
+            outln!("  :declare-index <name> --label <L> --property <p>...");
+            outln!("  :format, :f <table|json|csv>  result format");
+            outln!("End a statement with ';' or a blank line.");
+        }
+        "format" | "f" => {
+            if rest.is_empty() {
+                outln!("current format: {format:?}");
+            } else {
+                *format = Format::parse(rest)?;
+            }
+        }
+        "status" => crate::commands::status(repo_path, false)?,
+        "commit" => {
+            if rest.is_empty() {
+                anyhow::bail!("usage: :commit <message>");
+            }
+            crate::commands::commit(repo_path, rest, &[])?;
+        }
+        "schema" => {
+            let (_pos, flags) = parse_meta_args(rest);
+            let at = flags.get("at").and_then(|v| v.first()).map(String::as_str);
+            crate::commands::schema(repo_path, at, false)?;
+        }
+        "declare-label" => {
+            let (pos, flags) = parse_meta_args(rest);
+            let label = pos
+                .first()
+                .context("usage: :declare-label <LABEL> --key <prop>...")?;
+            let key = flags.get("key").cloned().unwrap_or_default();
+            if key.is_empty() {
+                anyhow::bail!("usage: :declare-label <LABEL> --key <prop>...");
+            }
+            let require = flags.get("require").cloned().unwrap_or_default();
+            let unique = flags.get("unique").cloned().unwrap_or_default();
+            crate::commands::declare_label(repo_path, label, &key, &require, &unique)?;
+        }
+        "declare-rel-type" => {
+            if rest.is_empty() {
+                anyhow::bail!("usage: :declare-rel-type <TYPE>");
+            }
+            crate::commands::declare_rel_type(repo_path, rest)?;
+        }
+        "declare-index" => {
+            let (pos, flags) = parse_meta_args(rest);
+            let name = pos
+                .first()
+                .context("usage: :declare-index <name> --label <L> --property <p>...")?;
+            let label = flags
+                .get("label")
+                .and_then(|v| v.first())
+                .context("usage: :declare-index <name> --label <L> --property <p>...")?;
+            let props = flags.get("property").cloned().unwrap_or_default();
+            if props.is_empty() {
+                anyhow::bail!("usage: :declare-index <name> --label <L> --property <p>...");
+            }
+            crate::commands::declare_index(repo_path, name, label, &props)?;
+        }
         "checkout" => {
-            let refspec = parts.next().context("usage: :checkout <ref>")?;
+            let refspec = rest
+                .split_whitespace()
+                .next()
+                .context("usage: :checkout <ref>")?;
             let repo = Repository::open(repo_path)?;
             repo.checkout_branch(refspec)?;
             outln!("switched to {refspec}");
