@@ -56,7 +56,7 @@ pub enum BindError {
         span: Span,
     },
 
-    #[error("unknown function '{name}'{suggestion}")]
+    #[error("unknown function {name:?}{suggestion}")]
     UnknownFunction {
         name: String,
         span: Span,
@@ -86,7 +86,7 @@ pub enum BindError {
     #[error("expressions in a projection must be aliased before reuse")]
     NoExpressionAlias { span: Span },
 
-    #[error("unknown label '{name}' (declared labels come from the schema map){suggestion}")]
+    #[error("unknown label {name:?} (not declared in the schema){suggestion}")]
     UnknownLabel {
         name: String,
         span: Span,
@@ -97,7 +97,7 @@ pub enum BindError {
     // escaped (`declare_cmd`) — a backtick-quoted Cypher identifier can carry
     // control characters, which must never reach the terminal raw.
     #[error(
-        "unknown relationship type '{name}' — declare it first with `acetone declare-rel-type {declare_cmd}`{suggestion}"
+        "unknown relationship type {name:?} — declare it first with `acetone declare-rel-type {declare_cmd}`{suggestion}"
     )]
     UnknownRelType {
         name: String,
@@ -106,7 +106,7 @@ pub enum BindError {
         suggestion: Suggestion,
     },
 
-    #[error("unknown property '{property}' on label '{label}'{suggestion}")]
+    #[error("unknown property {property:?} on label {label:?}{suggestion}")]
     UnknownProperty {
         label: String,
         property: String,

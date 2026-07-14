@@ -12,8 +12,12 @@
 //! **every root hash** while `format_version` stayed 1. That is exactly the
 //! two-builds-disagree-under-one-version failure a freeze exists to prevent.
 //!
-//! This suite closes the gap. It pins, under the **default** chunk
-//! parameters (`ChunkParams::default()` — the released format's defaults):
+//! This suite closes the gap. It pins, under the prolly **default** chunk
+//! parameters (`ChunkParams::default()` — the spike/test profile, max 16 KiB;
+//! NOT the shipped repository default, which is max 64 KiB via
+//! `acetone_graph::repo::default_chunk_params()`. Aligning the two — so these
+//! byte-exact goldens cover the released profile — is a Gate-D follow-up,
+//! acetone-7bn.18):
 //!
 //! - a leaf chunk's exact bytes (a single-leaf map),
 //! - an inner chunk's exact bytes (a map tall enough to have an inner root),
