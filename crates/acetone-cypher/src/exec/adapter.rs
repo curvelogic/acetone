@@ -279,14 +279,16 @@ fn convert_map(properties: &BTreeMap<String, ModelValue>) -> BTreeMap<String, Va
 }
 
 /// Convert a stored value to a runtime value. The v0.1 read subset
-/// (spec §5.1) defers temporal and byte types; rather than make a whole
-/// node unqueryable, those render to strings (lossy, but property access
-/// still works and temporal *arithmetic* is out of scope anyway).
+/// (spec §5.1) defers temporal and byte types: the runtime `Value` has no
+/// native `Bytes`/temporal variant, so those are wrapped in a
+/// [`Value::Stored`] carrier (ADR-0038) rather than made unqueryable.
 ///
-/// The rendering is lossy, so a read→write round-trip cannot naively re-persist
-/// it (that would retype the property to a string). The write path
-/// (`persist`) uses this same function to detect an *unchanged* deferred
-/// property and preserve its stored value verbatim (ADR-0029).
+/// The carrier presents as its string rendering ([`render_stored`]) in every
+/// query semantic, so property access, comparison and display are unchanged;
+/// its sole purpose is that the write path ([`persist`](crate::persist)) can
+/// recover the original typed [`ModelValue`], closing the read→write retyping
+/// loss for both nodes and edges (this supersedes the ADR-0029 node-only
+/// heuristic).
 pub(crate) fn convert_value(value: &ModelValue) -> Value {
     match value {
         ModelValue::Null => Value::Null,
@@ -295,18 +297,15 @@ pub(crate) fn convert_value(value: &ModelValue) -> Value {
         ModelValue::Float(x) => Value::Float(*x),
         ModelValue::String(s) => Value::String(s.clone()),
         ModelValue::List(items) => Value::List(items.iter().map(convert_value).collect()),
-        ModelValue::Bytes(bytes) => Value::String(hex(bytes)),
-        // Deferred temporal types: a stable string rendering.
-        other => Value::String(format!("{other:?}")),
+        // Deferred domain types (`Bytes` and the four temporals): carried
+        // verbatim so the round-trip is lossless. Exhaustive by design — a new
+        // `ModelValue` variant must make a deliberate carry-or-model choice.
+        ModelValue::Bytes(_)
+        | ModelValue::Date(_)
+        | ModelValue::Time(_)
+        | ModelValue::DateTime(_)
+        | ModelValue::Duration(_) => Value::Stored(value.clone()),
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
 }
 
 /// A deterministic byte rendering of a node's logical key for identity.
@@ -488,6 +487,13 @@ fn model_value_of(value: &Value) -> Option<ModelValue> {
         Value::Int(n) => ModelValue::Int(*n),
         Value::Float(x) => ModelValue::Float(*x),
         Value::String(s) => ModelValue::String(s.clone()),
+        // Index keys mirror the *runtime* comparison, not storage: a carrier is
+        // compared as its string rendering (it decays to a string before any
+        // `=`), so it must be index-keyed as that same string — keying the raw
+        // typed value would let a string-pinned seek miss it, disagreeing with a
+        // scan (the invariant this whole converter exists to hold). Lossless
+        // write-back is a separate concern, handled by `persist::convert_value`.
+        Value::Stored(mv) => ModelValue::String(crate::exec::value::render_stored(mv)),
         Value::List(items) => ModelValue::List(
             items
                 .iter()

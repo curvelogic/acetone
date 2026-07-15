@@ -22,3 +22,7 @@ proptest.workspace = true
 # insta: snapshot the rendered text of parser/binder diagnostics so message
 # improvements land as reviewed diffs rather than silent changes.
 insta.workspace = true
+# tempfile: a temporary on-disk repository for the value-carrier round-trip
+# integration test, which drives the real write path (execute → persist →
+# save → re-read) that the in-crate `GraphSource` tests cannot.
+tempfile.workspace = true

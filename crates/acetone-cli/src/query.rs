@@ -601,6 +601,9 @@ fn render_value(value: &Value) -> String {
         Value::Node(node) => render_node(node),
         Value::Relationship(rel) => render_rel(rel),
         Value::Path(path) => format!("<path of {} rels>", path.rels.len()),
+        // A read carrier renders exactly as its string form would (ADR-0038):
+        // hex for Bytes, a stable debug string for temporals, sanitised.
+        Value::Stored(mv) => sanitise_line(&acetone_cypher::exec::value::render_stored(mv)),
     }
 }
 
@@ -671,6 +674,8 @@ fn json_value(value: &Value) -> String {
         }
         Value::Relationship(rel) => format!("{{\"type\": {}}}", json_string(&rel.rel_type)),
         Value::Path(path) => format!("{{\"length\": {}}}", path.rels.len()),
+        // Carried as its string rendering, JSON-escaped like any string (ADR-0038).
+        Value::Stored(mv) => json_string(&acetone_cypher::exec::value::render_stored(mv)),
     }
 }
 
