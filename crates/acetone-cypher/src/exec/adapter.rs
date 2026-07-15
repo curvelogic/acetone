@@ -584,6 +584,29 @@ mod tests {
     }
 
     #[test]
+    fn a_relationship_id_never_equals_a_node_id() {
+        // The edge id (encode_fwd bytes) and node id (node-key bytes) are
+        // disjoint by construction — an edge encoding is strictly longer than
+        // its source node's id and lives in a different structural shape. Lock
+        // that down so rel/node identity can never be confused.
+        use crate::exec::source::GraphSource;
+        let a = node_key("Host", "a");
+        let b = node_key("Host", "b");
+        let nodes = vec![
+            (a.clone(), NodeRecord::new([], BTreeMap::new())),
+            (b.clone(), NodeRecord::new([], BTreeMap::new())),
+        ];
+        let ab = EdgeKey::new(a.clone(), "R", b.clone(), ModelValue::Null).unwrap();
+        let s = GraphSnapshot::from_records(&nodes, &[(ab, EdgeRecord::new(BTreeMap::new()))]);
+        let rel_id = rel_id_of(&s, &a, &b);
+        let node_ids: Vec<EntityId> = s.all_nodes().into_iter().map(|n| n.id).collect();
+        assert!(
+            !node_ids.contains(&rel_id),
+            "a relationship id must not collide with any node id"
+        );
+    }
+
+    #[test]
     fn distinct_relationships_have_distinct_identities() {
         // The injective edge-key encoding must give parallel-endpoint and
         // different-endpoint edges distinct ids.

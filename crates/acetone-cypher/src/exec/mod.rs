@@ -263,6 +263,17 @@ mod tests {
     }
 
     #[test]
+    fn var_length_over_created_edges_traverses_each_once() {
+        // Created edges carry stable overlay ids (acetone-rid); a var-length
+        // walk over them must honour relationship uniqueness across the
+        // overlay — each created edge traversed at most once, no double count.
+        let result = run("CREATE (a:N)-[:R]->(b:N) CREATE (b)-[:R]->(c:N) \
+             WITH a MATCH p = (a)-[:R*]->(x) RETURN count(p) AS c");
+        // Paths from a: a->b (len 1) and a->b->c (len 2) = 2, each edge once.
+        assert!(matches!(result.rows[0][0], Value::Int(2)));
+    }
+
+    #[test]
     fn optional_match_extends_with_nulls() {
         let graph = host_graph();
         let result = run_query(
