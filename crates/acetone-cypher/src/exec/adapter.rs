@@ -100,8 +100,7 @@ impl GraphSnapshot {
             .collect();
         let rel_values: Vec<RelValue> = edges
             .iter()
-            .enumerate()
-            .map(|(index, (key, record))| rel_value(index, key, record))
+            .map(|(key, record)| rel_value(key, record))
             .collect();
 
         let mut by_id = HashMap::with_capacity(node_values.len());
@@ -248,13 +247,23 @@ fn node_value(
     }
 }
 
-fn rel_value(index: usize, key: &EdgeKey, record: &EdgeRecord) -> RelValue {
+/// Stable relationship identity: the memcomparable forward-key bytes
+/// `(src, type, dst, disc)`. Distinct edges have distinct keys (relationship
+/// identity is `(src, type, dst, discriminator)`, spec §2), so this is stable
+/// across snapshots and round-trips back to the [`EdgeKey`] — unlike the
+/// former positional `e{index}` (acetone-rid, ADR-0037). Mirrors
+/// [`node_entity_id`]. The encoding succeeds for any valid stored key; the
+/// `Debug` fallback matches [`render_key_bytes`]'s defensive shape.
+fn rel_entity_id(key: &EdgeKey) -> EntityId {
+    EntityId::from_bytes(
+        key.encode_fwd()
+            .unwrap_or_else(|_| format!("{key:?}").into_bytes()),
+    )
+}
+
+fn rel_value(key: &EdgeKey, record: &EdgeRecord) -> RelValue {
     RelValue {
-        // Edge identity: forward-key bytes plus the row index guard
-        // against parallel edges sharing a discriminator collision in the
-        // rendering (keys are unique, index only disambiguates the
-        // rendering fallback).
-        id: EntityId::from_bytes(format!("e{index}").into_bytes()),
+        id: rel_entity_id(key),
         rel_type: key.rtype().to_string(),
         start: node_entity_id(key.src()),
         end: node_entity_id(key.dst()),
@@ -521,6 +530,108 @@ mod tests {
         .unwrap();
         let edges = vec![(edge, EdgeRecord::new(BTreeMap::new()))];
         GraphSnapshot::from_records(&nodes, &edges)
+    }
+
+    /// The runtime id of the `from -R-> to` edge in a snapshot, via `expand`.
+    fn rel_id_of(snapshot: &GraphSnapshot, from: &NodeKey, to: &NodeKey) -> EntityId {
+        use crate::ast::Direction;
+        use crate::exec::source::GraphSource;
+        let to_id = node_entity_id(to);
+        snapshot
+            .expand(&node_entity_id(from), Direction::Out, &["R".to_string()])
+            .into_iter()
+            .find(|(_, neighbour)| neighbour.id == to_id)
+            .expect("the edge must be reachable")
+            .0
+            .id
+    }
+
+    #[test]
+    fn relationship_identity_is_stable_across_snapshots() {
+        // acetone-rid: a relationship's identity must derive from its edge key,
+        // not its positional index — so inserting an unrelated *earlier* edge
+        // must not renumber it. (With the old `e{index}` scheme it did.)
+        let a = node_key("Host", "a");
+        let b = node_key("Host", "b");
+        let c = node_key("Host", "c");
+        let nodes = vec![
+            (a.clone(), NodeRecord::new([], BTreeMap::new())),
+            (b.clone(), NodeRecord::new([], BTreeMap::new())),
+            (c.clone(), NodeRecord::new([], BTreeMap::new())),
+        ];
+        let target = EdgeKey::new(b.clone(), "R", c.clone(), ModelValue::Null).unwrap();
+        let earlier = EdgeKey::new(a.clone(), "R", b.clone(), ModelValue::Null).unwrap();
+
+        // Snapshot 1: just the target edge.
+        let s1 = GraphSnapshot::from_records(
+            &nodes,
+            &[(target.clone(), EdgeRecord::new(BTreeMap::new()))],
+        );
+        // Snapshot 2: an unrelated edge inserted *before* the target.
+        let s2 = GraphSnapshot::from_records(
+            &nodes,
+            &[
+                (earlier, EdgeRecord::new(BTreeMap::new())),
+                (target, EdgeRecord::new(BTreeMap::new())),
+            ],
+        );
+
+        assert_eq!(
+            rel_id_of(&s1, &b, &c),
+            rel_id_of(&s2, &b, &c),
+            "relationship identity must not depend on unrelated earlier edges"
+        );
+    }
+
+    #[test]
+    fn a_relationship_id_never_equals_a_node_id() {
+        // The edge id (encode_fwd bytes) and node id (node-key bytes) are
+        // disjoint by construction — an edge encoding is strictly longer than
+        // its source node's id and lives in a different structural shape. Lock
+        // that down so rel/node identity can never be confused.
+        use crate::exec::source::GraphSource;
+        let a = node_key("Host", "a");
+        let b = node_key("Host", "b");
+        let nodes = vec![
+            (a.clone(), NodeRecord::new([], BTreeMap::new())),
+            (b.clone(), NodeRecord::new([], BTreeMap::new())),
+        ];
+        let ab = EdgeKey::new(a.clone(), "R", b.clone(), ModelValue::Null).unwrap();
+        let s = GraphSnapshot::from_records(&nodes, &[(ab, EdgeRecord::new(BTreeMap::new()))]);
+        let rel_id = rel_id_of(&s, &a, &b);
+        let node_ids: Vec<EntityId> = s.all_nodes().into_iter().map(|n| n.id).collect();
+        assert!(
+            !node_ids.contains(&rel_id),
+            "a relationship id must not collide with any node id"
+        );
+    }
+
+    #[test]
+    fn distinct_relationships_have_distinct_identities() {
+        // The injective edge-key encoding must give parallel-endpoint and
+        // different-endpoint edges distinct ids.
+        let a = node_key("Host", "a");
+        let b = node_key("Host", "b");
+        let c = node_key("Host", "c");
+        let nodes = vec![
+            (a.clone(), NodeRecord::new([], BTreeMap::new())),
+            (b.clone(), NodeRecord::new([], BTreeMap::new())),
+            (c.clone(), NodeRecord::new([], BTreeMap::new())),
+        ];
+        let ab = EdgeKey::new(a.clone(), "R", b.clone(), ModelValue::Null).unwrap();
+        let bc = EdgeKey::new(b.clone(), "R", c.clone(), ModelValue::Null).unwrap();
+        let s = GraphSnapshot::from_records(
+            &nodes,
+            &[
+                (ab, EdgeRecord::new(BTreeMap::new())),
+                (bc, EdgeRecord::new(BTreeMap::new())),
+            ],
+        );
+        assert_ne!(
+            rel_id_of(&s, &a, &b),
+            rel_id_of(&s, &b, &c),
+            "distinct relationships must have distinct identities"
+        );
     }
 
     #[test]
