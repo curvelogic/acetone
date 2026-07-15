@@ -85,12 +85,18 @@ clock reads).
 
 ### Enforcement seams
 
-`charge_rows` at every row-set growth site (`match_clause`, `UNWIND`,
-`project`, `collect`); `charge_expansion` + `charge_work` per hop in the
-`expand_var_length` explicit-stack DFS loop; `charge_collection` in the
-`eval.rs` list constructors and in `range()` (generalising `MAX_RANGE_ELEMENTS`
-to draw from the config); `charge_work` in the per-clause loop and at expensive
-`eval` nodes.
+`row` at every row-set growth site (`match_clause` — including the
+cross-pattern cartesian intermediate set — `UNWIND`, `project`, `collect`,
+CALL, and the create/merge/set/delete write helpers); `hop` per edge in both
+the fixed-length walk and the `expand_var_length` explicit-stack DFS;
+`collection`/`collection_push` for every value that materialises unboundedly —
+`range()` (generalising the former `MAX_RANGE_ELEMENTS`), list literals and
+comprehensions, `collect()`, and crucially the `+` operator's list/string
+concatenation (the one operator that produces a value unboundedly larger than
+its inputs, e.g. a doubling `reduce`); and a per-iteration charge in `reduce`
+and the quantifiers so their per-element work is accounted, not just bounded by
+the source list. The rule throughout is **charge before allocate**: a single
+oversized step is rejected up front, never after the memory is spent.
 
 ### Invariants
 

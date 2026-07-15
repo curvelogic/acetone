@@ -192,7 +192,7 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 _ => {
                     let a = eval(lhs, row, ctx)?;
                     let b = eval(rhs, row, ctx)?;
-                    binary(*op, a, b, *span)
+                    binary(*op, a, b, *span, ctx.governor)
                 }
             }
         }
@@ -289,9 +289,10 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 {
                     continue;
                 }
-                // Charge each produced element against the collection cap so a
-                // comprehension over a large source list is bounded.
-                ctx.governor.collection(out.len() as u64 + 1)?;
+                // Charge each produced element (linear work) against the
+                // collection cap so a comprehension over a large source list is
+                // bounded without over-charging quadratically.
+                ctx.governor.collection_push(out.len())?;
                 out.push(match map {
                     Some(map) => eval(map, &inner, ctx)?,
                     None => item,
@@ -340,7 +341,10 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             };
             let mut acc = eval(init, row, ctx)?;
             let mut inner = row.clone();
-            for item in items {
+            for (index, item) in items.into_iter().enumerate() {
+                // Charge each fold step so a reduce over a large list is
+                // CPU-accounted, not just bounded by the source list's size.
+                ctx.governor.collection_push(index)?;
                 inner.set(*accumulator, acc);
                 inner.set(*variable, item);
                 acc = eval(expr, &inner, ctx)?;
@@ -447,7 +451,13 @@ fn unary(op: UnaryOp, value: Value, span: Span) -> Result<Value, ExecError> {
     }
 }
 
-fn binary(op: BinaryOp, a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
+fn binary(
+    op: BinaryOp,
+    a: Value,
+    b: Value,
+    span: Span,
+    governor: &super::governor::Governor,
+) -> Result<Value, ExecError> {
     use BinaryOp::*;
     match op {
         Eq => Ok(ternary_to_value(a.eq3(&b))),
@@ -467,7 +477,7 @@ fn binary(op: BinaryOp, a: Value, b: Value, span: Span) -> Result<Value, ExecErr
         Ge => Ok(ternary_to_value(
             a.cmp3(&b).map(|o| o != std::cmp::Ordering::Less),
         )),
-        Add => add(a, b, span),
+        Add => add(a, b, span, governor),
         Sub => arith(a, b, span, i64::checked_sub, |x, y| x - y),
         Mul => arith(a, b, span, i64::checked_mul, |x, y| x * y),
         Div => divide(a, b, span),
@@ -492,8 +502,18 @@ fn nan_comparison(a: &Value, b: &Value) -> bool {
     is_number(a) && is_number(b) && (is_nan(a) || is_nan(b))
 }
 
-fn add(a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
+fn add(
+    a: Value,
+    b: Value,
+    span: Span,
+    governor: &super::governor::Governor,
+) -> Result<Value, ExecError> {
     use Value::*;
+    // `+` is the one operator that materialises an unboundedly larger value
+    // than its inputs — repeated `acc + acc` (a doubling `reduce`) or `s + x`
+    // over a large list. Charge the *resulting* collection/string size against
+    // the governor before allocating it, so those are bounded up front.
+    let concat = |governor: &super::governor::Governor, len: usize| governor.collection(len as u64);
     match (a, b) {
         (Null, _) | (_, Null) => Ok(Null),
         (Int(a), Int(b)) => a
@@ -503,26 +523,45 @@ fn add(a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
         (Int(a), Float(b)) => Ok(Float(a as f64 + b)),
         (Float(a), Int(b)) => Ok(Float(a + b as f64)),
         (Float(a), Float(b)) => Ok(Float(a + b)),
-        (String(a), String(b)) => Ok(String(a + &b)),
-        (String(a), Int(b)) => Ok(String(format!("{a}{b}"))),
-        (String(a), Float(b)) => Ok(String(format!(
-            "{a}{}",
-            crate::exec::functions::format_float(b)
-        ))),
-        (Int(a), String(b)) => Ok(String(format!("{a}{b}"))),
-        (Float(a), String(b)) => Ok(String(format!(
-            "{}{b}",
-            crate::exec::functions::format_float(a)
-        ))),
+        (String(a), String(b)) => {
+            concat(governor, a.len() + b.len())?;
+            Ok(String(a + &b))
+        }
+        // A number stringifies to at most ~24 bytes; bound generously.
+        (String(a), Int(b)) => {
+            concat(governor, a.len() + 24)?;
+            Ok(String(format!("{a}{b}")))
+        }
+        (String(a), Float(b)) => {
+            concat(governor, a.len() + 32)?;
+            Ok(String(format!(
+                "{a}{}",
+                crate::exec::functions::format_float(b)
+            )))
+        }
+        (Int(a), String(b)) => {
+            concat(governor, b.len() + 24)?;
+            Ok(String(format!("{a}{b}")))
+        }
+        (Float(a), String(b)) => {
+            concat(governor, b.len() + 32)?;
+            Ok(String(format!(
+                "{}{b}",
+                crate::exec::functions::format_float(a)
+            )))
+        }
         (List(mut a), List(b)) => {
+            concat(governor, a.len() + b.len())?;
             a.extend(b);
             Ok(List(a))
         }
         (List(mut a), b) => {
+            concat(governor, a.len() + 1)?;
             a.push(b);
             Ok(List(a))
         }
         (a, List(mut b)) => {
+            concat(governor, b.len() + 1)?;
             b.insert(0, a);
             Ok(List(b))
         }
@@ -821,7 +860,10 @@ fn quantify(
     let mut t = 0usize;
     let mut n = 0usize;
     let mut inner = row.clone();
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
+        // Charge each predicate evaluation so a quantifier over a large list
+        // is CPU-accounted.
+        ctx.governor.collection_push(index)?;
         inner.set(variable, item.clone());
         match truth(&eval(predicate, &inner, ctx)?, span)? {
             Some(true) => t += 1,

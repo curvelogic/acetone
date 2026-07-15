@@ -962,7 +962,12 @@ fn match_clause(
         for pattern in patterns {
             let mut next = Vec::new();
             for state in states {
-                next.extend(match_path(pattern, state, ctx)?);
+                // Bound the cross-pattern (cartesian) intermediate set too, not
+                // just each pattern's own matches and the final output.
+                for matched in match_path(pattern, state, ctx)? {
+                    ctx.governor.row(next.len())?;
+                    next.push(matched);
+                }
             }
             states = next;
         }

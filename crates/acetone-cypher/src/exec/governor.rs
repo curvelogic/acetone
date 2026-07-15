@@ -151,13 +151,28 @@ impl Governor {
     }
 
     /// Charge building a collection of `len` elements *before* it is
-    /// allocated, so an oversized `range()`/list is rejected up front rather
-    /// than after exhausting memory. Errors past `max_collection_len`.
+    /// allocated, so an oversized `range()`/list/string is rejected up front
+    /// rather than after exhausting memory. Errors past `max_collection_len`.
+    /// (For strings, `len` is the byte length — a string is a collection of
+    /// bytes for governing purposes.)
     pub fn collection(&self, len: u64) -> Result<(), ExecError> {
         if len > self.limits.max_collection_len {
             return Err(Self::exceeded(ResourceLimit::CollectionLen));
         }
         self.charge_work(len)
+    }
+
+    /// Charge one element about to be pushed into a collection that currently
+    /// holds `current_len` elements — the incremental counterpart of
+    /// [`Governor::collection`] for element-at-a-time builders (comprehensions)
+    /// and per-element list iteration (`reduce`, quantifiers). Charges linear
+    /// work (one unit per element) and errors once the collection reaches
+    /// `max_collection_len`.
+    pub fn collection_push(&self, current_len: usize) -> Result<(), ExecError> {
+        if current_len as u64 >= self.limits.max_collection_len {
+            return Err(Self::exceeded(ResourceLimit::CollectionLen));
+        }
+        self.charge_work(1)
     }
 
     /// Total work charged so far. Deterministic for a given query + graph +

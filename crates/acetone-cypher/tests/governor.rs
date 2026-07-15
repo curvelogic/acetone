@@ -116,6 +116,53 @@ fn the_work_odometer_catches_a_query_that_dodges_the_dimensional_caps() {
 }
 
 #[test]
+fn a_doubling_reduce_over_lists_is_bounded() {
+    // reduce(acc=[1], x IN range(1,N) | acc + acc) doubles the list each step:
+    // N steps build 2^N elements. Without charging `+` this dodged every cap
+    // (adversarial review blocker). It must now trip the collection cap.
+    let graph = MemoryGraph::new();
+    let err = run_query_with_limits(
+        "RETURN reduce(acc = [1], x IN range(1, 40) | acc + acc) AS r",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect_err("a doubling reduce over lists must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+}
+
+#[test]
+fn a_doubling_reduce_over_strings_is_bounded() {
+    // The string analogue: s + s doubles the string each step.
+    let graph = MemoryGraph::new();
+    let err = run_query_with_limits(
+        "RETURN size(reduce(s = 'x', y IN range(1, 40) | s + s)) AS n",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect_err("a doubling reduce over strings must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+}
+
+#[test]
+fn a_mid_size_list_comprehension_passes_under_defaults() {
+    // A comprehension of ~20k elements is a legitimate query well under the
+    // 10M collection cap. The first fix charged quadratically and killed it at
+    // ~14k (adversarial review major); linear charging must let it through,
+    // consistently with range() and collect() of the same size.
+    let graph = MemoryGraph::new();
+    let result = run_query_with_limits(
+        "RETURN size([x IN range(0, 20000) | x * 2]) AS n",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect("a mid-size comprehension must pass under defaults");
+    assert!(matches!(result.rows[0][0], Value::Int(20001)));
+}
+
+#[test]
 fn a_registry_scale_query_stays_under_the_defaults() {
     // A realistic lab-graph shape: a few hundred nodes, a bounded traversal.
     // Must succeed under the shipped defaults with room to spare.
