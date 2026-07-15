@@ -5,14 +5,19 @@
 pub mod adapter;
 pub mod eval;
 pub mod functions;
+pub mod governor;
 pub mod run;
 pub mod source;
 pub mod value;
 pub mod write;
 
 pub use adapter::{GraphSnapshot, catalogue_from_schema, virtual_diff_node};
-pub use eval::{ExecError, Row};
-pub use run::{QueryResult, execute, execute_versioned, execute_versioned_with, execute_write};
+pub use eval::{ExecError, ResourceLimit, Row};
+pub use governor::{Governor, QueryLimits};
+pub use run::{
+    QueryResult, execute, execute_versioned, execute_versioned_with, execute_versioned_with_limits,
+    execute_with_governor, execute_with_limits, execute_write, execute_write_with_limits,
+};
 pub use source::{
     EmptyGraph, GraphSource, MemoryGraph, NoProcedures, ProcedureProvider, SingleVersion,
     VersionResolver,
@@ -36,6 +41,25 @@ pub fn run_query(
     )
     .map_err(QueryError::Bind)?;
     execute(&bound, graph, parameters).map_err(QueryError::Exec)
+}
+
+/// Like [`run_query`] but under explicit [`QueryLimits`] — the convenience
+/// path the governor tests drive to prove the caps end to end.
+pub fn run_query_with_limits(
+    query_text: &str,
+    graph: &dyn GraphSource,
+    parameters: &std::collections::BTreeMap<String, Value>,
+    limits: &QueryLimits,
+) -> Result<QueryResult, QueryError> {
+    let parsed = crate::parse(query_text).map_err(QueryError::Parse)?;
+    let bound = crate::bind::bind(
+        query_text,
+        &parsed,
+        &crate::bind::Catalogue::empty(),
+        crate::bind::BindMode::Lenient,
+    )
+    .map_err(QueryError::Bind)?;
+    run::execute_with_limits(&bound, graph, parameters, limits).map_err(QueryError::Exec)
 }
 
 #[derive(Debug, thiserror::Error)]

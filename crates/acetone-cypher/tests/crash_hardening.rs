@@ -131,12 +131,13 @@ fn a_deep_variable_length_walk_does_not_overflow_the_stack() {
 
 #[test]
 fn range_over_a_huge_span_is_rejected_not_oom() {
-    // U13: range(0, i64::MAX) would materialise ~9.2e18 elements. Reject it.
+    // U13: range(0, i64::MAX) would materialise ~9.2e18 elements. The resource
+    // governor (acetone-iq6) rejects it up front on the collection-size cap.
     let graph = ChainSource::new(1);
     let err = run_scalar("RETURN range(0, 9223372036854775807) AS r", &graph)
         .expect_err("huge range must be rejected");
     assert!(
-        err.contains("exceeding the limit"),
+        err.contains("ResourceExceeded") && err.contains("CollectionLen"),
         "unexpected error: {err}"
     );
 }

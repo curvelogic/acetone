@@ -2,21 +2,17 @@
 //! the binder; null arguments generally yield null per openCypher.
 
 use crate::exec::eval::ExecError;
+use crate::exec::governor::Governor;
 use crate::exec::source::GraphSource;
 use crate::exec::value::Value;
 use crate::span::Span;
-
-/// Upper bound on the number of elements `range()` may materialise, so a query
-/// like `range(0, 9223372036854775807)` cannot exhaust memory. A resource
-/// governor will make this configurable (acetone-iq6); until then it is a fixed,
-/// generous cap.
-const MAX_RANGE_ELEMENTS: i128 = 10_000_000;
 
 pub fn call(
     name: &str,
     args: Vec<Value>,
     span: Span,
     graph: &dyn GraphSource,
+    governor: &Governor,
 ) -> Result<Value, ExecError> {
     let type_error = |message: String| ExecError::Type { message, span };
 
@@ -241,15 +237,11 @@ pub fn call(
             } else {
                 span_len / i128::from(step) + 1
             };
-            if count > MAX_RANGE_ELEMENTS {
-                return Err(ExecError::InvalidArgument {
-                    message: format!(
-                        "range() would produce {count} elements, exceeding the limit of \
-                         {MAX_RANGE_ELEMENTS}"
-                    ),
-                    span,
-                });
-            }
+            // Charge the collection *before* allocating, so a huge range() is
+            // rejected up front by the governor rather than exhausting memory
+            // (acetone-iq6). `count` is non-negative here; clamp for the u64
+            // cast so a value beyond u64::MAX still trips the cap.
+            governor.collection(count.min(i128::from(u64::MAX)) as u64)?;
             let count = count as usize;
             let mut items = Vec::with_capacity(count);
             let mut at = start;

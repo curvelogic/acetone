@@ -34,6 +34,39 @@ pub enum ExecError {
 
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String, span: Span },
+
+    #[error("query exceeded the {limit} resource limit")]
+    ResourceExceeded { limit: ResourceLimit, span: Span },
+}
+
+/// Which governed resource a query exhausted (see [`crate::exec::governor`]).
+/// Carried by [`ExecError::ResourceExceeded`] so a caller can tell *which*
+/// cap tripped without string-matching the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceLimit {
+    /// The canonical deterministic work-unit odometer.
+    WorkUnits,
+    /// The size of a single materialised result-row set.
+    ResultRows,
+    /// Cumulative variable-length / expansion hops.
+    ExpansionSteps,
+    /// The length of a single list/collection.
+    CollectionLen,
+    /// The optional wall-clock backstop.
+    WallClock,
+}
+
+impl std::fmt::Display for ResourceLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            ResourceLimit::WorkUnits => "work-unit",
+            ResourceLimit::ResultRows => "result-row",
+            ResourceLimit::ExpansionSteps => "expansion-step",
+            ResourceLimit::CollectionLen => "collection-size",
+            ResourceLimit::WallClock => "wall-clock",
+        };
+        f.write_str(name)
+    }
 }
 
 impl ExecError {
@@ -47,7 +80,8 @@ impl ExecError {
             | ExecError::DivisionByZero { span }
             | ExecError::MissingParameter { span, .. }
             | ExecError::Unsupported { span, .. }
-            | ExecError::InvalidArgument { span, .. } => *span,
+            | ExecError::InvalidArgument { span, .. }
+            | ExecError::ResourceExceeded { span, .. } => *span,
         }
     }
 
@@ -95,16 +129,25 @@ impl Row {
 pub struct EvalCtx<'a> {
     pub graph: &'a dyn GraphSource,
     pub parameters: &'a BTreeMap<String, Value>,
+    /// The per-query resource budget. Shared by reference (interior-mutable
+    /// counters) because `EvalCtx` is rebuilt per clause but the budget spans
+    /// the whole query — see [`crate::exec::governor`].
+    pub governor: &'a super::governor::Governor,
     /// Pre-computed aggregate results, consumed in traversal order by
     /// `BoundExpr::Aggregate` nodes (set by the Aggregate operator).
     pub aggregates: Option<(&'a [Value], Cell<usize>)>,
 }
 
 impl<'a> EvalCtx<'a> {
-    pub fn new(graph: &'a dyn GraphSource, parameters: &'a BTreeMap<String, Value>) -> Self {
+    pub fn new(
+        graph: &'a dyn GraphSource,
+        parameters: &'a BTreeMap<String, Value>,
+        governor: &'a super::governor::Governor,
+    ) -> Self {
         EvalCtx {
             graph,
             parameters,
+            governor,
             aggregates: None,
         }
     }
@@ -149,7 +192,7 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 _ => {
                     let a = eval(lhs, row, ctx)?;
                     let b = eval(rhs, row, ctx)?;
-                    binary(*op, a, b, *span)
+                    binary(*op, a, b, *span, ctx.governor)
                 }
             }
         }
@@ -166,7 +209,7 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             for arg in args {
                 values.push(eval(arg, row, ctx)?);
             }
-            crate::exec::functions::call(def.name, values, *span, ctx.graph)
+            crate::exec::functions::call(def.name, values, *span, ctx.graph, ctx.governor)
         }
         BoundExpr::Aggregate { span, .. } => {
             let Some((values, cursor)) = &ctx.aggregates else {
@@ -246,6 +289,10 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 {
                     continue;
                 }
+                // Charge each produced element (linear work) against the
+                // collection cap so a comprehension over a large source list is
+                // bounded without over-charging quadratically.
+                ctx.governor.collection_push(out.len())?;
                 out.push(match map {
                     Some(map) => eval(map, &inner, ctx)?,
                     None => item,
@@ -294,7 +341,10 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             };
             let mut acc = eval(init, row, ctx)?;
             let mut inner = row.clone();
-            for item in items {
+            for (index, item) in items.into_iter().enumerate() {
+                // Charge each fold step so a reduce over a large list is
+                // CPU-accounted, not just bounded by the source list's size.
+                ctx.governor.collection_push(index)?;
                 inner.set(*accumulator, acc);
                 inner.set(*variable, item);
                 acc = eval(expr, &inner, ctx)?;
@@ -401,7 +451,13 @@ fn unary(op: UnaryOp, value: Value, span: Span) -> Result<Value, ExecError> {
     }
 }
 
-fn binary(op: BinaryOp, a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
+fn binary(
+    op: BinaryOp,
+    a: Value,
+    b: Value,
+    span: Span,
+    governor: &super::governor::Governor,
+) -> Result<Value, ExecError> {
     use BinaryOp::*;
     match op {
         Eq => Ok(ternary_to_value(a.eq3(&b))),
@@ -421,7 +477,7 @@ fn binary(op: BinaryOp, a: Value, b: Value, span: Span) -> Result<Value, ExecErr
         Ge => Ok(ternary_to_value(
             a.cmp3(&b).map(|o| o != std::cmp::Ordering::Less),
         )),
-        Add => add(a, b, span),
+        Add => add(a, b, span, governor),
         Sub => arith(a, b, span, i64::checked_sub, |x, y| x - y),
         Mul => arith(a, b, span, i64::checked_mul, |x, y| x * y),
         Div => divide(a, b, span),
@@ -446,8 +502,18 @@ fn nan_comparison(a: &Value, b: &Value) -> bool {
     is_number(a) && is_number(b) && (is_nan(a) || is_nan(b))
 }
 
-fn add(a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
+fn add(
+    a: Value,
+    b: Value,
+    span: Span,
+    governor: &super::governor::Governor,
+) -> Result<Value, ExecError> {
     use Value::*;
+    // `+` is the one operator that materialises an unboundedly larger value
+    // than its inputs — repeated `acc + acc` (a doubling `reduce`) or `s + x`
+    // over a large list. Charge the *resulting* collection/string size against
+    // the governor before allocating it, so those are bounded up front.
+    let concat = |governor: &super::governor::Governor, len: usize| governor.collection(len as u64);
     match (a, b) {
         (Null, _) | (_, Null) => Ok(Null),
         (Int(a), Int(b)) => a
@@ -457,26 +523,44 @@ fn add(a: Value, b: Value, span: Span) -> Result<Value, ExecError> {
         (Int(a), Float(b)) => Ok(Float(a as f64 + b)),
         (Float(a), Int(b)) => Ok(Float(a + b as f64)),
         (Float(a), Float(b)) => Ok(Float(a + b)),
-        (String(a), String(b)) => Ok(String(a + &b)),
-        (String(a), Int(b)) => Ok(String(format!("{a}{b}"))),
-        (String(a), Float(b)) => Ok(String(format!(
-            "{a}{}",
-            crate::exec::functions::format_float(b)
-        ))),
-        (Int(a), String(b)) => Ok(String(format!("{a}{b}"))),
-        (Float(a), String(b)) => Ok(String(format!(
-            "{}{b}",
-            crate::exec::functions::format_float(a)
-        ))),
+        (String(a), String(b)) => {
+            concat(governor, a.len() + b.len())?;
+            Ok(String(a + &b))
+        }
+        // Charge the *exact* rendered length of the number (f64 Display can be
+        // up to ~309 bytes), so the collection cap is never overshot.
+        (String(a), Int(b)) => {
+            let r = b.to_string();
+            concat(governor, a.len() + r.len())?;
+            Ok(String(a + &r))
+        }
+        (String(a), Float(b)) => {
+            let r = crate::exec::functions::format_float(b);
+            concat(governor, a.len() + r.len())?;
+            Ok(String(a + &r))
+        }
+        (Int(a), String(b)) => {
+            let r = a.to_string();
+            concat(governor, r.len() + b.len())?;
+            Ok(String(r + &b))
+        }
+        (Float(a), String(b)) => {
+            let r = crate::exec::functions::format_float(a);
+            concat(governor, r.len() + b.len())?;
+            Ok(String(r + &b))
+        }
         (List(mut a), List(b)) => {
+            concat(governor, a.len() + b.len())?;
             a.extend(b);
             Ok(List(a))
         }
         (List(mut a), b) => {
+            concat(governor, a.len() + 1)?;
             a.push(b);
             Ok(List(a))
         }
         (a, List(mut b)) => {
+            concat(governor, b.len() + 1)?;
             b.insert(0, a);
             Ok(List(b))
         }
@@ -775,7 +859,10 @@ fn quantify(
     let mut t = 0usize;
     let mut n = 0usize;
     let mut inner = row.clone();
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
+        // Charge each predicate evaluation so a quantifier over a large list
+        // is CPU-accounted.
+        ctx.governor.collection_push(index)?;
         inner.set(variable, item.clone());
         match truth(&eval(predicate, &inner, ctx)?, span)? {
             Some(true) => t += 1,
