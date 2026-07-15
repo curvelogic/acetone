@@ -527,28 +527,27 @@ fn add(
             concat(governor, a.len() + b.len())?;
             Ok(String(a + &b))
         }
-        // A number stringifies to at most ~24 bytes; bound generously.
+        // Charge the *exact* rendered length of the number (f64 Display can be
+        // up to ~309 bytes), so the collection cap is never overshot.
         (String(a), Int(b)) => {
-            concat(governor, a.len() + 24)?;
-            Ok(String(format!("{a}{b}")))
+            let r = b.to_string();
+            concat(governor, a.len() + r.len())?;
+            Ok(String(a + &r))
         }
         (String(a), Float(b)) => {
-            concat(governor, a.len() + 32)?;
-            Ok(String(format!(
-                "{a}{}",
-                crate::exec::functions::format_float(b)
-            )))
+            let r = crate::exec::functions::format_float(b);
+            concat(governor, a.len() + r.len())?;
+            Ok(String(a + &r))
         }
         (Int(a), String(b)) => {
-            concat(governor, b.len() + 24)?;
-            Ok(String(format!("{a}{b}")))
+            let r = a.to_string();
+            concat(governor, r.len() + b.len())?;
+            Ok(String(r + &b))
         }
         (Float(a), String(b)) => {
-            concat(governor, b.len() + 32)?;
-            Ok(String(format!(
-                "{}{b}",
-                crate::exec::functions::format_float(a)
-            )))
+            let r = crate::exec::functions::format_float(a);
+            concat(governor, r.len() + b.len())?;
+            Ok(String(r + &b))
         }
         (List(mut a), List(b)) => {
             concat(governor, a.len() + b.len())?;
