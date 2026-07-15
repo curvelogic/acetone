@@ -366,6 +366,64 @@ mod tests {
     }
 
     #[test]
+    fn render_stored_pins_the_frozen_string_for_every_deferred_type() {
+        // The carrier's string rendering is a frozen contract: it IS the runtime
+        // string a Bytes/temporal property presents in every query semantic, and
+        // it is the key an index buckets that property under. An accidental change
+        // to a `Debug` derive on `acetone_model::Value` (or a temporal struct)
+        // would silently shift both — pin the exact bytes here so it lands red.
+        use acetone_model::{Date, DateTime, Duration, Time};
+        assert_eq!(
+            render_stored(&ModelValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef])),
+            "deadbeef"
+        );
+        assert_eq!(
+            render_stored(&ModelValue::Date(Date { days: 20_000 })),
+            "Date(Date { days: 20000 })"
+        );
+        assert_eq!(
+            render_stored(&ModelValue::Time(Time {
+                nanos: 3_600_000_000_000
+            })),
+            "Time(Time { nanos: 3600000000000 })"
+        );
+        assert_eq!(
+            render_stored(&ModelValue::DateTime(DateTime {
+                epoch_nanos: 1_600_000_000_000_000_000,
+                offset_minutes: 60,
+            })),
+            "DateTime(DateTime { epoch_nanos: 1600000000000000000, offset_minutes: 60 })"
+        );
+        assert_eq!(
+            render_stored(&ModelValue::Duration(Duration {
+                months: 1,
+                days: 2,
+                nanos: 3,
+            })),
+            "Duration(Duration { months: 1, days: 2, nanos: 3 })"
+        );
+        // Empty Bytes renders to the empty string (no `0x` prefix, no padding).
+        assert_eq!(render_stored(&ModelValue::Bytes(vec![])), "");
+    }
+
+    #[test]
+    fn a_carrier_behaves_as_its_string_rendering() {
+        let carrier = Value::Stored(ModelValue::Bytes(vec![0xde, 0xad]));
+        let string = Value::String("dead".into());
+        // type_name, format and all three comparison regimes agree with the string.
+        assert_eq!(carrier.type_name(), "String");
+        assert_eq!(carrier.format(), string.format());
+        assert_eq!(carrier.eq3(&string), Some(true));
+        assert_eq!(carrier.cmp3(&string), Some(Ordering::Equal));
+        assert_eq!(carrier.global_cmp(&string), Ordering::Equal);
+        // A carrier nested in a list compares element-wise via the same delegation.
+        let cl = Value::List(vec![Value::Stored(ModelValue::Bytes(vec![0xde, 0xad]))]);
+        let sl = Value::List(vec![Value::String("dead".into())]);
+        assert_eq!(cl.eq3(&sl), Some(true));
+        assert!(cl.equivalent(&sl));
+    }
+
+    #[test]
     fn equality_is_ternary() {
         assert_eq!(Value::Null.eq3(&Value::Null), None);
         assert_eq!(int(1).eq3(&Value::Null), None);

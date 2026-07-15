@@ -126,6 +126,7 @@ fn unchanged_edge_bytes_survives_a_set_as_its_type() {
         Repository::init(&dir.path().join("graph.git"), InitOptions::default()).expect("init");
 
     let payload = MV::Bytes(vec![0x01, 0x02, 0x03, 0x04]);
+    let stamp = sample_datetime();
 
     {
         let mut txn = repo.begin_write().expect("begin");
@@ -142,14 +143,17 @@ fn unchanged_edge_bytes_survives_a_set_as_its_type() {
         let edge = EdgeKey::new(node_key(1), "LINK", node_key(2), MV::Null).expect("edge key");
         txn.put_edge(
             &edge,
-            &EdgeRecord::new(BTreeMap::from([("payload".to_owned(), payload.clone())])),
+            &EdgeRecord::new(BTreeMap::from([
+                ("payload".to_owned(), payload.clone()),
+                ("stamp".to_owned(), stamp.clone()),
+            ])),
         )
         .expect("put edge");
         txn.save().expect("save seed");
     }
 
-    // Touch only `tag` on the edge; `payload` is read (as a carrier) and written
-    // back untouched.
+    // Touch only `tag` on the edge; `payload` (Bytes) and `stamp` (DateTime) are
+    // read (as carriers) and written back untouched.
     run_write(
         &repo,
         "MATCH (a:N {id: 1})-[r:LINK]->(b:N {id: 2}) SET r.tag = 'x' RETURN a.id",
@@ -170,6 +174,52 @@ fn unchanged_edge_bytes_survives_a_set_as_its_type() {
         record.properties().get("payload"),
         Some(&payload),
         "untouched edge Bytes must survive as Bytes, not a hex string (the ADR-0029 gap)"
+    );
+    assert_eq!(
+        record.properties().get("stamp"),
+        Some(&stamp),
+        "untouched edge DateTime must survive as DateTime, not a debug string"
+    );
+}
+
+#[test]
+fn setting_a_deferred_property_to_its_own_rendering_stores_a_string() {
+    // The headline ADR-0029 false-positive, fixed by ADR-0038: read a Bytes
+    // property, then `SET` it to a genuine string literal that happens to equal
+    // its own hex rendering. The old re-read heuristic would wrongly resurrect
+    // the typed Bytes; the carrier stores the string the user actually wrote,
+    // because a user `SET` yields a `Value::String`, never a `Value::Stored`.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo =
+        Repository::init(&dir.path().join("graph.git"), InitOptions::default()).expect("init");
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&node_schema()).expect("schema");
+        txn.put_node(
+            &node_key(1),
+            &NodeRecord::new(
+                [],
+                BTreeMap::from([("data".to_owned(), MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef]))]),
+            ),
+        )
+        .expect("put node");
+        txn.save().expect("save");
+    }
+
+    run_write(
+        &repo,
+        "MATCH (n:N {id: 1}) SET n.data = 'deadbeef' RETURN n.id",
+    );
+
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let record = snapshot
+        .get_node(&node_key(1))
+        .expect("read")
+        .expect("node present");
+    assert_eq!(
+        record.properties().get("data"),
+        Some(&MV::String("deadbeef".into())),
+        "a user SET to a string literal stores a string, not the resurrected Bytes"
     );
 }
 
