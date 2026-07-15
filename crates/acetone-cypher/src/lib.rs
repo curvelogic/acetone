@@ -20,6 +20,7 @@ pub mod exec;
 pub mod lex;
 pub mod parser;
 pub mod persist;
+pub mod session;
 pub mod span;
 pub mod suggest;
 

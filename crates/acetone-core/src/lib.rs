@@ -32,6 +32,7 @@ pub use acetone_model as model;
 pub use acetone_store as store;
 
 // Headline types — the everyday surface, flat at the crate root.
+pub use acetone_cypher::session::{Outcome, QueryError, Session};
 pub use acetone_graph::repo::{DEFAULT_BRANCH, DEFAULT_WORKSPACE, InitOptions, LogEntry};
 pub use acetone_graph::{
     FormatTransform, GraphError, MigrateReport, Rechunk, Repository, Snapshot, Transaction,
