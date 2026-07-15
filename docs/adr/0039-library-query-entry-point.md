@@ -83,7 +83,13 @@ rendering distinction comes from the `Outcome` variant (no re-parse). Wiring the
   so behaviour cannot drift between them.
 - `QueryError` is a typed, `thiserror`-based library error (libraries use
   `thiserror`; only the CLI uses `anyhow`) with a `render` that reproduces the
-  caret diagnostics, so a library consumer gets the same messages the CLI shows.
+  caret diagnostics, so a library consumer gets the **same parse/bind/execution
+  diagnostics** the CLI shows. Store-level failures (`Graph`/`Persist`) render as
+  their `Display` message: the underlying `GraphError` already names the
+  offending ref/operation, so the CLI's former `anyhow` context prefixes
+  (`"reading the workspace"`, `"reading at <ref>"`, …) are intentionally dropped
+  — the "same messages" guarantee is scoped to query diagnostics, not I/O
+  wrapper text.
 - Pure orchestration: no encoding, root-hash, merge or format change — Load-
   Bearing Invariants 1–5 are untouched, no `format_version` bump.
 - The write path saves the workspace atomically (matching the CLI); it does not

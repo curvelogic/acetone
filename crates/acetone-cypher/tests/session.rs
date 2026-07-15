@@ -238,3 +238,43 @@ fn run_with_honours_an_explicit_governor_budget() {
         .expect_err("a 1-unit budget must be exceeded");
     assert!(matches!(err, QueryError::Exec(_)), "{err:?}");
 }
+
+#[test]
+fn run_with_binds_query_parameters() {
+    let (_d, repo) = repo();
+    seed(&repo);
+    // A `$name` parameter is threaded through to the executor and drives the pin.
+    let params = BTreeMap::from([("wanted".to_string(), RtValue::Int(1))]);
+    let outcome = Session::new(&repo)
+        .run_with(
+            "MATCH (h:Host {id: $wanted}) RETURN h.name",
+            &params,
+            &QueryLimits::default(),
+        )
+        .expect("parameterised read");
+    assert_eq!(outcome.result().rows.len(), 1);
+    assert!(matches!(&outcome.result().rows[0][0], RtValue::String(s) if s == "web"));
+}
+
+#[test]
+fn call_acetone_blame_runs_through_the_session_procedures() {
+    let (_d, repo) = repo();
+    seed(&repo);
+    let first = commit(&repo, "create host");
+    let result = Session::new(&repo)
+        .run("CALL acetone.blame('Host', 1) YIELD label, key, commit RETURN commit")
+        .expect("call blame");
+    let commits: Vec<&str> = result
+        .result()
+        .rows
+        .iter()
+        .filter_map(|row| match &row[0] {
+            RtValue::String(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        commits.contains(&first.as_str()),
+        "acetone.blame should name the commit that last touched Host/1, got {commits:?}"
+    );
+}
