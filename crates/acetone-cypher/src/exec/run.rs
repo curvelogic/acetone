@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, HashSet};
 use crate::ast::{AtRef, Direction};
 use crate::bind::bound::*;
 use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
+use crate::exec::governor::{Governor, QueryLimits};
 use crate::exec::source::{
     GraphSource, NoProcedures, ProcedureProvider, SingleVersion, VersionResolver,
 };
@@ -43,6 +44,25 @@ pub fn execute(
     execute_versioned(query, &SingleVersion::new(graph), parameters)
 }
 
+/// Execute against a single fixed graph under explicit [`QueryLimits`] — the
+/// configurable counterpart of [`execute`], used by governor tests.
+pub fn execute_with_limits(
+    query: &BoundQuery,
+    graph: &dyn GraphSource,
+    parameters: &BTreeMap<String, Value>,
+    limits: &QueryLimits,
+) -> Result<QueryResult, ExecError> {
+    let governor = Governor::new(*limits);
+    Ok(execute_with_governor(
+        query,
+        &SingleVersion::new(graph),
+        &NoProcedures,
+        parameters,
+        &governor,
+    )?
+    .0)
+}
+
 /// Execute against a version resolver, so `MATCH ... AT <ref>` clauses
 /// (spec §5.2) query the graph at that commit while the rest of the
 /// query sees the base version.
@@ -60,7 +80,8 @@ pub fn execute_versioned(
     resolver: &dyn VersionResolver,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<QueryResult, ExecError> {
-    Ok(run_versioned(query, resolver, &NoProcedures, parameters)?.0)
+    let governor = Governor::new(QueryLimits::default());
+    Ok(run_versioned(query, resolver, &NoProcedures, parameters, &governor)?.0)
 }
 
 /// Execute against a version resolver and a procedure provider, so
@@ -73,7 +94,36 @@ pub fn execute_versioned_with(
     procedures: &dyn ProcedureProvider,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<QueryResult, ExecError> {
-    Ok(run_versioned(query, resolver, procedures, parameters)?.0)
+    let governor = Governor::new(QueryLimits::default());
+    Ok(run_versioned(query, resolver, procedures, parameters, &governor)?.0)
+}
+
+/// Execute against a resolver and procedure provider under explicit
+/// [`QueryLimits`] — the read path the CLI and the (0.2) library facade use
+/// when a caller wants to set the caps rather than take the defaults.
+pub fn execute_versioned_with_limits(
+    query: &BoundQuery,
+    resolver: &dyn VersionResolver,
+    procedures: &dyn ProcedureProvider,
+    parameters: &BTreeMap<String, Value>,
+    limits: &QueryLimits,
+) -> Result<QueryResult, ExecError> {
+    let governor = Governor::new(*limits);
+    Ok(run_versioned(query, resolver, procedures, parameters, &governor)?.0)
+}
+
+/// The lowest-level governed entry point: the caller owns the [`Governor`], so
+/// it can inspect the charged work after the run (used by the determinism
+/// test) and reuse a pre-configured budget. Every other entry point is a thin
+/// wrapper that constructs a governor and calls through here.
+pub fn execute_with_governor(
+    query: &BoundQuery,
+    resolver: &dyn VersionResolver,
+    procedures: &dyn ProcedureProvider,
+    parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
+) -> Result<(QueryResult, WriteChanges), ExecError> {
+    run_versioned(query, resolver, procedures, parameters, governor)
 }
 
 /// Execute and also return the net [`WriteChanges`] a persistence layer
@@ -84,7 +134,21 @@ pub fn execute_write(
     resolver: &dyn VersionResolver,
     parameters: &BTreeMap<String, Value>,
 ) -> Result<(QueryResult, WriteChanges), ExecError> {
-    run_versioned(query, resolver, &NoProcedures, parameters)
+    let governor = Governor::new(QueryLimits::default());
+    run_versioned(query, resolver, &NoProcedures, parameters, &governor)
+}
+
+/// Execute a write query under explicit [`QueryLimits`], returning the net
+/// [`WriteChanges`] alongside the result — the write counterpart of
+/// [`execute_versioned_with_limits`].
+pub fn execute_write_with_limits(
+    query: &BoundQuery,
+    resolver: &dyn VersionResolver,
+    parameters: &BTreeMap<String, Value>,
+    limits: &QueryLimits,
+) -> Result<(QueryResult, WriteChanges), ExecError> {
+    let governor = Governor::new(*limits);
+    run_versioned(query, resolver, &NoProcedures, parameters, &governor)
 }
 
 fn run_versioned(
@@ -92,6 +156,7 @@ fn run_versioned(
     resolver: &dyn VersionResolver,
     procedures: &dyn ProcedureProvider,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<(QueryResult, WriteChanges), ExecError> {
     let base = resolver.base();
     // Write clauses mutate an overlay over the base version; reads in later
@@ -125,8 +190,8 @@ fn run_versioned(
                     }
                 };
                 let clause_ctx = match &at_graph {
-                    Some(at) => EvalCtx::new(at.as_ref(), parameters),
-                    None => EvalCtx::new(&graph, parameters),
+                    Some(at) => EvalCtx::new(at.as_ref(), parameters, governor),
+                    None => EvalCtx::new(&graph, parameters, governor),
                 };
                 rows = match_clause(
                     rows,
@@ -137,7 +202,7 @@ fn run_versioned(
                 )?;
             }
             BoundClause::Unwind { expr, alias, span } => {
-                let ctx = EvalCtx::new(&graph, parameters);
+                let ctx = EvalCtx::new(&graph, parameters, governor);
                 let mut out = Vec::new();
                 for row in rows {
                     let list = eval(expr, &row, &ctx)?;
@@ -145,6 +210,7 @@ fn run_versioned(
                         Value::Null => {} // UNWIND null produces no rows
                         Value::List(items) => {
                             for item in items {
+                                governor.row(out.len())?;
                                 let mut next = row.clone();
                                 next.set(*alias, item);
                                 out.push(next);
@@ -161,11 +227,11 @@ fn run_versioned(
                 rows = out;
             }
             BoundClause::With(projection) => {
-                let ctx = EvalCtx::new(&graph, parameters);
+                let ctx = EvalCtx::new(&graph, parameters, governor);
                 rows = project(rows, projection, &ctx, true)?.1;
             }
             BoundClause::Return(projection) => {
-                let ctx = EvalCtx::new(&graph, parameters);
+                let ctx = EvalCtx::new(&graph, parameters, governor);
                 let (columns, projected) = project(rows, projection, &ctx, false)?;
                 let output = projected
                     .into_iter()
@@ -185,10 +251,10 @@ fn run_versioned(
                 rows = Vec::new();
             }
             BoundClause::Create { patterns, .. } => {
-                rows = create_clause(rows, patterns, &mut graph, parameters)?;
+                rows = create_clause(rows, patterns, &mut graph, parameters, governor)?;
             }
             BoundClause::Set { items, .. } => {
-                rows = set_clause(rows, items, &mut graph, parameters)?;
+                rows = set_clause(rows, items, &mut graph, parameters, governor)?;
             }
             BoundClause::Remove { items, .. } => {
                 rows = remove_clause(rows, items, &mut graph)?;
@@ -196,7 +262,7 @@ fn run_versioned(
             BoundClause::Delete {
                 detach, targets, ..
             } => {
-                rows = delete_clause(rows, *detach, targets, &mut graph, parameters)?;
+                rows = delete_clause(rows, *detach, targets, &mut graph, parameters, governor)?;
             }
             BoundClause::Merge {
                 pattern,
@@ -204,7 +270,9 @@ fn run_versioned(
                 on_match,
                 ..
             } => {
-                rows = merge_clause(rows, pattern, on_create, on_match, &mut graph, parameters)?;
+                rows = merge_clause(
+                    rows, pattern, on_create, on_match, &mut graph, parameters, governor,
+                )?;
             }
             BoundClause::Call {
                 procedure,
@@ -218,7 +286,7 @@ fn run_versioned(
                 // tuple with the requested YIELD columns bound.
                 let mut produced = Vec::new();
                 for row in &rows {
-                    let ctx = EvalCtx::new(&graph, parameters);
+                    let ctx = EvalCtx::new(&graph, parameters, governor);
                     let arg_values = args
                         .iter()
                         .map(|arg| eval(arg, row, &ctx))
@@ -255,11 +323,12 @@ fn run_versioned(
                             next.set(*var, tuple.get(index).cloned().unwrap_or(Value::Null));
                         }
                         if let Some(pred) = where_clause {
-                            let pred_ctx = EvalCtx::new(&graph, parameters);
+                            let pred_ctx = EvalCtx::new(&graph, parameters, governor);
                             if truth(&eval(pred, &next, &pred_ctx)?, pred.span())? != Some(true) {
                                 continue;
                             }
                         }
+                        governor.row(produced.len())?;
                         produced.push((next, tuple));
                     }
                 }
@@ -315,12 +384,14 @@ fn create_clause(
     patterns: &[BoundPathPattern],
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<Vec<Row>, ExecError> {
     let mut out = Vec::with_capacity(rows.len());
     for mut row in rows {
         for pattern in patterns {
-            create_path(pattern, &mut row, graph, parameters)?;
+            create_path(pattern, &mut row, graph, parameters, governor)?;
         }
+        governor.row(out.len())?;
         out.push(row);
     }
     Ok(out)
@@ -331,18 +402,19 @@ fn create_path(
     row: &mut Row,
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<(), ExecError> {
-    let start = resolve_or_create_node(&pattern.start, row, graph, parameters)?;
+    let start = resolve_or_create_node(&pattern.start, row, graph, parameters, governor)?;
     let mut path_nodes = vec![start.clone()];
     let mut path_rels = Vec::new();
     let mut prev = start;
 
     for (rel_pattern, node_pattern) in &pattern.steps {
-        let target = resolve_or_create_node(node_pattern, row, graph, parameters)?;
+        let target = resolve_or_create_node(node_pattern, row, graph, parameters, governor)?;
         // The binder guarantees exactly one type and a concrete direction.
         let rel_type = rel_pattern.types[0].clone();
         let props = {
-            let ctx = EvalCtx::new(&*graph, parameters);
+            let ctx = EvalCtx::new(&*graph, parameters, governor);
             eval_property_map(rel_pattern.properties.as_ref(), row, &ctx, rel_pattern.span)?
         };
         let (start_id, end_id) = match rel_pattern.direction {
@@ -383,6 +455,7 @@ fn resolve_or_create_node(
     row: &mut Row,
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<NodeValue, ExecError> {
     if let Some(var) = node.var
         && row.contains(var)
@@ -399,7 +472,7 @@ fn resolve_or_create_node(
         };
     }
     let props = {
-        let ctx = EvalCtx::new(&*graph, parameters);
+        let ctx = EvalCtx::new(&*graph, parameters, governor);
         eval_property_map(node.properties.as_ref(), row, &ctx, node.span)?
     };
     let created = graph.create_node(node.labels.clone(), props);
@@ -420,6 +493,7 @@ fn resolve_or_create_node(
 /// via `eval_property_map`) — which is exactly openCypher MERGE. Created
 /// elements are visible to later clauses through the overlay, so a second
 /// MERGE of the same key in the same query matches the first (idempotent).
+#[allow(clippy::too_many_arguments)]
 fn merge_clause(
     rows: Vec<Row>,
     pattern: &BoundPathPattern,
@@ -427,12 +501,13 @@ fn merge_clause(
     on_match: &[BoundSetItem],
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<Vec<Row>, ExecError> {
     let mut out = Vec::new();
     for row in rows {
         // Try to match the whole pattern against the current graph.
         let matched: Vec<Row> = {
-            let ctx = EvalCtx::new(&*graph, parameters);
+            let ctx = EvalCtx::new(&*graph, parameters, governor);
             let state = MatchState {
                 row: row.clone(),
                 used_rels: HashSet::new(),
@@ -445,19 +520,21 @@ fn merge_clause(
         if matched.is_empty() {
             // Create the pattern whole, then apply ON CREATE SET.
             let mut created = row;
-            create_path(pattern, &mut created, graph, parameters)?;
+            create_path(pattern, &mut created, graph, parameters, governor)?;
             for item in on_create {
-                apply_set_item(item, &mut created, graph, parameters)?;
+                apply_set_item(item, &mut created, graph, parameters, governor)?;
             }
             refresh_entities(&mut created, graph);
+            governor.row(out.len())?;
             out.push(created);
         } else {
             // Apply ON MATCH SET to every match.
             for mut matched_row in matched {
                 for item in on_match {
-                    apply_set_item(item, &mut matched_row, graph, parameters)?;
+                    apply_set_item(item, &mut matched_row, graph, parameters, governor)?;
                 }
                 refresh_entities(&mut matched_row, graph);
+                governor.row(out.len())?;
                 out.push(matched_row);
             }
         }
@@ -476,13 +553,15 @@ fn set_clause(
     items: &[BoundSetItem],
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<Vec<Row>, ExecError> {
     let mut out = Vec::with_capacity(rows.len());
     for mut row in rows {
         for item in items {
-            apply_set_item(item, &mut row, graph, parameters)?;
+            apply_set_item(item, &mut row, graph, parameters, governor)?;
         }
         refresh_entities(&mut row, graph);
+        governor.row(out.len())?;
         out.push(row);
     }
     Ok(out)
@@ -493,6 +572,7 @@ fn apply_set_item(
     row: &mut Row,
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<(), ExecError> {
     match item {
         BoundSetItem::Property {
@@ -502,7 +582,7 @@ fn apply_set_item(
             span,
         } => {
             let new_value = {
-                let ctx = EvalCtx::new(&*graph, parameters);
+                let ctx = EvalCtx::new(&*graph, parameters, governor);
                 eval(value, row, &ctx)?
             };
             // openCypher: `SET x.p = null` removes the property.
@@ -529,12 +609,16 @@ fn apply_set_item(
             target,
             value,
             span,
-        } => apply_set_map(*target, value, false, row, graph, parameters, *span)?,
+        } => apply_set_map(
+            *target, value, false, row, graph, parameters, governor, *span,
+        )?,
         BoundSetItem::Merge {
             target,
             value,
             span,
-        } => apply_set_map(*target, value, true, row, graph, parameters, *span)?,
+        } => apply_set_map(
+            *target, value, true, row, graph, parameters, governor, *span,
+        )?,
         BoundSetItem::AddLabels {
             target,
             labels,
@@ -570,10 +654,11 @@ fn apply_set_map(
     row: &mut Row,
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
     span: crate::span::Span,
 ) -> Result<(), ExecError> {
     let map = {
-        let ctx = EvalCtx::new(&*graph, parameters);
+        let ctx = EvalCtx::new(&*graph, parameters, governor);
         match eval(value, row, &ctx)? {
             Value::Map(map) => map,
             // openCypher: `SET x = null` clears all properties; `SET x +=
@@ -679,12 +764,13 @@ fn delete_clause(
     targets: &[BoundExpr],
     graph: &mut MutableGraph,
     parameters: &BTreeMap<String, Value>,
+    governor: &Governor,
 ) -> Result<Vec<Row>, ExecError> {
     // Phase 1 (read-only): resolve every target of every row to identities.
     let mut node_ids = Vec::new();
     let mut rels = Vec::new();
     {
-        let ctx = EvalCtx::new(&*graph, parameters);
+        let ctx = EvalCtx::new(&*graph, parameters, governor);
         for row in &rows {
             for target in targets {
                 collect_delete_target(
@@ -897,9 +983,15 @@ fn match_clause(
                     nulled.set(*var, Value::Null);
                 }
             }
+            ctx.governor.row(out.len())?;
             out.push(nulled);
         } else {
-            out.extend(matched);
+            // Guard the cross-row multiplication: each incoming row can fan
+            // out to many matches, so the running `out` set is capped here.
+            for state_row in matched {
+                ctx.governor.row(out.len())?;
+                out.push(state_row);
+            }
         }
     }
     Ok(out)
@@ -1009,6 +1101,7 @@ fn walk_steps(
                 }),
             );
         }
+        ctx.governor.row(results.len())?;
         results.push(done);
         return Ok(());
     };
@@ -1019,6 +1112,9 @@ fn walk_steps(
                 ctx.graph
                     .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
             {
+                // Every edge traversal is an expansion step, so a dense
+                // fixed-length pattern is bounded like a var-length one.
+                ctx.governor.hop()?;
                 if state.used_rels.contains(&rel.id) {
                     continue;
                 }
@@ -1170,6 +1266,9 @@ fn expand_var_length(
             ctx.graph
                 .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
         {
+            // Charge every edge considered — this is the primary bound on an
+            // unbounded `*` walk over a dense or cyclic graph.
+            ctx.governor.hop()?;
             if state.used_rels.contains(&rel.id) {
                 continue;
             }
@@ -1317,6 +1416,7 @@ fn project(
                 let value = eval_with_group(&item.expr, &group, &representative, ctx)?;
                 out.set(item.var, value);
             }
+            ctx.governor.row(merged.len())?;
             merged.push(out);
         }
     } else {
@@ -1326,6 +1426,7 @@ fn project(
                 let value = eval(&item.expr, &row, ctx)?;
                 out.set(item.var, value);
             }
+            ctx.governor.row(merged.len())?;
             merged.push(out);
         }
     }
@@ -1432,6 +1533,7 @@ fn eval_with_group(
     let inner = EvalCtx {
         graph: ctx.graph,
         parameters: ctx.parameters,
+        governor: ctx.governor,
         aggregates: Some((&slots, Cell::new(0))),
     };
     eval(expr, representative, &inner)
@@ -1564,7 +1666,11 @@ fn accumulate(aggregate: &BoundExpr, group: &[Row], ctx: &EvalCtx) -> Result<Val
 
     match def.name {
         "count" => Ok(Value::Int(values.len() as i64)),
-        "collect" => Ok(Value::List(values)),
+        "collect" => {
+            // collect() materialises a list; hold it to the collection cap.
+            ctx.governor.collection(values.len() as u64)?;
+            Ok(Value::List(values))
+        }
         "sum" => {
             let mut int_sum = 0i64;
             let mut float_sum = 0.0f64;

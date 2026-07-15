@@ -34,6 +34,39 @@ pub enum ExecError {
 
     #[error("invalid argument: {message}")]
     InvalidArgument { message: String, span: Span },
+
+    #[error("query exceeded the {limit} resource limit")]
+    ResourceExceeded { limit: ResourceLimit, span: Span },
+}
+
+/// Which governed resource a query exhausted (see [`crate::exec::governor`]).
+/// Carried by [`ExecError::ResourceExceeded`] so a caller can tell *which*
+/// cap tripped without string-matching the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceLimit {
+    /// The canonical deterministic work-unit odometer.
+    WorkUnits,
+    /// The size of a single materialised result-row set.
+    ResultRows,
+    /// Cumulative variable-length / expansion hops.
+    ExpansionSteps,
+    /// The length of a single list/collection.
+    CollectionLen,
+    /// The optional wall-clock backstop.
+    WallClock,
+}
+
+impl std::fmt::Display for ResourceLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            ResourceLimit::WorkUnits => "work-unit",
+            ResourceLimit::ResultRows => "result-row",
+            ResourceLimit::ExpansionSteps => "expansion-step",
+            ResourceLimit::CollectionLen => "collection-size",
+            ResourceLimit::WallClock => "wall-clock",
+        };
+        f.write_str(name)
+    }
 }
 
 impl ExecError {
@@ -47,7 +80,8 @@ impl ExecError {
             | ExecError::DivisionByZero { span }
             | ExecError::MissingParameter { span, .. }
             | ExecError::Unsupported { span, .. }
-            | ExecError::InvalidArgument { span, .. } => *span,
+            | ExecError::InvalidArgument { span, .. }
+            | ExecError::ResourceExceeded { span, .. } => *span,
         }
     }
 
@@ -95,16 +129,25 @@ impl Row {
 pub struct EvalCtx<'a> {
     pub graph: &'a dyn GraphSource,
     pub parameters: &'a BTreeMap<String, Value>,
+    /// The per-query resource budget. Shared by reference (interior-mutable
+    /// counters) because `EvalCtx` is rebuilt per clause but the budget spans
+    /// the whole query — see [`crate::exec::governor`].
+    pub governor: &'a super::governor::Governor,
     /// Pre-computed aggregate results, consumed in traversal order by
     /// `BoundExpr::Aggregate` nodes (set by the Aggregate operator).
     pub aggregates: Option<(&'a [Value], Cell<usize>)>,
 }
 
 impl<'a> EvalCtx<'a> {
-    pub fn new(graph: &'a dyn GraphSource, parameters: &'a BTreeMap<String, Value>) -> Self {
+    pub fn new(
+        graph: &'a dyn GraphSource,
+        parameters: &'a BTreeMap<String, Value>,
+        governor: &'a super::governor::Governor,
+    ) -> Self {
         EvalCtx {
             graph,
             parameters,
+            governor,
             aggregates: None,
         }
     }
@@ -166,7 +209,7 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             for arg in args {
                 values.push(eval(arg, row, ctx)?);
             }
-            crate::exec::functions::call(def.name, values, *span, ctx.graph)
+            crate::exec::functions::call(def.name, values, *span, ctx.graph, ctx.governor)
         }
         BoundExpr::Aggregate { span, .. } => {
             let Some((values, cursor)) = &ctx.aggregates else {
@@ -246,6 +289,9 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 {
                     continue;
                 }
+                // Charge each produced element against the collection cap so a
+                // comprehension over a large source list is bounded.
+                ctx.governor.collection(out.len() as u64 + 1)?;
                 out.push(match map {
                     Some(map) => eval(map, &inner, ctx)?,
                     None => item,
