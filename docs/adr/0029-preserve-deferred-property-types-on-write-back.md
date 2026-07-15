@@ -1,7 +1,10 @@
 # ADR-0029: Preserve deferred property types across a read→write round-trip
 
-*Status: accepted — decided by ADR under the Autonomous Protocol (pre-0.1
-hardening sprint); ratified by Greg at the pre-0.1 boundary review (2026-07-11) · Date: 2026-07-10 · Bead: acetone-2vr*
+*Status: **superseded by [ADR-0038](0038-value-domain-carrier.md)** (2026-07-15,
+`acetone-vdc`) — the re-read heuristic below is replaced by a typed value
+carrier that also closes the edge gap and the false-positive corner. Originally
+accepted by ADR under the Autonomous Protocol (pre-0.1 hardening sprint) and
+ratified by Greg at the pre-0.1 boundary review (2026-07-11) · Date: 2026-07-10 · Bead: acetone-2vr*
 
 ## Context
 

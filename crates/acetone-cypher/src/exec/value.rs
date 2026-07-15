@@ -16,6 +16,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use acetone_model::Value as ModelValue;
+
 /// Opaque, stable entity identity (in-memory counter bytes or storage key
 /// bytes). Equality of entities is identity, not property equality.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -63,6 +65,36 @@ pub enum Value {
     Node(NodeValue),
     Relationship(RelValue),
     Path(PathValue),
+    /// A read-only carrier for a stored value the runtime does not model
+    /// natively (`Bytes` and the four temporals). The read adapter produces it
+    /// so an untouched read→write round-trip recovers the original typed
+    /// [`ModelValue`] instead of retyping it to a string (ADR-0038); it is
+    /// **never** produced by a Cypher expression. In every query semantic it is
+    /// behaviourally identical to [`Value::String`] of its rendering
+    /// ([`render_stored`]): `format`, `type_name` and the three comparison
+    /// regimes all delegate to that string, and it [`decays`](Value::decayed)
+    /// to that string the moment an operator or function consumes it.
+    Stored(ModelValue),
+}
+
+/// Render a stored value as the string the runtime used before the carrier
+/// existed: lowercase hex for `Bytes`, a stable `{:?}` debug rendering for the
+/// temporals. This is the frozen string form a [`Value::Stored`] presents in
+/// every query semantic (ADR-0038).
+pub fn render_stored(mv: &ModelValue) -> String {
+    match mv {
+        ModelValue::Bytes(bytes) => hex(bytes),
+        other => format!("{other:?}"),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 /// Ternary logic result.
@@ -81,11 +113,25 @@ impl Value {
             Value::Node(_) => "Node",
             Value::Relationship(_) => "Relationship",
             Value::Path(_) => "Path",
+            // A carrier is indistinguishable from its string rendering.
+            Value::Stored(_) => "String",
         }
     }
 
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
+    }
+
+    /// Normalise a read-carrier to its string rendering when an operator or
+    /// function is about to consume this value (ADR-0038). Shallow and O(1):
+    /// a non-`Stored` value (including a list that merely *contains* a carrier)
+    /// is returned untouched, so evaluation never pays a traversal cost and an
+    /// untouched pass-through keeps its carrier for the write-back round-trip.
+    pub(crate) fn decayed(self) -> Value {
+        match self {
+            Value::Stored(mv) => Value::String(render_stored(&mv)),
+            other => other,
+        }
     }
 
     /// A human-readable rendering for user-facing error messages.
@@ -124,6 +170,8 @@ impl Value {
             }
             Value::Relationship(rel) => format!("relationship({:?})", rel.rel_type),
             Value::Path(path) => format!("path(length {})", path.rels.len()),
+            // Rendered exactly as `Value::String(render_stored(mv))` would be.
+            Value::Stored(mv) => format!("{:?}", render_stored(mv)),
         }
     }
 
@@ -139,6 +187,11 @@ impl Value {
     pub fn eq3(&self, other: &Value) -> Ternary {
         use Value::*;
         match (self, other) {
+            // A carrier compares as its string rendering (ADR-0038); recursion
+            // reaches a carrier nested inside a list or map. Terminates: the
+            // rendering is a `String`, never another `Stored`.
+            (Stored(mv), _) => String(render_stored(mv)).eq3(other),
+            (_, Stored(mv)) => self.eq3(&String(render_stored(mv))),
             (Null, _) | (_, Null) => None,
             (Bool(a), Bool(b)) => Some(a == b),
             (Int(a), Int(b)) => Some(a == b),
@@ -193,6 +246,9 @@ impl Value {
     pub fn cmp3(&self, other: &Value) -> Option<Ordering> {
         use Value::*;
         match (self, other) {
+            // A carrier orders as its string rendering (ADR-0038).
+            (Stored(mv), _) => String(render_stored(mv)).cmp3(other),
+            (_, Stored(mv)) => self.cmp3(&String(render_stored(mv))),
             (Null, _) | (_, Null) => None,
             (Int(a), Int(b)) => Some(a.cmp(b)),
             (Int(_), Float(_)) | (Float(_), Int(_)) | (Float(_), Float(_)) => {
@@ -229,10 +285,18 @@ impl Value {
                 Value::Bool(_) => 6,
                 Value::Int(_) | Value::Float(_) => 7,
                 Value::Null => 8,
+                // Unreachable: a carrier is normalised to its `String` rendering
+                // at the top of `global_cmp` before `rank` is ever called. Ranked
+                // as a string for a coherent total order regardless.
+                Value::Stored(_) => 5,
             }
         }
         use Value::*;
         match (self, other) {
+            // A carrier sorts as its string rendering (ADR-0038): it ranks
+            // among strings, and two carriers order by their renderings.
+            (Stored(mv), _) => String(render_stored(mv)).global_cmp(other),
+            (_, Stored(mv)) => self.global_cmp(&String(render_stored(mv))),
             (Null, Null) => Ordering::Equal,
             (Int(a), Int(b)) => a.cmp(b),
             (Int(_), Float(_)) | (Float(_), Int(_)) | (Float(_), Float(_)) => {

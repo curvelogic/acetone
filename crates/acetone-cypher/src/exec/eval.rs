@@ -177,7 +177,9 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             property_access(&base, key, *span)
         }
         BoundExpr::Unary { op, operand, span } => {
-            let value = eval(operand, row, ctx)?;
+            // A read carrier decays to its string rendering the moment an
+            // operator consumes it (ADR-0038): from here on it is a string.
+            let value = eval(operand, row, ctx)?.decayed();
             unary(*op, value, *span)
         }
         BoundExpr::Binary { op, lhs, rhs, span } => {
@@ -190,8 +192,11 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                     Ok(ternary_to_value(logic(*op, a, b)))
                 }
                 _ => {
-                    let a = eval(lhs, row, ctx)?;
-                    let b = eval(rhs, row, ctx)?;
+                    // Both operands decay a read carrier to its string
+                    // rendering before any comparison, arithmetic, `+`, `IN`
+                    // or `STARTS WITH`/`CONTAINS` (ADR-0038).
+                    let a = eval(lhs, row, ctx)?.decayed();
+                    let b = eval(rhs, row, ctx)?.decayed();
                     binary(*op, a, b, *span, ctx.governor)
                 }
             }
@@ -207,7 +212,10 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
         BoundExpr::Function { def, args, span } => {
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                values.push(eval(arg, row, ctx)?);
+                // A carrier passed to a function decays to its string rendering
+                // (ADR-0038), so `toUpper`/`substring`/`toString`/… see the same
+                // string the runtime saw before the carrier existed.
+                values.push(eval(arg, row, ctx)?.decayed());
             }
             crate::exec::functions::call(def.name, values, *span, ctx.graph, ctx.governor)
         }
@@ -359,8 +367,11 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             Ok(Value::Map(map))
         }
         BoundExpr::Index { base, index, span } => {
-            let base = eval(base, row, ctx)?;
-            let index = eval(index, row, ctx)?;
+            // Decay a carrier used as a container or a map/list key (ADR-0038);
+            // a carrier is a scalar, so as a base it errors exactly as its
+            // string rendering would, and as a key it matches by that string.
+            let base = eval(base, row, ctx)?.decayed();
+            let index = eval(index, row, ctx)?.decayed();
             index_access(base, index, *span)
         }
         BoundExpr::Slice {
@@ -369,13 +380,15 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             to,
             span,
         } => {
-            let base = eval(base, row, ctx)?;
+            // A carrier decays before slicing (ADR-0038): as a scalar base it
+            // errors as its string rendering would; the bounds are integers.
+            let base = eval(base, row, ctx)?.decayed();
             let from = match from {
-                Some(expr) => Some(eval(expr, row, ctx)?),
+                Some(expr) => Some(eval(expr, row, ctx)?.decayed()),
                 None => None,
             };
             let to = match to {
-                Some(expr) => Some(eval(expr, row, ctx)?),
+                Some(expr) => Some(eval(expr, row, ctx)?.decayed()),
                 None => None,
             };
             slice_access(base, from, to, *span)

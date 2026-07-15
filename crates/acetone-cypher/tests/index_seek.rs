@@ -330,9 +330,10 @@ fn numeric_index_seek_matches_across_int_and_float_like_a_scan() {
 
 #[test]
 fn bytes_property_seek_matches_a_scan_end_to_end() {
-    // A stored Bytes property is rendered to a hex string in the runtime node
-    // value, so a string-pinned query matches it. The index must agree — key
-    // over the runtime representation, not the raw Bytes — or the seek would
+    // A stored Bytes property is carried as `Value::Stored` in the runtime node
+    // value (ADR-0038) and decays to a hex string for comparison, so a
+    // string-pinned query matches it. The index must agree — key over the
+    // runtime (string) representation, not the raw Bytes — or the seek would
     // silently drop the node (a subset).
     let schema_with = vec![
         SchemaEntry::Label {

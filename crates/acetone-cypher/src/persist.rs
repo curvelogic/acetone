@@ -133,15 +133,11 @@ pub fn persist_changes(
     for node in &changes.upserted_nodes {
         // A created node carries an overlay id (its key does not decode); a
         // modified base node carries its storage id (which decodes back to its
-        // original, immutable key). For a modified base node, fetch its stored
-        // record so unchanged deferred-typed properties are preserved verbatim
-        // (ADR-0029 / U2), not retyped to string on write-back.
+        // original, immutable key). Unchanged deferred-typed properties survive
+        // write-back because the read adapter carries them as `Value::Stored`
+        // (ADR-0038), so no base-record re-read is needed.
         let decoded_id = NodeKey::decode(node.id.0.as_ref());
-        let base_record = match &decoded_id {
-            Ok(original) => base.get_node(original)?,
-            Err(_) => None,
-        };
-        let (key, record) = node_key_and_record(node, catalogue, base_record.as_ref())?;
+        let (key, record) = node_key_and_record(node, catalogue)?;
 
         match &decoded_id {
             Err(_) => {
@@ -243,7 +239,6 @@ pub fn persist_changes(
 fn node_key_and_record(
     node: &NodeValue,
     catalogue: &Catalogue,
-    base_record: Option<&NodeRecord>,
 ) -> Result<(NodeKey, NodeRecord), PersistError> {
     // Primary label: the one that declares a (non-empty) key.
     let mut keyed = node.labels.iter().filter(|label| {
@@ -303,50 +298,19 @@ fn node_key_and_record(
         .filter(|label| *label != primary)
         .cloned()
         .collect();
-    // The record stores only the non-key properties (the key is the key).
+    // The record stores only the non-key properties (the key is the key). A
+    // deferred-typed property (Bytes/temporal) read and written back unchanged
+    // arrives here as a `Value::Stored` carrier and converts straight back to
+    // its original `ModelValue` (ADR-0038) — no base-record comparison needed,
+    // and a genuine `SET p = '<string>'` correctly stores a string.
     let mut properties = BTreeMap::new();
     for (name, value) in &node.properties {
         if key_names.iter().any(|k| k == name) {
             continue;
         }
-        // Preserve an unchanged property's stored value verbatim (ADR-0029 / U2):
-        // the read path renders deferred types (Bytes/temporal) lossily to
-        // strings, so re-persisting the runtime value would retype them. If the
-        // property came from a modified base node and its runtime value is
-        // exactly the adapter's rendering of the stored value, it was read and
-        // written back unchanged — keep the stored `ModelValue`. Otherwise it was
-        // added or changed, so convert (lossless for non-deferred types, so this
-        // is a no-op for them).
-        let model = match base_record.and_then(|r| r.properties().get(name)) {
-            Some(stored) if same_rendering(&crate::exec::adapter::convert_value(stored), value) => {
-                stored.clone()
-            }
-            _ => convert_value(value)?,
-        };
-        properties.insert(name.clone(), model);
+        properties.insert(name.clone(), convert_value(value)?);
     }
     Ok((node_key, NodeRecord::new(secondary, properties)))
-}
-
-/// Structural equality on the runtime-value subset a stored node property can
-/// take once the read adapter has rendered deferred types (Bytes/temporal) to
-/// strings. The runtime [`Value`] has no `PartialEq` (openCypher equality is
-/// deliberately three-valued), so this is a plain structural compare used only
-/// to decide whether a property was written back unchanged. Any value shape a
-/// stored property cannot hold (Node/Rel/Path/Map) compares unequal, which
-/// correctly treats it as a change.
-fn same_rendering(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Null, Value::Null) => true,
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Int(x), Value::Int(y)) => x == y,
-        (Value::Float(x), Value::Float(y)) => x == y,
-        (Value::String(x), Value::String(y)) => x == y,
-        (Value::List(x), Value::List(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| same_rendering(a, b))
-        }
-        _ => false,
-    }
 }
 
 /// Enforce the schema's existence and UNIQUE constraints (spec §2) for one
@@ -452,6 +416,10 @@ fn convert_value(value: &Value) -> Result<ModelValue, PersistError> {
         Value::Int(n) => ModelValue::Int(*n),
         Value::Float(x) => ModelValue::Float(*x),
         Value::String(s) => ModelValue::String(s.clone()),
+        // A read carrier round-trips to its original typed value (ADR-0038):
+        // an untouched `Bytes`/temporal property is written back as itself, not
+        // retyped to a string. This closes the loss for nodes and edges alike.
+        Value::Stored(mv) => mv.clone(),
         Value::List(items) => ModelValue::List(
             items
                 .iter()
@@ -495,23 +463,21 @@ mod tests {
 
     #[test]
     fn write_back_preserves_unchanged_deferred_properties() {
-        // U2 (ADR-0029): the read path renders Bytes/temporal to strings, so a
-        // read→modify→write cycle must not retype the untouched ones. `name` is
-        // genuinely changed; `data` (Bytes) and `when` (DateTime) are read back
-        // exactly as the adapter rendered them.
+        // ADR-0038 (supersedes ADR-0029/U2): the read adapter carries
+        // Bytes/temporal as `Value::Stored`, so a read→modify→write cycle writes
+        // the untouched ones straight back as their original type — no base-record
+        // re-read. `name` is genuinely changed; `data` (Bytes) and `when`
+        // (DateTime) arrive exactly as the adapter produced them.
         let data = ModelValue::Bytes(vec![0xAB, 0xCD, 0xEF]);
         let when = ModelValue::DateTime(DateTime {
             epoch_nanos: 1_600_000_000_000_000_000,
             offset_minutes: 60,
         });
-        let base = NodeRecord::new(
-            Vec::<String>::new(),
-            BTreeMap::from([
-                ("name".to_string(), ModelValue::String("old".into())),
-                ("data".to_string(), data.clone()),
-                ("when".to_string(), when.clone()),
-            ]),
-        );
+        // The adapter carries deferred types as `Value::Stored` (not a string).
+        assert!(matches!(
+            crate::exec::adapter::convert_value(&data),
+            Value::Stored(_)
+        ));
         let node = runtime(&[
             ("id", Value::Int(1)),
             ("name", Value::String("new".into())), // changed
@@ -519,7 +485,7 @@ mod tests {
             ("when", crate::exec::adapter::convert_value(&when)), // read back unchanged
         ]);
 
-        let (key, record) = node_key_and_record(&node, &catalogue(), Some(&base)).expect("persist");
+        let (key, record) = node_key_and_record(&node, &catalogue()).expect("persist");
         assert_eq!(
             key,
             NodeKey::new("L", vec![ModelValue::Int(1)]).expect("key")
@@ -543,19 +509,16 @@ mod tests {
 
     #[test]
     fn write_back_of_a_changed_deferred_property_stores_the_new_value() {
-        // Setting a deferred property to a different value must store the new
-        // value, not silently preserve the old one.
-        let data = ModelValue::Bytes(vec![0xAB, 0xCD]);
-        let base = NodeRecord::new(
-            Vec::<String>::new(),
-            BTreeMap::from([("data".to_string(), data)]),
-        );
+        // Setting a deferred property to a genuine string value stores the
+        // string, not the old typed value. A user `SET` yields a `Value::String`
+        // (never a `Value::Stored`), so this also pins ADR-0038's fix of the
+        // ADR-0029 false-positive: assigning a property its own rendered string
+        // now correctly stores a string.
         let node = runtime(&[
             ("id", Value::Int(1)),
             ("data", Value::String("changed".into())),
         ]);
-        let (_key, record) =
-            node_key_and_record(&node, &catalogue(), Some(&base)).expect("persist");
+        let (_key, record) = node_key_and_record(&node, &catalogue()).expect("persist");
         assert_eq!(
             record.properties().get("data"),
             Some(&ModelValue::String("changed".into()))
@@ -571,7 +534,7 @@ mod tests {
             labels: vec![],
             properties: [("id".to_string(), Value::Int(1))].into_iter().collect(),
         };
-        let err = node_key_and_record(&node, &catalogue(), None).expect_err("no identity");
+        let err = node_key_and_record(&node, &catalogue()).expect_err("no identity");
         let msg = err.to_string();
         assert!(msg.contains("this node has no labels"), "{msg}");
         assert!(msg.contains("`(:Topic {…})`"), "{msg}");
@@ -590,7 +553,7 @@ mod tests {
             labels: vec!["Ghost".to_string()],
             properties: [("id".to_string(), Value::Int(1))].into_iter().collect(),
         };
-        let err = node_key_and_record(&node, &catalogue(), None).expect_err("no identity");
+        let err = node_key_and_record(&node, &catalogue()).expect_err("no identity");
         let msg = err.to_string();
         assert!(
             msg.contains("none of the labels [\"Ghost\"] declares a key"),
@@ -605,7 +568,7 @@ mod tests {
     #[test]
     fn a_created_node_has_no_base_and_converts_directly() {
         let node = runtime(&[("id", Value::Int(1)), ("name", Value::String("x".into()))]);
-        let (_key, record) = node_key_and_record(&node, &catalogue(), None).expect("persist");
+        let (_key, record) = node_key_and_record(&node, &catalogue()).expect("persist");
         assert_eq!(
             record.properties().get("name"),
             Some(&ModelValue::String("x".into()))
