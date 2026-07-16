@@ -35,6 +35,112 @@ fn edge(src: &NodeKey, rtype: &str, dst: &NodeKey) -> EdgeKey {
 }
 
 #[test]
+fn a_detached_head_worktree_bootstraps_instead_of_failing() {
+    // acetone-cm9: a fresh linked worktree checked out at a *detached* HEAD used
+    // to fail every operation with a spurious "no acetone workspace" error,
+    // because bootstrap resolved only a branch tip (None for a detached HEAD).
+    // It must now bootstrap the worktree's workspace from the checked-out
+    // commit.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[("cores", 8)]))
+        .expect("put");
+    let commit = tx.commit("base", &[], None).expect("commit");
+
+    let git_dir = repo.store().git_dir().to_path_buf();
+    let wt = dir.path().join("wt-detached");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&git_dir)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(commit.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success(), "git worktree add --detach failed");
+
+    // Opening the detached worktree must succeed and read-only ops must work.
+    let wt_repo = Repository::open(&wt).expect("open detached worktree");
+    assert!(
+        wt_repo.current_branch().expect("branch").is_none(),
+        "the worktree HEAD is detached"
+    );
+    let snap = wt_repo.workspace_snapshot().expect("snapshot");
+    assert!(
+        snap.get_node(&node("Host", "web1")).expect("get").is_some(),
+        "the bootstrapped workspace sees the checked-out commit's data"
+    );
+    // A pristine detached bootstrap reads as clean, not spuriously dirty
+    // (cm9 review, finding 1): is_dirty compares against the checked-out commit.
+    assert!(
+        !wt_repo.is_dirty().expect("dirty"),
+        "a pristine detached bootstrap must be clean"
+    );
+
+    // Committing from a detached worktree fails cleanly (no branch to advance)
+    // and — the branch check runs before staged writes are applied — leaves the
+    // workspace untouched (cm9 review, finding 2).
+    let mut wt_tx = wt_repo.begin_write().expect("begin");
+    wt_tx
+        .put_node(&node("Host", "web2"), &record(&[("cores", 4)]))
+        .expect("stage");
+    let err = wt_tx
+        .commit("nope", &[], None)
+        .expect_err("a detached commit must fail");
+    assert!(matches!(err, GraphError::NoCurrentBranch), "got {err:?}");
+    assert!(
+        wt_repo
+            .workspace_snapshot()
+            .expect("snapshot")
+            .get_node(&node("Host", "web2"))
+            .expect("get")
+            .is_none(),
+        "a failed detached commit must not partially apply"
+    );
+}
+
+#[test]
+fn a_detached_worktree_bootstraps_from_its_own_commit_not_the_branch_tip() {
+    // Bootstrap must follow the *detached* commit, not the branch tip: a
+    // worktree detached at an earlier commit sees that commit's graph, not the
+    // newer data on the branch (acetone-cm9).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "old"), &record(&[]))
+        .expect("put");
+    let earlier = tx.commit("c1", &[], None).expect("commit");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "new"), &record(&[]))
+        .expect("put");
+    tx.commit("c2", &[], None).expect("commit"); // branch tip now has both
+
+    let git_dir = repo.store().git_dir().to_path_buf();
+    let wt = dir.path().join("wt-earlier");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&git_dir)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(earlier.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success());
+
+    let wt_repo = Repository::open(&wt).expect("open");
+    let snap = wt_repo.workspace_snapshot().expect("snapshot");
+    assert!(
+        snap.get_node(&node("Host", "old")).expect("get").is_some(),
+        "sees the detached commit's node"
+    );
+    assert!(
+        snap.get_node(&node("Host", "new")).expect("get").is_none(),
+        "must NOT see the branch tip's later node"
+    );
+}
+
+#[test]
 fn init_creates_empty_workspace_that_reopens() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
