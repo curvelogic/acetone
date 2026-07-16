@@ -4,6 +4,7 @@ use acetone_model::graph_keys::GraphKeyError;
 use acetone_model::manifest::ManifestDecodeError;
 use acetone_model::records::{RecordDecodeError, RecordEncodeError};
 use acetone_model::schema::SchemaError;
+use acetone_model::values::ValueEncodeError;
 use acetone_prolly::ProllyError;
 use acetone_store::StoreError;
 use std::path::PathBuf;
@@ -27,6 +28,9 @@ pub enum GraphError {
     /// A record failed to encode.
     #[error(transparent)]
     RecordEncode(#[from] RecordEncodeError),
+    /// A property value failed to canonically encode (cell-wise merge equality).
+    #[error(transparent)]
+    ValueEncode(#[from] ValueEncodeError),
     /// A record failed to decode.
     #[error(transparent)]
     RecordDecode(#[from] RecordDecodeError),

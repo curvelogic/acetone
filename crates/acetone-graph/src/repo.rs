@@ -40,6 +40,7 @@ use crate::diff::{EdgeChange, GraphDiff, NodeChange};
 use crate::error::GraphError;
 use crate::lock::WriteLock;
 use crate::merge::{ConflictMap, ManifestMerge, MergeConflict, MergeOutcome, merge_manifests};
+use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
@@ -1551,40 +1552,169 @@ impl<'r> Transaction<'r> {
             ));
         }
 
-        let mut count = 0;
+        // Group the per-property conflicts by their `(map, key)`, so a node or
+        // edge conflicted on several properties (ADR-0035, cell-wise merge) is
+        // rebuilt once. A whole-record conflict (`property == None`) resolves by
+        // taking the entire record from `source`; a set of property conflicts
+        // resolves by overwriting only those properties on the merged record,
+        // preserving the properties that auto-merged.
+        let mut by_key: BTreeMap<(ConflictMap, Vec<u8>), Vec<Option<String>>> = BTreeMap::new();
         for conflict in &conflicts {
-            let crate::conflicts::PersistedConflict::Cell { map, key } = conflict else {
+            let crate::conflicts::PersistedConflict::Cell { map, key, property } = conflict else {
                 continue;
             };
+            by_key
+                .entry((*map, key.clone()))
+                .or_default()
+                .push(property.clone());
+        }
+
+        let mut count = 0;
+        for ((map, key), properties) in &by_key {
+            count += properties.len();
+            let whole_record = properties.iter().any(Option::is_none);
             let source_root = match map {
                 ConflictMap::Schema => source.schema,
                 ConflictMap::Nodes => source.nodes,
                 ConflictMap::Edges => source.edges_fwd,
             }
             .to_root(params)?;
-            let value = acetone_prolly::get(&self.repo.store, &source_root, key)?;
-            let op = match &value {
-                Some(bytes) => BatchOp::Put(key.clone(), bytes.to_vec()),
-                None => BatchOp::Delete(key.clone()),
-            };
-            match map {
-                ConflictMap::Schema => self.schema.push(op),
-                ConflictMap::Nodes => self.nodes.push(op),
-                ConflictMap::Edges => {
-                    self.edges_fwd.push(op);
-                    // `edges_rev` is derived: mirror the forward change.
-                    let rev = EdgeKey::decode_fwd(key)?.encode_rev()?;
-                    self.edges_rev.push(match &value {
-                        Some(_) => BatchOp::Put(rev, Vec::new()),
-                        None => BatchOp::Delete(rev),
-                    });
-                }
+
+            if whole_record {
+                // Existence is disputed (or a schema key): take the whole record
+                // from the chosen side — a `Put` if it has one, else a `Delete`.
+                let value = acetone_prolly::get(&self.repo.store, &source_root, key)?;
+                self.resolve_whole_record(*map, key, value.as_deref())?;
+            } else {
+                // Overwrite only the conflicted properties on the merged record,
+                // taking each value from the chosen side (or dropping it when
+                // that side has none — a resolved delete-vs-modify).
+                let names: Vec<&str> = properties.iter().filter_map(|p| p.as_deref()).collect();
+                self.resolve_properties(*map, key, &source_root, &names)?;
             }
-            count += 1;
         }
-        // The merge is fully resolved: drop the conflicts map.
+        // The merge is fully resolved: drop the conflicts map. `save_in_place`
+        // persists a transaction only when `is_dirty()` (it does not observe a
+        // `conflicts` delta on its own), so clearing the map must always
+        // co-occur with a staged map op — which it does: every resolved key
+        // stages at least one op, so a non-empty conflicts map yields count > 0
+        // and a dirty transaction. Guard the invariant a future refactor could
+        // break.
+        debug_assert!(
+            count == 0 || self.is_dirty(),
+            "resolving conflicts must stage a write so `conflicts = None` persists"
+        );
         self.manifest.conflicts = None;
         Ok(count)
+    }
+
+    /// Resolve a whole-record cell conflict by taking `value` (the chosen
+    /// side's encoded record, or `None` to delete) verbatim, mirroring
+    /// `edges_rev` for an edge.
+    fn resolve_whole_record(
+        &mut self,
+        map: ConflictMap,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> Result<(), GraphError> {
+        let op = match value {
+            Some(bytes) => BatchOp::Put(key.to_vec(), bytes.to_vec()),
+            None => BatchOp::Delete(key.to_vec()),
+        };
+        match map {
+            ConflictMap::Schema => self.schema.push(op),
+            ConflictMap::Nodes => self.nodes.push(op),
+            ConflictMap::Edges => {
+                self.edges_fwd.push(op);
+                // `edges_rev` is derived: mirror the forward change.
+                let rev = EdgeKey::decode_fwd(key)?.encode_rev()?;
+                self.edges_rev.push(match value {
+                    Some(_) => BatchOp::Put(rev, Vec::new()),
+                    None => BatchOp::Delete(rev),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a set of per-property conflicts on one node/edge: start from the
+    /// merged record (its auto-merged properties), overwrite each named property
+    /// with the chosen side's value (or drop it when that side lacks it), and
+    /// write the record back. The map key — and so the edge's endpoints — is
+    /// unchanged, so `edges_rev` needs no update.
+    fn resolve_properties(
+        &mut self,
+        map: ConflictMap,
+        key: &[u8],
+        source_root: &Root,
+        names: &[&str],
+    ) -> Result<(), GraphError> {
+        let store = &self.repo.store;
+        let source_value = acetone_prolly::get(store, source_root, key)?;
+        match map {
+            ConflictMap::Nodes => {
+                let merged_root = self.manifest.nodes.to_root(self.manifest.chunk_params)?;
+                let merged = match acetone_prolly::get(store, &merged_root, key)? {
+                    Some(bytes) => NodeRecord::decode(&bytes)?,
+                    None => NodeRecord::new(Vec::new(), BTreeMap::new()),
+                };
+                let source = match &source_value {
+                    Some(bytes) => Some(NodeRecord::decode(bytes)?),
+                    None => None,
+                };
+                let labels: Vec<String> = merged.secondary_labels().to_vec();
+                let mut properties: BTreeMap<String, Value> = merged.properties().clone();
+                for name in names {
+                    match source.as_ref().and_then(|s| s.properties().get(*name)) {
+                        Some(v) => {
+                            properties.insert((*name).to_owned(), v.clone());
+                        }
+                        None => {
+                            properties.remove(*name);
+                        }
+                    }
+                }
+                let resolved = NodeRecord::new(labels, properties);
+                self.nodes
+                    .push(BatchOp::Put(key.to_vec(), resolved.encode()?));
+            }
+            ConflictMap::Edges => {
+                let merged_root = self
+                    .manifest
+                    .edges_fwd
+                    .to_root(self.manifest.chunk_params)?;
+                let merged = match acetone_prolly::get(store, &merged_root, key)? {
+                    Some(bytes) => EdgeRecord::decode(&bytes)?,
+                    None => EdgeRecord::new(BTreeMap::new()),
+                };
+                let source = match &source_value {
+                    Some(bytes) => Some(EdgeRecord::decode(bytes)?),
+                    None => None,
+                };
+                let mut properties: BTreeMap<String, Value> = merged.properties().clone();
+                for name in names {
+                    match source.as_ref().and_then(|s| s.properties().get(*name)) {
+                        Some(v) => {
+                            properties.insert((*name).to_owned(), v.clone());
+                        }
+                        None => {
+                            properties.remove(*name);
+                        }
+                    }
+                }
+                let merged = EdgeRecord::new(properties);
+                self.edges_fwd
+                    .push(BatchOp::Put(key.to_vec(), merged.encode()?));
+            }
+            // A schema conflict is never per-property (it has `property == None`
+            // and is handled as a whole record).
+            ConflictMap::Schema => {
+                return Err(GraphError::MergeState(
+                    "schema conflicts have no per-property form",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

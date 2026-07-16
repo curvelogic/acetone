@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod cell_merge;
 pub mod conflicts;
 pub mod diff;
 pub mod error;

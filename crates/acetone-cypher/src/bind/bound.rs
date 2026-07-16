@@ -569,11 +569,14 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         name: "acetone.conflicts",
         min_args: 0,
         max_args: 0,
-        // `node` is the `_Conflict` virtual subgraph (acetone-14c.4b): the
-        // conflicting node as a value labelled `_Conflict`, so
-        // `YIELD node WHERE '_Conflict' IN labels(node)` queries the merge's
-        // conflicts as a graph. Null for a relationship or schema conflict.
-        yields: &["label", "key", "node"],
+        // `property` names the single conflicted property of a cell-wise merge
+        // (ADR-0035), or is null for a whole-record conflict (a node/edge whose
+        // existence is disputed, or a schema key). `node` is the `_Conflict`
+        // virtual subgraph (acetone-14c.4b): the conflicting node as a value
+        // labelled `_Conflict`, so `YIELD node WHERE '_Conflict' IN
+        // labels(node)` queries the merge's conflicts as a graph. Null for a
+        // relationship or schema conflict.
+        yields: &["label", "key", "property", "node"],
     },
 ];
 

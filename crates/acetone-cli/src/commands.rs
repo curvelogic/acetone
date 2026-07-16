@@ -447,11 +447,20 @@ fn render_edge_key(key: &[u8]) -> String {
 /// single human-readable line.
 fn render_conflict(c: &MergeConflict) -> String {
     match c {
-        MergeConflict::Cell(cell) => match cell.map {
-            ConflictMap::Nodes => format!("node {}", render_node_key(&cell.key)),
-            ConflictMap::Edges => format!("edge {}", render_edge_key(&cell.key)),
-            ConflictMap::Schema => format!("schema {}", hex_key(&cell.key)),
-        },
+        MergeConflict::Cell(cell) => {
+            // A cell-wise merge (ADR-0035) names the single property that
+            // diverged; a whole-record conflict (disputed existence, or a
+            // schema key) has none.
+            let at = match &cell.property {
+                Some(property) => format!(" property {}", format_label(property)),
+                None => String::new(),
+            };
+            match cell.map {
+                ConflictMap::Nodes => format!("node {}{at}", render_node_key(&cell.key)),
+                ConflictMap::Edges => format!("edge {}{at}", render_edge_key(&cell.key)),
+                ConflictMap::Schema => format!("schema {}{at}", hex_key(&cell.key)),
+            }
+        }
         MergeConflict::Graph(GraphViolation::DanglingEdge {
             edge,
             endpoint,

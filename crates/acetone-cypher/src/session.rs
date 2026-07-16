@@ -421,9 +421,15 @@ impl ProcedureProvider for RepoProcedures<'_> {
 
                 let mut rows = Vec::new();
                 for conflict in conflicts {
-                    let PersistedConflict::Cell { map, key } = conflict else {
+                    let PersistedConflict::Cell { map, key, property } = conflict else {
                         // Graph violations are not persisted (acetone-14c.4a).
                         continue;
+                    };
+                    // The conflicted property of a cell-wise merge (ADR-0035),
+                    // null for a whole-record conflict.
+                    let property_col = match &property {
+                        Some(p) => Value::String(p.clone()),
+                        None => Value::Null,
                     };
                     let row = match map {
                         ConflictMap::Nodes => {
@@ -450,6 +456,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                             vec![
                                 Value::String(node_key.label().to_string()),
                                 Value::String(acetone_model::display::format_node_key(&node_key)),
+                                property_col,
                                 node,
                             ]
                         }
@@ -458,12 +465,14 @@ impl ProcedureProvider for RepoProcedures<'_> {
                             vec![
                                 Value::String(edge_key.rtype().to_string()),
                                 Value::String(format_edge_key(&edge_key)),
+                                property_col,
                                 Value::Null,
                             ]
                         }
                         ConflictMap::Schema => vec![
                             Value::String("schema".to_string()),
                             Value::String(key.iter().map(|b| format!("{b:02x}")).collect()),
+                            property_col,
                             Value::Null,
                         ],
                     };
