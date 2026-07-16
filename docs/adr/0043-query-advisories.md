@@ -28,11 +28,15 @@ a query result.
   `advisories: Vec<String>`. The executor leaves it empty; the **session** layer
   — which holds the schema catalogue — populates it after execution. It never
   affects `rows`, `columns`, `stats`, or the error path.
-- The first advisory: in `Lenient` (schema-free) mode, a read that **referenced
-  a label and produced no rows** yields one note naming the undeclared label(s)
-  and how to declare one. It fires only on an empty result (the trap), only in
-  schema-free mode (a declared schema already errors), and only when a label was
-  actually referenced (a label-free `MATCH (n)` gets none).
+- The first advisory: in `Lenient` (schema-free) mode, a read that produced **no
+  rows** and referenced a label that matches **no node in the graph** yields one
+  note naming that label and how to declare one. It fires only on an empty
+  result (the trap), only in schema-free mode (a declared schema already
+  errors), only when a label was actually referenced (a label-free `MATCH (n)`
+  gets none), and — checked with the executor's own `nodes_by_labels` — only for
+  a genuinely absent label, never for a real, populated label whose `WHERE`
+  filtered the result to empty (which would make "check for a typo" misleading).
+  The graph check runs only on this narrow schema-free-and-empty path.
 - **Surfacing**: the CLI prints advisories to **stderr**, so they never pollute
   the result on stdout (table/JSON/CSV) and never change the exit status. Library
   callers read `result.advisories` and choose their own presentation.
@@ -48,8 +52,10 @@ further API change.
 - Result semantics and exit status are unchanged — a scripted `MATCH … RETURN`
   piped to a file still receives exactly its rows on stdout; the note is
   out-of-band on stderr.
-- The advisory is intentionally conservative (schema-free + empty + label
-  referenced). It does not fire for a schema-free `MATCH` that *did* match, nor
-  for `OPTIONAL MATCH` (which yields a null row, not an empty result). Extending
-  advisories to the write path, or to undeclared relationship types (already a
-  hard error today), is left open.
+- The advisory is intentionally conservative (schema-free + empty result +
+  label referenced + label absent from the graph). It does not fire for a
+  schema-free `MATCH` that *did* match, for a populated label a `WHERE` filtered
+  to empty, nor for `OPTIONAL MATCH` (which yields a null row, not an empty
+  result). Labels inside a `WHERE` sub-pattern are not scanned, and extending
+  advisories to the write path or to undeclared relationship types (already a
+  hard error today) is left open.

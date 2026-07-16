@@ -542,6 +542,42 @@ fn undeclared_label_match_in_a_schema_free_repo_advises_on_stderr() {
         "no advisory for a label-free match: {}",
         stderr(&plain)
     );
+
+    // stdout is byte-invariant under --format json/csv (the advisory is
+    // stderr-only and must never leak into a machine-readable result).
+    for fmt in ["json", "csv"] {
+        let out = acetone(
+            &repo,
+            &["query", "MATCH (n:Nope) RETURN n", "--format", fmt],
+        );
+        assert!(out.status.success());
+        assert!(
+            !stdout(&out).contains("Nope") && !stdout(&out).contains("note:"),
+            "advisory leaked into {fmt} stdout: {}",
+            stdout(&out)
+        );
+        assert!(
+            stderr(&out).contains("Nope"),
+            "advisory still on stderr for {fmt}"
+        );
+    }
+
+    // A real, populated label whose WHERE filters the result to empty must NOT
+    // advise: the label exists, so "check for a typo" would be misleading.
+    let seed = acetone(&repo, &["put-node", "Person", "1", "--prop", "name=Alice"]);
+    assert!(seed.status.success(), "{}", stderr(&seed));
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let filtered = acetone(
+        &repo,
+        &["query", "MATCH (p:Person) WHERE p.name = 'Zzz' RETURN p"],
+    );
+    assert!(filtered.status.success());
+    assert!(stdout(&filtered).contains("0 rows"));
+    assert!(
+        stderr(&filtered).trim().is_empty(),
+        "a populated label filtered to empty must not advise: {}",
+        stderr(&filtered)
+    );
 }
 
 /// The `query` command (acetone-yzc.6): parse → bind → execute an

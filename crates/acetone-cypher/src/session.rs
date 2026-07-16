@@ -183,7 +183,7 @@ impl<'r> Session<'r> {
         if let Some(error) = base.take_error() {
             return Err(QueryError::Graph(error));
         }
-        result.advisories = undeclared_label_advisories(parsed, &catalogue, &result);
+        result.advisories = undeclared_label_advisories(parsed, &catalogue, &result, &base);
         Ok(result)
     }
 
@@ -221,14 +221,22 @@ fn is_write(parsed: &Query) -> bool {
 /// Advisories for a schema-free read that matched nothing (acetone-7bn.5). In a
 /// schema-free repository binding is Lenient, so an undeclared label in a
 /// `MATCH` is not an error (openCypher read semantics) — a typo therefore
-/// returns 0 rows with no signal, an exploration trap. When a read referenced a
-/// label and produced no rows, return a non-error note naming the label(s). This
-/// never fires with a declared schema (an undeclared label is already a hard
-/// error there, acetone-7bn.4) and never changes the result.
+/// returns 0 rows with no signal, an exploration trap. When a read produced no
+/// rows and referenced a label that matches **no node in the graph**, return a
+/// non-error note naming the label(s). This never fires with a declared schema
+/// (an undeclared label is already a hard error there, acetone-7bn.4) and never
+/// changes the result.
+///
+/// The label is checked against the graph with the executor's own
+/// [`GraphSource::nodes_by_labels`], so the note fires only for a genuinely
+/// absent label — never for a real, populated label whose `WHERE` filtered the
+/// result to empty (which would make "check for a typo" misleading). This check
+/// runs only on the narrow schema-free-and-empty-result path.
 fn undeclared_label_advisories(
     parsed: &Query,
     catalogue: &Catalogue,
     result: &QueryResult,
+    graph: &dyn GraphSource,
 ) -> Vec<String> {
     if !catalogue.is_empty() || !result.rows.is_empty() {
         return Vec::new();
@@ -243,6 +251,13 @@ fn undeclared_label_advisories(
     }
     labels.sort();
     labels.dedup();
+    // Keep only labels that match no node at all — a genuinely absent (typo'd or
+    // never-populated) label, not a real label a `WHERE` filtered to empty.
+    labels.retain(|label| {
+        graph
+            .nodes_by_labels(std::slice::from_ref(label))
+            .is_empty()
+    });
     if labels.is_empty() {
         return Vec::new();
     }
@@ -253,8 +268,9 @@ fn undeclared_label_advisories(
         .join(", ");
     let plural = if labels.len() == 1 { "label" } else { "labels" };
     vec![format!(
-        "note: {plural} {names} not declared in this schema-free repository — 0 rows. \
-         Declare a label with `acetone declare-label <label> --key <property>`, or check for a typo."
+        "note: {plural} {names} not declared and matched no nodes in this schema-free \
+         repository — 0 rows. Declare a label with `acetone declare-label <label> \
+         --key <property>`, or check for a typo."
     )]
 }
 
