@@ -1654,22 +1654,24 @@ fn call_conflicts_surfaces_base_ours_theirs_side_by_side() {
             .status
             .success()
     );
+    // Distinct sentinels (not equal to the column names) so the positional
+    // assertion is unambiguous and catches an ours/theirs transposition.
     assert!(
-        acetone(&repo, &["put-node", "N", "1", "--prop", "name=base"])
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=basev"])
             .status
             .success()
     );
     assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
     assert!(acetone(&repo, &["branch", "other"]).status.success());
     assert!(
-        acetone(&repo, &["put-node", "N", "1", "--prop", "name=ours"])
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=oursv"])
             .status
             .success()
     );
     assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
     assert!(acetone(&repo, &["checkout", "other"]).status.success());
     assert!(
-        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirs"])
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirsv"])
             .status
             .success()
     );
@@ -1688,15 +1690,10 @@ fn call_conflicts_surfaces_base_ours_theirs_side_by_side() {
         ],
     );
     let text = stdout(&rows);
-    // One row naming the conflicted property with all three sides.
-    assert!(text.contains("name"), "names the property: {text}");
-    assert!(text.contains("base"), "base value present: {text}");
-    assert!(text.contains("ours"), "ours value present: {text}");
-    assert!(text.contains("theirs"), "theirs value present: {text}");
-    // Concretely: the row carries base,ours,theirs in order.
+    // The conflicted property and all three sides, in the right columns.
     assert!(
-        text.contains("name,base,ours,theirs"),
-        "three-way values in one row: {text}"
+        text.contains("name,basev,oursv,theirsv"),
+        "three-way values in one row, correctly ordered: {text}"
     );
 }
 
