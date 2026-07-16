@@ -510,6 +510,40 @@ fn query_command_table_is_never_row_capped() {
     );
 }
 
+/// acetone-7bn.5: in a schema-free repository an undeclared label in a `MATCH`
+/// is not an error (openCypher read semantics), so a typo returns 0 rows with
+/// no signal — an exploration trap. The query still returns 0 rows and exits 0,
+/// but a non-error advisory naming the label lands on stderr.
+#[test]
+fn undeclared_label_match_in_a_schema_free_repo_advises_on_stderr() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let out = acetone(&repo, &["query", "MATCH (n:Nope) RETURN n"]);
+    // Result semantics unchanged: 0 rows, exit 0.
+    assert!(out.status.success(), "must exit 0: {}", stderr(&out));
+    assert!(stdout(&out).contains("0 rows"), "stdout: {}", stdout(&out));
+    // The advisory is on stderr, names the label, and does not pollute stdout.
+    let err = stderr(&out);
+    assert!(err.contains("Nope"), "advisory must name the label: {err}");
+    assert!(err.contains("not declared"), "stderr: {err}");
+    assert!(
+        !stdout(&out).contains("Nope"),
+        "advisory must not pollute stdout: {}",
+        stdout(&out)
+    );
+
+    // A label-free MATCH gets no advisory (nothing undeclared was referenced).
+    let plain = acetone(&repo, &["query", "MATCH (n) RETURN n"]);
+    assert!(plain.status.success());
+    assert!(
+        stderr(&plain).trim().is_empty(),
+        "no advisory for a label-free match: {}",
+        stderr(&plain)
+    );
+}
+
 /// The `query` command (acetone-yzc.6): parse → bind → execute an
 /// openCypher read query against the repository, in table/JSON/CSV.
 #[test]
