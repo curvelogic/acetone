@@ -628,7 +628,15 @@ impl Repository {
     /// progress.
     pub fn abort_merge(&self) -> Result<(), GraphError> {
         let _lock = WriteLock::acquire(self.store.git_dir())?;
-        if self.merge_head()?.is_none() {
+        // A merge is abortable while MERGE_HEAD is set. Also accept a workspace
+        // that still carries a `conflicts` map with no MERGE_HEAD: that is a
+        // *half-aborted* state a prior abort could leave if its `delete_ref`
+        // succeeded but a step failed — accepting either half means re-running
+        // `merge --abort` always finishes the abort (idempotent recovery),
+        // whichever step failed.
+        let has_merge_head = self.merge_head()?.is_some();
+        let has_conflicts = self.workspace_manifest()?.conflicts.is_some();
+        if !has_merge_head && !has_conflicts {
             return Err(GraphError::MergeState("no merge in progress to abort"));
         }
         // Reset the workspace to the branch tip's manifest (its `conflicts` is
@@ -641,8 +649,13 @@ impl Repository {
         let tree = self.workspace_tree_for(&manifest_hash)?;
         let expected = self.workspace_ref_value()?;
         self.cas_workspace(expected.as_ref(), &tree)?;
-        // Clearing MERGE_HEAD last is the definitive "merge over" signal.
-        self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+        // Clear MERGE_HEAD last — the definitive "merge over" signal. A failed
+        // delete here leaves MERGE_HEAD set with the workspace already at the
+        // branch tip; re-running `merge --abort` recovers it (and the commit
+        // path's stale-MERGE_HEAD guard covers the post-completion analogue).
+        if self.merge_head()?.is_some() {
+            self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+        }
         Ok(())
     }
 
@@ -1556,19 +1569,28 @@ impl<'r> Transaction<'r> {
             // Re-validate the resolved graph against the merge base
             // (acetone-mws / acetone-36y): a resolution can itself introduce a
             // dangling edge, drop a required property, or create a UNIQUE
-            // collision, none of which may be committed.
-            if let Some(tip) = parent
-                && let Some(base) = repo.merge_base(&tip, &theirs)?
-            {
-                let base_manifest = repo.manifest_at_commit(&base)?;
-                let violations =
-                    crate::merge::validate_merged(&repo.store, &base_manifest, &self.manifest)?;
-                if !violations.is_empty() {
-                    return Err(GraphError::MergeState(
-                        "cannot commit: the merge leaves graph-level violations \
-                         (dangling edge or constraint breach) — repair the graph, then commit",
-                    ));
-                }
+            // collision, none of which may be committed. A completing merge
+            // always has a branch tip and a base (the branch is frozen at `ours`
+            // for the whole merge); their absence means a corrupt or injected
+            // MERGE_HEAD, so refuse rather than commit an unrelated history
+            // unchecked.
+            let tip = parent.ok_or(GraphError::MergeState(
+                "merge in progress but the branch is unborn",
+            ))?;
+            let base = repo
+                .merge_base(&tip, &theirs)?
+                .ok_or_else(|| GraphError::NoMergeBase {
+                    ours: tip.to_hex(),
+                    theirs: theirs.to_hex(),
+                })?;
+            let base_manifest = repo.manifest_at_commit(&base)?;
+            let violations =
+                crate::merge::validate_merged(&repo.store, &base_manifest, &self.manifest)?;
+            if !violations.is_empty() {
+                return Err(GraphError::MergeState(
+                    "cannot commit: the merge leaves graph-level violations \
+                     (dangling edge or constraint breach) — repair the graph, then commit",
+                ));
             }
             // Clean: drop any advisory graph-violation entries so the completed
             // manifest carries no conflicts map.

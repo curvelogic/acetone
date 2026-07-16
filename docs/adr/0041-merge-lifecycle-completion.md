@@ -52,7 +52,10 @@ remaining cell entry refuses the commit before re-validation runs.
 **4. `merge --abort` is the escape hatch.** `Repository::abort_merge` resets the
 workspace to the branch tip's manifest (dropping the partial merge and its
 conflicts map) and clears `MERGE_HEAD`. It is the only way to back out of a
-graph-violation merge, and works for cell merges too.
+graph-violation merge, and works for cell merges too. It is **idempotent**: a
+merge is abortable while `MERGE_HEAD` is set *or* the workspace still carries a
+conflicts map, so a partial abort (a failed `delete_ref` or workspace CAS) is
+recovered by simply re-running `merge --abort`.
 
 **5. Defensive `MERGE_HEAD` handling.** A `MERGE_HEAD` already in the branch
 tip's history is stale (a prior completion whose `delete_ref` failed); commit
@@ -71,6 +74,10 @@ merge commit.
 - No format change: `MERGE_HEAD`, the `conflicts` map, and the re-validation are
   all workspace-only. The graph-violation entry-key encoding is unchanged from
   ADR-0020.
+- A completing merge always has a branch tip and a merge base (the branch is
+  frozen at `ours` for the whole merge-in-progress), so their absence at
+  completion means a corrupt or injected `MERGE_HEAD`: `commit` refuses
+  (`NoMergeBase`) rather than joining an unrelated history unchecked.
 - **Known boundaries (v0.2):** `status`/`acetone.conflicts` show the *persisted*
   graph-violation entries, which are not re-derived after a repair — so they can
   over-report until the completion commit clears them; the authoritative check is

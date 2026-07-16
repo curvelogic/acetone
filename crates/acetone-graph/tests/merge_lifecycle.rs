@@ -103,6 +103,30 @@ fn abort_with_no_merge_in_progress_errors() {
 }
 
 #[test]
+fn abort_recovers_a_half_aborted_state_with_no_merge_head() {
+    // A prior abort that cleared MERGE_HEAD but failed before resetting the
+    // workspace leaves a conflicts-map workspace with no MERGE_HEAD. Re-running
+    // `merge --abort` must still finish the abort (idempotent recovery).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let (ours, _theirs) = dangling_merge_in_progress(&repo);
+
+    // Simulate the half-aborted state: drop MERGE_HEAD, leave the partial-merge
+    // workspace in place.
+    repo.store()
+        .delete_ref(MERGE_HEAD)
+        .expect("drop merge head");
+    assert!(repo.merge_head().expect("merge head").is_none());
+    assert!(repo.is_dirty().expect("dirty"), "workspace still partial");
+
+    // Re-abort recovers: workspace back to ours, clean, fsck-clean.
+    repo.abort_merge().expect("recovering abort");
+    assert!(!repo.is_dirty().expect("dirty"));
+    assert_eq!(repo.head_commit().expect("head"), Some(ours));
+    assert!(!fsck::check(&repo).expect("fsck").has_errors());
+}
+
+#[test]
 fn commit_refuses_while_a_graph_violation_remains() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init(dir.path());
