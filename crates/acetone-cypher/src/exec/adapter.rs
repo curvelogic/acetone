@@ -218,7 +218,7 @@ pub fn virtual_diff_node(
     node
 }
 
-fn node_value(
+pub(crate) fn node_value(
     key: &NodeKey,
     record: &NodeRecord,
     key_names: &HashMap<String, Vec<String>>,
@@ -261,7 +261,7 @@ fn rel_entity_id(key: &EdgeKey) -> EntityId {
     )
 }
 
-fn rel_value(key: &EdgeKey, record: &EdgeRecord) -> RelValue {
+pub(crate) fn rel_value(key: &EdgeKey, record: &EdgeRecord) -> RelValue {
     RelValue {
         id: rel_entity_id(key),
         rel_type: key.rtype().to_string(),
@@ -480,7 +480,7 @@ fn encode_model_value(value: &ModelValue) -> Option<Vec<u8>> {
 
 /// Convert a runtime [`Value`] to a stored [`ModelValue`], or `None` for a
 /// kind that cannot be an index value (map/node/relationship/path).
-fn model_value_of(value: &Value) -> Option<ModelValue> {
+pub(crate) fn model_value_of(value: &Value) -> Option<ModelValue> {
     Some(match value {
         Value::Null => ModelValue::Null,
         Value::Bool(b) => ModelValue::Bool(*b),
