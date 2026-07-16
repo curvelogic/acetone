@@ -77,6 +77,37 @@ fn range_over_a_huge_span_is_bounded() {
 }
 
 #[test]
+fn a_list_returning_function_is_charged_against_the_collection_cap() {
+    // acetone-fab: the list-returning builtins (split/keys/labels/nodes/
+    // relationships/reverse/tail) now charge their result length against the
+    // collection cap, like range()/collect(). A `split` into more parts than the
+    // cap must be rejected up front, not allocated first.
+    let graph = MemoryGraph::new();
+    let limits = QueryLimits {
+        max_collection_len: 5,
+        ..QueryLimits::unbounded()
+    };
+    // Eight parts, cap of five.
+    let err = run_query_with_limits(
+        "RETURN split('a,a,a,a,a,a,a,a', ',') AS parts",
+        &graph,
+        &params(),
+        &limits,
+    )
+    .expect_err("a split past the collection cap must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+
+    // A split within the cap still succeeds (no over-charging).
+    run_query_with_limits(
+        "RETURN split('a,a,a', ',') AS parts",
+        &graph,
+        &params(),
+        &limits,
+    )
+    .expect("a split within the cap must succeed");
+}
+
+#[test]
 fn a_huge_intermediate_row_set_is_bounded() {
     // A cartesian blow-up whose intermediate set dwarfs the tiny final result:
     // 51 * 51 = 2601 rows materialised, capped at 100.

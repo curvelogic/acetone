@@ -7,6 +7,19 @@ use crate::exec::source::GraphSource;
 use crate::exec::value::Value;
 use crate::span::Span;
 
+/// Wrap `items` as a list value after charging its length against the query's
+/// collection cap (acetone-fab), the same accounting `range()`/`collect()` do.
+/// Used by the list-returning builtins whose result is bounded by an
+/// already-resident, already-bounded input (`keys`/`labels` by graph data,
+/// `nodes`/`relationships` by a hop-governed path, `tail`/`reverse` by an
+/// existing list): building the result is an O(input) transient, so charging
+/// after the `.collect()` is sufficient. `split`, whose input is a raw string,
+/// charges the part count *before* building instead (see its arm).
+fn charged_list(governor: &Governor, items: Vec<Value>) -> Result<Value, ExecError> {
+    governor.collection(items.len() as u64)?;
+    Ok(Value::List(items))
+}
+
 pub fn call(
     name: &str,
     args: Vec<Value>,
@@ -101,7 +114,7 @@ pub fn call(
             ))),
         },
         _ if name.eq_ignore_ascii_case("tail") => match arg(0) {
-            Value::List(items) => Ok(Value::List(items.into_iter().skip(1).collect())),
+            Value::List(items) => charged_list(governor, items.into_iter().skip(1).collect()),
             other => Err(type_error(format!(
                 "tail() needs a list, got {}",
                 other.type_name()
@@ -110,7 +123,7 @@ pub fn call(
         _ if name.eq_ignore_ascii_case("reverse") => match arg(0) {
             Value::List(mut items) => {
                 items.reverse();
-                Ok(Value::List(items))
+                charged_list(governor, items)
             }
             Value::String(s) => Ok(Value::String(s.chars().rev().collect())),
             other => Err(type_error(format!(
@@ -119,13 +132,15 @@ pub fn call(
             ))),
         },
         _ if name.eq_ignore_ascii_case("keys") => match arg(0) {
-            Value::Map(map) => Ok(Value::List(map.into_keys().map(Value::String).collect())),
-            Value::Node(node) => Ok(Value::List(
+            Value::Map(map) => charged_list(governor, map.into_keys().map(Value::String).collect()),
+            Value::Node(node) => charged_list(
+                governor,
                 node.properties.into_keys().map(Value::String).collect(),
-            )),
-            Value::Relationship(rel) => Ok(Value::List(
+            ),
+            Value::Relationship(rel) => charged_list(
+                governor,
                 rel.properties.into_keys().map(Value::String).collect(),
-            )),
+            ),
             other => Err(type_error(format!(
                 "keys() cannot inspect {}",
                 other.type_name()
@@ -141,9 +156,10 @@ pub fn call(
             ))),
         },
         _ if name.eq_ignore_ascii_case("labels") => match arg(0) {
-            Value::Node(node) => Ok(Value::List(
+            Value::Node(node) => charged_list(
+                governor,
                 node.labels.into_iter().map(Value::String).collect(),
-            )),
+            ),
             other => Err(type_error(format!(
                 "labels() needs a node, got {}",
                 other.type_name()
@@ -176,18 +192,19 @@ pub fn call(
             ))),
         },
         _ if name.eq_ignore_ascii_case("nodes") => match arg(0) {
-            Value::Path(path) => Ok(Value::List(
-                path.nodes.into_iter().map(Value::Node).collect(),
-            )),
+            Value::Path(path) => {
+                charged_list(governor, path.nodes.into_iter().map(Value::Node).collect())
+            }
             other => Err(type_error(format!(
                 "nodes() needs a path, got {}",
                 other.type_name()
             ))),
         },
         _ if name.eq_ignore_ascii_case("relationships") => match arg(0) {
-            Value::Path(path) => Ok(Value::List(
+            Value::Path(path) => charged_list(
+                governor,
                 path.rels.into_iter().map(Value::Relationship).collect(),
-            )),
+            ),
             other => Err(type_error(format!(
                 "relationships() needs a path, got {}",
                 other.type_name()
@@ -265,11 +282,17 @@ pub fn call(
             string_fn(arg(0), span, |s| s.trim_end().to_string())
         }
         _ if name.eq_ignore_ascii_case("split") => match (arg(0), arg(1)) {
-            (Value::String(s), Value::String(sep)) => Ok(Value::List(
-                s.split(&sep)
-                    .map(|part| Value::String(part.to_string()))
-                    .collect(),
-            )),
+            (Value::String(s), Value::String(sep)) => {
+                // Charge *before* allocating the parts: a large input string can
+                // split into a large list, so count the parts (lazily, no
+                // allocation) and charge first — mirroring `range()`.
+                governor.collection(s.split(sep.as_str()).count() as u64)?;
+                Ok(Value::List(
+                    s.split(&sep)
+                        .map(|part| Value::String(part.to_string()))
+                        .collect(),
+                ))
+            }
             (a, b) => Err(type_error(format!(
                 "split() needs strings, got {} and {}",
                 a.type_name(),
