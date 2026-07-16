@@ -1593,7 +1593,17 @@ impl<'r> Transaction<'r> {
                 self.resolve_properties(*map, key, &source_root, &names)?;
             }
         }
-        // The merge is fully resolved: drop the conflicts map.
+        // The merge is fully resolved: drop the conflicts map. `save_in_place`
+        // persists a transaction only when `is_dirty()` (it does not observe a
+        // `conflicts` delta on its own), so clearing the map must always
+        // co-occur with a staged map op — which it does: every resolved key
+        // stages at least one op, so a non-empty conflicts map yields count > 0
+        // and a dirty transaction. Guard the invariant a future refactor could
+        // break.
+        debug_assert!(
+            count == 0 || self.is_dirty(),
+            "resolving conflicts must stage a write so `conflicts = None` persists"
+        );
         self.manifest.conflicts = None;
         Ok(count)
     }

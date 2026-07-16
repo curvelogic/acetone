@@ -64,8 +64,14 @@ pub enum PersistedConflict {
     Graph,
 }
 
-/// Append a length-prefixed field, so a run of them cannot alias.
+/// Append a length-prefixed field, so a run of them cannot alias. Keys and
+/// property names are bounded far below 4 GiB by the graph's own encodings, so
+/// the `u32` prefix never truncates.
 fn push_field(key: &mut Vec<u8>, bytes: &[u8]) {
+    debug_assert!(
+        bytes.len() <= u32::MAX as usize,
+        "conflict-entry field exceeds u32 length prefix"
+    );
     key.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
     key.extend_from_slice(bytes);
 }

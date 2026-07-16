@@ -7,7 +7,9 @@
 //! invariants (merge determinism #4; derived index/edges_rev consistency #5).
 
 use acetone_graph::fsck;
-use acetone_graph::merge::{ManifestMerge, MergeOutcome, merge_manifests};
+use acetone_graph::merge::{
+    ConflictMap, ManifestMerge, MergeConflict, MergeOutcome, merge_manifests,
+};
 use acetone_graph::repo::{InitOptions, Repository, ResolveSide};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
@@ -513,11 +515,48 @@ proptest! {
         prop_assert_eq!(classify(&fwd), classify(&again));
         // Symmetry: swapping sides preserves clean-vs-conflict classification.
         prop_assert_eq!(classify(&fwd), classify(&swapped));
-        if let (ManifestMerge::Clean(f), ManifestMerge::Clean(a), ManifestMerge::Clean(sw)) =
-            (&fwd, &again, &swapped)
-        {
-            prop_assert_eq!(f.encode(), a.encode(), "merge is deterministic");
-            prop_assert_eq!(f.encode(), sw.encode(), "clean merge is direction-independent");
-        }
+
+        // The partial merged manifest (which now carries the *auto-merged*
+        // records written back on the conflict path) and the persisted conflict
+        // *identities* — `(map, key, property)`, the only thing that reaches the
+        // conflicts map, side-value-free — must be byte-identical when repeated
+        // and swap-invariant. This is the one place the auto-merge write-back on
+        // the conflict path is asserted (single-property `merge_prop.rs` never
+        // reaches it).
+        let partial = |m: &ManifestMerge| -> Option<Vec<u8>> {
+            match m {
+                ManifestMerge::Clean(x) => Some(x.encode()),
+                ManifestMerge::Conflicts { merged, .. } => Some(merged.encode()),
+            }
+        };
+        let ids = |m: &ManifestMerge| -> Vec<(ConflictMap, Vec<u8>, Option<String>)> {
+            let cs = match m {
+                ManifestMerge::Clean(_) => return Vec::new(),
+                ManifestMerge::Conflicts { conflicts, .. } => conflicts,
+            };
+            let mut v: Vec<_> = cs
+                .iter()
+                .filter_map(|c| match c {
+                    MergeConflict::Cell(cell) => {
+                        Some((cell.map, cell.key.clone(), cell.property.clone()))
+                    }
+                    MergeConflict::Graph(_) => None,
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        prop_assert_eq!(partial(&fwd), partial(&again), "merge is deterministic");
+        prop_assert_eq!(
+            partial(&fwd),
+            partial(&swapped),
+            "merged manifest is direction-independent"
+        );
+        prop_assert_eq!(ids(&fwd), ids(&again), "conflict identities are deterministic");
+        prop_assert_eq!(
+            ids(&fwd),
+            ids(&swapped),
+            "persisted conflict identities are direction-independent"
+        );
     }
 }
