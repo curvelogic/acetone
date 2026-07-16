@@ -1008,7 +1008,11 @@ impl Repository {
     /// built from the same logical criss-cross history could pick different
     /// bases. This is not git's recursive-merge "virtual base" — a documented
     /// simplification for v0.1 (spec §7).
-    fn merge_base(&self, a: &Hash, b: &Hash) -> Result<Option<Hash>, GraphError> {
+    ///
+    /// Public so a merge inspector can re-derive the three-way base of an
+    /// in-progress merge (`acetone.conflicts`, acetone-s7d): the base's values
+    /// are recomputed from `merge_base(ours, MERGE_HEAD)`, not persisted.
+    pub fn merge_base(&self, a: &Hash, b: &Hash) -> Result<Option<Hash>, GraphError> {
         let anc_a = self.ancestors(a)?;
         let anc_b = self.ancestors(b)?;
         let common: Vec<Hash> = anc_a.intersection(&anc_b).copied().collect();
