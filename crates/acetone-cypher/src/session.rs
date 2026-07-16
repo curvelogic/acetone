@@ -483,6 +483,37 @@ impl ProcedureProvider for RepoProcedures<'_> {
                     .map_err(|e| e.to_string())?;
                 let ours_schema = ours_snap.schema_entries().map_err(|e| e.to_string())?;
                 let theirs_schema = theirs_snap.schema_entries().map_err(|e| e.to_string())?;
+                // The three-way base of the merge (acetone-s7d): a per-property
+                // conflict's base/ours/theirs values are re-derived here from the
+                // merge base + the two tips, so a user sees all three sides in one
+                // call rather than three hand-written `AT` queries. Unrelated
+                // histories (no base) surface base values as null.
+                let base_snap = match self
+                    .repo
+                    .merge_base(&ours, &theirs)
+                    .map_err(|e| e.to_string())?
+                {
+                    Some(base) => Some(
+                        self.repo
+                            .snapshot(&base.to_hex())
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    None => None,
+                };
+                // A node's value for `property` on one side, as an exec value
+                // (null when the node or the property is absent there).
+                let node_prop = |snap: Option<&Snapshot<'_>>, key: &NodeKey, property: &str| {
+                    let Some(snap) = snap else {
+                        return Ok::<Value, String>(Value::Null);
+                    };
+                    Ok(snap
+                        .get_node(key)
+                        .map_err(|e| e.to_string())?
+                        .as_ref()
+                        .and_then(|r| r.properties().get(property))
+                        .map(crate::exec::adapter::convert_value)
+                        .unwrap_or(Value::Null))
+                };
 
                 let mut rows = Vec::new();
                 for conflict in conflicts {
@@ -518,19 +549,37 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                 )),
                                 None => Value::Null,
                             };
+                            // The three sides of a per-property conflict; null for
+                            // a whole-record conflict (no single property).
+                            let (base_v, ours_v, theirs_v) = match &property {
+                                Some(p) => (
+                                    node_prop(base_snap.as_ref(), &node_key, p)?,
+                                    node_prop(Some(&ours_snap), &node_key, p)?,
+                                    node_prop(Some(&theirs_snap), &node_key, p)?,
+                                ),
+                                None => (Value::Null, Value::Null, Value::Null),
+                            };
                             vec![
                                 Value::String(node_key.label().to_string()),
                                 Value::String(acetone_model::display::format_node_key(&node_key)),
                                 property_col,
+                                base_v,
+                                ours_v,
+                                theirs_v,
                                 node,
                             ]
                         }
                         ConflictMap::Edges => {
                             let edge_key = EdgeKey::decode_fwd(&key).map_err(|e| e.to_string())?;
+                            // Edge per-property three-way values need a snapshot
+                            // edge-record accessor (follow-up); null for now.
                             vec![
                                 Value::String(edge_key.rtype().to_string()),
                                 Value::String(format_edge_key(&edge_key)),
                                 property_col,
+                                Value::Null,
+                                Value::Null,
+                                Value::Null,
                                 Value::Null,
                             ]
                         }
@@ -538,6 +587,9 @@ impl ProcedureProvider for RepoProcedures<'_> {
                             Value::String("schema".to_string()),
                             Value::String(key.iter().map(|b| format!("{b:02x}")).collect()),
                             property_col,
+                            Value::Null,
+                            Value::Null,
+                            Value::Null,
                             Value::Null,
                         ],
                     };

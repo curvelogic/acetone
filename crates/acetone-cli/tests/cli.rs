@@ -1643,6 +1643,61 @@ fn call_conflicts_exposes_the_merge_conflicts() {
 }
 
 #[test]
+fn call_conflicts_surfaces_base_ours_theirs_side_by_side() {
+    // acetone-s7d: a per-property conflict yields base/ours/theirs values in one
+    // call, so the three-way is visible without three hand-written AT queries.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    // Distinct sentinels (not equal to the column names) so the positional
+    // assertion is unambiguous and catches an ours/theirs transposition.
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=basev"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=oursv"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=theirsv"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    let _ = acetone(&repo, &["merge", "other", "-m", "merge"]); // conflicts
+
+    let rows = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD property, base, ours, theirs \
+             RETURN property, base, ours, theirs",
+            "--format",
+            "csv",
+        ],
+    );
+    let text = stdout(&rows);
+    // The conflicted property and all three sides, in the right columns.
+    assert!(
+        text.contains("name,basev,oursv,theirsv"),
+        "three-way values in one row, correctly ordered: {text}"
+    );
+}
+
+#[test]
 fn conflicts_node_falls_back_to_theirs_when_ours_deleted() {
     // acetone-14c.4b: the _Conflict node shows ours' value, but when ours
     // deleted the node (delete-vs-modify), it falls back to theirs'.
