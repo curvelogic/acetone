@@ -311,15 +311,18 @@ impl Repository {
         }
     }
 
-    /// Whether the workspace differs from the checked-out branch's
-    /// committed state. True when the branch is unborn and the workspace
-    /// is no longer the empty graph it was initialised with — and, always,
-    /// when the workspace manifest differs from the head commit's.
+    /// Whether the workspace differs from the checked-out commit's committed
+    /// state. True when `HEAD` is unborn and the workspace is no longer the
+    /// empty graph it was initialised with — and, always, when the workspace
+    /// manifest differs from the checked-out commit's. The checked-out commit is
+    /// resolved via [`GitStore::head_commit_id`], so a **detached** worktree is
+    /// compared against its checked-out commit (not spuriously against the empty
+    /// graph, acetone-cm9), and a pristine detached bootstrap reads as clean.
     pub fn is_dirty(&self) -> Result<bool, GraphError> {
         let workspace = self.workspace_manifest_hash()?;
-        match self.head_commit()? {
+        match self.store.head_commit_id()? {
             None => {
-                // Unborn branch: dirty iff the workspace has left its
+                // Unborn HEAD (no commit): dirty iff the workspace has left its
                 // init state (an empty graph under the manifest's own
                 // chunk parameters).
                 let manifest = read_manifest_chunk(&self.store, &workspace)?;
@@ -1529,6 +1532,11 @@ impl<'r> Transaction<'r> {
         author: Option<Signature>,
     ) -> Result<Hash, GraphError> {
         let repo = self.repo;
+        // Committing advances a branch, so a detached-HEAD worktree cannot
+        // commit. Resolve the branch *before* applying staged writes, so a
+        // detached commit fails cleanly (`NoCurrentBranch`) without partially
+        // mutating the workspace (acetone-cm9 review).
+        let branch = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
         // A merge in progress (MERGE_HEAD set) completes here: the commit gets
         // `theirs` as a second parent (spec §6). It may only complete once
         // every conflict is resolved. Apply staged writes first, so a write
@@ -1537,7 +1545,6 @@ impl<'r> Transaction<'r> {
         let merge_head = repo.store.read_ref(WORKTREE_MERGE_HEAD_REF)?;
         self.save_in_place()?;
 
-        let branch = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
         let parent = repo.store.read_ref(&branch)?;
 
         // Defensive (acetone-mws, m2): a MERGE_HEAD already in the branch tip's
