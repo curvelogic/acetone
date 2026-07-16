@@ -214,9 +214,13 @@ fn the_annotation_survives_repeated_re_import_cycles() {
             )],
             Some("ingest"),
         );
+        // Each cycle ≥2 is a genuine *three-way* merge (main carries the human's
+        // owner commit, so ingest is never a fast-forward) — that is exactly the
+        // risky merge-base path under test, so require `Merged`, not a
+        // fast-forward.
         match repo.merge("ingest", "merge ingest").expect("merge") {
-            MergeOutcome::Merged(_) | MergeOutcome::FastForward(_) => {}
-            other => panic!("cycle {cycle} should auto-merge, got {other:?}"),
+            MergeOutcome::Merged(_) => {}
+            other => panic!("cycle {cycle} must three-way merge, got {other:?}"),
         }
         assert_eq!(
             prop(&repo, "owner", "web1"),

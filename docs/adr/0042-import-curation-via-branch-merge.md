@@ -62,9 +62,12 @@ indefinitely across arbitrarily many re-import cycles.
 The footgun to avoid: merging `main → ingest` (or otherwise letting a curated
 property reach `ingest`'s history) leaks the annotation into the merge base.
 Then a later authoritative-replace re-import — which drops the property, because
-the source does not carry it — reads as "theirs deleted it, ours unchanged from
-base" and the merge takes the deletion, silently losing the annotation. The
-one-directional discipline is what prevents this; it is a property of the
+the source does not carry it — loses it silently, with no conflict: in a
+three-way merge it reads as "theirs deleted it, ours unchanged from base" and
+the merge takes the deletion; and if that merge instead fast-forwards (when
+`ingest` now strictly contains `main`'s history), the curated record is simply
+overwritten by the import's. Either way the annotation is gone. The
+one-directional discipline is what prevents both paths; it is a property of the
 workflow, not enforced by the store.
 
 ## Consequences
