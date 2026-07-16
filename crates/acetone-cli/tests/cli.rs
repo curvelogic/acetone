@@ -510,6 +510,76 @@ fn query_command_table_is_never_row_capped() {
     );
 }
 
+/// acetone-7bn.5: in a schema-free repository an undeclared label in a `MATCH`
+/// is not an error (openCypher read semantics), so a typo returns 0 rows with
+/// no signal — an exploration trap. The query still returns 0 rows and exits 0,
+/// but a non-error advisory naming the label lands on stderr.
+#[test]
+fn undeclared_label_match_in_a_schema_free_repo_advises_on_stderr() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let out = acetone(&repo, &["query", "MATCH (n:Nope) RETURN n"]);
+    // Result semantics unchanged: 0 rows, exit 0.
+    assert!(out.status.success(), "must exit 0: {}", stderr(&out));
+    assert!(stdout(&out).contains("0 rows"), "stdout: {}", stdout(&out));
+    // The advisory is on stderr, names the label, and does not pollute stdout.
+    let err = stderr(&out);
+    assert!(err.contains("Nope"), "advisory must name the label: {err}");
+    assert!(err.contains("not declared"), "stderr: {err}");
+    assert!(
+        !stdout(&out).contains("Nope"),
+        "advisory must not pollute stdout: {}",
+        stdout(&out)
+    );
+
+    // A label-free MATCH gets no advisory (nothing undeclared was referenced).
+    let plain = acetone(&repo, &["query", "MATCH (n) RETURN n"]);
+    assert!(plain.status.success());
+    assert!(
+        stderr(&plain).trim().is_empty(),
+        "no advisory for a label-free match: {}",
+        stderr(&plain)
+    );
+
+    // stdout is byte-invariant under --format json/csv (the advisory is
+    // stderr-only and must never leak into a machine-readable result).
+    for fmt in ["json", "csv"] {
+        let out = acetone(
+            &repo,
+            &["query", "MATCH (n:Nope) RETURN n", "--format", fmt],
+        );
+        assert!(out.status.success());
+        assert!(
+            !stdout(&out).contains("Nope") && !stdout(&out).contains("note:"),
+            "advisory leaked into {fmt} stdout: {}",
+            stdout(&out)
+        );
+        assert!(
+            stderr(&out).contains("Nope"),
+            "advisory still on stderr for {fmt}"
+        );
+    }
+
+    // A real, populated label whose WHERE filters the result to empty must NOT
+    // advise: the label exists, so "check for a typo" would be misleading.
+    let seed = acetone(&repo, &["put-node", "Person", "1", "--prop", "name=Alice"]);
+    assert!(seed.status.success(), "{}", stderr(&seed));
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let filtered = acetone(
+        &repo,
+        &["query", "MATCH (p:Person) WHERE p.name = 'Zzz' RETURN p"],
+    );
+    assert!(filtered.status.success());
+    assert!(stdout(&filtered).contains("0 rows"));
+    assert!(
+        stderr(&filtered).trim().is_empty(),
+        "a populated label filtered to empty must not advise: {}",
+        stderr(&filtered)
+    );
+}
+
 /// The `query` command (acetone-yzc.6): parse → bind → execute an
 /// openCypher read query against the repository, in table/JSON/CSV.
 #[test]

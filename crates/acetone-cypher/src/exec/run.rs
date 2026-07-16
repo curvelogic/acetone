@@ -31,6 +31,12 @@ pub struct QueryResult {
     pub rows: Vec<Vec<Value>>,
     /// Side effects of any write clauses (all zero for a read query).
     pub stats: WriteSummary,
+    /// Non-error diagnostics about the query that do not change its result —
+    /// e.g. a schema-free `MATCH` on an undeclared label that returned no rows
+    /// (acetone-7bn.5). The executor leaves this empty; the session layer, which
+    /// holds the schema catalogue, populates it. A caller may surface these
+    /// (the CLI prints them to stderr) but they never affect rows or exit status.
+    pub advisories: Vec<String>,
 }
 
 /// Execute against a single fixed graph. `AT <ref>` clauses are
@@ -247,6 +253,7 @@ fn run_versioned(
                     columns,
                     rows: output,
                     stats: WriteSummary::default(),
+                    advisories: Vec::new(),
                 });
                 rows = Vec::new();
             }
@@ -339,6 +346,7 @@ fn run_versioned(
                         columns: procedure.yields.iter().map(|c| c.to_string()).collect(),
                         rows: produced.into_iter().map(|(_, tuple)| tuple).collect(),
                         stats: WriteSummary::default(),
+                        advisories: Vec::new(),
                     });
                     rows = Vec::new();
                 } else {
@@ -360,6 +368,7 @@ fn run_versioned(
                 .map(|row| yields.iter().map(|(_, var)| row.get(*var)).collect())
                 .collect(),
             stats: WriteSummary::default(),
+            advisories: Vec::new(),
         });
     }
     let stats = graph.summary().clone();
@@ -367,6 +376,7 @@ fn run_versioned(
         columns: Vec::new(),
         rows: Vec::new(),
         stats: WriteSummary::default(),
+        advisories: Vec::new(),
     });
     result.stats = stats;
     let changes = graph.changes();

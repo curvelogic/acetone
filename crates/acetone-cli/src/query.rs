@@ -77,6 +77,13 @@ fn render_outcome(outcome: &QueryOutcome, format: Format, max_rows: Option<usize
     if outcome.is_write() {
         render_write_summary(&outcome.result().stats);
     }
+    // Non-error advisories (e.g. a schema-free MATCH on an undeclared label that
+    // matched nothing, acetone-7bn.5) go to stderr, so they never pollute the
+    // result on stdout or change the exit status. The text is acetone-generated
+    // with label names debug-escaped, but route it through sanitise_line too.
+    for note in &outcome.result().advisories {
+        errln!("{}", sanitise_line(note));
+    }
 }
 
 /// Map a `--at` query error, giving the flag-specific hint for a write attempt.

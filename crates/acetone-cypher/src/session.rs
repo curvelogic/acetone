@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use acetone_graph::repo::{Repository, Snapshot};
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 
-use crate::ast::Query;
+use crate::ast::{Clause, PathPattern, Query};
 use crate::bind::{BindMode, Catalogue, bind};
 use crate::exec::value::Value;
 use crate::exec::{
@@ -176,13 +176,14 @@ impl<'r> Session<'r> {
             base: &base,
         };
         let procedures = RepoProcedures { repo: self.repo };
-        let result =
+        let mut result =
             execute_versioned_with_limits(&bound, &resolver, &procedures, parameters, limits)?;
         // A lazy read error cannot travel through the infallible source trait;
         // surface it now rather than return a silently-incomplete result.
         if let Some(error) = base.take_error() {
             return Err(QueryError::Graph(error));
         }
+        result.advisories = undeclared_label_advisories(parsed, &catalogue, &result, &base);
         Ok(result)
     }
 
@@ -215,6 +216,70 @@ impl<'r> Session<'r> {
 /// Whether any clause writes (so the session dispatches to the write path).
 fn is_write(parsed: &Query) -> bool {
     parsed.clauses.iter().any(|clause| clause.is_write())
+}
+
+/// Advisories for a schema-free read that matched nothing (acetone-7bn.5). In a
+/// schema-free repository binding is Lenient, so an undeclared label in a
+/// `MATCH` is not an error (openCypher read semantics) — a typo therefore
+/// returns 0 rows with no signal, an exploration trap. When a read produced no
+/// rows and referenced a label that matches **no node in the graph**, return a
+/// non-error note naming the label(s). This never fires with a declared schema
+/// (an undeclared label is already a hard error there, acetone-7bn.4) and never
+/// changes the result.
+///
+/// The label is checked against the graph with the executor's own
+/// [`GraphSource::nodes_by_labels`], so the note fires only for a genuinely
+/// absent label — never for a real, populated label whose `WHERE` filtered the
+/// result to empty (which would make "check for a typo" misleading). This check
+/// runs only on the narrow schema-free-and-empty-result path.
+fn undeclared_label_advisories(
+    parsed: &Query,
+    catalogue: &Catalogue,
+    result: &QueryResult,
+    graph: &dyn GraphSource,
+) -> Vec<String> {
+    if !catalogue.is_empty() || !result.rows.is_empty() {
+        return Vec::new();
+    }
+    let mut labels: Vec<String> = Vec::new();
+    for clause in &parsed.clauses {
+        if let Clause::Match(m) = clause {
+            for path in &m.patterns {
+                collect_pattern_labels(path, &mut labels);
+            }
+        }
+    }
+    labels.sort();
+    labels.dedup();
+    // Keep only labels that match no node at all — a genuinely absent (typo'd or
+    // never-populated) label, not a real label a `WHERE` filtered to empty.
+    labels.retain(|label| {
+        graph
+            .nodes_by_labels(std::slice::from_ref(label))
+            .is_empty()
+    });
+    if labels.is_empty() {
+        return Vec::new();
+    }
+    let names = labels
+        .iter()
+        .map(|l| format!("{l:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let plural = if labels.len() == 1 { "label" } else { "labels" };
+    vec![format!(
+        "note: {plural} {names} not declared and matched no nodes in this schema-free \
+         repository — 0 rows. Declare a label with `acetone declare-label <label> \
+         --key <property>`, or check for a typo."
+    )]
+}
+
+/// Collect every label named on the nodes of one path pattern.
+fn collect_pattern_labels(path: &PathPattern, out: &mut Vec<String>) {
+    out.extend(path.start.labels.iter().cloned());
+    for (_, node) in &path.steps {
+        out.extend(node.labels.iter().cloned());
+    }
 }
 
 /// Build the executor's in-memory graph source, the binder catalogue and the
