@@ -4,10 +4,10 @@
 
 use std::io::{self, IsTerminal};
 
-use acetone_cypher::exec::QueryResult;
-use acetone_cypher::exec::value::{NodeValue, RelValue, Value};
-use acetone_cypher::session::{Outcome as QueryOutcome, Session};
-use acetone_graph::Repository;
+use acetone_core::cypher::exec::QueryResult;
+use acetone_core::cypher::exec::value::{NodeValue, RelValue, Value};
+use acetone_core::cypher::session::{Outcome as QueryOutcome, Session};
+use acetone_core::graph::Repository;
 use anyhow::{Context, Result, anyhow};
 
 use unicode_width::UnicodeWidthStr;
@@ -80,9 +80,9 @@ fn render_outcome(outcome: &QueryOutcome, format: Format, max_rows: Option<usize
 }
 
 /// Map a `--at` query error, giving the flag-specific hint for a write attempt.
-fn at_error(error: acetone_cypher::session::QueryError, cypher: &str) -> anyhow::Error {
+fn at_error(error: acetone_core::cypher::session::QueryError, cypher: &str) -> anyhow::Error {
     match error {
-        acetone_cypher::session::QueryError::WriteAtVersion => {
+        acetone_core::cypher::session::QueryError::WriteAtVersion => {
             anyhow!("cannot write with --at: writes target the workspace, not a past version")
         }
         other => anyhow!("{}", other.render(cypher)),
@@ -90,7 +90,7 @@ fn at_error(error: acetone_cypher::session::QueryError, cypher: &str) -> anyhow:
 }
 
 /// A one-line summary of a write's side effects (openCypher counts).
-fn render_write_summary(stats: &acetone_cypher::exec::WriteSummary) {
+fn render_write_summary(stats: &acetone_core::cypher::exec::WriteSummary) {
     if stats.is_empty() {
         outln!("(no changes)");
         return;
@@ -273,7 +273,7 @@ fn render_value(value: &Value) -> String {
         Value::Null => "NULL".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Int(n) => n.to_string(),
-        Value::Float(x) => acetone_cypher::exec::functions::format_float(*x),
+        Value::Float(x) => acetone_core::cypher::exec::functions::format_float(*x),
         Value::String(s) => sanitise_line(s),
         Value::List(items) => {
             let inner = items
@@ -296,7 +296,7 @@ fn render_value(value: &Value) -> String {
         Value::Path(path) => format!("<path of {} rels>", path.rels.len()),
         // A read carrier renders exactly as its string form would (ADR-0038):
         // hex for Bytes, a stable debug string for temporals, sanitised.
-        Value::Stored(mv) => sanitise_line(&acetone_cypher::exec::value::render_stored(mv)),
+        Value::Stored(mv) => sanitise_line(&acetone_core::cypher::exec::value::render_stored(mv)),
     }
 }
 
@@ -331,10 +331,10 @@ fn json_value(value: &Value) -> String {
         Value::Int(n) => n.to_string(),
         Value::Float(x) => {
             if x.is_finite() {
-                acetone_cypher::exec::functions::format_float(*x)
+                acetone_core::cypher::exec::functions::format_float(*x)
             } else {
                 // JSON has no NaN/Infinity; render as strings.
-                json_string(&acetone_cypher::exec::functions::format_float(*x))
+                json_string(&acetone_core::cypher::exec::functions::format_float(*x))
             }
         }
         Value::String(s) => json_string(s),
@@ -368,7 +368,7 @@ fn json_value(value: &Value) -> String {
         Value::Relationship(rel) => format!("{{\"type\": {}}}", json_string(&rel.rel_type)),
         Value::Path(path) => format!("{{\"length\": {}}}", path.rels.len()),
         // Carried as its string rendering, JSON-escaped like any string (ADR-0038).
-        Value::Stored(mv) => json_string(&acetone_cypher::exec::value::render_stored(mv)),
+        Value::Stored(mv) => json_string(&acetone_core::cypher::exec::value::render_stored(mv)),
     }
 }
 
@@ -498,7 +498,7 @@ fn shell_prompt(repo_path: &std::path::Path, fresh: bool) -> String {
                 .ok()
                 .flatten()
                 .map(|full| {
-                    full.strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
+                    full.strip_prefix(acetone_core::graph::repo::BRANCH_REF_PREFIX)
                         .unwrap_or(full.as_str())
                         .to_owned()
                 })

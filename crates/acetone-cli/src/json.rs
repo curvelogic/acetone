@@ -16,7 +16,7 @@
 //! [`emit_json`] escapes those remaining characters to `\u…` on the way out. The escapes
 //! round-trip: a JSON parser reads `` back to the original byte.
 
-use acetone_model::Value;
+use acetone_core::model::Value;
 use serde_json::{Value as Json, json};
 
 use crate::output::outln;

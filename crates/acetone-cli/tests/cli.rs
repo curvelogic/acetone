@@ -392,10 +392,10 @@ fn log_sanitises_hostile_commit_messages() {
 
 #[test]
 fn get_node_escapes_hostile_secondary_labels() {
-    use acetone_graph::{InitOptions, Repository};
-    use acetone_model::Value;
-    use acetone_model::graph_keys::NodeKey;
-    use acetone_model::records::NodeRecord;
+    use acetone_core::graph::{InitOptions, Repository};
+    use acetone_core::model::Value;
+    use acetone_core::model::graph_keys::NodeKey;
+    use acetone_core::model::records::NodeRecord;
 
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path().join("repo");

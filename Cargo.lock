@@ -15,10 +15,7 @@ dependencies = [
 name = "acetone-cli"
 version = "0.1.1"
 dependencies = [
- "acetone-cypher",
- "acetone-graph",
- "acetone-model",
- "acetone-store",
+ "acetone-core",
  "anyhow",
  "clap",
  "csv",

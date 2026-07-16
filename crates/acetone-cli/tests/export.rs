@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use acetone_graph::repo::Repository;
+use acetone_core::graph::repo::Repository;
 
 fn acetone(repo: &Path, args: &[&str]) -> Output {
     let bin = env!("CARGO_BIN_EXE_acetone");

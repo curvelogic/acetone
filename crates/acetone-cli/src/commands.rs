@@ -4,12 +4,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use acetone_graph::merge::{ConflictMap, Endpoint, GraphViolation, MergeConflict, MergeOutcome};
-use acetone_graph::{InitOptions, Repository};
-use acetone_model::Value;
-use acetone_model::graph_keys::{EdgeKey, NodeKey};
-use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_store::ObjectFormat;
+use acetone_core::graph::merge::{
+    ConflictMap, Endpoint, GraphViolation, MergeConflict, MergeOutcome,
+};
+use acetone_core::graph::{InitOptions, Repository};
+use acetone_core::model::Value;
+use acetone_core::model::graph_keys::{EdgeKey, NodeKey};
+use acetone_core::model::records::{EdgeRecord, NodeRecord};
+use acetone_core::store::ObjectFormat;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::Command;
@@ -121,7 +123,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
 
 fn fsck(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
-    let report = acetone_graph::fsck::check(&repo)?;
+    let report = acetone_core::graph::fsck::check(&repo)?;
     for finding in &report.findings {
         // Findings embed repository-controlled text (index names, ref
         // names, decode-error detail): sanitise at the terminal boundary.
@@ -171,7 +173,7 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     // Short branch name (None when detached), head hash, dirtiness, merge
     // state and the workspace counts — the same facts both paths report.
     let branch = repo.current_branch()?.map(|full| {
-        full.strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
+        full.strip_prefix(acetone_core::graph::repo::BRANCH_REF_PREFIX)
             .unwrap_or(&full)
             .to_owned()
     });
@@ -315,7 +317,7 @@ fn branch(repo_path: &Path, name: Option<&str>, json: bool) -> Result<()> {
         None => {
             let current = repo.current_branch()?;
             let current_short = current.as_deref().map(|full| {
-                full.strip_prefix(acetone_graph::repo::BRANCH_REF_PREFIX)
+                full.strip_prefix(acetone_core::graph::repo::BRANCH_REF_PREFIX)
                     .unwrap_or(full)
                     .to_owned()
             });
@@ -408,8 +410,8 @@ fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
 
 fn resolve(repo_path: &Path, all_ours: bool, all_theirs: bool) -> Result<()> {
     let side = match (all_ours, all_theirs) {
-        (true, false) => acetone_graph::repo::ResolveSide::Ours,
-        (false, true) => acetone_graph::repo::ResolveSide::Theirs,
+        (true, false) => acetone_core::graph::repo::ResolveSide::Ours,
+        (false, true) => acetone_core::graph::repo::ResolveSide::Theirs,
         (false, false) => bail!(
             "choose a side: --all-ours or --all-theirs \
              (per-key resolution arrives with a later change)"
@@ -507,7 +509,7 @@ pub(crate) fn declare_label(
     require: &[String],
     unique: &[String],
 ) -> Result<()> {
-    use acetone_model::schema::{LabelDef, SchemaEntry};
+    use acetone_core::model::schema::{LabelDef, SchemaEntry};
     let def = LabelDef::new(
         key.to_vec(),
         BTreeMap::new(),
@@ -541,7 +543,7 @@ pub(crate) fn declare_label(
 }
 
 pub(crate) fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
-    use acetone_model::schema::{RelTypeDef, SchemaEntry};
+    use acetone_core::model::schema::{RelTypeDef, SchemaEntry};
     let def = RelTypeDef::new(None, BTreeMap::new(), [])
         .with_context(|| format!("declaring relationship type {rtype:?}"))?;
     let entry = SchemaEntry::RelType {
@@ -562,7 +564,7 @@ pub(crate) fn declare_index(
     label: &str,
     properties: &[String],
 ) -> Result<()> {
-    use acetone_model::schema::{IndexDef, SchemaEntry};
+    use acetone_core::model::schema::{IndexDef, SchemaEntry};
     let def = IndexDef::new(label, properties.to_vec())
         .with_context(|| format!("declaring index {name:?}"))?;
     let entry = SchemaEntry::Index {
@@ -597,7 +599,7 @@ fn reindex(repo_path: &Path) -> Result<()> {
 }
 
 pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<()> {
-    use acetone_model::schema::SchemaEntry;
+    use acetone_core::model::schema::SchemaEntry;
 
     let repo = open(repo_path)?;
     let snapshot = match at {
@@ -611,9 +613,9 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
     // Partition the entries by kind. `schema_entries()` returns them in the
     // schema map's key order, which is grouped and sorted by (kind, name); we
     // keep that order within each group.
-    let mut labels: Vec<(&str, &acetone_model::schema::LabelDef)> = Vec::new();
+    let mut labels: Vec<(&str, &acetone_core::model::schema::LabelDef)> = Vec::new();
     let mut rel_types: Vec<&str> = Vec::new();
-    let mut indexes: Vec<(&str, &acetone_model::schema::IndexDef)> = Vec::new();
+    let mut indexes: Vec<(&str, &acetone_core::model::schema::IndexDef)> = Vec::new();
     for entry in &entries {
         match entry {
             SchemaEntry::Label { name, def } => labels.push((name, def)),
@@ -743,7 +745,7 @@ fn migrate(
     mask_bits: Option<u32>,
     max_bytes: Option<u32>,
 ) -> Result<()> {
-    use acetone_graph::{Rechunk, rewrite_history};
+    use acetone_core::graph::{Rechunk, rewrite_history};
 
     let repo = open(repo_path)?;
     // Each unspecified parameter defaults to the repo's current value, so a
@@ -819,7 +821,7 @@ fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Resul
 /// `Label [key, ...]`, escaped — the one place a node key is rendered, used
 /// by every command that echoes one.
 pub(crate) fn format_node_key(key: &NodeKey) -> String {
-    acetone_model::display::format_node_key(key)
+    acetone_core::model::display::format_node_key(key)
 }
 
 pub(crate) fn format_edge_key(key: &EdgeKey) -> String {
@@ -838,7 +840,7 @@ pub(crate) fn format_edge_key(key: &EdgeKey) -> String {
 }
 
 fn diff(repo_path: &Path, from: &str, to: &str, json: bool) -> Result<()> {
-    use acetone_graph::diff::ChangeKind;
+    use acetone_core::graph::diff::ChangeKind;
     let repo = open(repo_path)?;
     let diff = repo
         .diff(from, to)

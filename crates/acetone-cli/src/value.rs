@@ -2,13 +2,13 @@
 //!
 //! Phase 1 has no Cypher front end, so `--prop`/key arguments are typed by
 //! a single, documented heuristic rather than a real literal grammar:
-//! **parse as [`acetone_model::Value::Int`] if the whole argument is a
-//! valid `i64`, otherwise take it verbatim as [`acetone_model::Value::String`]**.
+//! **parse as [`acetone_core::model::Value::Int`] if the whole argument is a
+//! valid `i64`, otherwise take it verbatim as [`acetone_core::model::Value::String`]**.
 //! There is no way to force a numeric-looking string to stay a string, or
 //! to write any other value kind (bool, float, list, temporal) from the
 //! command line — that waits for Cypher literals.
 
-use acetone_model::Value;
+use acetone_core::model::Value;
 use anyhow::{Result, bail};
 
 /// Parse one CLI argument as a property/key value using the int-or-string
@@ -84,15 +84,15 @@ pub fn sanitise_line(s: &str) -> String {
 }
 
 /// Render a label, relationship type or other identifier-shaped string for
-/// output. Thin re-export of the canonical renderer in [`acetone_model`] so
+/// output. Thin re-export of the canonical renderer in [`acetone_core::model`] so
 /// the CLI and every layer's error messages format identifiers identically
 /// (and escape attacker-writable control characters the same way).
-pub use acetone_model::display::format_label;
+pub use acetone_core::model::display::format_label;
 
 /// Render a value for human-readable output (`get-node`, `list-nodes`). Thin
-/// re-export of the canonical renderer in [`acetone_model`], shared with the
+/// re-export of the canonical renderer in [`acetone_core::model`], shared with the
 /// error-message paths so a value never renders two different ways.
-pub use acetone_model::display::format_value;
+pub use acetone_core::model::display::format_value;
 
 #[cfg(test)]
 mod tests {
