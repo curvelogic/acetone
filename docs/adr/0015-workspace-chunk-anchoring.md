@@ -22,8 +22,10 @@ the shape `create_commit` already builds for a commit, minus the `README.md`
 summary. The `chunks/` anchor tree is the same sharded `<hh>/<rest-of-hex>`
 tree of chunk-blob references the commit path uses (`write_anchor_tree`).
 Git's reachability walk follows the tree into `chunks/` and keeps every
-referenced chunk, so an uncommitted workspace survives any gc — foreign or
-acetone's own. This closes the ADR-0010 caveat.
+referenced chunk, so the **main worktree's** uncommitted workspace survives
+any gc — foreign or acetone's own. This closes the ADR-0010 caveat. (A
+*linked* worktree's workspace is a per-worktree ref that foreign gc does not
+enumerate — see the Known limitation under Consequences, acetone-7tf.)
 
 **It is a local-only ref-plumbing change, not a format change.** The
 `Manifest` bytes and every chunk are byte-identical; only what the ref
