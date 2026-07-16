@@ -30,9 +30,9 @@ use crate::ast::Query;
 use crate::bind::{BindMode, Catalogue, bind};
 use crate::exec::value::Value;
 use crate::exec::{
-    GraphSnapshot, GraphSource, ProcedureProvider, QueryLimits, QueryResult, VersionResolver,
-    catalogue_from_schema, execute_versioned_with_limits, execute_write_with_limits,
-    virtual_diff_node,
+    GraphSnapshot, GraphSource, ProcedureProvider, QueryLimits, QueryResult, StoreBackedSource,
+    VersionResolver, catalogue_from_schema, execute_versioned_with_limits,
+    execute_write_with_limits, virtual_diff_node,
 };
 
 /// The result of a [`Session::run`], carrying which kind of query ran so a
@@ -147,6 +147,13 @@ impl<'r> Session<'r> {
 
     /// Bind and execute a read against `snapshot`, resolving clause-group
     /// `AT <ref>` and `CALL acetone.*` against the repository.
+    ///
+    /// The read runs over a lazy [`StoreBackedSource`] (ADR-0040): a
+    /// seek/expand-anchored query touches only the matching rows rather than
+    /// materialising the whole version. A store read that fails mid-query is
+    /// recorded on the source (the [`GraphSource`] trait is infallible) and
+    /// drained here into a [`QueryError`] so it surfaces rather than silently
+    /// dropping rows.
     fn run_read(
         &self,
         parsed: &Query,
@@ -155,15 +162,27 @@ impl<'r> Session<'r> {
         parameters: &BTreeMap<String, Value>,
         limits: &QueryLimits,
     ) -> Result<QueryResult, QueryError> {
-        let (base, catalogue, mode) = build_base(snapshot)?;
+        let schema = snapshot.schema_entries()?;
+        let catalogue = catalogue_from_schema(schema.clone());
+        let mode = if catalogue.is_empty() {
+            BindMode::Lenient
+        } else {
+            BindMode::Strict
+        };
         let bound = bind(cypher, parsed, &catalogue, mode)?;
-        let resolver = RepoResolver {
+        let base = StoreBackedSource::new(snapshot, &schema);
+        let resolver = StoreResolver {
             repo: self.repo,
-            base,
+            base: &base,
         };
         let procedures = RepoProcedures { repo: self.repo };
         let result =
             execute_versioned_with_limits(&bound, &resolver, &procedures, parameters, limits)?;
+        // A lazy read error cannot travel through the infallible source trait;
+        // surface it now rather than return a silently-incomplete result.
+        if let Some(error) = base.take_error() {
+            return Err(QueryError::Graph(error));
+        }
         Ok(result)
     }
 
@@ -230,14 +249,39 @@ impl VersionResolver for RepoResolver<'_> {
     }
 
     fn at(&self, refspec: &str) -> Result<Box<dyn GraphSource>, String> {
-        let snapshot = self.repo.snapshot(refspec).map_err(|e| e.to_string())?;
-        let nodes = snapshot.nodes().map_err(|e| e.to_string())?;
-        let edges = snapshot.edges().map_err(|e| e.to_string())?;
-        let schema = snapshot.schema_entries().map_err(|e| e.to_string())?;
-        Ok(Box::new(GraphSnapshot::from_records_with_schema(
-            &nodes, &edges, &schema,
-        )))
+        materialise_at(self.repo, refspec)
     }
+}
+
+/// A version resolver whose base is the lazy [`StoreBackedSource`] (the read
+/// path, ADR-0040). Clause-group `AT <ref>` still materialises a
+/// [`GraphSnapshot`]: a boxed `GraphSource` must own its data, so it cannot
+/// borrow a per-call snapshot.
+struct StoreResolver<'r, 's> {
+    repo: &'r Repository,
+    base: &'s StoreBackedSource<'s>,
+}
+
+impl VersionResolver for StoreResolver<'_, '_> {
+    fn base(&self) -> &dyn GraphSource {
+        self.base
+    }
+
+    fn at(&self, refspec: &str) -> Result<Box<dyn GraphSource>, String> {
+        materialise_at(self.repo, refspec)
+    }
+}
+
+/// Materialise the graph at `refspec` as an owned [`GraphSnapshot`] for a
+/// clause-group `AT`. Used by both resolvers (the boxed source must be owned).
+fn materialise_at(repo: &Repository, refspec: &str) -> Result<Box<dyn GraphSource>, String> {
+    let snapshot = repo.snapshot(refspec).map_err(|e| e.to_string())?;
+    let nodes = snapshot.nodes().map_err(|e| e.to_string())?;
+    let edges = snapshot.edges().map_err(|e| e.to_string())?;
+    let schema = snapshot.schema_entries().map_err(|e| e.to_string())?;
+    Ok(Box::new(GraphSnapshot::from_records_with_schema(
+        &nodes, &edges, &schema,
+    )))
 }
 
 /// Serves `CALL acetone.*` history procedures (spec §5.2) from the open

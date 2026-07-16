@@ -1714,6 +1714,107 @@ impl<'s> Snapshot<'s> {
         Ok(out)
     }
 
+    /// The node keys a declared index `name` selects for `prefix` — the
+    /// memcomparable [`index_value_prefix`](acetone_model::graph_keys::index_value_prefix)
+    /// of an equality probe. Read **lazily**: only the index leaves covering the
+    /// prefix are loaded, not the whole map. `None` when the index map is absent
+    /// (the caller falls back to a scan). The result is a candidate set (in index
+    /// order) the caller still filters, so being over-broad is safe; the scan
+    /// stops at the first key past the prefix (index order guarantees no later
+    /// key matches). This is the store-backed `IndexSeek` primitive (ADR-0040).
+    pub fn index_scan(
+        &self,
+        name: &str,
+        prefix: &[u8],
+    ) -> Result<Option<Vec<NodeKey>>, GraphError> {
+        let Some(map_root) = self.manifest.indexes.get(name) else {
+            return Ok(None);
+        };
+        let root = self.root(map_root)?;
+        let mut out = Vec::new();
+        for item in acetone_prolly::scan(
+            self.store,
+            &root,
+            (Bound::Included(prefix), Bound::Unbounded),
+        )? {
+            let (key, _) = item?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            out.push(
+                acetone_model::graph_keys::IndexEntry::decode(&key)?
+                    .node()
+                    .clone(),
+            );
+        }
+        Ok(Some(out))
+    }
+
+    /// Edges leading out of `node` (`edges_fwd`, keyed by `src`), read lazily by
+    /// a degree-bounded prefix scan — only the leaves holding this node's
+    /// out-edges are loaded, not the whole edge map.
+    pub fn out_edges(&self, node: &NodeKey) -> Result<Vec<(EdgeKey, EdgeRecord)>, GraphError> {
+        self.incident(&self.manifest.edges_fwd, node, false)
+    }
+
+    /// Edges leading into `node` (`edges_rev`, keyed by `dst`), read lazily by a
+    /// degree-bounded prefix scan.
+    pub fn in_edges(&self, node: &NodeKey) -> Result<Vec<(EdgeKey, EdgeRecord)>, GraphError> {
+        self.incident(&self.manifest.edges_rev, node, true)
+    }
+
+    /// A degree-bounded prefix scan of an edge map: the leading endpoint's key
+    /// bytes prefix every edge key incident to it (spec §3.3), so `node`'s key
+    /// selects exactly its out-edges (`edges_fwd`) or in-edges (`edges_rev`).
+    ///
+    /// The forward map stores the [`EdgeRecord`]; the reverse map stores only
+    /// keys (Invariant #5), so an in-edge's record is a point lookup on
+    /// `edges_fwd`.
+    fn incident(
+        &self,
+        map_root: &MapRoot,
+        node: &NodeKey,
+        reversed: bool,
+    ) -> Result<Vec<(EdgeKey, EdgeRecord)>, GraphError> {
+        let prefix = acetone_model::graph_keys::edge_endpoint_prefix(node)?;
+        let root = self.root(map_root)?;
+        let fwd_root = if reversed {
+            Some(self.root(&self.manifest.edges_fwd)?)
+        } else {
+            None
+        };
+        let mut out = Vec::new();
+        for item in acetone_prolly::scan(
+            self.store,
+            &root,
+            (Bound::Included(prefix.as_slice()), Bound::Unbounded),
+        )? {
+            let (key, value) = item?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let (edge, record) = if reversed {
+                let edge = EdgeKey::decode_rev(&key)?;
+                let bytes = acetone_prolly::get(
+                    self.store,
+                    fwd_root.as_ref().expect("set when reversed"),
+                    &edge.encode_fwd()?,
+                )?
+                .ok_or_else(|| GraphError::InconsistentReverseEdge {
+                    edge: acetone_model::display::format_node_identity(
+                        edge.src().label(),
+                        edge.src().key(),
+                    ),
+                })?;
+                (edge, EdgeRecord::decode(&bytes)?)
+            } else {
+                (EdgeKey::decode_fwd(&key)?, EdgeRecord::decode(&value)?)
+            };
+            out.push((edge, record));
+        }
+        Ok(out)
+    }
+
     /// The edge keys of the reverse map, in key order (fsck's
     /// edge-symmetry check reads both maps through this pair).
     pub fn reverse_edge_keys(&self) -> Result<Vec<EdgeKey>, GraphError> {

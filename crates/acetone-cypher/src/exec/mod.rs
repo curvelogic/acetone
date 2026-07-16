@@ -8,6 +8,7 @@ pub mod functions;
 pub mod governor;
 pub mod run;
 pub mod source;
+pub mod store_source;
 pub mod value;
 pub mod write;
 
@@ -22,6 +23,7 @@ pub use source::{
     EmptyGraph, GraphSource, MemoryGraph, NoProcedures, ProcedureProvider, SingleVersion,
     VersionResolver,
 };
+pub use store_source::StoreBackedSource;
 pub use value::Value;
 pub use write::{MutableGraph, Mutation, WriteChanges, WriteSummary};
 

@@ -159,6 +159,15 @@ pub enum GraphError {
         /// What was malformed.
         reason: &'static str,
     },
+    /// An `edges_rev` entry has no matching `edges_fwd` record — the reverse map
+    /// is derived from the forward map by construction (Invariant #5), so this
+    /// can only mean a corrupt reverse map (fsck's edge-symmetry check catches
+    /// it). Surfaced rather than silently dropped when reading in-edges.
+    #[error("corrupt reverse edge map: {edge} has no forward record")]
+    InconsistentReverseEdge {
+        /// The rendered offending edge.
+        edge: String,
+    },
     /// An operation needs a merge in progress but none is (or vice versa).
     #[error("{0}")]
     MergeState(&'static str),

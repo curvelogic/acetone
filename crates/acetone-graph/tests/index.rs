@@ -815,3 +815,124 @@ fn redeclaring_one_of_two_indexes_leaves_the_other_untouched() {
     );
     assert!(fsck::check(&repo).expect("fsck").is_clean());
 }
+
+#[test]
+fn index_scan_returns_the_node_keys_for_an_equality_prefix() {
+    // The lazy store-backed IndexSeek primitive (ADR-0040): a value prefix
+    // selects exactly the matching node keys, agreeing with a full index scan.
+    use acetone_model::graph_keys::index_value_prefix;
+
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    declare_region_index(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        for (host, region) in [("web1", "eu"), ("web2", "eu"), ("db1", "us")] {
+            tx.put_node(
+                &node("Host", host),
+                &record(&[("region", Value::String(region.into()))]),
+            )
+            .expect("n");
+        }
+        tx.commit("nodes", &[], None).expect("commit");
+    }
+
+    let snap = repo.workspace_snapshot().expect("snap");
+    let prefix = index_value_prefix("Host", &["region".into()], &[Value::String("eu".into())])
+        .expect("prefix");
+    let mut got: Vec<String> = snap
+        .index_scan("host_region", &prefix)
+        .expect("scan")
+        .expect("index present")
+        .into_iter()
+        .map(|k| match &k.key()[0] {
+            Value::String(s) => s.clone(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    got.sort();
+    assert_eq!(got, vec!["web1".to_string(), "web2".to_string()]);
+
+    // A value with no entries yields an empty (not absent) result.
+    let none = index_value_prefix("Host", &["region".into()], &[Value::String("ap".into())])
+        .expect("prefix");
+    assert!(
+        snap.index_scan("host_region", &none)
+            .expect("scan")
+            .expect("present")
+            .is_empty()
+    );
+
+    // An undeclared index is absent, so the caller can fall back to a scan.
+    assert!(
+        snap.index_scan("no_such_index", &prefix)
+            .expect("scan")
+            .is_none()
+    );
+}
+
+#[test]
+fn out_and_in_edges_are_degree_bounded_and_agree_with_a_full_scan() {
+    use acetone_model::graph_keys::EdgeKey;
+    use acetone_model::records::EdgeRecord;
+
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host_label(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        for host in ["a", "b", "c"] {
+            tx.put_node(&node("Host", host), &record(&[])).expect("n");
+        }
+        // a -> b, a -> c, b -> c.
+        for (src, dst) in [("a", "b"), ("a", "c"), ("b", "c")] {
+            tx.put_edge(
+                &EdgeKey::new(node("Host", src), "LINK", node("Host", dst), Value::Null)
+                    .expect("edge"),
+                &EdgeRecord::new(std::collections::BTreeMap::new()),
+            )
+            .expect("edge");
+        }
+        tx.commit("graph", &[], None).expect("commit");
+    }
+
+    let snap = repo.workspace_snapshot().expect("snap");
+
+    // out_edges(a) = {a->b, a->c}; matches the forward map filtered to src == a.
+    let mut out: Vec<String> = snap
+        .out_edges(&node("Host", "a"))
+        .expect("out")
+        .into_iter()
+        .map(|(k, _)| dst_of(&k))
+        .collect();
+    out.sort();
+    assert_eq!(out, vec!["b".to_string(), "c".to_string()]);
+
+    // in_edges(c) = {a->c, b->c}; the reverse map keyed by dst.
+    let mut into: Vec<String> = snap
+        .in_edges(&node("Host", "c"))
+        .expect("in")
+        .into_iter()
+        .map(|(k, _)| src_of(&k))
+        .collect();
+    into.sort();
+    assert_eq!(into, vec!["a".to_string(), "b".to_string()]);
+
+    // A node with no out-edges reads back empty (degree-bounded, no whole-map load).
+    assert!(snap.out_edges(&node("Host", "c")).expect("out").is_empty());
+}
+
+fn dst_of(key: &acetone_model::graph_keys::EdgeKey) -> String {
+    match &key.dst().key()[0] {
+        Value::String(s) => s.clone(),
+        other => format!("{other:?}"),
+    }
+}
+
+fn src_of(key: &acetone_model::graph_keys::EdgeKey) -> String {
+    match &key.src().key()[0] {
+        Value::String(s) => s.clone(),
+        other => format!("{other:?}"),
+    }
+}
