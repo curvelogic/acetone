@@ -8,9 +8,13 @@ use crate::exec::value::Value;
 use crate::span::Span;
 
 /// Wrap `items` as a list value after charging its length against the query's
-/// collection cap (acetone-fab) — the same accounting `range()`/`collect()` do,
-/// so a list-returning builtin (`split`, `keys`, `labels`, `nodes`,
-/// `relationships`, `reverse`, `tail`) cannot allocate an unbounded collection.
+/// collection cap (acetone-fab), the same accounting `range()`/`collect()` do.
+/// Used by the list-returning builtins whose result is bounded by an
+/// already-resident, already-bounded input (`keys`/`labels` by graph data,
+/// `nodes`/`relationships` by a hop-governed path, `tail`/`reverse` by an
+/// existing list): building the result is an O(input) transient, so charging
+/// after the `.collect()` is sufficient. `split`, whose input is a raw string,
+/// charges the part count *before* building instead (see its arm).
 fn charged_list(governor: &Governor, items: Vec<Value>) -> Result<Value, ExecError> {
     governor.collection(items.len() as u64)?;
     Ok(Value::List(items))
@@ -278,12 +282,17 @@ pub fn call(
             string_fn(arg(0), span, |s| s.trim_end().to_string())
         }
         _ if name.eq_ignore_ascii_case("split") => match (arg(0), arg(1)) {
-            (Value::String(s), Value::String(sep)) => charged_list(
-                governor,
-                s.split(&sep)
-                    .map(|part| Value::String(part.to_string()))
-                    .collect(),
-            ),
+            (Value::String(s), Value::String(sep)) => {
+                // Charge *before* allocating the parts: a large input string can
+                // split into a large list, so count the parts (lazily, no
+                // allocation) and charge first — mirroring `range()`.
+                governor.collection(s.split(sep.as_str()).count() as u64)?;
+                Ok(Value::List(
+                    s.split(&sep)
+                        .map(|part| Value::String(part.to_string()))
+                        .collect(),
+                ))
+            }
             (a, b) => Err(type_error(format!(
                 "split() needs strings, got {} and {}",
                 a.type_name(),
