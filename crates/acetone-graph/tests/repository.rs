@@ -456,6 +456,84 @@ fn uncommitted_workspace_survives_git_gc() {
 }
 
 #[test]
+#[ignore = "acetone-7tf: documents a CONFIRMED durability gap that is not yet \
+            fixed — git does not treat a linked worktree's refs/worktree/* refs \
+            as gc roots, so foreign `git gc` from the main worktree prunes a \
+            linked worktree's uncommitted chunks. Flip to a plain #[test] when \
+            the common-anchor fix lands (see ADR-0015 Known limitation)."]
+fn a_linked_worktrees_uncommitted_workspace_survives_git_gc() {
+    // acetone-7tf: the huo durability guarantee (ADR-0015) SHOULD hold for a
+    // *linked* worktree too, not only the main one — but currently does not. A
+    // linked worktree's workspace ref is a worktree-private ref
+    // (`<common>/worktrees/<id>/refs/worktree/acetone/workspace`), and git's gc
+    // reachability walk does NOT enumerate another worktree's `refs/worktree/*`
+    // refs as roots (confirmed pure-git, 2.48.1). This test asserts the desired
+    // (fixed) behaviour: the linked worktree's saved-but-uncommitted chunks
+    // survive an aggressive foreign `git gc --prune=now` from the main worktree.
+    // It is `#[ignore]`d until the fix (anchor under a common gc-rooted ref).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let main_git = dir.path().join("graph.git");
+    let repo = Repository::init(&main_git, InitOptions::default()).expect("init");
+
+    // A commit in the main worktree, so `git worktree add` has a committish.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "seed"), &record(&[]))
+        .expect("seed");
+    let base = tx.commit("seed", &[], None).expect("commit");
+
+    // A linked worktree checked out at the seed commit (detached).
+    let wt = dir.path().join("wt-linked");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(base.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success(), "git worktree add failed");
+
+    // In the linked worktree, save (never commit) a multi-chunk batch of work.
+    let wt_repo = Repository::open(&wt).expect("open linked worktree");
+    let mut tx = wt_repo.begin_write().expect("begin");
+    for i in 0..500 {
+        tx.put_node(
+            &node("Host", &format!("host-{i:04}")),
+            &record(&[("index", i)]),
+        )
+        .expect("node");
+    }
+    tx.save().expect("save"); // save, not commit — the linked worktree is detached
+    assert!(
+        wt_repo.is_dirty().expect("dirty"),
+        "uncommitted work is present"
+    );
+
+    // Aggressive foreign gc from the MAIN worktree.
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["gc", "--prune=now", "--aggressive", "--quiet"])
+        .status()
+        .expect("run git gc");
+    assert!(status.success(), "git gc failed");
+
+    // Reopen the linked worktree cold: its uncommitted work reads back in full —
+    // the private-ref-anchored chunks survived the prune.
+    let wt_repo = Repository::open(&wt).expect("reopen linked worktree");
+    let snapshot = wt_repo.workspace_snapshot().expect("workspace survives gc");
+    // The 500 saved nodes plus the seed the worktree bootstrapped from.
+    assert_eq!(snapshot.nodes().expect("nodes").len(), 501);
+    assert!(
+        snapshot
+            .get_node(&node("Host", "host-0499"))
+            .expect("get")
+            .is_some(),
+        "a chunk-anchored uncommitted node survived gc"
+    );
+}
+
+#[test]
 fn diff_classifies_node_and_edge_changes() {
     use acetone_graph::diff::ChangeKind;
     use acetone_model::Value;
