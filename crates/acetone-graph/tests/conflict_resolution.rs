@@ -39,13 +39,16 @@ fn commit_node(repo: &Repository, id: u8, v: i64, message: &str) -> Hash {
     tx.commit(message, &[], None).expect("commit")
 }
 
-/// The `v` property of node 1 in the current workspace.
+/// The `v` property of node `id` in the current workspace, or `None` when the
+/// node is absent *or* its `v` is (a conflicted-away property under cell-wise
+/// merge, ADR-0035).
 fn workspace_v(repo: &Repository, id: u8) -> Option<i64> {
     let snap = repo.workspace_snapshot().expect("snapshot");
     snap.get_node(&node(id))
         .expect("get")
-        .map(|r| match r.properties().get("v") {
-            Some(Value::Int(n)) => *n,
+        .and_then(|r| match r.properties().get("v") {
+            Some(Value::Int(n)) => Some(*n),
+            None => None,
             other => panic!("unexpected v: {other:?}"),
         })
 }
@@ -77,7 +80,13 @@ fn a_conflicted_merge_enters_merge_in_progress_state() {
     assert_eq!(repo.head_commit().expect("head"), Some(ours));
     assert_eq!(repo.merge_head().expect("merge head"), Some(theirs));
     assert_eq!(repo.conflicts().expect("conflicts").len(), 1);
-    // The conflicted node is absent from the working graph until resolved.
+    // Under cell-wise merge (ADR-0035) the node itself is present — only its
+    // single conflicted property `v` is withheld until the conflict resolves.
+    let snap = repo.workspace_snapshot().expect("snapshot");
+    assert!(
+        snap.get_node(&node(1)).expect("get").is_some(),
+        "the node stays in the graph; only the conflicted property is withheld"
+    );
     assert_eq!(workspace_v(&repo, 1), None);
 }
 

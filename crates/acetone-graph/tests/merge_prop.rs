@@ -274,6 +274,7 @@ proptest! {
                         MergeConflict::Cell(cell) => MergeConflict::Cell(CellConflict {
                             map: cell.map,
                             key: cell.key.clone(),
+                            property: cell.property.clone(),
                             base: cell.base.clone(),
                             ours: cell.theirs.clone(),
                             theirs: cell.ours.clone(),

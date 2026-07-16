@@ -53,6 +53,10 @@ pub enum PersistedConflict {
         map: ConflictMap,
         /// The conflicted key (encoded).
         key: Vec<u8>,
+        /// The conflicted property (ADR-0035, cell-wise merge), or `None` for a
+        /// whole-record conflict (a schema key, or a node/edge whose existence
+        /// is disputed by delete-vs-modify).
+        property: Option<String>,
     },
     /// A graph-level violation (dangling edge / constraint). Not persisted or
     /// resolvable yet — a violating merge leaves the repository unchanged
@@ -66,14 +70,33 @@ fn push_field(key: &mut Vec<u8>, bytes: &[u8]) {
     key.extend_from_slice(bytes);
 }
 
+/// The `[KIND_CELL][map_tag][key_len][key]` prefix every conflict entry for a
+/// `(map, key)` pair shares — a node/edge may carry several per-property
+/// conflicts, all resolved together when the key is written. The map key is
+/// length-prefixed so the property suffix cannot alias into it.
+fn cell_key_prefix(map: ConflictMap, key: &[u8]) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(2 + 4 + key.len());
+    prefix.push(KIND_CELL);
+    prefix.push(map_tag(map));
+    push_field(&mut prefix, key);
+    prefix
+}
+
 /// The persisted-map entry key for one conflict.
 fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
     match conflict {
         MergeConflict::Cell(cell) => {
-            let mut key = Vec::with_capacity(2 + cell.key.len());
-            key.push(KIND_CELL);
-            key.push(map_tag(cell.map));
-            key.extend_from_slice(&cell.key);
+            // `[…prefix…][prop_present:u8][if present: len-prefixed property]`,
+            // so all of a key's per-property conflicts sort together after the
+            // shared prefix and none aliases another.
+            let mut key = cell_key_prefix(cell.map, &cell.key);
+            match &cell.property {
+                Some(property) => {
+                    key.push(1);
+                    push_field(&mut key, property.as_bytes());
+                }
+                None => key.push(0),
+            }
             key
         }
         MergeConflict::Graph(violation) => {
@@ -114,6 +137,17 @@ fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
     }
 }
 
+/// Read a big-endian `u32` length prefix and the field it introduces from
+/// `bytes` at `pos`, advancing `pos` past both.
+fn read_field<'a>(bytes: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
+    let len_end = pos.checked_add(4)?;
+    let len = u32::from_be_bytes(bytes.get(*pos..len_end)?.try_into().ok()?) as usize;
+    let field_end = len_end.checked_add(len)?;
+    let field = bytes.get(len_end..field_end)?;
+    *pos = field_end;
+    Some(field)
+}
+
 /// Decode a persisted-map entry key back to a [`PersistedConflict`].
 fn decode_entry(key: &[u8]) -> Result<PersistedConflict, GraphError> {
     let invalid = || GraphError::CorruptConflicts {
@@ -123,9 +157,21 @@ fn decode_entry(key: &[u8]) -> Result<PersistedConflict, GraphError> {
         Some(KIND_CELL) => {
             let tag = *key.get(1).ok_or_else(invalid)?;
             let map = map_from_tag(tag).ok_or_else(invalid)?;
+            let mut pos = 2;
+            let map_key = read_field(key, &mut pos).ok_or_else(invalid)?.to_vec();
+            let property = match key.get(pos).copied().ok_or_else(invalid)? {
+                0 => None,
+                1 => {
+                    pos += 1;
+                    let bytes = read_field(key, &mut pos).ok_or_else(invalid)?;
+                    Some(String::from_utf8(bytes.to_vec()).map_err(|_| invalid())?)
+                }
+                _ => return Err(invalid()),
+            };
             Ok(PersistedConflict::Cell {
                 map,
-                key: key[2..].to_vec(),
+                key: map_key,
+                property,
             })
         }
         Some(KIND_GRAPH) => Ok(PersistedConflict::Graph),
@@ -150,24 +196,30 @@ pub fn build_conflicts_map<S: ChunkStore>(
 
 /// Clear the cell-conflict entries for the `written` `(map, key)` pairs from
 /// the conflicts map — a write to a conflicted key resolves it (spec §6,
-/// acetone-14c.4c). Deleting a key that is not a conflict is a harmless no-op,
-/// so callers can pass every key they wrote. Returns the reduced root, or
-/// `None` when no conflicts remain (the merge is fully resolved).
+/// acetone-14c.4c). A single node/edge may carry several per-property conflicts
+/// (ADR-0035); writing the record resolves the record, so *every* entry sharing
+/// that key's prefix is dropped. Clearing a key that is not a conflict is a
+/// harmless no-op, so callers can pass every key they wrote. Returns the reduced
+/// root, or `None` when no conflicts remain (the merge is fully resolved).
 pub fn clear_written<S: ChunkStore>(
     store: &S,
     root: &Root,
     written: &[(ConflictMap, Vec<u8>)],
 ) -> Result<Option<Root>, GraphError> {
-    let ops: Vec<BatchOp> = written
+    let prefixes: Vec<Vec<u8>> = written
         .iter()
-        .map(|(map, key)| {
-            let mut entry = Vec::with_capacity(2 + key.len());
-            entry.push(KIND_CELL);
-            entry.push(map_tag(*map));
-            entry.extend_from_slice(key);
-            BatchOp::Delete(entry)
-        })
+        .map(|(map, key)| cell_key_prefix(*map, key))
         .collect();
+    // Delete every persisted entry whose bytes begin with a written key's
+    // prefix. A scan is needed because per-property entries share a prefix but
+    // are distinct exact keys; `apply_batch` deletes only exact keys.
+    let mut ops: Vec<BatchOp> = Vec::new();
+    for item in scan(store, root, ..)? {
+        let (entry, _) = item?;
+        if prefixes.iter().any(|p| entry.starts_with(p)) {
+            ops.push(BatchOp::Delete(entry.to_vec()));
+        }
+    }
     let reduced = apply_batch(store, root, ops)?;
     // Any entries left?
     match scan(store, &reduced, ..)?.next() {
@@ -231,6 +283,7 @@ mod tests {
         let cell = MergeConflict::Cell(CellConflict {
             map: ConflictMap::Nodes,
             key: vec![1, 2],
+            property: None,
             base: None,
             ours: None,
             theirs: None,
@@ -244,10 +297,95 @@ mod tests {
         let schema_cell = MergeConflict::Cell(CellConflict {
             map: ConflictMap::Schema,
             key: vec![1, 2],
+            property: None,
             base: None,
             ours: None,
             theirs: None,
         });
         assert_ne!(entry_key(&cell), entry_key(&schema_cell));
+    }
+
+    /// Per-property conflicts on one node round-trip through the entry key, and
+    /// stay distinct from each other and from a whole-record conflict on the
+    /// same key. A key-prefix collision here would let one property's
+    /// resolution silently clear another's.
+    #[test]
+    fn per_property_cell_entries_are_distinct_and_decode() {
+        let key = vec![7, 7];
+        let owner = MergeConflict::Cell(CellConflict {
+            map: ConflictMap::Nodes,
+            key: key.clone(),
+            property: Some("owner".into()),
+            base: None,
+            ours: None,
+            theirs: None,
+        });
+        let os = MergeConflict::Cell(CellConflict {
+            map: ConflictMap::Nodes,
+            key: key.clone(),
+            property: Some("os".into()),
+            base: None,
+            ours: None,
+            theirs: None,
+        });
+        let whole = MergeConflict::Cell(CellConflict {
+            map: ConflictMap::Nodes,
+            key: key.clone(),
+            property: None,
+            base: None,
+            ours: None,
+            theirs: None,
+        });
+        assert_ne!(entry_key(&owner), entry_key(&os));
+        assert_ne!(entry_key(&owner), entry_key(&whole));
+
+        assert_eq!(
+            decode_entry(&entry_key(&owner)).unwrap(),
+            PersistedConflict::Cell {
+                map: ConflictMap::Nodes,
+                key: key.clone(),
+                property: Some("owner".into()),
+            }
+        );
+        assert_eq!(
+            decode_entry(&entry_key(&whole)).unwrap(),
+            PersistedConflict::Cell {
+                map: ConflictMap::Nodes,
+                key,
+                property: None,
+            }
+        );
+    }
+
+    /// A property name whose bytes end in a length-prefix-shaped run must not
+    /// alias a different (key, property) split — the length-prefixed map key
+    /// pins the boundary.
+    #[test]
+    fn key_and_property_boundary_is_unambiguous() {
+        let a = MergeConflict::Cell(CellConflict {
+            map: ConflictMap::Nodes,
+            key: vec![1],
+            property: Some("ab".into()),
+            base: None,
+            ours: None,
+            theirs: None,
+        });
+        let b = MergeConflict::Cell(CellConflict {
+            map: ConflictMap::Nodes,
+            key: vec![1, b'a'],
+            property: Some("b".into()),
+            base: None,
+            ours: None,
+            theirs: None,
+        });
+        assert_ne!(entry_key(&a), entry_key(&b));
+        assert_eq!(
+            decode_entry(&entry_key(&a)).unwrap(),
+            PersistedConflict::Cell {
+                map: ConflictMap::Nodes,
+                key: vec![1],
+                property: Some("ab".into()),
+            }
+        );
     }
 }

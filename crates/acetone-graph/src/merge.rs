@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
-use acetone_model::records::{NodeRecord, RecordEncodeError};
+use acetone_model::records::{EdgeRecord, NodeRecord, RecordEncodeError};
 use acetone_model::schema::{LabelDef, SchemaEntry};
 use acetone_model::values::encode_value;
 use acetone_prolly::{
@@ -67,7 +67,7 @@ pub enum MergeOutcome {
 }
 
 /// Which graph map a cell-level conflict arose in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConflictMap {
     /// The schema map.
     Schema,
@@ -80,12 +80,23 @@ pub enum ConflictMap {
 /// One key that changed incompatibly on both sides — a cell-level conflict.
 /// The raw encoded key and the three side values are preserved so the
 /// resolution machinery (acetone-14c.4) can render and resolve it.
+///
+/// For a node or edge modified on both branches, the clash is refined to the
+/// **property** level (ADR-0035, cell-wise merge): `property` names the single
+/// property that diverged, and `base`/`ours`/`theirs` hold that property's
+/// canonical value on each side (absent when the side lacks it). A whole-record
+/// conflict — a schema-map key, or a node/edge deleted on one side and modified
+/// on the other (its very existence disputed) — has `property == None` and the
+/// three fields hold the whole record's bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellConflict {
     /// Which map the key belongs to.
     pub map: ConflictMap,
-    /// The conflicted key (encoded), absent from the merged map.
+    /// The conflicted key (encoded), whose merged record is either partial
+    /// (auto-merged properties only) or, for a whole-record conflict, absent.
     pub key: Vec<u8>,
+    /// The conflicted property name, or `None` for a whole-record conflict.
+    pub property: Option<String>,
     /// The value in the merge base, if present.
     pub base: Option<Vec<u8>>,
     /// The value in `ours`, if present.
@@ -278,6 +289,17 @@ pub fn merge_manifests<S: ChunkStore>(
 }
 
 /// Three-way merge one map, appending any cell conflicts (tagged with `map`).
+///
+/// For the schema map a whole-record conflict is opaque (identity/definition,
+/// not properties). For the `nodes` and `edges` maps a key modified on both
+/// sides is refined **cell-wise** (ADR-0035): the base/ours/theirs records are
+/// decoded and merged property-by-property. A key edited on *different*
+/// properties auto-merges; the merged record — carrying the auto-merged
+/// properties, with any conflicted ones omitted — is written back into the
+/// merged root, and each divergent property becomes one per-property
+/// [`CellConflict`]. A node/edge deleted on one side and modified on the other
+/// stays a whole-record conflict (property `None`): its very existence is
+/// disputed, so there is nothing to merge cell-wise.
 fn merge_one<S: ChunkStore>(
     store: &S,
     map: ConflictMap,
@@ -294,16 +316,107 @@ fn merge_one<S: ChunkStore>(
         &select(ours).to_root(params)?,
         &select(theirs).to_root(params)?,
     )?;
-    for c in outcome.conflicts {
-        conflicts.push(CellConflict {
-            map,
-            key: c.key.to_vec(),
-            base: c.base.map(|b| b.to_vec()),
-            ours: c.ours.map(|b| b.to_vec()),
-            theirs: c.theirs.map(|b| b.to_vec()),
-        });
+
+    // The schema map stays whole-opaque: a schema entry is an identity or a
+    // definition, not a bag of independently-mergeable properties.
+    if map == ConflictMap::Schema {
+        for c in outcome.conflicts {
+            conflicts.push(CellConflict {
+                map,
+                key: c.key.to_vec(),
+                property: None,
+                base: c.base.map(|b| b.to_vec()),
+                ours: c.ours.map(|b| b.to_vec()),
+                theirs: c.theirs.map(|b| b.to_vec()),
+            });
+        }
+        return Ok(outcome.root);
     }
-    Ok(outcome.root)
+
+    // Nodes/edges: refine each whole-record conflict cell-wise. Auto-merged
+    // (and partially-merged) records are written back to the merged root so the
+    // merge-in-progress workspace holds the union of the two sides' independent
+    // edits; conflicted properties are surfaced individually.
+    let mut puts: Vec<BatchOp> = Vec::new();
+    for c in outcome.conflicts {
+        match (&c.ours, &c.theirs) {
+            (Some(ours_bytes), Some(theirs_bytes)) => {
+                let (merged_value, prop_conflicts) = match map {
+                    ConflictMap::Nodes => {
+                        // A missing base (both sides *added* the same key) merges
+                        // against an empty record, so their contents still fold
+                        // together property-wise.
+                        let base_rec = match &c.base {
+                            Some(b) => NodeRecord::decode(b)?,
+                            None => NodeRecord::new(Vec::new(), BTreeMap::new()),
+                        };
+                        let ours_rec = NodeRecord::decode(ours_bytes)?;
+                        let theirs_rec = NodeRecord::decode(theirs_bytes)?;
+                        let (rec, pcs) = crate::cell_merge::merge_node_record(
+                            &base_rec,
+                            &ours_rec,
+                            &theirs_rec,
+                        )?;
+                        (rec.encode()?, pcs)
+                    }
+                    ConflictMap::Edges => {
+                        let base_rec = match &c.base {
+                            Some(b) => EdgeRecord::decode(b)?,
+                            None => EdgeRecord::new(BTreeMap::new()),
+                        };
+                        let ours_rec = EdgeRecord::decode(ours_bytes)?;
+                        let theirs_rec = EdgeRecord::decode(theirs_bytes)?;
+                        let (rec, pcs) = crate::cell_merge::merge_edge_record(
+                            &base_rec,
+                            &ours_rec,
+                            &theirs_rec,
+                        )?;
+                        (rec.encode()?, pcs)
+                    }
+                    ConflictMap::Schema => unreachable!("schema handled above"),
+                };
+                // Write the merged record (auto-merged properties; conflicted
+                // ones omitted) back into the merged root.
+                puts.push(BatchOp::Put(c.key.to_vec(), merged_value));
+                for pc in prop_conflicts {
+                    conflicts.push(CellConflict {
+                        map,
+                        key: c.key.to_vec(),
+                        property: Some(pc.property),
+                        base: encode_opt_value(pc.base.as_ref())?,
+                        ours: encode_opt_value(pc.ours.as_ref())?,
+                        theirs: encode_opt_value(pc.theirs.as_ref())?,
+                    });
+                }
+            }
+            // Delete-vs-modify at the record level: existence is disputed, so
+            // there is no per-property merge — keep it a whole-record conflict.
+            _ => {
+                conflicts.push(CellConflict {
+                    map,
+                    key: c.key.to_vec(),
+                    property: None,
+                    base: c.base.map(|b| b.to_vec()),
+                    ours: c.ours.map(|b| b.to_vec()),
+                    theirs: c.theirs.map(|b| b.to_vec()),
+                });
+            }
+        }
+    }
+    let root = if puts.is_empty() {
+        outcome.root
+    } else {
+        apply_batch(store, &outcome.root, puts)?
+    };
+    Ok(root)
+}
+
+/// Canonical-encode an optional property value for a [`CellConflict`] side.
+fn encode_opt_value(value: Option<&acetone_model::Value>) -> Result<Option<Vec<u8>>, GraphError> {
+    match value {
+        Some(v) => Ok(Some(encode_value(v)?)),
+        None => Ok(None),
+    }
 }
 
 /// Rebuild the reverse edge map from a forward edge map: one key-only entry
