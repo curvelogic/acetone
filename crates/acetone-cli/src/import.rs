@@ -1,5 +1,5 @@
 //! The `import` subcommand: built-in CSV and JSON/NDJSON extractors, source
-//! hashing, and the thin wiring to `acetone_graph::import` (spec §7,
+//! hashing, and the thin wiring to `acetone_core::graph::import` (spec §7,
 //! ADR-0021). The orchestration, transform and provenance live in the graph
 //! crate; this module only turns a file plus mapping flags into a
 //! [`SourceExtractor`] and reports the outcome.
@@ -7,11 +7,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use acetone_graph::import::{
+use acetone_core::graph::import::{
     EndpointRef, ImportError, ImportOptions, ImportOutcome, ImportRecord, Provenance,
     SourceExtractor,
 };
-use acetone_model::Value;
+use acetone_core::model::Value;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
@@ -314,7 +314,7 @@ pub fn run(
         author: None,
     };
 
-    let outcome = acetone_graph::import(&repo, &mut extractor, opts).context("importing")?;
+    let outcome = acetone_core::graph::import(&repo, &mut extractor, opts).context("importing")?;
 
     let target = branch.unwrap_or("the current branch");
     match outcome {

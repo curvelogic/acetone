@@ -29,10 +29,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use acetone_model::Value;
-use acetone_model::graph_keys::{EdgeKey, NodeKey};
-use acetone_model::records::NodeRecord;
-use acetone_model::schema::SchemaEntry;
+use acetone_core::model::Value;
+use acetone_core::model::graph_keys::{EdgeKey, NodeKey};
+use acetone_core::model::records::NodeRecord;
+use acetone_core::model::schema::SchemaEntry;
 use anyhow::{Context, Result, bail};
 
 use crate::output::outln;
@@ -164,7 +164,7 @@ fn node_table(
 /// the whole table — a type must connect a single `(srcLabel, dstLabel)` pair,
 /// or the flat table cannot round-trip; that is rejected loudly here.
 fn edge_table(
-    edges: &[(EdgeKey, acetone_model::records::EdgeRecord)],
+    edges: &[(EdgeKey, acetone_core::model::records::EdgeRecord)],
     rtype: &str,
 ) -> Result<Table> {
     let mut non_key: BTreeSet<String> = BTreeSet::new();
@@ -231,7 +231,7 @@ fn edge_table(
 /// Export every keyed label and relationship type into `dir`.
 fn export_all(
     nodes: &[(NodeKey, NodeRecord)],
-    edges: &[(EdgeKey, acetone_model::records::EdgeRecord)],
+    edges: &[(EdgeKey, acetone_core::model::records::EdgeRecord)],
     schema: &[SchemaEntry],
     key_names: &BTreeMap<String, Vec<String>>,
     format: Format,
@@ -407,7 +407,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acetone_model::schema::LabelDef;
+    use acetone_core::model::schema::LabelDef;
 
     fn schema() -> Vec<SchemaEntry> {
         vec![SchemaEntry::Label {
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn edge_table_rejects_heterogeneous_endpoint_labels() {
-        use acetone_model::records::EdgeRecord;
+        use acetone_core::model::records::EdgeRecord;
         let edge = |src_label: &str, dst_label: &str| {
             let src = NodeKey::new(src_label, vec![Value::String("s".into())]).unwrap();
             let dst = NodeKey::new(dst_label, vec![Value::String("d".into())]).unwrap();
@@ -511,7 +511,7 @@ mod tests {
         // U10 (pre-0.1 review): an edge property named src/dst/disc would
         // overwrite the endpoint/discriminator column and duplicate it —
         // silent corruption. Reject it rather than emit a wrong table.
-        use acetone_model::records::EdgeRecord;
+        use acetone_core::model::records::EdgeRecord;
         let src = NodeKey::new("Host", vec![Value::String("s".into())]).unwrap();
         let dst = NodeKey::new("Host", vec![Value::String("d".into())]).unwrap();
         for reserved in ["src", "dst", "disc"] {

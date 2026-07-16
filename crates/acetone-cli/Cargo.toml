@@ -13,16 +13,12 @@ name = "acetone"
 path = "src/main.rs"
 
 [dependencies]
-acetone-cypher.workspace = true
-acetone-graph.workspace = true
-# acetone-model: NodeKey/EdgeKey/NodeRecord/EdgeRecord/Value construction
-# for the pre-Cypher plumbing commands (put-node/get-node/put-edge).
-acetone-model.workspace = true
-# acetone-store: only for the ObjectFormat enum, to plumb `init
-# --object-format` through to acetone_graph::InitOptions. Still downward
-# per the crate layout (CLAUDE.md), and acetone-cli already depends on
-# more than one lower crate.
-acetone-store.workspace = true
+# acetone-core: the single library façade the CLI is a thin client over
+# (acetone-ijq). Everything the CLI needs is reached through it —
+# `acetone_core::{cypher,graph,model,store}` re-export the constituent crates,
+# with the headline types re-exported at the crate root — so the workbench and
+# an external library consumer share one product surface (spec §7).
+acetone-core.workspace = true
 # anyhow: the one crate in the workspace allowed ad hoc error handling
 # (CLAUDE.md) — used only here, to add context to acetone-graph's typed
 # errors on the way to a friendly top-level message.
