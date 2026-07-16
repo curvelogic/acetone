@@ -297,6 +297,25 @@ impl GitStore {
         self.repo.path()
     }
 
+    /// The commit `HEAD` currently resolves to, whether `HEAD` is on a branch
+    /// (its tip) or **detached** (the checked-out commit directly). `None` only
+    /// when there is no such commit — an unborn branch. Unlike [`read_head`],
+    /// which reports the symbolic *ref name* (and so yields `None` for a
+    /// detached `HEAD`), this peels `HEAD` to an object, so a worktree checked
+    /// out at a detached commit still resolves to its commit (acetone-cm9).
+    ///
+    /// [`read_head`]: RefStore::read_head
+    pub fn head_commit_id(&self) -> Result<Option<Hash>, StoreError> {
+        let head = self
+            .repo
+            .head()
+            .map_err(|e| StoreError::backend("reading HEAD", e))?;
+        match head.id() {
+            Some(id) => Ok(Some(Hash::from_oid(id.detach()))),
+            None => Ok(None),
+        }
+    }
+
     /// Build a workspace tree `{.acetone/: {chunks/: <anchor tree>, manifest:
     /// <blob>}}` — the commit-tree shape minus the root README — and return
     /// its object id (ADR-0023). The `.acetone/chunks/` anchor tree makes

@@ -189,10 +189,16 @@ impl Repository {
     /// Ensure the current worktree has a workspace. If it already has one
     /// (per-worktree or legacy ref), do nothing. Otherwise — a freshly
     /// `git worktree add`ed worktree that acetone has not seen — bootstrap
-    /// its per-worktree workspace from the checked-out branch's committed
+    /// its per-worktree workspace from the checked-out commit's committed
     /// manifest, so opening a new worktree "just works" (ADR-0014). The
     /// bootstrap takes the writer lock only in that first-time case; an
     /// already-provisioned worktree opens lock-free.
+    ///
+    /// The checked-out commit is resolved via [`GitStore::head_commit_id`], so a
+    /// worktree at a **detached** `HEAD` bootstraps from its commit too, rather
+    /// than failing every operation with a spurious "no workspace" error
+    /// (acetone-cm9). Only a genuinely unborn `HEAD` (no commit at all) has
+    /// nothing to bootstrap from.
     fn ensure_workspace(&self) -> Result<(), GraphError> {
         if self.workspace_ref_value()?.is_some() || self.legacy_ref_value()?.is_some() {
             return Ok(());
@@ -202,13 +208,14 @@ impl Repository {
         if self.workspace_ref_value()?.is_some() {
             return Ok(());
         }
-        match self.head_commit()? {
+        match self.store.head_commit_id()? {
             Some(commit) => {
                 let manifest_hash = self.commit_manifest_hash(&commit)?;
                 let tree = self.workspace_tree_for(&manifest_hash)?;
                 self.cas_workspace(None, &tree)
             }
-            // No workspace and an unborn branch: nothing to bootstrap from.
+            // No workspace and an unborn HEAD (no commit): nothing to bootstrap
+            // from.
             None => Err(GraphError::NoWorkspace {
                 name: self.workspace.clone(),
             }),
