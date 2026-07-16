@@ -33,9 +33,18 @@ lands back near the un-deltified baseline (roughly 7× more retained history).
 
 **Consequences:**
 
-- It corrupts nothing — every object still reads back and `git fsck` stays
-  clean — so operators and tooling may run `git gc` safely; it only costs
-  space. Re-running `acetone`'s own consolidation restores the ratio.
+- It corrupts nothing **in the main worktree** — every object still reads back
+  and `git fsck` stays clean — so operators and tooling may run `git gc` safely
+  there; it only costs space. Re-running `acetone`'s own consolidation restores
+  the ratio.
+- **Exception — a *linked* worktree with uncommitted work (acetone-7tf):** stock
+  `git gc --prune=now` from the main worktree can *delete* a linked worktree's
+  saved-but-uncommitted chunks, because git does not treat another worktree's
+  `refs/worktree/*` refs as gc roots (confirmed, git 2.48.1). The huo
+  durability guarantee (ADR-0015) therefore holds only for the main worktree
+  until acetone-7tf lands. Commit work in a linked worktree before running a
+  foreign `git gc`, or run `acetone gc` (which refuses while worktrees exist)
+  instead. acetone's own gc and committed history are unaffected.
 - The base-hint cache (`<git-dir>/acetone-pack-bases`) and the consolidation
   pack list (`<git-dir>/acetone-consolidation-packs`) are **local**: they are
   not refs and do not travel with clone/push/fetch. A clone therefore starts

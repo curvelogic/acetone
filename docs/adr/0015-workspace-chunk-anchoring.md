@@ -53,10 +53,26 @@ latency optimization over a correct base, flagged for the phase report.
 
 ## Consequences
 
-- Uncommitted working state is fully gc-durable; the "commit before gc"
-  caveat is dropped from the docs. Verified by a test that saves (never
-  commits) a multi-chunk workspace, runs `git gc --prune=now --aggressive`,
-  and reads it back cold in full.
+- Uncommitted working state in the **main worktree** is fully gc-durable; the
+  "commit before gc" caveat is dropped from the docs. Verified by a test that
+  saves (never commits) a multi-chunk workspace, runs `git gc --prune=now
+  --aggressive`, and reads it back cold in full.
+- **Known limitation — a *linked* worktree's uncommitted workspace is NOT
+  foreign-gc-durable (acetone-7tf).** A linked worktree's workspace ref lives in
+  its private ref store (`<common>/worktrees/<id>/refs/worktree/acetone/workspace`).
+  Contrary to the original assumption, `git gc` run from the main worktree does
+  **not** enumerate another worktree's `refs/worktree/*` refs as reachability
+  roots — confirmed at the pure-git level (git 2.48.1): a tree *or* commit
+  referenced only by such a ref is pruned. So an aggressive foreign `git gc
+  --prune=now` from the main worktree can prune a linked worktree's
+  saved-but-uncommitted chunks. Acetone's **own** gc is unaffected (it refuses
+  while linked worktrees exist, ADR-0014); the exposure is a user running stock
+  `git gc` with uncommitted work in a linked worktree. The fix — anchor a linked
+  worktree's workspace tree under a *common* (globally gc-enumerated) ref, with
+  the anchor pruned when its worktree is removed — is a deliberate ref-layout
+  change tracked on acetone-7tf (and overlaps the ref-namespace unification,
+  acetone-gns); a reproduction is pinned as an `#[ignore]`d test in
+  `repository.rs`.
 - fsck resolves the workspace ref (tree or blob) to its manifest and checks
   it; anchor-completeness of the workspace tree itself (that every anchored
   chunk exists) is a natural extension (acetone-5a8).
