@@ -84,13 +84,13 @@ pub fn sanitise_line(s: &str) -> String {
 }
 
 /// Render a label, relationship type or other identifier-shaped string for
-/// output. Thin re-export of the canonical renderer in [`acetone_model`] so
+/// output. Thin re-export of the canonical renderer in [`acetone_core::model`] so
 /// the CLI and every layer's error messages format identifiers identically
 /// (and escape attacker-writable control characters the same way).
 pub use acetone_core::model::display::format_label;
 
 /// Render a value for human-readable output (`get-node`, `list-nodes`). Thin
-/// re-export of the canonical renderer in [`acetone_model`], shared with the
+/// re-export of the canonical renderer in [`acetone_core::model`], shared with the
 /// error-message paths so a value never renders two different ways.
 pub use acetone_core::model::display::format_value;
 
