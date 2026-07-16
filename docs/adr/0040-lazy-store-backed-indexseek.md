@@ -91,6 +91,19 @@ string pins (a documented limitation; type the property to get the seek).
   silently dropping.
 - Single-property indexes only (composite indexes scan-and-filter, as ADR-0022);
   writes and `AT` keep the materialised source.
+- **In-edge order differs from the materialised source.** `GraphSnapshot` yields
+  a node's in-edges in `edges_fwd` (global) order; the store source yields them
+  in `edges_rev` order (keyed by `dst`, so by `type`/`src`). The result *set* is
+  identical and openCypher leaves `MATCH` order unspecified without `ORDER BY`,
+  but it is observable via `LIMIT`/`collect()` with no order key, and the read
+  and write paths can now order in-edges differently. Not a correctness issue;
+  add `ORDER BY` for a determined order.
+- **The one behavioural divergence from the in-memory seek**: a `String` pin on
+  a node that holds a `Bytes`/temporal value in a `String`-declared property
+  under-selects (the entry is keyed raw, the probe is string-tagged), where the
+  in-memory seek — keyed by rendering — would find it. Only reachable by a raw
+  `Transaction::put_node` that violates the declared type (Cypher and `import`
+  both prevent it); out of the supported contract, but recorded here.
 - Rejected: refactoring `GraphSource` to be fallible (far larger blast radius
   than an error cell); re-keying the stored index by rendered value (an on-disk
   format change that would make `Bytes`/temporal indexes lossy).
