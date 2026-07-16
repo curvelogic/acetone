@@ -206,6 +206,56 @@ fn garbage_manifest_behind_workspace_ref_is_a_manifest_finding() {
 }
 
 #[test]
+fn fsck_runs_on_a_repo_whose_default_workspace_manifest_is_damaged() {
+    // acetone-zhp: when the *default* worktree workspace is damaged,
+    // `Repository::open` fail-fasts decoding it, so `fsck::check(&repo)` cannot
+    // be reached — exactly the repo fsck exists for. `fsck::check_path` opens
+    // only the store and reports the damage instead.
+    const WORKSPACE_REF: &str = "refs/worktree/acetone/workspace";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(
+        &node("Host", "web1"),
+        &NodeRecord::new([], Default::default()),
+    )
+    .expect("put");
+    tx.commit("base", &[], None).expect("commit");
+
+    // Corrupt the default workspace ref to a blob that is neither a workspace
+    // tree nor a manifest.
+    let store = repo.store();
+    let current = store
+        .read_ref(WORKSPACE_REF)
+        .expect("read ref")
+        .expect("workspace ref present");
+    let garbage = store.put(b"not a workspace tree or manifest").expect("put");
+    store
+        .write_ref(WORKSPACE_REF, Some(&current), &garbage)
+        .expect("overwrite workspace ref");
+    let repo_path = repo.store().git_dir().to_path_buf();
+    drop(repo);
+
+    // The bug: opening a full Repository now fails-fast on the damaged manifest.
+    assert!(
+        Repository::open(&repo_path).is_err(),
+        "Repository::open fail-fasts on a damaged default workspace manifest"
+    );
+
+    // The fix: fsck::check_path still runs and reports the damage as a finding.
+    let report = fsck::check_path(&repo_path).expect("fsck must run on a damaged repo");
+    assert!(
+        report.findings.iter().any(|f| {
+            f.kind == FindingKind::Manifest
+                && matches!(&f.origin, acetone_graph::Origin::Workspace { reference }
+                    if reference == WORKSPACE_REF)
+        }),
+        "expected a Manifest finding for the damaged default workspace, got {:?}",
+        report.findings
+    );
+}
+
+#[test]
 fn non_commit_branch_tip_is_a_commit_finding() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());

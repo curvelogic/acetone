@@ -281,7 +281,25 @@ struct Verified {
 /// docs for the finding taxonomy and totality guarantees. A clean
 /// repository returns an [`FsckReport`] with no findings.
 pub fn check(repo: &Repository) -> Result<FsckReport, GraphError> {
-    let store = repo.store();
+    check_store(repo.store())
+}
+
+/// Verify the repository at `path` without first constructing a
+/// [`Repository`] — so `fsck` runs even when the default workspace manifest is
+/// **damaged or absent**, which is exactly when the diagnostic is needed
+/// (acetone-zhp). [`Repository::open`] fail-fasts by decoding that manifest, so
+/// `check(&repo)` cannot be reached on a broken repository; this opens only the
+/// underlying [`GitStore`] and runs the same checks, reporting the damage as
+/// [`Finding`]s rather than erroring at open.
+pub fn check_path(path: &std::path::Path) -> Result<FsckReport, GraphError> {
+    let store = GitStore::open_discovering(path)?;
+    check_store(&store)
+}
+
+/// The store-level fsck used by both [`check`] and [`check_path`]. It needs only
+/// the chunk/ref/commit store — never a decoded workspace manifest — so it is
+/// robust to a damaged workspace.
+fn check_store(store: &GitStore) -> Result<FsckReport, GraphError> {
     let mut report = FsckReport::default();
     let mut verified = Verified::default();
     check_workspaces(store, &mut verified, &mut report)?;
