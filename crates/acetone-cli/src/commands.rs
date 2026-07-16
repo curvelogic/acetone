@@ -126,8 +126,11 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
 }
 
 fn fsck(repo_path: &Path) -> Result<()> {
-    let repo = open(repo_path)?;
-    let report = acetone_core::graph::fsck::check(&repo)?;
+    // Open only the store (not a full Repository): fsck must run even when the
+    // default workspace manifest is damaged — precisely when it is needed
+    // (acetone-zhp). `Repository::open` would fail-fast decoding that manifest.
+    let report = acetone_core::graph::fsck::check_path(repo_path)
+        .with_context(|| format!("checking repository at {}", repo_path.display()))?;
     for finding in &report.findings {
         // Findings embed repository-controlled text (index names, ref
         // names, decode-error detail): sanitise at the terminal boundary.
