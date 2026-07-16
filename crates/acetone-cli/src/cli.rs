@@ -127,25 +127,32 @@ pub enum Command {
     ///
     /// Merges another version (spec §7). The workspace must be clean and a
     /// branch checked out; fast-forwards when possible, otherwise a clean
-    /// three-way merge writes a two-parent merge commit. Cell-level conflicts
-    /// enter a merge-in-progress state: resolve them with
-    /// `acetone resolve --all-ours|--all-theirs` (or by editing the graph),
-    /// then `acetone commit` to complete. Graph-level breaches (a dangling edge
-    /// or a broken schema constraint) are reported and make no commit.
+    /// three-way merge writes a two-parent merge commit. Conflicts — cell-level
+    /// (a key edited incompatibly) or graph-level (a dangling edge or broken
+    /// schema constraint) — enter a merge-in-progress state: resolve cell
+    /// conflicts with `acetone resolve --all-ours|--all-theirs` or by writing
+    /// the entities, repair graph violations by editing the graph, then
+    /// `acetone commit` to complete (it re-validates first). `merge --abort`
+    /// discards the merge and restores the pre-merge branch tip.
     Merge {
         /// The version to merge in (branch short name, full ref name or
-        /// commit hash).
-        #[arg(value_name = "REF")]
-        refspec: String,
+        /// commit hash). Omit only with `--abort`.
+        #[arg(value_name = "REF", required_unless_present = "abort")]
+        refspec: Option<String>,
         /// Commit message for the merge commit (default: `Merge <ref>`).
         #[arg(short = 'm', long)]
         message: Option<String>,
+        /// Abandon a merge in progress, restoring the pre-merge branch tip.
+        #[arg(long, conflicts_with_all = ["refspec", "message"])]
+        abort: bool,
     },
     /// Resolve a merge in progress by taking one whole side.
     ///
-    /// Resolves the conflicts of a merge in progress, then `commit` to complete
-    /// the merge (spec §6). Cell conflicts only; graph-level violations and
-    /// per-key resolution arrive later.
+    /// Resolves the cell conflicts of a merge in progress by taking every
+    /// conflicted value from one side, then `commit` to complete the merge
+    /// (spec §6). Cell conflicts only — graph-level violations (a dangling edge
+    /// or constraint breach) are repaired by editing the graph, and `commit`
+    /// re-validates before completing.
     Resolve {
         /// Take the current branch's value for every conflict.
         #[arg(long = "all-ours")]

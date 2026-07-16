@@ -34,7 +34,11 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         Command::Log { json } => log(repo_path, json),
         Command::Branch { name, json } => branch(repo_path, name.as_deref(), json),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
-        Command::Merge { refspec, message } => merge(repo_path, &refspec, message.as_deref()),
+        Command::Merge {
+            refspec,
+            message,
+            abort,
+        } => merge(repo_path, refspec.as_deref(), message.as_deref(), abort),
         Command::Resolve {
             all_ours,
             all_theirs,
@@ -179,10 +183,17 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     });
     let head = repo.head_commit()?.map(|h| h.to_hex());
     let dirty = repo.is_dirty()?;
-    let merge_remaining = if repo.merge_head()?.is_some() {
-        Some(repo.conflicts()?.len())
+    // While a merge is in progress, report how many conflicts remain and
+    // whether any is a graph-level violation (which resolves by editing the
+    // graph, not by picking a side).
+    let (merge_remaining, merge_has_graph) = if repo.merge_head()?.is_some() {
+        let conflicts = repo.conflicts()?;
+        let has_graph = conflicts
+            .iter()
+            .any(|c| matches!(c, acetone_core::graph::conflicts::PersistedConflict::Graph));
+        (Some(conflicts.len()), has_graph)
     } else {
-        None
+        (None, false)
     };
     let snapshot = repo.workspace_snapshot()?;
     let nodes = snapshot.nodes()?.len();
@@ -221,11 +232,17 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     if let Some(remaining) = merge_remaining {
         if remaining == 0 {
             outln!("merge: in progress, all conflicts resolved — run `acetone commit` to finish");
+        } else if merge_has_graph {
+            outln!(
+                "merge: in progress, {remaining} graph-level violation(s) — repair the \
+                 graph (delete the dangling relationship, restore the endpoint, or fix \
+                 the constraint), then `acetone commit`, or `acetone merge --abort`"
+            );
         } else {
             outln!(
                 "merge: in progress, {remaining} conflict(s) to resolve \
                  (`acetone resolve --all-ours|--all-theirs`, or write the \
-                 conflicted entities directly)"
+                 conflicted entities directly), or `acetone merge --abort`"
             );
         }
     }
@@ -240,10 +257,23 @@ pub(crate) fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Re
     // guard is skipped while a merge is in progress. It still refuses if
     // conflicts remain unresolved (the library errors, but this is friendlier).
     if repo.merge_head()?.is_some() {
-        let remaining = repo.conflicts()?.len();
-        if remaining > 0 {
+        // Only unresolved *cell* conflicts are counted for this friendly early
+        // bail — graph violations are never cleared by a write; they are gated
+        // by the library's completion re-validation (acetone-mws), so let
+        // `commit` run and re-validate rather than blocking here.
+        let cell_remaining = repo
+            .conflicts()?
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    acetone_core::graph::conflicts::PersistedConflict::Cell { .. }
+                )
+            })
+            .count();
+        if cell_remaining > 0 {
             bail!(
-                "cannot commit: {remaining} unresolved conflict(s) — \
+                "cannot commit: {cell_remaining} unresolved conflict(s) — \
                  resolve with `acetone resolve --all-ours|--all-theirs`"
             );
         }
@@ -366,8 +396,20 @@ fn checkout(repo_path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
+fn merge(
+    repo_path: &Path,
+    refspec: Option<&str>,
+    message: Option<&str>,
+    abort: bool,
+) -> Result<()> {
     let repo = open(repo_path)?;
+    if abort {
+        repo.abort_merge().context("aborting merge")?;
+        outln!("merge aborted — workspace restored to the branch tip");
+        return Ok(());
+    }
+    // clap guarantees a refspec unless --abort was given.
+    let refspec = refspec.expect("clap requires REF unless --abort");
     let message = message
         .map(str::to_owned)
         .unwrap_or_else(|| format!("Merge {refspec}"));
@@ -387,18 +429,25 @@ fn merge(repo_path: &Path, refspec: &str, message: Option<&str>) -> Result<()> {
             for c in &conflicts {
                 outln!("  {}", render_conflict(c));
             }
-            // Cell conflicts enter merge-in-progress (MERGE_HEAD set); graph
-            // violations leave the repository unchanged, with no resolution
-            // verb yet (spec §6, acetone-14c.4c).
-            if repo.merge_head()?.is_some() {
+            // Both cell and graph conflicts now enter merge-in-progress
+            // (acetone-mws): cell conflicts resolve by picking a side or writing
+            // the entity; graph violations resolve by repairing the graph. Either
+            // way, `commit` re-validates before completing, or `merge --abort`
+            // backs out.
+            let is_graph = conflicts
+                .iter()
+                .any(|c| matches!(c, MergeConflict::Graph(_)));
+            if is_graph {
                 outln!(
-                    "resolve with `acetone resolve --all-ours|--all-theirs`, \
-                     then `acetone commit` to complete the merge"
+                    "repair the graph (delete the dangling relationship, restore the \
+                     endpoint, or fix the constraint breach), then `acetone commit` to \
+                     complete — or `acetone merge --abort` to back out"
                 );
             } else {
                 outln!(
-                    "these are graph-level violations; resolving them is not yet \
-                     available, so the merge was not started (repository unchanged)"
+                    "resolve with `acetone resolve --all-ours|--all-theirs` (or write \
+                     the conflicted entities), then `acetone commit` to complete — or \
+                     `acetone merge --abort` to back out"
                 );
             }
             // Non-zero exit: the merge did not finish.

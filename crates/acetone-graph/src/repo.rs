@@ -39,7 +39,7 @@
 use crate::diff::{EdgeChange, GraphDiff, NodeChange};
 use crate::error::GraphError;
 use crate::lock::WriteLock;
-use crate::merge::{ConflictMap, ManifestMerge, MergeConflict, MergeOutcome, merge_manifests};
+use crate::merge::{ConflictMap, ManifestMerge, MergeOutcome, merge_manifests};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
@@ -557,19 +557,16 @@ impl Repository {
                 mut merged,
                 conflicts,
             } => {
-                // Only cell conflicts enter merge-in-progress: they are
-                // resolvable (`resolve --all-ours|--all-theirs`) and
-                // completable now. Graph-level violations have no resolution
-                // or abort verb yet (acetone-14c.4c), so persisting them would
-                // wedge the workspace — leave the repository unchanged and just
-                // report them, as before this bead. Conflicts are homogeneous
-                // (cell XOR graph), so this is an all-or-nothing check.
-                if !conflicts
-                    .iter()
-                    .all(|c| matches!(c, MergeConflict::Cell(_)))
-                {
-                    return Ok(MergeOutcome::Conflicts(conflicts));
-                }
+                // Both cell and graph-level conflicts now enter merge-in-progress
+                // (acetone-mws). Cell conflicts resolve by picking a side
+                // (`resolve --all-ours|--all-theirs`) or by writing the key;
+                // graph violations (dangling edge / constraint) resolve by
+                // ordinary writes that repair the graph, and the completion
+                // commit re-validates before it lands. Either way `merge --abort`
+                // is the escape hatch. The merged manifest for a graph-violation
+                // merge is map-complete (the maps merged; validation flagged the
+                // resulting graph), so the workspace shows that graph and the
+                // conflicts map lists the violations to fix.
                 let map = crate::conflicts::build_conflicts_map(
                     &self.store,
                     merged.chunk_params,
@@ -604,7 +601,16 @@ impl Repository {
 
                 let commit = self.write_merge_commit(&manifest, &[ours, theirs], message)?;
                 match self.store.write_ref(&branch, Some(&ours), &commit) {
-                    Ok(()) => Ok(MergeOutcome::Merged(commit)),
+                    Ok(()) => {
+                        // A clean merge consumes no MERGE_HEAD, but clear any
+                        // stale one (e.g. a prior completion whose delete failed,
+                        // acetone-mws) so a later ordinary commit is not turned
+                        // into a spurious merge commit.
+                        if self.merge_head()?.is_some() {
+                            self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+                        }
+                        Ok(MergeOutcome::Merged(commit))
+                    }
                     Err(StoreError::CasFailed { .. }) => Err(GraphError::BranchConflict {
                         name: branch.clone(),
                     }),
@@ -612,6 +618,32 @@ impl Repository {
                 }
             }
         }
+    }
+
+    /// Abandon a merge in progress: discard the partial merge and its
+    /// `conflicts` map, resetting the workspace to `ours` (the branch tip) and
+    /// clearing `MERGE_HEAD` (`acetone merge --abort`, spec §6, acetone-mws).
+    /// The escape hatch when you do not want to resolve the conflicts — and the
+    /// only way to back out of a graph-violation merge. Errors if no merge is in
+    /// progress.
+    pub fn abort_merge(&self) -> Result<(), GraphError> {
+        let _lock = WriteLock::acquire(self.store.git_dir())?;
+        if self.merge_head()?.is_none() {
+            return Err(GraphError::MergeState("no merge in progress to abort"));
+        }
+        // Reset the workspace to the branch tip's manifest (its `conflicts` is
+        // `None`, so the partial merge and its conflicts map are dropped).
+        let ours = self.head_commit()?.ok_or(GraphError::MergeState(
+            "merge in progress but the branch is unborn",
+        ))?;
+        let ours_manifest = self.manifest_at_commit(&ours)?;
+        let manifest_hash = self.store.put(&ours_manifest.encode())?;
+        let tree = self.workspace_tree_for(&manifest_hash)?;
+        let expected = self.workspace_ref_value()?;
+        self.cas_workspace(expected.as_ref(), &tree)?;
+        // Clearing MERGE_HEAD last is the definitive "merge over" signal.
+        self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+        Ok(())
     }
 
     /// Blame a node: the commits that changed its record, newest first (spec
@@ -1484,17 +1516,71 @@ impl<'r> Transaction<'r> {
         // (14c.4c) before the unresolved-conflicts check.
         let merge_head = repo.store.read_ref(WORKTREE_MERGE_HEAD_REF)?;
         self.save_in_place()?;
-        if self.manifest.conflicts.is_some() {
-            return Err(match merge_head {
-                Some(_) => GraphError::MergeState(
-                    "cannot commit: unresolved merge conflicts remain — resolve them first",
-                ),
-                None => GraphError::MergeInProgress,
-            });
-        }
 
         let branch = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
         let parent = repo.store.read_ref(&branch)?;
+
+        // Defensive (acetone-mws, m2): a MERGE_HEAD already in the branch tip's
+        // history is stale — a prior completion whose `delete_ref` failed. Do
+        // not add it as a second parent; clear it and commit as an ordinary
+        // single-parent commit.
+        let merge_head = match (merge_head, parent) {
+            (Some(theirs), Some(tip)) if repo.is_ancestor(&theirs, &tip)? => {
+                repo.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+                None
+            }
+            (mh, _) => mh,
+        };
+
+        if let Some(theirs) = merge_head {
+            // Completing a genuine merge. Every cell conflict must be resolved
+            // (each resolving write clears its entry via `clear_written`); a
+            // remaining cell entry means unresolved work. Graph-violation entries
+            // are never cleared by a write — they are resolved by repairing the
+            // graph, and cleared here once the resolved graph re-validates.
+            let remaining = match self.manifest.conflicts {
+                Some(root) => crate::conflicts::read_conflicts(
+                    &repo.store,
+                    &root.to_root(self.manifest.chunk_params)?,
+                )?,
+                None => Vec::new(),
+            };
+            if remaining
+                .iter()
+                .any(|c| matches!(c, crate::conflicts::PersistedConflict::Cell { .. }))
+            {
+                return Err(GraphError::MergeState(
+                    "cannot commit: unresolved merge conflicts remain — resolve them first",
+                ));
+            }
+            // Re-validate the resolved graph against the merge base
+            // (acetone-mws / acetone-36y): a resolution can itself introduce a
+            // dangling edge, drop a required property, or create a UNIQUE
+            // collision, none of which may be committed.
+            if let Some(tip) = parent
+                && let Some(base) = repo.merge_base(&tip, &theirs)?
+            {
+                let base_manifest = repo.manifest_at_commit(&base)?;
+                let violations =
+                    crate::merge::validate_merged(&repo.store, &base_manifest, &self.manifest)?;
+                if !violations.is_empty() {
+                    return Err(GraphError::MergeState(
+                        "cannot commit: the merge leaves graph-level violations \
+                         (dangling edge or constraint breach) — repair the graph, then commit",
+                    ));
+                }
+            }
+            // Clean: drop any advisory graph-violation entries so the completed
+            // manifest carries no conflicts map.
+            if self.manifest.conflicts.is_some() {
+                self.manifest.conflicts = None;
+                self.persist_manifest(self.manifest.clone())?;
+            }
+        } else if self.manifest.conflicts.is_some() {
+            // No merge in progress, yet the workspace still holds a conflicts
+            // map: a wedged merge-in-progress workspace with no MERGE_HEAD.
+            return Err(GraphError::MergeInProgress);
+        }
 
         let manifest_bytes = self.manifest.encode();
         let anchors = manifest_chunk_set(&repo.store, &self.manifest)?;

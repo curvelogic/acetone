@@ -31,6 +31,13 @@ repository unchanged and merely reports the violations (as before this bead).
 Conflicts are homogeneous (cell XOR graph), so `merge` persists only when
 every conflict is a cell conflict.
 
+> **Superseded by ADR-0041 (acetone-mws).** Graph-violation merges now *do*
+> enter merge-in-progress: they are repaired by ordinary writes and gated by a
+> completion re-validation at commit, `merge --abort` is the escape hatch, and
+> completion re-validation covers cell merges too (acetone-36y). The cell
+> entry-key encoding below was also refined by ADR-0035 (cell-wise merge) to
+> carry a per-property component.
+
 ### The conflicts map records *which* keys conflict, not their values
 
 The `conflicts` prolly map stores one empty-valued entry per conflict, whose
