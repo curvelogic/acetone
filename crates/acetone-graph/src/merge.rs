@@ -452,7 +452,13 @@ fn rebuild_reverse<S: ChunkStore>(
 /// tightened. A breach already present in `base` that neither side touched is
 /// left alone — the merge did not cause it, and re-reporting it would attach
 /// unrelated history to this merge.
-fn validate_merged<S: ChunkStore>(
+///
+/// Also called at merge **completion** (`Transaction::commit` while a merge is
+/// in progress, acetone-mws / acetone-36y) to re-check the resolved graph
+/// against the merge base before the two-parent commit lands: a resolution can
+/// itself introduce a breach (a dangling edge, a resolve-to-delete of a
+/// required property, a UNIQUE collision), which must be caught, not committed.
+pub(crate) fn validate_merged<S: ChunkStore>(
     store: &S,
     base: &Manifest,
     merged: &Manifest,

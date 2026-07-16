@@ -85,13 +85,13 @@ Options:
 ========== acetone merge --help ==========
 Merge another version into the current branch.
 
-Merges another version (spec §7). The workspace must be clean and a branch checked out; fast-forwards when possible, otherwise a clean three-way merge writes a two-parent merge commit. Cell-level conflicts enter a merge-in-progress state: resolve them with `acetone resolve --all-ours|--all-theirs` (or by editing the graph), then `acetone commit` to complete. Graph-level breaches (a dangling edge or a broken schema constraint) are reported and make no commit.
+Merges another version (spec §7). The workspace must be clean and a branch checked out; fast-forwards when possible, otherwise a clean three-way merge writes a two-parent merge commit. Conflicts — cell-level (a key edited incompatibly) or graph-level (a dangling edge or broken schema constraint) — enter a merge-in-progress state: resolve cell conflicts with `acetone resolve --all-ours|--all-theirs` or by writing the entities, repair graph violations by editing the graph, then `acetone commit` to complete (it re-validates first). `merge --abort` discards the merge and restores the pre-merge branch tip.
 
-Usage: acetone merge [OPTIONS] <REF>
+Usage: acetone merge [OPTIONS] [REF]
 
 Arguments:
-  <REF>
-          The version to merge in (branch short name, full ref name or commit hash)
+  [REF]
+          The version to merge in (branch short name, full ref name or commit hash). Omit only with `--abort`
 
 Options:
   -m, --message <MESSAGE>
@@ -101,6 +101,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --abort
+          Abandon a merge in progress, restoring the pre-merge branch tip
 
   -h, --help
           Print help (see a summary with '-h')
@@ -294,7 +297,7 @@ Options:
 ========== acetone resolve --help ==========
 Resolve a merge in progress by taking one whole side.
 
-Resolves the conflicts of a merge in progress, then `commit` to complete the merge (spec §6). Cell conflicts only; graph-level violations and per-key resolution arrive later.
+Resolves the cell conflicts of a merge in progress by taking every conflicted value from one side, then `commit` to complete the merge (spec §6). Cell conflicts only — graph-level violations (a dangling edge or constraint breach) are repaired by editing the graph, and `commit` re-validates before completing.
 
 Usage: acetone resolve [OPTIONS]
 

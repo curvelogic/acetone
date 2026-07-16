@@ -530,9 +530,11 @@ fn validation_is_deterministic() {
 }
 
 #[test]
-fn a_dangling_merge_writes_no_commit_at_the_repository_level() {
+fn a_dangling_merge_enters_merge_in_progress_without_advancing_the_branch() {
     // Through Repository::merge, a validation breach surfaces as
-    // MergeOutcome::Conflicts and leaves the branch head untouched.
+    // MergeOutcome::Conflicts and — since acetone-mws — enters merge-in-progress
+    // (MERGE_HEAD set, the conflicts map lists the violation) so it can be
+    // repaired by editing the graph, without advancing the branch.
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init(dir.path());
     let mut tx = repo.begin_write().expect("begin");
@@ -546,7 +548,7 @@ fn a_dangling_merge_writes_no_commit_at_the_repository_level() {
     repo.checkout_branch("other").expect("checkout");
     let mut tx = repo.begin_write().expect("begin");
     tx.delete_node(&node(2)).expect("delete");
-    tx.commit("theirs deletes 2", &[], None).expect("commit");
+    let theirs = tx.commit("theirs deletes 2", &[], None).expect("commit");
 
     repo.checkout_branch("main").expect("checkout");
     let mut tx = repo.begin_write().expect("begin");
@@ -564,12 +566,13 @@ fn a_dangling_merge_writes_no_commit_at_the_repository_level() {
         }
         other => panic!("expected Conflicts, got {other:?}"),
     }
-    // Graph-level violations have no resolution verb yet, so a violating
-    // merge leaves the repository unchanged (acetone-14c.4c will persist and
-    // resolve them): no commit, no merge-in-progress state.
+    // The branch head does not move (no merge commit), but the merge is now in
+    // progress: MERGE_HEAD names theirs, the conflicts map lists the violation,
+    // and the workspace holds the partial merge.
     assert_eq!(repo.head_commit().expect("head"), Some(ours));
-    assert!(repo.merge_head().expect("merge head").is_none());
-    assert!(!repo.is_dirty().expect("dirty"));
+    assert_eq!(repo.merge_head().expect("merge head"), Some(theirs));
+    assert_eq!(repo.conflicts().expect("conflicts").len(), 1);
+    assert!(repo.is_dirty().expect("dirty"));
 }
 
 #[test]
