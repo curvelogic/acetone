@@ -355,6 +355,110 @@ impl Value {
     pub fn equivalent(&self, other: &Value) -> bool {
         self.global_cmp(other) == Ordering::Equal
     }
+
+    /// A canonical, self-delimiting byte key for hash-based DISTINCT/grouping
+    /// dedup. Two values that are [`equivalent`](Value::equivalent) produce the
+    /// **same** key, so a `HashSet<Vec<u8>>` dedups in O(n) instead of the
+    /// O(n²) linear-scan `equivalent` comparison — the difference between the
+    /// governor bounding a `DISTINCT` and a query running away with the CPU
+    /// (acetone-8ln). Every variable-length field is length-prefixed, so keys
+    /// never collide across shapes.
+    ///
+    /// The one place key-equality is *finer* than `equivalent`: two numbers
+    /// whose `f64` images coincide only because a large integer is not exactly
+    /// representable (e.g. `2^60` vs `2^60 + 1`) get distinct keys, where
+    /// `equivalent` — comparing through `f64` — calls them equal. `equivalent`
+    /// is not transitive there (it is a lossy numeric comparison, not a true
+    /// equivalence relation), so no hash key can match it in that corner;
+    /// treating genuinely-distinct integers as distinct is the safer reading
+    /// and never affects a realistic `DISTINCT`.
+    pub fn distinct_key(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.push_distinct_key(&mut out);
+        out
+    }
+
+    fn push_distinct_key(&self, out: &mut Vec<u8>) {
+        fn len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
+            out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            out.extend_from_slice(bytes);
+        }
+        // Tags match the `rank` used by `global_cmp` so the key's type ordering
+        // is consistent with the sort order; a carrier is keyed as its string.
+        match self {
+            Value::Stored(mv) => Value::String(render_stored(mv)).push_distinct_key(out),
+            Value::Map(m) => {
+                out.push(0);
+                out.extend_from_slice(&(m.len() as u64).to_be_bytes());
+                for (k, v) in m {
+                    len_prefixed(out, k.as_bytes());
+                    v.push_distinct_key(out);
+                }
+            }
+            Value::Node(n) => {
+                out.push(1);
+                len_prefixed(out, &n.id.0);
+            }
+            Value::Relationship(r) => {
+                out.push(2);
+                len_prefixed(out, &r.id.0);
+            }
+            Value::List(items) => {
+                out.push(3);
+                out.extend_from_slice(&(items.len() as u64).to_be_bytes());
+                for item in items {
+                    item.push_distinct_key(out);
+                }
+            }
+            Value::Path(p) => {
+                out.push(4);
+                out.extend_from_slice(&((p.nodes.len() + p.rels.len()) as u64).to_be_bytes());
+                for n in &p.nodes {
+                    len_prefixed(out, &n.id.0);
+                }
+                for r in &p.rels {
+                    len_prefixed(out, &r.id.0);
+                }
+            }
+            Value::String(s) => {
+                out.push(5);
+                len_prefixed(out, s.as_bytes());
+            }
+            Value::Bool(b) => {
+                out.push(6);
+                out.push(*b as u8);
+            }
+            Value::Int(_) | Value::Float(_) => {
+                out.push(7);
+                push_number_key(self, out);
+            }
+            Value::Null => out.push(8),
+        }
+    }
+}
+
+/// Key the numeric sub-domain the way `global_cmp` compares numbers: `NaN` is
+/// one bucket; a value equal to an exact `i64` (an `Int`, or an integral
+/// `Float` in range) keys by that `i64` so `Int(1) ≡ Float(1.0)`; any other
+/// finite/infinite float keys by its bits. See [`Value::distinct_key`] for the
+/// one lossy-comparison corner this does not (and cannot) reproduce.
+fn push_number_key(value: &Value, out: &mut Vec<u8>) {
+    match value {
+        Value::Int(n) => {
+            out.push(0);
+            out.extend_from_slice(&n.to_be_bytes());
+        }
+        Value::Float(f) if f.is_nan() => out.push(2),
+        Value::Float(f) if f.fract() == 0.0 && *f >= -(2f64.powi(63)) && *f < 2f64.powi(63) => {
+            out.push(0);
+            out.extend_from_slice(&(*f as i64).to_be_bytes());
+        }
+        Value::Float(f) => {
+            out.push(1);
+            out.extend_from_slice(&f.to_bits().to_be_bytes());
+        }
+        _ => unreachable!("push_number_key called on a non-number"),
+    }
 }
 
 #[cfg(test)]
@@ -421,6 +525,79 @@ mod tests {
         let sl = Value::List(vec![Value::String("dead".into())]);
         assert_eq!(cl.eq3(&sl), Some(true));
         assert!(cl.equivalent(&sl));
+    }
+
+    #[test]
+    fn distinct_key_agrees_with_equivalent() {
+        use acetone_model::Value as MV;
+        // Representatives spanning every rank and the tricky within-rank cases.
+        let values = vec![
+            Value::Null,
+            Value::Bool(false),
+            Value::Bool(true),
+            Value::Int(0),
+            Value::Int(1),
+            Value::Int(-1),
+            Value::Float(1.0), // ≡ Int(1)
+            Value::Float(1.5),
+            Value::Float(f64::NAN),
+            Value::Float(f64::INFINITY),
+            Value::String(String::new()),
+            Value::String("a".into()),
+            Value::String("ab".into()),
+            Value::Stored(MV::Bytes(vec![0xab])), // ≡ String("ab")
+            Value::List(vec![Value::Int(1), Value::String("a".into())]),
+            Value::List(vec![Value::Int(1)]),
+            Value::Map(BTreeMap::from([("k".to_string(), Value::Int(1))])),
+        ];
+        // The key partitions values exactly as `equivalent` does (over this set,
+        // which avoids the documented lossy-numeric corner): equal keys iff
+        // equivalent, and — critically — NaN≡NaN, Int(1)≡Float(1.0),
+        // Stored(0xab)≡String("ab").
+        for a in &values {
+            for b in &values {
+                assert_eq!(
+                    a.distinct_key() == b.distinct_key(),
+                    a.equivalent(b),
+                    "distinct_key/equivalent disagree on {a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn distinct_key_unions_the_number_domain() {
+        // Int and an integral Float share a key (they are equivalent)…
+        assert_eq!(
+            Value::Int(42).distinct_key(),
+            Value::Float(42.0).distinct_key()
+        );
+        // …NaNs collapse to one bucket (NaN ≡ NaN for DISTINCT)…
+        assert_eq!(
+            Value::Float(f64::NAN).distinct_key(),
+            Value::Float(-f64::NAN).distinct_key()
+        );
+        // …but a non-integral float is its own value.
+        assert_ne!(
+            Value::Int(42).distinct_key(),
+            Value::Float(42.5).distinct_key()
+        );
+    }
+
+    #[test]
+    fn distinct_key_is_collision_free_across_tuple_boundaries() {
+        // Self-delimiting keys: the tuple ("a","bc") must not key-collide with
+        // ("ab","c"), which a naive concatenation would.
+        let concat = |vs: &[Value]| -> Vec<u8> {
+            let mut k = Vec::new();
+            for v in vs {
+                k.extend(v.distinct_key());
+            }
+            k
+        };
+        let ab_c = concat(&[Value::String("ab".into()), Value::String("c".into())]);
+        let a_bc = concat(&[Value::String("a".into()), Value::String("bc".into())]);
+        assert_ne!(ab_c, a_bc);
     }
 
     #[test]

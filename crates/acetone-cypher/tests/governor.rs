@@ -194,6 +194,62 @@ fn a_mid_size_list_comprehension_passes_under_defaults() {
 }
 
 #[test]
+fn a_distinct_aggregate_charges_the_collection_cap() {
+    // count(DISTINCT x) deduped with an O(n²) linear scan that charged the
+    // governor NOTHING (Phase 7 security review HIGH, acetone-8ln). It now
+    // charges one unit per distinct value, so an oversized DISTINCT set trips
+    // the collection cap instead of grinding uncharged. Under unbounded rows
+    // and work, only the DISTINCT charge can trip here.
+    let graph = MemoryGraph::new();
+    let limits = QueryLimits {
+        max_collection_len: 1000,
+        ..QueryLimits::unbounded()
+    };
+    let err = run_query_with_limits(
+        "UNWIND range(0, 5000) AS x RETURN count(DISTINCT x) AS c",
+        &graph,
+        &params(),
+        &limits,
+    )
+    .expect_err("a DISTINCT aggregate over a huge domain must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+}
+
+#[test]
+fn a_huge_distinct_projection_runs_in_linear_time() {
+    // The reviewer's repro: `UNWIND range(0, N) RETURN DISTINCT x`. The old
+    // linear-scan dedup did ~N² comparisons — for N=100k that is 10^10 ops,
+    // minutes of CPU while the odometer read ~N. The hash-keyed dedup is O(n),
+    // so this returns all 100_001 distinct rows near-instantly; on the old code
+    // the test would not finish inside the suite's time budget (acetone-8ln).
+    let graph = MemoryGraph::new();
+    let result = run_query_with_limits(
+        "UNWIND range(0, 100000) AS x RETURN DISTINCT x",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect("a large DISTINCT must complete under the defaults");
+    assert_eq!(result.rows.len(), 100_001);
+}
+
+#[test]
+fn distinct_dedups_correctly_across_the_number_domain() {
+    // Correctness is preserved through the hash-key rewrite: duplicates fold,
+    // and an integer and its float image are one value (Int(1) ≡ Float(1.0)).
+    let graph = MemoryGraph::new();
+    let result = run_query_with_limits(
+        "UNWIND [1, 1, 1.0, 2, 3, 3, 2] AS x RETURN DISTINCT x AS v ORDER BY v",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect("distinct dedup");
+    // {1, 2, 3} — 1 and 1.0 collapse to a single value.
+    assert_eq!(result.rows.len(), 3);
+}
+
+#[test]
 fn a_registry_scale_query_stays_under_the_defaults() {
     // A realistic lab-graph shape: a few hundred nodes, a bounded traversal.
     // Must succeed under the shipped defaults with room to spare.
