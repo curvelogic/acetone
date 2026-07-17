@@ -1457,21 +1457,24 @@ fn project(
         merged = kept;
     }
 
-    // DISTINCT over the projected values.
+    // DISTINCT over the projected values. Dedup in O(n) via a canonical hash
+    // key (consistent with `equivalent`) rather than an O(n²) linear scan, so
+    // the governor's per-kept-row charge actually bounds the work — a linear
+    // scan does uncharged quadratic comparison work the odometer cannot see
+    // (acetone-8ln). Each value's key is self-delimiting, so concatenating the
+    // tuple's keys is collision-free.
     if projection.distinct {
-        let mut seen: Vec<Vec<OrdValue>> = Vec::new();
-        let mut kept = Vec::new();
+        let mut seen: HashSet<Vec<u8>> = HashSet::new();
+        let mut kept: Vec<Row> = Vec::new();
         for row in merged {
-            let key: Vec<OrdValue> = projection
-                .items
-                .iter()
-                .map(|item| OrdValue(row.get(item.var)))
-                .collect();
-            if seen.contains(&key) {
-                continue;
+            let mut key = Vec::new();
+            for item in &projection.items {
+                key.extend(row.get(item.var).distinct_key());
             }
-            seen.push(key);
-            kept.push(row);
+            if seen.insert(key) {
+                ctx.governor.row(kept.len())?;
+                kept.push(row);
+            }
         }
         merged = kept;
     }
@@ -1670,9 +1673,14 @@ fn accumulate(aggregate: &BoundExpr, group: &[Row], ctx: &EvalCtx) -> Result<Val
         }
     }
     if *distinct {
+        // O(n) canonical-key dedup + a per-element governor charge, so a
+        // DISTINCT aggregate over many rows cannot do uncharged quadratic
+        // comparison work (acetone-8ln).
+        let mut seen: HashSet<Vec<u8>> = HashSet::new();
         let mut unique: Vec<Value> = Vec::new();
         for value in values {
-            if !unique.iter().any(|seen| seen.equivalent(&value)) {
+            if seen.insert(value.distinct_key()) {
+                ctx.governor.collection_push(unique.len())?;
                 unique.push(value);
             }
         }
