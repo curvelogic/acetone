@@ -27,7 +27,7 @@
 //!   an inner root from a smaller dataset than the shipped profile does.
 //! - **The shipped repository profile** = `(1024, 12, 65536)`, max 64 KiB —
 //!   what `acetone init` writes via `acetone_graph::repo::default_chunk_params()`.
-//!   Pinned here explicitly (`SHIPPED_CHUNK_PARAMS`) so the byte-exact goldens
+//!   Pinned here explicitly (`shipped_chunk_params()`) so the byte-exact goldens
 //!   cover the profile every real repository actually produces. A guard test in
 //!   `acetone-graph` (`repository.rs`) pins `default_chunk_params()` to these
 //!   same values, so drift in one forces reconciliation with the other.
