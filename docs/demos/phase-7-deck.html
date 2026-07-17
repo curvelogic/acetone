@@ -1,0 +1,451 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent (house style) */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck { height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .card.lead { border-left: 3px solid var(--accent); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  /* Terminal box: FIXED dark ground in BOTH themes, so the hard-coded light
+     text always has contrast (a var(--ink) background flips to near-white in
+     dark mode — the pale-on-pale bug from the 0.1.1 deck). */
+  .term {
+    background: #0d141a; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65; border: 1px solid #22313a;
+  }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term .p { color: #2dd4bf; }
+  .term .c { color: #e8eef0; }
+  .term .o { color: #8b9aa2; }
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+</style>
+<title>Acetone · Phase 7 sprint demo</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Where we are"></a>
+  <a href="#s3" aria-label="The seam"></a>
+  <a href="#s4" aria-label="Governed API"></a>
+  <a href="#s5" aria-label="Frozen contracts"></a>
+  <a href="#s6" aria-label="Merge grows up"></a>
+  <a href="#s7" aria-label="Faster and sturdier"></a>
+  <a href="#s8" aria-label="Autonomous format work"></a>
+  <a href="#s9" aria-label="Review gate"></a>
+  <a href="#s10" aria-label="Security gate"></a>
+  <a href="#s11" aria-label="Decisions"></a>
+  <a href="#s12" aria-label="Live demo"></a>
+  <a href="#s13" aria-label="For Greg"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · Phase 7 boundary</p>
+      <h1>Carry the discipline<br>upward.</h1>
+      <p class="lede">0.1 shipped a rigorous storage engine below the manifest and a younger query layer above it — <strong>two systems of different maturity wearing one name</strong>. Phase 7 carries the lower system's invariant discipline <strong>up</strong> into the query/runtime layer, and freezes <code>acetone-core</code> as a <strong>governed public library API</strong> — the last chance to fix the seams before 0.2 commits to them.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>epic acetone-zlu</span>
+        <span class="chip good"><span class="dot"></span>Governed query API</span>
+        <span class="chip good"><span class="dot"></span>Identity + values frozen</span>
+        <span class="chip good"><span class="dot"></span>Cell-wise merge</span>
+        <span class="chip good"><span class="dot"></span>11 ADRs · 0035–0045</span>
+      </div>
+    </div>
+    <div class="foot">epic acetone-zlu · 2026-07-17 · main @ b443bf7</div>
+    <div class="num">01 / 13</div>
+  </section>
+
+  <!-- 2 · Where we are -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>From a workbench you run to a library you embed.</h2>
+      <p class="lede">The pre-0.1 review named it plainly: every urgent defect lived at the <strong>seam</strong> between the clean storage core and the query/runtime layer above it. 0.2 turns <code>acetone-core</code> into a public API — so those seams must be fixed <em>before</em> the freeze, not after.</p>
+      <div class="flow" style="margin-top:26px">
+        <div class="step"><div class="k">GOVERN</div><div class="v">work budget</div><div class="d">time · rows · steps · memory, all capped</div></div>
+        <div class="step"><div class="k">FREEZE</div><div class="v">identity + values</div><div class="d">stable rel id · lossless value domains</div></div>
+        <div class="step"><div class="k">EXPOSE</div><div class="v">Session API</div><div class="d">library entry point · CLI runs through it</div></div>
+        <div class="step"><div class="k">MERGE</div><div class="v">per-property</div><div class="d">cell-wise · lifecycle · import curation</div></div>
+        <div class="step"><div class="k">HARDEN</div><div class="v">seams closed</div><div class="d">durability · fsck · worktrees · goldens</div></div>
+      </div>
+    </div>
+    <div class="num">02 / 13</div>
+  </section>
+
+  <!-- 3 · The seam / critical path -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">The critical path</p>
+      <h2>Fix the seams before the API freezes them.</h2>
+      <p class="lede">The order was deliberate: govern first, then stabilise what the API will commit to, and only then expose it. Freezing a defect into a public signature is the one mistake 0.2 cannot take back.</p>
+      <div class="grid cols-3" style="margin-top:22px">
+        <div class="card lead"><div class="tag">1 · GOVERN</div><h3>Resource governor</h3><p>A deterministic work budget bounds every query — the blocker for any embedded or library use.</p></div>
+        <div class="card lead"><div class="tag">2 · STABILISE</div><h3>Identity · values · seek</h3><p>Stable relationship identity, a lossless value-domain contract, and a lazy store-backed <code>IndexSeek</code> — in parallel, each a thing the API will freeze.</p></div>
+        <div class="card lead"><div class="tag">3 · EXPOSE</div><h3>Session + CLI façade</h3><p>The library query entry point lands last, and the CLI is re-routed through it — so the API can't freeze the defects the first two steps removed.</p></div>
+      </div>
+    </div>
+    <div class="num">03 / 13</div>
+  </section>
+
+  <!-- 4 · The governed API -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">The governed API · the headline</p>
+      <h2>A query can't run away with the machine.</h2>
+      <p class="lede">The 0.2 promise for embedders: hand acetone an arbitrary query and it returns, bounded, or declines — it never exhausts the host. A single deterministic <strong>work budget</strong> charges every row, expansion step, and allocation.</p>
+      <div class="grid cols-3" style="margin-top:22px">
+        <div class="card"><div class="tag">GOVERNOR · ADR-0036</div><h3>One budget, charged everywhere</h3><p>Time, result rows, expansion steps and collection/list size all draw on one budget. Var-length expansion, list-building functions and materialisation each charge it — no unbounded path.</p></div>
+        <div class="card"><div class="tag">SESSION · ADR-0039</div><h3>The library entry point</h3><p>A <code>Session</code> takes untrusted Cypher and runs it under the governor. This is the surface 0.2 freezes.</p></div>
+        <div class="card"><div class="tag">FAÇADE · ijq</div><h3>The CLI runs through it</h3><p>The CLI is now a client of the same governed path — so the library and the tool cannot drift apart in behaviour or bounds.</p></div>
+      </div>
+    </div>
+    <div class="num">04 / 13</div>
+  </section>
+
+  <!-- 5 · Frozen contracts -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">Frozen contracts</p>
+      <h2>What the public API commits to.</h2>
+      <p class="lede">Two things a stable API must never quietly change under a caller: <strong>which relationship you're looking at</strong>, and <strong>what a value means when it comes back</strong>. Both were fixed to a real contract before the freeze.</p>
+      <div class="grid cols-2" style="margin-top:22px">
+        <div class="card lead">
+          <div class="tag">STABLE RELATIONSHIP IDENTITY · ADR-0037</div>
+          <h3>Identity from the edge key, not a position</h3>
+          <p>Relationships were addressed by a positional <code>e{index}</code> that shifted as the graph changed. Identity now derives from the edge key itself — the same relationship keeps the same id across queries and edits. Shares its root cause with the duplicate-edge fix.</p>
+        </div>
+        <div class="card lead">
+          <div class="tag">VALUE-DOMAIN ROUND-TRIP · ADR-0038</div>
+          <h3>A value reads back as itself</h3>
+          <p>A typed value carrier threads temporal and <code>Bytes</code> values through the query adapter, so they return as their own domain — not stringified debug output. The acute symptom (temporal → string) is now structurally impossible.</p>
+        </div>
+      </div>
+    </div>
+    <div class="num">05 / 13</div>
+  </section>
+
+  <!-- 6 · Merge grows up -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">Merge grows up</p>
+      <h2>Two branches, different properties, no conflict.</h2>
+      <p class="lede">Decision 4 of the spec promised per-property merge. Phase 7 delivers it — plus the lifecycle around it and the workflow it unlocks.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card"><div class="tag">CELL-WISE MERGE · ADR-0035 · your call</div><h3>Per-property, not per-node</h3><p>Import sets <code>os_version</code>; a human sets <code>owner</code>. They no longer collide — the merge is at the cell, as the design record promised. A Greg-gated decision, taken at the last demo.</p></div>
+        <div class="card"><div class="tag">LIFECYCLE · ADR-0041</div><h3>Abort, resolve, re-validate</h3><p>Merge abort and mid-merge recovery, graph-violation resolution, and post-merge re-validation — the full lifecycle, not just the happy path.</p></div>
+        <div class="card"><div class="tag">CURATION · ADR-0042</div><h3>Import vs human, reconciled</h3><p>Re-importing no longer blats manual annotations: import lands on a branch and <em>merges</em>, reusing the cell-wise machinery.</p></div>
+        <div class="card"><div class="tag">CONFLICTS · s7d</div><h3>Base / ours / theirs, side by side</h3><p><code>acetone.conflicts</code> now surfaces all three sides together, so a conflict is something you can actually read and resolve.</p></div>
+      </div>
+    </div>
+    <div class="num">06 / 13</div>
+  </section>
+
+  <!-- 7 · Faster & sturdier -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">Faster and sturdier</p>
+      <h2>Read less; survive more.</h2>
+      <div class="grid cols-2" style="margin-top:8px">
+        <div class="card lead"><div class="tag">PERFORMANCE · ADR-0040</div><h3>Lazy, store-backed <code>IndexSeek</code></h3><p>An indexed lookup touches only the matching rows in the store, instead of materialising a whole version per statement — mirroring the numeric cross-type and runtime-representation fixes so it never silently returns a subset.</p></div>
+        <div class="card"><div class="tag">ROBUSTNESS</div><h3>The seams that used to crash</h3><p><code>fsck</code> runs on a repo with a damaged workspace manifest (<code>zhp</code>); a detached-<code>HEAD</code> linked worktree bootstraps instead of erroring (<code>cm9</code>); list-returning functions charge the collection cap (<code>fab</code>); an undeclared-label <code>MATCH</code> gets an advisory instead of a silent zero rows (<code>7bn.5</code>, ADR-0043).</p></div>
+      </div>
+      <p style="margin-top:18px">Each one was a seam between the storage core and the runtime — exactly where 0.1's urgent defects clustered. Closing them is what makes <code>acetone-core</code> trustworthy enough to freeze.</p>
+    </div>
+    <div class="num">07 / 13</div>
+  </section>
+
+  <!-- 8 · Autonomous format work -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">Autonomous · Gate-D care</p>
+      <h2>Two format-adjacent fixes, done to freeze standard.</h2>
+      <p class="lede">The last two items you asked to be done autonomously — both touch durability or the on-disk format, so both got the full process: ADR, TDD, strongest-tier adversarial review.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card lead">
+          <div class="tag">DURABILITY · ADR-0044 · 7tf</div>
+          <h3>A linked worktree survives a foreign <code>git gc</code></h3>
+          <p>A linked worktree's workspace ref lives under <code>refs/worktree/*</code>, which git does not enumerate as a gc root from the main worktree — so a stock <code>git gc --prune=now</code> could prune its uncommitted chunks. Now mirrored to a common-store anchor git always sees; <code>acetone gc</code> prunes stale anchors.</p>
+        </div>
+        <div class="card lead">
+          <div class="tag">GOLDEN · ADR-0045 · 7bn.18</div>
+          <h3>Pin the profile a real repo actually uses</h3>
+          <p>The byte-exact goldens pinned only the 16 KiB test profile, not the shipped 64 KiB one. An empirical check showed the old dataset collapses to a single leaf at 64 KiB — so re-pinning would have <em>lost</em> coverage. Additively pinned both, with a cross-crate guard.</p>
+        </div>
+      </div>
+    </div>
+    <div class="num">08 / 13</div>
+  </section>
+
+  <!-- 9 · The review gate -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="eyebrow">The review gate</p>
+      <h2>A fresh reviewer on every PR — still earning its keep.</h2>
+      <p class="lede">Every code PR faced a fresh subagent with no implementation context, prompted to break it. Across Phase 7 it kept catching real things — right through the final two PRs.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card"><div class="tag">7tf · DURABILITY</div><p>The anchor was silently <strong>skipped</strong> for a worktree whose id wasn't valid UTF-8 — quietly dropping durability where the design fails loudly. Now it errors the save. <span style="color:var(--good)">APPROVE + CONFIRM.</span></p></div>
+        <div class="card"><div class="tag">7bn.18 · GATE-D PINS</div><p>The reviewer <strong>independently regenerated every pinned hash and framing byte</strong> under the shipped profile — byte-exact match — and swept the height plateau to prove 2000 entries isn't borderline. <span style="color:var(--good)">APPROVE.</span></p></div>
+        <div class="card"><div class="tag">SEAM FIXES</div><p>The governor, value carrier and IndexSeek PRs each drew findings on unbounded paths and subset-return edge cases — fixed before the API surface froze around them.</p></div>
+        <div class="card"><div class="tag">DISCIPLINE</div><p>Non-trivial fixes were re-reviewed; reviewers that stalled mid-stream were re-dispatched, never merged on a partial. The gate is reviewer sign-off, not CI.</p></div>
+      </div>
+    </div>
+    <div class="num">09 / 13</div>
+  </section>
+
+  <!-- 10 · Security gate -->
+  <section class="slide" id="s10">
+    <div class="slide-inner">
+      <p class="eyebrow">Gate · security</p>
+      <h2>The review found the one cap the governor missed.</h2>
+      <p class="lede">A dedicated adversarial pass over the ~10k-line Phase 7 diff, aimed at the new attack surface. Almost everything held — and then it found a real hole in the exact property this phase freezes.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card lead">
+          <div class="tag">HIGH · FOUND</div>
+          <h3><code>DISTINCT</code> ran away from the governor</h3>
+          <p>Both <code>DISTINCT</code> sites deduped with an O(n²) scan that charged the work budget <strong>nothing</strong>. <code>UNWIND range(0,999999) RETURN DISTINCT x</code> burned minutes of CPU while the odometer read ~3M — evading exit criterion #2, the guarantee being frozen at 0.2.</p>
+        </div>
+        <div class="card lead">
+          <div class="tag">HIGH · FIXED</div>
+          <h3>O(n) hash dedup, charged per row</h3>
+          <p>A canonical value key (consistent with the existing equality) dedups in O(n) and charges the governor per kept row, so the caps now fire. Internal only — <strong>no change to the frozen <code>Session</code> API</strong>; TCK-neutral; fresh re-review brute-forced the equality and confirmed it.</p>
+        </div>
+      </div>
+      <p style="margin-top:18px">Everything else verified sound: governor arithmetic (no overflow), the library path governed like the CLI, the value carrier, lazy reads on corrupt data, merge/persist, and the worktree-ref <code>&lt;id&gt;</code> — a validated single path component, not injectable.</p>
+      <div class="chips" style="margin-top:18px">
+        <span class="chip good"><span class="dot"></span>1 HIGH · found &amp; fixed</span>
+        <span class="chip good"><span class="dot"></span>0 blocker · 0 other-high</span>
+        <span class="chip good"><span class="dot"></span>Gate ready</span>
+        <span class="chip accent"><span class="dot"></span>2 LOW notes · filed</span>
+      </div>
+    </div>
+    <div class="num">10 / 13</div>
+  </section>
+
+  <!-- 11 · Decisions -->
+  <section class="slide" id="s11">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions · for ratification</p>
+      <h2>Eleven ADRs — the shape of the 0.2 API.</h2>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>ADR</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr><td><code>0035</code></td><td>Cell-wise (per-property) three-way merge <span class="pr">· your call, taken</span></td></tr>
+            <tr><td><code>0036</code></td><td>Query-engine resource governor — one deterministic work budget</td></tr>
+            <tr><td><code>0037</code></td><td>Stable relationship identity, derived from the edge key</td></tr>
+            <tr><td><code>0038</code></td><td>A typed value carrier for lossless value-domain round-trips</td></tr>
+            <tr><td><code>0039</code></td><td>A library-level Cypher query entry point (<code>Session</code>)</td></tr>
+            <tr><td><code>0040</code></td><td>A lazy, store-backed <code>IndexSeek</code></td></tr>
+            <tr><td><code>0041</code></td><td>Merge lifecycle — abort, resolution, completion re-validation</td></tr>
+            <tr><td><code>0042</code></td><td>Import vs curation — resolve via import-to-branch + merge</td></tr>
+            <tr><td><code>0043</code></td><td>Query advisories — the schema-free undeclared-label note</td></tr>
+            <tr><td><code>0044</code></td><td>Linked-worktree durability anchor <span class="pr">· agent decision, flagged</span></td></tr>
+            <tr><td><code>0045</code></td><td>Pin the shipped 64 KiB chunk profile in the goldens <span class="pr">· agent decision, flagged</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="num">11 / 13</div>
+  </section>
+
+  <!-- 12 · Live demo -->
+  <section class="slide" id="s12">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo</p>
+      <h2>The governed API, cell-wise merge, durable worktrees.</h2>
+      <p class="lede">Driving the phase's own code and tooling, one step at a time.</p>
+      <div class="term" style="margin-top:18px">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+        <div class="term-body">
+<div class="l"><span class="o"># 1 · the governor bounds a runaway query, deterministically</span></div>
+<div class="l"><span class="p">$</span> <span class="c">cargo test -p acetone-cypher governor</span>   <span class="o"># caps: rows · steps · list size</span></div>
+<div class="l"><span class="ok">   ok</span> <span class="o">budget charged on expansion, list-build, materialisation</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 2 · cell-wise merge: two branches edit different properties</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone merge import   </span><span class="o"># import set os_version; human set owner</span></div>
+<div class="l"><span class="ok">   merged — 0 conflicts</span> <span class="o">(per-property, not per-node)</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 3 · a value reads back as itself, not a debug string</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query 'MATCH (h:Host) RETURN h.last_seen'</span></div>
+<div class="l"><span class="ok">   2026-07-16T09:30:00Z</span>  <span class="o"># temporal domain preserved</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 4 · a linked worktree's uncommitted work survives a foreign gc</span></div>
+<div class="l"><span class="p">$</span> <span class="c">git -C main.git gc --prune=now --aggressive</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone -C wt-linked query 'MATCH (h:Host) RETURN count(h)'</span>   <span class="ok">→ 501</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="num">12 / 13</div>
+  </section>
+
+  <!-- 13 · For Greg -->
+  <section class="slide" id="s13">
+    <div class="slide-inner">
+      <p class="eyebrow">At the boundary</p>
+      <h2>Yours to close.</h2>
+      <p class="lede">Four of the five exit criteria are met and green. What remains is deliberately yours.</p>
+      <ul class="clean" style="margin-top:18px">
+        <li><b>Ratify</b> ADR-0035 – 0045, including the two agent decisions flagged for review (0044 durability, 0045 goldens).</li>
+        <li><b>Rule on the 0.2 freeze</b> — the governed <code>acetone-core</code> API surface, once you're satisfied identity and values are stable enough to commit to.</li>
+        <li><b>Dogfood</b> — exit criterion #5 is the registry running continuously since 0.1 with no integrity incident; that evidence is inherently yours.</li>
+        <li><b>Close</b> <code>acetone-zlu</code> — agents never close the gate bead.</li>
+      </ul>
+      <div class="risk" style="margin-top:20px">
+        <div class="r"><span class="id">filed</span><span class="t">acetone-8ln (governor/DISTINCT HIGH) — fixed &amp; merged · acetone-dfh (pre-existing gc TOCTOU) · acetone-bzr (grouping O(n log n), LOW) · default wall-clock backstop (LOW) · 7bn.20 (P4) — none blocks the boundary.</span></div>
+      </div>
+      <div class="chips" style="margin-top:20px">
+        <span class="chip good"><span class="dot"></span>main green @ b443bf7</span>
+        <span class="chip good"><span class="dot"></span>Exit criteria 4/5 · security gate ready</span>
+        <span class="chip accent"><span class="dot"></span>11 ADRs · fresh-reviewed</span>
+      </div>
+    </div>
+    <div class="foot">docs/reports/phase-7.md · docs/demos/phase-7-deck.html</div>
+    <div class="num">13 / 13</div>
+  </section>
+
+</main>
