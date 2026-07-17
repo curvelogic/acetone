@@ -37,14 +37,17 @@ lands back near the un-deltified baseline (roughly 7× more retained history).
   and `git fsck` stays clean — so operators and tooling may run `git gc` safely
   there; it only costs space. Re-running `acetone`'s own consolidation restores
   the ratio.
-- **Exception — a *linked* worktree with uncommitted work (acetone-7tf):** stock
-  `git gc --prune=now` from the main worktree can *delete* a linked worktree's
-  saved-but-uncommitted chunks, because git does not treat another worktree's
-  `refs/worktree/*` refs as gc roots (confirmed, git 2.48.1). The huo
-  durability guarantee (ADR-0015) therefore holds only for the main worktree
-  until acetone-7tf lands. Commit work in a linked worktree before running a
-  foreign `git gc`, or run `acetone gc` (which refuses while worktrees exist)
-  instead. acetone's own gc and committed history are unaffected.
+- **A *linked* worktree with uncommitted work is durable too (FIXED by
+  ADR-0044, acetone-7tf).** git does not treat another worktree's
+  `refs/worktree/*` refs as gc roots (confirmed, git 2.48.1), so on its own a
+  stock `git gc --prune=now` from the main worktree could once *delete* a linked
+  worktree's saved-but-uncommitted chunks. Acetone now mirrors each linked
+  worktree's workspace tree into a common-store anchor
+  `refs/acetone/worktree-anchors/<id>` — an ordinary ref git enumerates
+  globally as a gc root — so the huo durability guarantee (ADR-0015) now holds
+  for **every** worktree, not just the main one. `acetone gc` prunes stale
+  anchors (it runs only when no linked worktree exists). Like all
+  `refs/acetone/*`, the anchor is local-only and never transferred.
 - The base-hint cache (`<git-dir>/acetone-pack-bases`) and the consolidation
   pack list (`<git-dir>/acetone-consolidation-packs`) are **local**: they are
   not refs and do not travel with clone/push/fetch. A clone therefore starts
