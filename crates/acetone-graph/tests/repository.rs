@@ -16,6 +16,24 @@ fn init_repo(dir: &Path) -> Repository {
     Repository::init(&dir.join("graph.git"), InitOptions::default()).expect("init")
 }
 
+/// Guard: the shipped chunk profile is exactly `(1024, 12, 65536)`. The prolly
+/// golden suite (`acetone-prolly/tests/golden.rs`) hard-codes these same values
+/// as `shipped_chunk_params()` to pin the on-disk format a real repository
+/// produces (ADR-0045, acetone-7bn.18) — but cannot import this crate. This
+/// test keeps the two in lock-step: changing the shipped profile trips here and
+/// forces a deliberate golden re-pin (a format_version decision), rather than
+/// silently drifting the goldens away from what `acetone init` writes.
+#[test]
+fn shipped_chunk_profile_is_pinned() {
+    let p = acetone_graph::repo::default_chunk_params();
+    assert_eq!(
+        (p.min_bytes(), p.mask_bits(), p.max_bytes()),
+        (1024, 12, 65536),
+        "shipped chunk profile changed — re-pin acetone-prolly's golden suite \
+         (shipped_chunk_params) with Gate-D care before updating this guard"
+    );
+}
+
 fn node(label: &str, key: &str) -> NodeKey {
     NodeKey::new(label, vec![Value::String(key.to_owned())]).expect("valid")
 }
