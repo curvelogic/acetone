@@ -66,6 +66,15 @@ pub const WORKTREE_MERGE_HEAD_REF: &str = "refs/worktree/acetone/merge-head";
 /// fallback so an existing repository keeps its workspace across the
 /// upgrade; the first write migrates to [`WORKTREE_WORKSPACE_REF`].
 pub const WORKSPACE_REF_PREFIX: &str = "refs/acetone/workspaces/";
+/// Common-dir anchors that keep a *linked* worktree's uncommitted workspace
+/// gc-durable (ADR-0044). A linked worktree's own workspace ref lives under
+/// `refs/worktree/*`, which git does NOT enumerate as a gc root from another
+/// worktree — so a foreign `git gc --prune=now` from the main worktree would
+/// prune its saved-but-uncommitted chunks. Mirroring the workspace tree into
+/// `refs/acetone/worktree-anchors/<worktree-id>` — an ordinary ref in the
+/// common store, which git enumerates globally — closes that gap. Local-only,
+/// like all `refs/acetone/*` (never transferred; operational-constraints).
+pub const WORKTREE_ANCHOR_PREFIX: &str = "refs/acetone/worktree-anchors/";
 /// Namespace of branches (git-native).
 pub const BRANCH_REF_PREFIX: &str = "refs/heads/";
 /// The branch a fresh repository's checked-out ref points at.
@@ -846,6 +855,13 @@ impl Repository {
             return Err(GraphError::GcWithLinkedWorktrees);
         }
         let _lock = WriteLock::acquire(self.store.git_dir())?;
+        // gc runs only when NO linked worktree exists (checked above), so every
+        // `refs/acetone/worktree-anchors/*` is a leftover from a since-removed
+        // worktree — pinning chunks nothing live needs (ADR-0044). Delete them
+        // before consolidating so their now-unreferenced chunks are reclaimed.
+        for (anchor, _) in self.store.list_refs(WORKTREE_ANCHOR_PREFIX)? {
+            self.store.delete_ref(&anchor)?;
+        }
         Ok(self.store.consolidate(ConsolidateOptions::default())?)
     }
 
@@ -1040,13 +1056,56 @@ impl Repository {
     /// Compare-and-swap the per-worktree workspace ref. `expected` is its
     /// value at transaction begin — `None` creates it (first write after an
     /// ADR-0014 migration, or a fresh transaction whose ref was absent).
+    ///
+    /// Every workspace advance funnels through here (init bootstrap,
+    /// transaction save, merge, abort, reindex), so this is also where a
+    /// *linked* worktree renews its common-dir durability anchor (ADR-0044):
+    /// once the per-worktree CAS has committed the new workspace tree, mirror
+    /// it into `refs/acetone/worktree-anchors/<id>` so a foreign `git gc` from
+    /// the main worktree cannot prune the linked worktree's uncommitted chunks.
+    /// The anchor merely follows the workspace tree, so it is force-written; a
+    /// failure to anchor fails the save (durability is the whole point).
     fn cas_workspace(&self, expected: Option<&Hash>, new: &Hash) -> Result<(), GraphError> {
         match self.store.write_ref(WORKTREE_WORKSPACE_REF, expected, new) {
-            Ok(()) => Ok(()),
-            Err(StoreError::CasFailed { .. }) => Err(GraphError::WorkspaceConflict {
-                name: self.workspace.clone(),
+            Ok(()) => {}
+            Err(StoreError::CasFailed { .. }) => {
+                return Err(GraphError::WorkspaceConflict {
+                    name: self.workspace.clone(),
+                });
+            }
+            Err(e) => return Err(e.into()),
+        }
+        if let Some(anchor) = self.worktree_anchor_ref()? {
+            self.store.overwrite_ref(&anchor, new)?;
+        }
+        Ok(())
+    }
+
+    /// The common-dir durability anchor ref for *this* worktree, or `None` for
+    /// the main worktree (whose `refs/worktree/*` workspace ref already lives
+    /// in the common store and is gc-enumerated — it needs no anchor). A linked
+    /// worktree's git dir is `<common>/worktrees/<id>`; its basename is the
+    /// stable worktree id git itself uses, and keys the anchor (ADR-0044).
+    ///
+    /// A linked worktree whose id is not usable as a ref-name component is an
+    /// error, not a silent `None`: skipping the anchor would quietly drop this
+    /// worktree's foreign-gc durability. (The narrower "id is not valid UTF-8"
+    /// case is caught here; a UTF-8 id that still fails git's ref-name rules is
+    /// caught downstream by `overwrite_ref`'s `validated_ref_name`.)
+    fn worktree_anchor_ref(&self) -> Result<Option<String>, GraphError> {
+        let git_dir = self.store.git_dir();
+        if git_dir == self.store.common_dir() {
+            return Ok(None); // main worktree — no anchor needed
+        }
+        match git_dir.file_name().and_then(|id| id.to_str()) {
+            Some(id) => Ok(Some(format!("{WORKTREE_ANCHOR_PREFIX}{id}"))),
+            None => Err(GraphError::WorktreeAnchorUnnameable {
+                id: git_dir
+                    .file_name()
+                    .unwrap_or(git_dir.as_os_str())
+                    .to_string_lossy()
+                    .into_owned(),
             }),
-            Err(e) => Err(e.into()),
         }
     }
 }

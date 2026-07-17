@@ -25,7 +25,8 @@ Git's reachability walk follows the tree into `chunks/` and keeps every
 referenced chunk, so the **main worktree's** uncommitted workspace survives
 any gc — foreign or acetone's own. This closes the ADR-0010 caveat. (A
 *linked* worktree's workspace is a per-worktree ref that foreign gc does not
-enumerate — see the Known limitation under Consequences, acetone-7tf.)
+enumerate; that gap is closed by a common-store durability anchor — ADR-0044,
+acetone-7tf — see the note under Consequences.)
 
 **It is a local-only ref-plumbing change, not a format change.** The
 `Manifest` bytes and every chunk are byte-identical; only what the ref
@@ -59,22 +60,21 @@ latency optimization over a correct base, flagged for the phase report.
   "commit before gc" caveat is dropped from the docs. Verified by a test that
   saves (never commits) a multi-chunk workspace, runs `git gc --prune=now
   --aggressive`, and reads it back cold in full.
-- **Known limitation — a *linked* worktree's uncommitted workspace is NOT
-  foreign-gc-durable (acetone-7tf).** A linked worktree's workspace ref lives in
-  its private ref store (`<common>/worktrees/<id>/refs/worktree/acetone/workspace`).
-  Contrary to the original assumption, `git gc` run from the main worktree does
+- **A *linked* worktree's uncommitted workspace is now foreign-gc-durable too
+  (FIXED by ADR-0044, acetone-7tf).** A linked worktree's workspace ref lives in
+  its private ref store (`<common>/worktrees/<id>/refs/worktree/acetone/workspace`),
+  and — contrary to the original assumption — `git gc` from the main worktree does
   **not** enumerate another worktree's `refs/worktree/*` refs as reachability
-  roots — confirmed at the pure-git level (git 2.48.1): a tree *or* commit
-  referenced only by such a ref is pruned. So an aggressive foreign `git gc
-  --prune=now` from the main worktree can prune a linked worktree's
-  saved-but-uncommitted chunks. Acetone's **own** gc is unaffected (it refuses
-  while linked worktrees exist, ADR-0014); the exposure is a user running stock
-  `git gc` with uncommitted work in a linked worktree. The fix — anchor a linked
-  worktree's workspace tree under a *common* (globally gc-enumerated) ref, with
-  the anchor pruned when its worktree is removed — is a deliberate ref-layout
-  change tracked on acetone-7tf (and overlaps the ref-namespace unification,
-  acetone-gns); a reproduction is pinned as an `#[ignore]`d test in
-  `repository.rs`.
+  roots (confirmed pure-git, git 2.48.1: a tree *or* commit reachable only through
+  such a ref is pruned). So on its own a linked worktree's saved-but-uncommitted
+  chunks were exposed to an aggressive foreign `git gc --prune=now` from the main
+  worktree. ADR-0044 closes this: `cas_workspace` mirrors a linked worktree's
+  workspace tree into a *common*-store anchor ref
+  `refs/acetone/worktree-anchors/<id>`, which git enumerates globally as a gc
+  root; acetone's own `gc` prunes stale anchors (it runs only when no linked
+  worktree exists, so every anchor is then stale). The reproduction in
+  `repository.rs` is now a passing test. (Acetone's own gc was never exposed — it
+  refuses while linked worktrees exist, ADR-0014.)
 - fsck resolves the workspace ref (tree or blob) to its manifest and checks
   it; anchor-completeness of the workspace tree itself (that every anchored
   chunk exists) is a natural extension (acetone-5a8).

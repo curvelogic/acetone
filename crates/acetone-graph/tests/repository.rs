@@ -456,21 +456,20 @@ fn uncommitted_workspace_survives_git_gc() {
 }
 
 #[test]
-#[ignore = "acetone-7tf: documents a CONFIRMED durability gap that is not yet \
-            fixed — git does not treat a linked worktree's refs/worktree/* refs \
-            as gc roots, so foreign `git gc` from the main worktree prunes a \
-            linked worktree's uncommitted chunks. Flip to a plain #[test] when \
-            the common-anchor fix lands (see ADR-0015 Known limitation)."]
 fn a_linked_worktrees_uncommitted_workspace_survives_git_gc() {
-    // acetone-7tf: the huo durability guarantee (ADR-0015) SHOULD hold for a
-    // *linked* worktree too, not only the main one — but currently does not. A
-    // linked worktree's workspace ref is a worktree-private ref
+    // acetone-7tf (fixed by ADR-0044): the huo durability guarantee (ADR-0015)
+    // now holds for a *linked* worktree too, not only the main one. A linked
+    // worktree's workspace ref is a worktree-private ref
     // (`<common>/worktrees/<id>/refs/worktree/acetone/workspace`), and git's gc
     // reachability walk does NOT enumerate another worktree's `refs/worktree/*`
-    // refs as roots (confirmed pure-git, 2.48.1). This test asserts the desired
-    // (fixed) behaviour: the linked worktree's saved-but-uncommitted chunks
-    // survive an aggressive foreign `git gc --prune=now` from the main worktree.
-    // It is `#[ignore]`d until the fix (anchor under a common gc-rooted ref).
+    // refs as roots (confirmed pure-git, 2.48.1) — so on its own the workspace
+    // would be pruned by a foreign `git gc` from the main worktree. cas_workspace
+    // therefore also force-updates a COMMON anchor ref
+    // `refs/acetone/worktree-anchors/<id>` -> the workspace tree; because that
+    // ref lives in the common ref store, git enumerates it globally as a gc root.
+    // This test proves end-to-end that gix writes `refs/acetone/*` to the common
+    // dir (not per-worktree) and that the linked worktree's saved-but-uncommitted
+    // chunks survive an aggressive foreign `git gc --prune=now` from main.
     let dir = tempfile::tempdir().expect("tempdir");
     let main_git = dir.path().join("graph.git");
     let repo = Repository::init(&main_git, InitOptions::default()).expect("init");
@@ -509,6 +508,22 @@ fn a_linked_worktrees_uncommitted_workspace_survives_git_gc() {
         "uncommitted work is present"
     );
 
+    // The anchor ref must live in the COMMON ref store (not the worktree-private
+    // one) — that is the whole reason git enumerates it as a gc root. The linked
+    // worktree's private refs live under `<common>/worktrees/<id>/`, so finding
+    // the anchor directly under `<main_git>/refs/acetone/worktree-anchors/`
+    // confirms gix routed it to the common dir.
+    let anchors_dir = main_git.join("refs/acetone/worktree-anchors");
+    let anchors: Vec<_> = std::fs::read_dir(&anchors_dir)
+        .expect("anchors dir exists in common ref store")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(
+        anchors.len(),
+        1,
+        "exactly one linked-worktree anchor in the common ref store, got {anchors:?}"
+    );
+
     // Aggressive foreign gc from the MAIN worktree.
     let status = std::process::Command::new("git")
         .arg("-C")
@@ -530,6 +545,70 @@ fn a_linked_worktrees_uncommitted_workspace_survives_git_gc() {
             .expect("get")
             .is_some(),
         "a chunk-anchored uncommitted node survived gc"
+    );
+}
+
+#[test]
+fn acetone_gc_prunes_a_removed_worktrees_stale_anchor() {
+    // acetone-7tf (ADR-0044): the common anchor ref keeps a linked worktree's
+    // uncommitted chunks alive. Once that worktree is removed it must NOT keep
+    // pinning them — acetone's own gc runs only when no linked worktree exists
+    // (ADR-0014), so every surviving anchor is stale and gc deletes them all,
+    // letting consolidation reclaim their chunks.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let main_git = dir.path().join("graph.git");
+    let repo = Repository::init(&main_git, InitOptions::default()).expect("init");
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "seed"), &record(&[]))
+        .expect("seed");
+    let base = tx.commit("seed", &[], None).expect("commit");
+
+    // A linked worktree that saves uncommitted work, creating an anchor.
+    let wt = dir.path().join("wt-linked");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(base.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success(), "git worktree add failed");
+
+    let wt_repo = Repository::open(&wt).expect("open linked worktree");
+    let mut tx = wt_repo.begin_write().expect("begin");
+    for i in 0..500 {
+        tx.put_node(
+            &node("Host", &format!("host-{i:04}")),
+            &record(&[("index", i)]),
+        )
+        .expect("node");
+    }
+    tx.save().expect("save");
+
+    let anchors_dir = main_git.join("refs/acetone/worktree-anchors");
+    assert!(anchors_dir.exists(), "an anchor was created");
+
+    // Remove the worktree and prune git's record of it, so no linked worktree
+    // remains and acetone gc will run.
+    std::fs::remove_dir_all(&wt).expect("remove worktree dir");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["worktree", "prune"])
+        .status()
+        .expect("run git worktree prune");
+    assert!(status.success(), "git worktree prune failed");
+
+    // acetone gc now runs (no linked worktrees) and must delete the stale anchor.
+    repo.gc().expect("gc runs with no linked worktrees");
+    let remaining: Vec<_> = std::fs::read_dir(&anchors_dir)
+        .map(|it| it.map(|e| e.expect("entry").file_name()).collect())
+        .unwrap_or_default();
+    assert!(
+        remaining.is_empty(),
+        "gc pruned every stale worktree anchor, remaining: {remaining:?}"
     );
 }
 

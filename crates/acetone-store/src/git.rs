@@ -345,6 +345,46 @@ impl GitStore {
         Ok(Hash::from_oid(tree_id))
     }
 
+    /// Force `name` to point at `new`, whatever it holds now (creating it if
+    /// absent). Unlike [`RefStore::write_ref`], this is an unconditional
+    /// overwrite — the `RefStore` trait deliberately offers no such operation
+    /// (its contract is compare-and-swap only). It exists for the
+    /// linked-worktree durability anchor (ADR-0044), a ref that merely follows
+    /// the workspace tree and whose sole writer already holds the per-worktree
+    /// single-writer lock, so there is no value to compare against.
+    ///
+    /// Serialised with the other acetone ref writers through the same
+    /// common-dir marker lock as [`RefStore::write_ref`].
+    pub fn overwrite_ref(&self, name: &str, new: &Hash) -> Result<(), StoreError> {
+        use gix::refs::Target;
+        use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+
+        let full_name = validated_ref_name(name)?;
+        let _writer_guard = gix::lock::Marker::acquire_to_hold_resource(
+            self.repo.common_dir().join("acetone-refs"),
+            gix::lock::acquire::Fail::AfterDurationWithBackoff(std::time::Duration::from_secs(5)),
+            None,
+        )
+        .map_err(|e| StoreError::backend("locking refs for overwrite", e))?;
+        let edit = RefEdit {
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "acetone: overwrite_ref".into(),
+                },
+                expected: PreviousValue::Any,
+                new: Target::Object(new.oid()),
+            },
+            name: full_name,
+            deref: false,
+        };
+        self.repo
+            .edit_reference(edit)
+            .map_err(|e| map_ref_edit_error(name, e))?;
+        Ok(())
+    }
+
     /// Resolve the manifest blob a workspace ref points at. The ref value is
     /// either a workspace tree (huo) whose `.acetone/manifest` entry is the
     /// blob (ADR-0023), or — for a pre-huo workspace — the manifest blob

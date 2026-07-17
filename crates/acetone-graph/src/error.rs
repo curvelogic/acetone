@@ -192,6 +192,19 @@ pub enum GraphError {
          uncommitted work); run it with a single worktree"
     )]
     GcWithLinkedWorktrees,
+    /// A linked worktree's git-dir basename (its worktree id) is not usable
+    /// as a ref-name component, so its durability anchor (ADR-0044) cannot be
+    /// written. Failing the save loudly is deliberate: silently skipping the
+    /// anchor would revert this worktree to the pre-fix, foreign-gc-vulnerable
+    /// state without any signal.
+    #[error(
+        "cannot anchor linked worktree {id:?} for gc-durability: its id is not \
+         a usable ref name"
+    )]
+    WorktreeAnchorUnnameable {
+        /// The offending worktree id (git-dir basename), lossily rendered.
+        id: String,
+    },
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
     #[error("lock file I/O at {path}: {source}")]
