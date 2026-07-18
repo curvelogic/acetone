@@ -1,6 +1,6 @@
 # ADR-0036: Query-engine resource governor
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-15
 - Deciders: Greg (enforcement-mechanism gate, ruled at the 0.2 kick-off); agent under the Phase 7 mandate
 - Related: Phase 2 milestone security review (MAJOR-1, MAJOR-2); spec §5 (query language); beads `acetone-iq6` (this work, absorbs `acetone-18z`), `acetone-vf6` (library query entry point — freezes this config), `acetone-ijq` (route CLI through the core facade); Load-Bearing Invariants (this ADR adds a determinism obligation)

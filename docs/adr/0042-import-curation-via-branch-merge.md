@@ -1,6 +1,6 @@
 # ADR-0042: Import vs human curation — resolve via import-to-branch + merge
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-16
 - Bead: acetone-6g5.11 (Greg's priority direction, Phase 5 boundary)
 - Relates to: ADR-0021 (import), ADR-0035 (cell-wise merge), ADR-0041 (merge lifecycle), the Phase 6 dogfood.

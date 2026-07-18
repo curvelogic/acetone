@@ -1,6 +1,6 @@
 # ADR-0041: Merge lifecycle — abort, graph-violation resolution, and completion re-validation
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-16
 - Bead: acetone-mws (folds in acetone-36y)
 - Supersedes the "graph violations are not persisted / leave the repository unchanged" slice of ADR-0020.

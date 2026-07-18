@@ -1,6 +1,6 @@
 # ADR-0040: A lazy, store-backed IndexSeek
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-16
 - Deciders: agent under the Phase 7 mandate (mid-phase optimisation recorded by ADR; the correctness rules are load-bearing and flagged for the phase report)
 - Related: ADR-0022 (in-memory IndexSeek, which this delivers the deferred follow-up to), ADR-0027 (composite index keys), ADR-0038 (`Value::Stored` carrier — the reason a string pin can match a Bytes rendering), ADR-0036 (query governor); beads `acetone-cbl.11` (this work), `acetone-6g5.3.2`
