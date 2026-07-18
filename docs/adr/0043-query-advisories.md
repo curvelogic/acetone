@@ -1,6 +1,6 @@
 # ADR-0043: Query advisories — the schema-free undeclared-label note
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-16
 - Bead: acetone-7bn.5 (0.1.1 sweep Tier 1, deferred to Phase 7)
 - Relates to: acetone-7bn.4 (did-you-mean on unknown label), ADR-0039 (library query entry point), the `yzc.6` schema-free read decision.

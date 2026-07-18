@@ -1,6 +1,6 @@
 # ADR-0038: A typed value carrier for lossless value-domain round-trips
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-15
 - Deciders: Greg (chose the opaque-carrier option over native variants at the 0.2 design fork); agent under the Phase 7 mandate
 - Related: spec §4 (value domain); ADR-0029 (`acetone-2vr`/U2 — preserve deferred property types on write-back, which this supersedes); beads `acetone-vdc` (this work), `acetone-vf6` (library query entry point, which freezes the runtime `Value` API at 0.2)

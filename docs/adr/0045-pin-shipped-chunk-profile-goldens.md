@@ -1,6 +1,6 @@
 # ADR-0045: Pin the shipped 64 KiB chunk profile in the prolly golden suite (additively)
 
-*Status: accepted (agent decision, autonomous Phase 7 — Gate-D adjacent, flagged for phase-boundary review) · Date: 2026-07-16 · Bead: acetone-7bn.18 · Relates: ADR-0024 (Gate D freeze), 7bn.17*
+*Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18); originally an agent decision (Gate-D adjacent) flagged for phase-boundary review · Date: 2026-07-16 · Bead: acetone-7bn.18 · Relates: ADR-0024 (Gate D freeze), 7bn.17*
 
 ## Context
 

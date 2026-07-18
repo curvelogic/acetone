@@ -1,6 +1,6 @@
 # ADR-0044: Anchor a linked worktree's uncommitted workspace under a common gc-rooted ref
 
-*Status: accepted (agent decision, autonomous Phase 7 — flagged for phase-boundary review) · Date: 2026-07-16 · Bead: acetone-7tf · Amends: ADR-0015 · Relates: ADR-0014, acetone-gns*
+*Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18); originally an agent decision flagged for phase-boundary review · Date: 2026-07-16 · Bead: acetone-7tf · Amends: ADR-0015 · Relates: ADR-0014, acetone-gns*
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR-0037: Stable relationship identity
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-15
 - Deciders: agent under the Phase 7 mandate (mid-phase design decision — recorded for retrospective review; no format-freeze gate applies, see below)
 - Related: spec §2 (relationship identity), §3.3 (edge maps); design-space Decision on edge identity (`docs/acetone-01-design-space.md`); ADR-0008 (edge-key discriminator layout), ADR-0030 (reject duplicate `CREATE` edge — the interim parallel-edge measure); beads `acetone-rid` (this work), `acetone-8yn`/`acetone-o8r` (query-reachable discriminators, out of scope here), `acetone-vf6` (library query entry point that freezes this identity)

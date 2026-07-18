@@ -1,6 +1,6 @@
 # ADR-0035: Cell-wise (per-property) three-way merge
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-15
 - Deciders: Greg (merge-granularity gate, ruled at the 0.1.1→0.2 boundary); agent under the Phase 7 mandate
 - Related: design-space Decision 4; spec §6 (merge); ADR-0016/`acetone-jmp` (post-merge validation semantics); beads `acetone-clm` (this decision), `acetone-6g5.11` (import curation, depends on this), `acetone-mqz` (merge property tests over indexed repos)

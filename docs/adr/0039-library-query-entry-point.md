@@ -1,6 +1,6 @@
 # ADR-0039: A library-level Cypher query entry point (`Session`)
 
-- Status: accepted
+- Status: accepted — ratified by Greg at the Phase 7 / 0.2 boundary review (2026-07-18)
 - Date: 2026-07-16
 - Deciders: agent under the Phase 7 mandate (frozen-0.2 API shape recorded by ADR and flagged for the phase-boundary review; the API shape is a clear default, the layering resolution is the notable decision)
 - Related: beads `acetone-vf6` (this work), `acetone-ijq` (route the whole CLI through the `acetone-core` façade — separate, mechanical), `acetone-cbl.5` (PR #76 review that raised it); ADR-0036 (`QueryLimits`), spec §5 (query), §7 (library/CLI)
