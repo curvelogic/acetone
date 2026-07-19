@@ -34,7 +34,12 @@ covered by the guarantee — items reachable only through them may change in any
 0.2.x release. The curated surface was completed as part of this work:
 `QueryLimits`, `QueryResult` and `ResourceLimit` are now re-exported at the root
 (ADR-0036/0043 had declared them frozen, but they were reachable only through
-the deep-access modules).
+the deep-access modules). Likewise the **runtime value type** — the element type
+of `QueryResult` rows and of the `run_with` parameter map (ADR-0038) — is
+re-exported as **`QueryValue`**: it is transitively part of the frozen query API
+(you cannot read a row or bind a parameter without it), so leaving it reachable
+only through the unstable `cypher` module would make the contract incoherent on
+its main path. It is distinct from the stored-domain `Value` (keys/records).
 
 **2. Semver policy.** The frozen surface follows semver **additive-only within
 the 0.2.x series**; a breaking change to it requires **0.3.0**. `STABILITY.md`
@@ -70,7 +75,11 @@ crates). So (Greg's scope choice at the boundary):
 not a crate dependency, so the shipped artefact and the normal build are
 untouched. (Rejected: adding `public-api`/`rustdoc-json` as dev-deps — they
 would compile into every `cargo test` and enlarge the dependency surface for a
-check only CI needs.)
+check only CI needs.) The binary is installed in CI with `cargo install
+--locked --version 0.52.0` rather than a SHA-pinned action, a slightly weaker
+supply-chain posture than the rest of the workflow; `--locked` (its own
+lockfile) and the exact version pin mitigate it, and it is worth revisiting a
+vendored/cached binary if the freeze proves load-bearing.
 
 ## Consequences
 

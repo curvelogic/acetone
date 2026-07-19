@@ -11,8 +11,11 @@
 //! The **curated headline surface** — the types and functions re-exported flat
 //! at this crate root (below) — is **frozen at 0.2** (ADR-0046): it follows
 //! semver, additive-only within the 0.2.x series, and a breaking change to it
-//! requires 0.3. A committed public-API snapshot (`tests/public-api.txt`)
-//! guards it against silent drift, the API analogue of the format goldens.
+//! requires 0.3. A committed public-API snapshot
+//! (`crates/acetone-core/public-api.txt`) guards this list against silent
+//! drift, and `crates/acetone-cypher/public-api.txt` guards the full signatures
+//! of the query surface (`Session`, `QueryLimits`, `QueryResult`, `QueryValue`)
+//! — the API analogue of the format goldens.
 //!
 //! ```no_run
 //! use acetone_core::{InitOptions, Repository, Session};
@@ -30,10 +33,11 @@
 //! expose. This **deep-access surface is not part of the 0.2 stability
 //! guarantee**: items reachable only through these modules may change in any
 //! 0.2.x release. Depend on the flat crate-root re-exports for a stable API;
-//! reach into the modules only when you knowingly accept the churn. (The public
-//! snapshot still tracks the whole surface, so every change — stable or deep —
-//! is a deliberate, reviewed one; only the *promise* is scoped to the curated
-//! surface.) `STABILITY.md` lists the frozen surface and the policy in full.
+//! reach into the modules only when you knowingly accept the churn. (The
+//! `acetone-cypher` snapshot signature-tracks that crate's whole surface; the
+//! `graph`/`model`/`store` deep surfaces are guarded only by the fresh-review
+//! gate, not a snapshot — see `STABILITY.md`, which lists the frozen surface
+//! and the policy in full.)
 
 #![forbid(unsafe_code)]
 
@@ -57,6 +61,13 @@ pub use acetone_graph::{
 // The governed query entry point (ADR-0039) and its caps/result (ADR-0036/0043).
 pub use acetone_cypher::exec::{QueryLimits, QueryResult, ResourceLimit};
 pub use acetone_cypher::session::{Outcome, QueryError, Session};
+// The runtime value type of the query interface — the element type of
+// `QueryResult` rows and of the `run_with` parameter map (ADR-0038). Distinct
+// from the stored-domain `Value` below: this is what queries *return and take*.
+// Re-exported (and thus frozen by name, not only via the cypher snapshot) so
+// the query API is nameable end-to-end without reaching into the unstable
+// `cypher` module.
+pub use acetone_cypher::exec::Value as QueryValue;
 
 // The stored value domain, keys and records — what you put and get.
 pub use acetone_model::Value;

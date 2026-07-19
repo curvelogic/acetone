@@ -16,6 +16,7 @@ pub use acetone_core::Outcome
 pub use acetone_core::QueryError
 pub use acetone_core::QueryLimits
 pub use acetone_core::QueryResult
+pub use acetone_core::QueryValue
 pub use acetone_core::Rechunk
 pub use acetone_core::Repository
 pub use acetone_core::ResourceLimit

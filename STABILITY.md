@@ -13,7 +13,8 @@ The **curated headline surface** — the items re-exported flat at the
   `LogEntry`, `DEFAULT_BRANCH`, `DEFAULT_WORKSPACE`, `GraphError`.
 - Migrate: `FormatTransform`, `Rechunk`, `MigrateReport`, `rewrite_history`.
 - Query: `Session`, `Outcome`, `QueryError`, `QueryLimits`, `QueryResult`,
-  `ResourceLimit`.
+  `ResourceLimit`, and `QueryValue` — the value type of query result rows and
+  `run_with` parameters (distinct from the stored-domain `Value`).
 - Values, keys & records: `Value`, `NodeKey`, `EdgeKey`, `NodeRecord`,
   `EdgeRecord`.
 - Store: `Hash`, `ObjectFormat`.
