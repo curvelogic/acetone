@@ -16,6 +16,16 @@ fine.)
 
 ## [Unreleased]
 
+### Changed
+
+- **The `acetone-core` library API is frozen at 0.2** (ADR-0046). The curated
+  headline surface re-exported at the crate root now follows semantic
+  versioning — additive-only within 0.2.x — and is guarded against silent drift
+  by committed public-API snapshots checked in CI. `QueryLimits`, `QueryResult`
+  and `ResourceLimit` are now re-exported at the crate root. The whole-crate
+  module re-exports remain available as *unstable* deep access. See
+  `STABILITY.md`. Version bumped to **0.2.0**.
+
 ## [0.1.1] - 2026-07-14
 
 A CLI and Cypher **ergonomics** release — no on-disk format change, so 0.1.0

@@ -70,6 +70,46 @@ jobs:
         with:
           command: check advisories licenses sources bans
 
+  public-api:
+    # The 0.2 API freeze (ADR-0046): the acetone-core façade re-export list and
+    # the acetone-cypher full-signature surface are byte-pinned in committed
+    # snapshots — the API analogue of the format goldens. Any public-surface
+    # drift fails here and must be a deliberate re-bless (see the failure hint).
+    #
+    # cargo-public-api reads rustdoc's UNSTABLE JSON, so BOTH the nightly and the
+    # tool version are pinned to a combination known to parse it (rustdoc JSON
+    # format_version 60). Bump all three together — nightly, tool, snapshots.
+    name: public API freeze (ADR-0046)
+    runs-on: ubuntu-latest
+    env:
+      # cargo-public-api builds rustdoc JSON with this exact nightly (matched to
+      # the tool version and the committed snapshots — see ADR-0046).
+      RUSTUP_TOOLCHAIN: nightly-2026-07-18
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: nightly-2026-07-18
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: install cargo-public-api (pinned)
+        run: cargo install cargo-public-api --locked --version 0.52.0
+      - name: check acetone-core façade surface
+        run: |
+          cargo public-api --package acetone-core > /tmp/core-api.txt
+          if ! diff -u crates/acetone-core/public-api.txt /tmp/core-api.txt; then
+            echo "::error::acetone-core public surface changed. If intended, re-bless:"
+            echo "::error::  cargo public-api --package acetone-core > crates/acetone-core/public-api.txt"
+            exit 1
+          fi
+      - name: check acetone-cypher signature surface
+        run: |
+          cargo public-api --package acetone-cypher > /tmp/cypher-api.txt
+          if ! diff -u crates/acetone-cypher/public-api.txt /tmp/cypher-api.txt; then
+            echo "::error::acetone-cypher public surface changed. If intended, re-bless:"
+            echo "::error::  cargo public-api --package acetone-cypher > crates/acetone-cypher/public-api.txt"
+            exit 1
+          fi
+
   tck:
     # openCypher TCK conformance (spec §5.1: the pass rate is published
     # per commit). The job gates on the HARNESS completing — an unreadable
