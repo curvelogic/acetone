@@ -16,15 +16,21 @@ fine.)
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-20
+
 ### Changed
 
-- **The `acetone-core` library API is frozen at 0.2** (ADR-0046). The curated
-  headline surface re-exported at the crate root now follows semantic
-  versioning — additive-only within 0.2.x — and is guarded against silent drift
-  by committed public-API snapshots checked in CI. `QueryLimits`, `QueryResult`
-  and `ResourceLimit` are now re-exported at the crate root. The whole-crate
-  module re-exports remain available as *unstable* deep access. See
-  `STABILITY.md`. Version bumped to **0.2.0**.
+- **The `acetone-core` library API is frozen** (ADR-0046). The curated headline
+  surface re-exported at the crate root now follows semantic versioning —
+  additive-only within 0.2.x, breaking changes require 0.3 — and is guarded
+  against silent drift by committed public-API snapshots checked in CI (the API
+  analogue of the format goldens). `QueryLimits`, `QueryResult`, `ResourceLimit`
+  and `QueryValue` (the query result/parameter value type) are now re-exported
+  at the crate root, completing the query surface. The whole-crate module
+  re-exports remain available as *unstable* deep access. See `STABILITY.md`.
+
+  No on-disk format change: `format_version 1` repositories are read and written
+  unchanged.
 
 ## [0.1.1] - 2026-07-14
 
@@ -141,6 +147,7 @@ diffs become change reports, and any git remote is backup and transport.
 The authoritative design record — data model, storage, encodings, query
 language, diff/merge, and the phased roadmap — lives in `docs/`.
 
-[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/curvelogic/acetone/releases/tag/v0.2.0
 [0.1.1]: https://github.com/curvelogic/acetone/releases/tag/v0.1.1
 [0.1.0]: https://github.com/curvelogic/acetone/releases/tag/v0.1.0
