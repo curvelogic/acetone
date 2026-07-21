@@ -3,9 +3,12 @@
 //! A [`GraphRefNamespace`] is the single source of truth mapping a graph's
 //! *logical* refs — branch and tag short names — to the *physical* git ref
 //! paths that hold them. A [`Repository`](crate::Repository) constructs one
-//! at `init`/`open` and every ref-path site goes through it, so a graph's
-//! layout is described in one value rather than scattered across
-//! `format!("{prefix}{name}")` concatenations.
+//! at `init`/`open` and every `Repository`-borne ref-path site goes through
+//! it, so a graph's layout is described in one value rather than scattered
+//! across `format!("{prefix}{name}")` concatenations. (The one exception is
+//! the store-level `fsck` scan, which runs repo-less — on a bare store with no
+//! `Repository`, so it can check a repository whose workspace is damaged — and
+//! so reads the standalone prefix constants directly.)
 //!
 //! Today the only layout is [`GraphRefNamespace::standalone`]: branches under
 //! `refs/heads/*`, tags under `refs/tags/*`, exactly as acetone has always
