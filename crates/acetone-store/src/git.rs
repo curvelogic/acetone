@@ -297,12 +297,14 @@ impl GitStore {
         self.repo.path()
     }
 
-    /// The commit `HEAD` currently resolves to, whether `HEAD` is on a branch
-    /// (its tip) or **detached** (the checked-out commit directly). `None` only
-    /// when there is no such commit — an unborn branch. Unlike [`read_head`],
-    /// which reports the symbolic *ref name* (and so yields `None` for a
-    /// detached `HEAD`), this peels `HEAD` to an object, so a worktree checked
-    /// out at a detached commit still resolves to its commit (acetone-cm9).
+    /// The commit the current-branch `pointer` resolves to, whether it is on a
+    /// branch (its tip) or **detached** (the commit directly). `None` only when
+    /// there is no such commit — an unborn branch, or an absent pointer. Unlike
+    /// [`read_head`], which reports the symbolic *ref name* (and so yields
+    /// `None` for a detached pointer), this peels the pointer to an object, so a
+    /// worktree checked out at a detached commit still resolves to its commit
+    /// (acetone-cm9). `pointer` is git `HEAD` (standalone) or a
+    /// `refs/acetone/<graph>/HEAD` symref (co-tenant, ADR-0050).
     ///
     /// [`read_head`]: RefStore::read_head
     pub fn head_commit_id(&self, pointer: &str) -> Result<Option<Hash>, StoreError> {
