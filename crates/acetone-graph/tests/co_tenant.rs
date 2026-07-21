@@ -8,10 +8,13 @@ use std::path::Path;
 use std::process::Command;
 
 use acetone_graph::repo::{InitOptions, Repository};
+use acetone_graph::{Rechunk, rewrite_history};
 use acetone_model::Value;
 use acetone_model::graph_keys::NodeKey;
 use acetone_model::records::NodeRecord;
 use acetone_model::schema::{LabelDef, SchemaEntry};
+use acetone_prolly::ChunkParams;
+use acetone_store::RefStore;
 
 /// Run `git -C <dir> <args>`, asserting success, returning trimmed stdout.
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -41,6 +44,136 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 fn node(key: i64) -> NodeKey {
     NodeKey::new("N", vec![Value::Int(key)]).expect("key")
+}
+
+/// Create a code repo with one commit on `main`, and return (project dir,
+/// tempdir guard, code commit hash, code blob hash).
+fn code_repo() -> (std::path::PathBuf, tempfile::TempDir, String, String) {
+    let dir = tempfile::tempdir().expect("tmp");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).expect("mkdir");
+    git(&project, &["-c", "init.defaultBranch=main", "init"]);
+    std::fs::write(project.join("code.txt"), "unique source content").expect("write");
+    git(&project, &["add", "code.txt"]);
+    git(&project, &["commit", "-m", "code: initial"]);
+    let commit = git(&project, &["rev-parse", "refs/heads/main"]);
+    let blob = git(&project, &["rev-parse", "HEAD:code.txt"]);
+    (project, dir, commit, blob)
+}
+
+/// Seed a co-tenant graph with a schema and `n` committed nodes.
+fn seed_graph(graph: &Repository, n: i64) {
+    let mut tx = graph.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "N".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+    })
+    .expect("schema");
+    for i in 0..n {
+        tx.put_node(
+            &node(i),
+            &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+        )
+        .expect("node");
+    }
+    tx.commit("graph: seed", &[], None).expect("commit");
+}
+
+#[test]
+fn gc_preserves_objects_reachable_only_from_code_history() {
+    // Phase 8 exit criterion 2 (gc half): an object reachable only from the
+    // code history — never from any graph ref — must survive the graph's gc.
+    let (project, _dir, code_commit, code_blob) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 50);
+    // Churn the graph so gc has loose objects to consolidate/prune.
+    for round in 0..20i64 {
+        let mut tx = graph.begin_write().expect("begin");
+        tx.put_node(
+            &node(round % 50),
+            &NodeRecord::new(
+                [],
+                BTreeMap::from([("v".to_owned(), Value::Int(1000 + round))]),
+            ),
+        )
+        .expect("node");
+        tx.commit(&format!("graph: churn {round}"), &[], None)
+            .expect("commit");
+    }
+
+    graph.gc().expect("gc");
+
+    // The code commit AND its blob — reachable only from refs/heads/main — still
+    // exist. `git cat-file -e` exits non-zero if the object is gone.
+    for obj in [&code_commit, &code_blob] {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(["cat-file", "-e", obj])
+            .status()
+            .expect("cat-file");
+        assert!(out.success(), "code object {obj} was pruned by graph gc");
+    }
+    // And the code branch itself is untouched.
+    assert_eq!(
+        git(&project, &["rev-parse", "refs/heads/main"]),
+        code_commit
+    );
+}
+
+#[test]
+fn migrate_rewrites_only_graph_refs_leaving_code_untouched() {
+    // Phase 8 exit criterion 2 (migrate half): a history-rewriting migrate of
+    // the graph must rewrite only the graph's refs; the code's refs and git
+    // HEAD are untouched.
+    let (project, _dir, code_commit, _blob) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 50);
+
+    let graph_branch_before = graph
+        .store()
+        .read_ref("refs/heads/acetone/g/main")
+        .expect("read")
+        .expect("graph branch exists");
+
+    // Re-chunk migrate: version-preserving but rewrites every graph commit hash.
+    let new_params = ChunkParams::new(2048, 13, 131072).expect("params");
+    rewrite_history(&graph, &Rechunk::new(new_params)).expect("migrate");
+
+    // The graph's branch was rewritten...
+    let graph_branch_after = graph
+        .store()
+        .read_ref("refs/heads/acetone/g/main")
+        .expect("read")
+        .expect("graph branch still exists");
+    assert_ne!(
+        graph_branch_before, graph_branch_after,
+        "migrate must rewrite the graph branch"
+    );
+    // ...while the code branch and git HEAD are completely untouched.
+    assert_eq!(
+        git(&project, &["rev-parse", "refs/heads/main"]),
+        code_commit,
+        "migrate must not touch the code branch"
+    );
+    assert_eq!(
+        git(&project, &["symbolic-ref", "HEAD"]),
+        "refs/heads/main",
+        "migrate must not touch git HEAD"
+    );
+    // The graph data survives the rewrite.
+    let reopened = Repository::open(&project).expect("reopen");
+    assert!(
+        reopened
+            .workspace_snapshot()
+            .expect("snapshot")
+            .get_node(&node(0))
+            .expect("get")
+            .is_some(),
+        "graph data preserved across migrate"
+    );
 }
 
 #[test]
