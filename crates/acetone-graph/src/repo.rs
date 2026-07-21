@@ -40,6 +40,7 @@ use crate::diff::{EdgeChange, GraphDiff, NodeChange};
 use crate::error::GraphError;
 use crate::lock::WriteLock;
 use crate::merge::{ConflictMap, ManifestMerge, MergeOutcome, merge_manifests};
+use crate::refns::GraphRefNamespace;
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
@@ -75,8 +76,11 @@ pub const WORKSPACE_REF_PREFIX: &str = "refs/acetone/workspaces/";
 /// common store, which git enumerates globally — closes that gap. Local-only,
 /// like all `refs/acetone/*` (never transferred; operational-constraints).
 pub const WORKTREE_ANCHOR_PREFIX: &str = "refs/acetone/worktree-anchors/";
-/// Namespace of branches (git-native).
+/// Namespace of branches (git-native). The standalone layout's branch
+/// prefix; see [`GraphRefNamespace`](crate::refns::GraphRefNamespace).
 pub const BRANCH_REF_PREFIX: &str = "refs/heads/";
+/// Namespace of tags (git-native). The standalone layout's tag prefix.
+pub const TAG_REF_PREFIX: &str = "refs/tags/";
 /// The branch a fresh repository's checked-out ref points at.
 pub const DEFAULT_BRANCH: &str = "main";
 /// The default workspace name (one workspace per checkout in v0.1).
@@ -136,6 +140,10 @@ pub struct LogEntry {
 pub struct Repository {
     store: GitStore,
     workspace: String,
+    /// Where this graph's refs live (ADR-0049). Every branch/tag ref-path
+    /// site resolves through it. Standalone for every repository today;
+    /// `acetone-5w6` constructs a co-tenant layout here at `open`.
+    namespace: GraphRefNamespace,
 }
 
 impl Repository {
@@ -164,10 +172,12 @@ impl Repository {
         let anchors = manifest_chunk_set(&store, &manifest)?;
         let tree = store.write_workspace_tree(&manifest.encode(), &anchors)?;
         store.write_ref(WORKTREE_WORKSPACE_REF, None, &tree)?;
-        store.set_head(&format!("{BRANCH_REF_PREFIX}{DEFAULT_BRANCH}"))?;
+        let namespace = GraphRefNamespace::standalone();
+        store.set_head(&namespace.branch_ref(DEFAULT_BRANCH))?;
         Ok(Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
+            namespace,
         })
     }
 
@@ -187,6 +197,7 @@ impl Repository {
         let repo = Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
+            namespace: GraphRefNamespace::standalone(),
         };
         repo.ensure_workspace()?;
         // Fail fast: the workspace manifest must decode, so a damaged
@@ -302,13 +313,19 @@ impl Repository {
         })
     }
 
+    /// Where this graph's refs live (ADR-0049): the layout every branch/tag
+    /// ref-path resolves through. Standalone for every repository today.
+    pub fn namespace(&self) -> &GraphRefNamespace {
+        &self.namespace
+    }
+
     /// The full ref name of the checked-out branch, if the checked-out
     /// ref is a branch.
     pub fn current_branch(&self) -> Result<Option<String>, GraphError> {
         Ok(self
             .store
             .read_head()?
-            .filter(|name| name.starts_with(BRANCH_REF_PREFIX)))
+            .filter(|name| self.namespace.branch_name(name).is_some()))
     }
 
     /// The commit the checked-out branch points at (`None` while the
@@ -358,11 +375,12 @@ impl Repository {
     pub fn branches(&self) -> Result<Vec<(String, Hash)>, GraphError> {
         Ok(self
             .store
-            .list_refs(BRANCH_REF_PREFIX)?
+            .list_refs(self.namespace.branch_prefix())?
             .into_iter()
             .map(|(name, hash)| {
-                let short = name
-                    .strip_prefix(BRANCH_REF_PREFIX)
+                let short = self
+                    .namespace
+                    .branch_name(&name)
                     .unwrap_or(&name)
                     .to_owned();
                 (short, hash)
@@ -377,7 +395,7 @@ impl Repository {
             Some(spec) => self.resolve_commit(spec)?,
             None => self.head_commit()?.ok_or(GraphError::NoCurrentBranch)?,
         };
-        let full = format!("{BRANCH_REF_PREFIX}{name}");
+        let full = self.namespace.branch_ref(name);
         match self.store.write_ref(&full, None, &target) {
             Ok(()) => Ok(target),
             Err(StoreError::CasFailed { .. }) => Err(GraphError::BranchExists {
@@ -396,7 +414,7 @@ impl Repository {
         if self.is_dirty()? {
             return Err(GraphError::DirtyWorkspace);
         }
-        let full = format!("{BRANCH_REF_PREFIX}{name}");
+        let full = self.namespace.branch_ref(name);
         let target = self
             .store
             .read_ref(&full)?
@@ -884,7 +902,7 @@ impl Repository {
     /// the next and ultimately to [`GraphError::UnresolvedRefspec`];
     /// genuine store damage still surfaces as its own error.
     pub fn resolve_commit(&self, refspec: &str) -> Result<Hash, GraphError> {
-        let as_branch = format!("{BRANCH_REF_PREFIX}{refspec}");
+        let as_branch = self.namespace.branch_ref(refspec);
         if let Some(hash) = read_ref_lenient(&self.store, &as_branch)? {
             return Ok(hash);
         }
