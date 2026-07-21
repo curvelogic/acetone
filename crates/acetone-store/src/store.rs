@@ -98,14 +98,20 @@ pub trait RefStore {
     /// so this is idempotent (used to clear transient refs like `MERGE_HEAD`).
     fn delete_ref(&self, name: &str) -> Result<(), StoreError>;
 
-    /// The full ref name the checked-out-ref pointer (git `HEAD`)
-    /// currently designates, e.g. `refs/heads/main` — including when that
-    /// branch is still unborn. `None` when the pointer is detached.
-    fn read_head(&self) -> Result<Option<String>, StoreError>;
+    /// The full ref name the current-branch `pointer` designates, e.g.
+    /// `refs/heads/main` — including when that branch is still unborn. `None`
+    /// when the pointer is detached (holds a commit directly) or absent.
+    ///
+    /// `pointer` is git `HEAD` in the standalone layout, or a private
+    /// `refs/acetone/<graph>/HEAD` symref in the co-tenant layout (ADR-0050);
+    /// the caller supplies it from the graph's ref namespace.
+    fn read_head(&self, pointer: &str) -> Result<Option<String>, StoreError>;
 
-    /// Point the checked-out-ref pointer at `ref_name` (a full name under
-    /// `refs/`), symbolically — the target branch need not exist yet.
-    fn set_head(&self, ref_name: &str) -> Result<(), StoreError>;
+    /// Point the current-branch `pointer` at `target` (a full name under
+    /// `refs/`), symbolically — the target branch need not exist yet. `pointer`
+    /// is git `HEAD` (standalone) or a `refs/acetone/<graph>/HEAD` symref
+    /// (co-tenant, ADR-0050).
+    fn set_head(&self, pointer: &str, target: &str) -> Result<(), StoreError>;
 
     /// All direct refs whose full name starts with `prefix` (itself under
     /// `refs/`), as `(full name, target)` pairs in name order. Symbolic

@@ -20,25 +20,45 @@
 
 use crate::repo::{BRANCH_REF_PREFIX, TAG_REF_PREFIX};
 
-/// The physical ref layout of one graph: where its branches and tags live.
+/// The physical ref layout of one graph: where its branches and tags live and
+/// which ref is its current-branch pointer.
 ///
-/// Maps branch/tag short names to full git ref paths and back. Cheap to clone;
-/// held by a [`Repository`](crate::Repository) for its lifetime.
+/// Maps branch/tag short names to full git ref paths and back, and names the
+/// graph's head pointer. Cheap to clone; held by a
+/// [`Repository`](crate::Repository) for its lifetime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphRefNamespace {
     branch_prefix: String,
     tag_prefix: String,
+    head_ref: String,
 }
 
 impl GraphRefNamespace {
     /// The standalone layout: the repository *is* the graph. Branches under
     /// `refs/heads/*`, tags under `refs/tags/*` — the git-native namespaces,
-    /// so the graph is visible to plain `git` out of the box. The default for
-    /// every repository today (ADR-0049).
+    /// so the graph is visible to plain `git` out of the box — and the graph's
+    /// current-branch pointer is git `HEAD`. The default for every repository
+    /// today (ADR-0049).
     pub fn standalone() -> Self {
         GraphRefNamespace {
             branch_prefix: BRANCH_REF_PREFIX.to_owned(),
             tag_prefix: TAG_REF_PREFIX.to_owned(),
+            head_ref: "HEAD".to_owned(),
+        }
+    }
+
+    /// The co-tenant layout (ADR-0050): a graph living inside a code
+    /// repository, on its own ref namespace. Branches under
+    /// `refs/heads/acetone/<graph>/*` (a proxy-safe subnamespace of
+    /// `refs/heads`, distinct from the user's code branches), tags under
+    /// `refs/tags/acetone/<graph>/*`, and the graph's current-branch pointer at
+    /// `refs/acetone/<graph>/HEAD` — a local-only symref, so the shared git
+    /// `HEAD` stays with the user's code checkout.
+    pub fn co_tenant(graph: &str) -> Self {
+        GraphRefNamespace {
+            branch_prefix: format!("refs/heads/acetone/{graph}/"),
+            tag_prefix: format!("refs/tags/acetone/{graph}/"),
+            head_ref: format!("refs/acetone/{graph}/HEAD"),
         }
     }
 
@@ -78,6 +98,14 @@ impl GraphRefNamespace {
     pub fn tag_prefix(&self) -> &str {
         &self.tag_prefix
     }
+
+    /// The graph's current-branch pointer ref: git `HEAD` in the standalone
+    /// layout, or a private `refs/acetone/<graph>/HEAD` symref in the co-tenant
+    /// layout. The store reads/sets/peels this pointer instead of assuming git
+    /// `HEAD` (ADR-0050).
+    pub fn head_ref(&self) -> &str {
+        &self.head_ref
+    }
 }
 
 #[cfg(test)]
@@ -89,6 +117,22 @@ mod tests {
         let ns = GraphRefNamespace::standalone();
         assert_eq!(ns.branch_prefix(), "refs/heads/");
         assert_eq!(ns.tag_prefix(), "refs/tags/");
+        assert_eq!(ns.head_ref(), "HEAD");
+    }
+
+    #[test]
+    fn co_tenant_namespaces_under_acetone() {
+        let ns = GraphRefNamespace::co_tenant("g");
+        assert_eq!(ns.branch_prefix(), "refs/heads/acetone/g/");
+        assert_eq!(ns.tag_prefix(), "refs/tags/acetone/g/");
+        // The head pointer is a private ref, NOT git HEAD, so the user's HEAD
+        // stays with their code checkout.
+        assert_eq!(ns.head_ref(), "refs/acetone/g/HEAD");
+        // Branch mapping still round-trips under the co-tenant prefix.
+        assert_eq!(ns.branch_ref("main"), "refs/heads/acetone/g/main");
+        assert_eq!(ns.branch_name(&ns.branch_ref("main")), Some("main"));
+        // A user's plain code branch is NOT a graph branch in this layout.
+        assert_eq!(ns.branch_name("refs/heads/main"), None);
     }
 
     #[test]
