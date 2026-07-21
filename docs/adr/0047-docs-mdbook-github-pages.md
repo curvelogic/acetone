@@ -6,7 +6,7 @@
 
 Through 0.2 the documentation is a growing pile of authoritative markdown:
 `docs/user-guide.md` (a 146-line *tour*), `docs/conformance.md`, the three
-design-record documents, 47 ADRs, and the phase reports. GitHub renders each
+design-record documents, 46 ADRs, and the phase reports. GitHub renders each
 file, but there is no navigable, searchable, operator-facing **manual** — and
 the highest-value operator content (worked Cypher examples, an end-to-end import
 walkthrough, and failure/recovery procedures) barely exists.
