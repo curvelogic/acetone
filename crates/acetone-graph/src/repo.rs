@@ -173,7 +173,7 @@ impl Repository {
         let tree = store.write_workspace_tree(&manifest.encode(), &anchors)?;
         store.write_ref(WORKTREE_WORKSPACE_REF, None, &tree)?;
         let namespace = GraphRefNamespace::standalone();
-        store.set_head(&namespace.branch_ref(DEFAULT_BRANCH))?;
+        store.set_head(namespace.head_ref(), &namespace.branch_ref(DEFAULT_BRANCH))?;
         Ok(Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
@@ -228,7 +228,7 @@ impl Repository {
         if self.workspace_ref_value()?.is_some() {
             return Ok(());
         }
-        match self.store.head_commit_id()? {
+        match self.store.head_commit_id(self.namespace.head_ref())? {
             Some(commit) => {
                 let manifest_hash = self.commit_manifest_hash(&commit)?;
                 let tree = self.workspace_tree_for(&manifest_hash)?;
@@ -324,7 +324,7 @@ impl Repository {
     pub fn current_branch(&self) -> Result<Option<String>, GraphError> {
         Ok(self
             .store
-            .read_head()?
+            .read_head(self.namespace.head_ref())?
             .filter(|name| self.namespace.branch_name(name).is_some()))
     }
 
@@ -346,7 +346,7 @@ impl Repository {
     /// graph, acetone-cm9), and a pristine detached bootstrap reads as clean.
     pub fn is_dirty(&self) -> Result<bool, GraphError> {
         let workspace = self.workspace_manifest_hash()?;
-        match self.store.head_commit_id()? {
+        match self.store.head_commit_id(self.namespace.head_ref())? {
             None => {
                 // Unborn HEAD (no commit): dirty iff the workspace has left its
                 // init state (an empty graph under the manifest's own
@@ -435,7 +435,7 @@ impl Repository {
             let tree = self.workspace_tree_for(&manifest_hash)?;
             self.cas_workspace(expected.as_ref(), &tree)?;
         }
-        self.store.set_head(&full)?;
+        self.store.set_head(self.namespace.head_ref(), &full)?;
         Ok(())
     }
 

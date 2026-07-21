@@ -3,7 +3,7 @@
 
 mod common;
 
-use acetone_store::{ChunkStore, GitStore, RefStore, StoreError};
+use acetone_store::{ChunkStore, CommitStore, GitStore, NewCommit, RefStore, StoreError};
 use common::{git, new_store, repo_path};
 
 const REF: &str = "refs/acetone/workspaces/default";
@@ -12,6 +12,84 @@ const REF: &str = "refs/acetone/workspaces/default";
 fn read_absent_ref_is_none() {
     let (_dir, store) = new_store();
     assert!(store.read_ref(REF).expect("read_ref").is_none());
+}
+
+#[test]
+fn named_head_pointer_reads_sets_and_peels_like_git_head() {
+    // ADR-0050: the head plumbing takes the pointer ref name, so a co-tenant
+    // graph can drive its own `refs/acetone/<graph>/HEAD` instead of git HEAD.
+    let (_dir, store) = new_store();
+    const PTR: &str = "refs/acetone/g/HEAD";
+    const BRANCH: &str = "refs/heads/acetone/g/main";
+
+    // The git HEAD fast path is unaffected: a fresh store's HEAD is the unborn
+    // default branch (Some, not detached).
+    assert!(
+        store.read_head("HEAD").expect("read HEAD").is_some(),
+        "git HEAD still reads via the fast path"
+    );
+
+    // Point the private pointer at an unborn branch: read_head returns the
+    // branch name (like an unborn git HEAD), but there is no commit yet.
+    store.set_head(PTR, BRANCH).expect("set head pointer");
+    assert_eq!(
+        store.read_head(PTR).expect("read pointer").as_deref(),
+        Some(BRANCH),
+        "the pointer's symbolic target is the current branch, even unborn"
+    );
+    assert!(
+        store.head_commit_id(PTR).expect("peel unborn").is_none(),
+        "an unborn pointer has no commit"
+    );
+
+    // Give the branch a commit: the pointer now peels to it, and still reads
+    // its (now born) branch as the current branch.
+    let commit = store
+        .create_commit(&NewCommit::new(b"m", "s", "commit on the graph branch"))
+        .expect("create_commit");
+    store
+        .write_ref(BRANCH, None, &commit)
+        .expect("create branch");
+    assert_eq!(
+        store.read_head(PTR).expect("read pointer").as_deref(),
+        Some(BRANCH),
+        "a born branch is still the current branch"
+    );
+    assert_eq!(
+        store.head_commit_id(PTR).expect("peel"),
+        Some(commit),
+        "the pointer follows its symref to the branch tip commit"
+    );
+
+    // An object-valued pointer (a detached graph head) reads as no branch,
+    // mirroring a detached git HEAD.
+    const DETACHED: &str = "refs/acetone/g/detached";
+    store
+        .write_ref(DETACHED, None, &commit)
+        .expect("object-valued ref");
+    assert!(
+        store.read_head(DETACHED).expect("read detached").is_none(),
+        "a detached (object-valued) pointer has no current branch"
+    );
+
+    // An absent pointer is simply no current branch, not an error.
+    assert!(
+        store
+            .read_head("refs/acetone/absent/HEAD")
+            .expect("read absent")
+            .is_none()
+    );
+
+    // A pointer that is neither bare `HEAD` nor under `refs/` is rejected at the
+    // validation door, not silently treated as absent.
+    assert!(matches!(
+        store.read_head("bogus-pointer"),
+        Err(StoreError::InvalidRefName { .. })
+    ));
+    assert!(matches!(
+        store.set_head("bogus-pointer", BRANCH),
+        Err(StoreError::InvalidRefName { .. })
+    ));
 }
 
 #[test]

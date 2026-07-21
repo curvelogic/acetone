@@ -297,22 +297,45 @@ impl GitStore {
         self.repo.path()
     }
 
-    /// The commit `HEAD` currently resolves to, whether `HEAD` is on a branch
-    /// (its tip) or **detached** (the checked-out commit directly). `None` only
-    /// when there is no such commit — an unborn branch. Unlike [`read_head`],
-    /// which reports the symbolic *ref name* (and so yields `None` for a
-    /// detached `HEAD`), this peels `HEAD` to an object, so a worktree checked
-    /// out at a detached commit still resolves to its commit (acetone-cm9).
+    /// The commit the current-branch `pointer` resolves to, whether it is on a
+    /// branch (its tip) or **detached** (the commit directly). `None` only when
+    /// there is no such commit — an unborn branch, or an absent pointer. Unlike
+    /// [`read_head`], which reports the symbolic *ref name* (and so yields
+    /// `None` for a detached pointer), this peels the pointer to an object, so a
+    /// worktree checked out at a detached commit still resolves to its commit
+    /// (acetone-cm9). `pointer` is git `HEAD` (standalone) or a
+    /// `refs/acetone/<graph>/HEAD` symref (co-tenant, ADR-0050).
     ///
     /// [`read_head`]: RefStore::read_head
-    pub fn head_commit_id(&self) -> Result<Option<Hash>, StoreError> {
-        let head = self
+    pub fn head_commit_id(&self, pointer: &str) -> Result<Option<Hash>, StoreError> {
+        // git HEAD fast path — byte-identical standalone behaviour (ADR-0050).
+        if pointer == "HEAD" {
+            let head = self
+                .repo
+                .head()
+                .map_err(|e| StoreError::backend("reading HEAD", e))?;
+            return Ok(head.id().map(|id| Hash::from_oid(id.detach())));
+        }
+        // Generic named pointer. Resolve it to the commit its current branch
+        // points at, distinguishing "no commit" from store damage — unlike a
+        // blanket `follow_to_object()` error swallow, which would report a
+        // corrupt or cyclic pointer as an empty graph and let `ensure_workspace`
+        // bootstrap over real history.
+        let full_name = validated_ref_name(pointer)?;
+        let reference = self
             .repo
-            .head()
-            .map_err(|e| StoreError::backend("reading HEAD", e))?;
-        match head.id() {
-            Some(id) => Ok(Some(Hash::from_oid(id.detach()))),
+            .try_find_reference(full_name.as_bstr())
+            .map_err(|e| StoreError::backend("reading head pointer", e))?;
+        match reference {
+            // An absent pointer has no current branch.
             None => Ok(None),
+            Some(reference) => match reference.target() {
+                // Detached: the pointer holds a commit directly.
+                gix::refs::TargetRef::Object(oid) => Ok(Some(Hash::from_oid(oid.to_owned()))),
+                // Symbolic: resolve the branch tip via `read_ref`, which reports
+                // an unborn branch as `Ok(None)` and genuine damage as `Err`.
+                gix::refs::TargetRef::Symbolic(name) => self.read_ref(&name.as_bstr().to_string()),
+            },
         }
     }
 
@@ -896,23 +919,51 @@ impl RefStore for GitStore {
         Ok(())
     }
 
-    fn read_head(&self) -> Result<Option<String>, StoreError> {
-        let head = self
+    fn read_head(&self, pointer: &str) -> Result<Option<String>, StoreError> {
+        // git HEAD fast path: use gix's dedicated HEAD handling so the
+        // standalone layout is byte-identical (ADR-0050).
+        if pointer == "HEAD" {
+            let head = self
+                .repo
+                .head()
+                .map_err(|e| StoreError::backend("reading HEAD", e))?;
+            return Ok(match head.kind {
+                gix::head::Kind::Symbolic(reference) => Some(reference.name.as_bstr().to_string()),
+                gix::head::Kind::Unborn(full_name) => Some(full_name.as_bstr().to_string()),
+                gix::head::Kind::Detached { .. } => None,
+            });
+        }
+        // Generic named pointer (a co-tenant `refs/acetone/<graph>/HEAD`
+        // symref): its symbolic target is the current branch — including when
+        // that branch is unborn. A detached (object-valued) or absent pointer
+        // has no current branch.
+        let full_name = validated_ref_name(pointer)?;
+        let reference = self
             .repo
-            .head()
-            .map_err(|e| StoreError::backend("reading HEAD", e))?;
-        Ok(match head.kind {
-            gix::head::Kind::Symbolic(reference) => Some(reference.name.as_bstr().to_string()),
-            gix::head::Kind::Unborn(full_name) => Some(full_name.as_bstr().to_string()),
-            gix::head::Kind::Detached { .. } => None,
+            .try_find_reference(full_name.as_bstr())
+            .map_err(|e| StoreError::backend("reading head pointer", e))?;
+        Ok(match reference {
+            Some(reference) => match reference.target() {
+                gix::refs::TargetRef::Symbolic(name) => Some(name.as_bstr().to_string()),
+                gix::refs::TargetRef::Object(_) => None,
+            },
+            None => None,
         })
     }
 
-    fn set_head(&self, ref_name: &str) -> Result<(), StoreError> {
+    fn set_head(&self, pointer: &str, target: &str) -> Result<(), StoreError> {
         use gix::refs::Target;
         use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
-        let target = validated_ref_name(ref_name)?;
+        let target = validated_ref_name(target)?;
+        // The pointer is either bare `HEAD` (standalone — not under refs/, so it
+        // bypasses the refs/-only validation door) or a validated
+        // `refs/acetone/<graph>/HEAD` (co-tenant, ADR-0050).
+        let pointer_name = if pointer == "HEAD" {
+            gix::refs::FullName::try_from("HEAD").expect("HEAD is a valid ref name")
+        } else {
+            validated_ref_name(pointer)?
+        };
         let edit = RefEdit {
             change: Change::Update {
                 log: LogChange {
@@ -923,12 +974,18 @@ impl RefStore for GitStore {
                 expected: PreviousValue::Any,
                 new: Target::Symbolic(target),
             },
-            name: gix::refs::FullName::try_from("HEAD").expect("HEAD is a valid ref name"),
+            name: pointer_name,
             deref: false,
+        };
+        // Keep the standalone error context byte-identical to before ADR-0050.
+        let context = if pointer == "HEAD" {
+            "setting HEAD"
+        } else {
+            "setting head pointer"
         };
         self.repo
             .edit_reference(edit)
-            .map_err(|e| StoreError::backend("setting HEAD", e))?;
+            .map_err(|e| StoreError::backend(context, e))?;
         Ok(())
     }
 
