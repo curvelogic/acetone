@@ -76,6 +76,13 @@ pub const WORKSPACE_REF_PREFIX: &str = "refs/acetone/workspaces/";
 /// common store, which git enumerates globally — closes that gap. Local-only,
 /// like all `refs/acetone/*` (never transferred; operational-constraints).
 pub const WORKTREE_ANCHOR_PREFIX: &str = "refs/acetone/worktree-anchors/";
+/// Direct marker refs recording each co-tenant graph hosted in a repository
+/// (ADR-0050). `refs/acetone/graphs/<name>` exists iff the repository hosts a
+/// co-tenant graph `<name>`; `open` enumerates this prefix to detect the mode
+/// and the graph name. A *direct* ref (not the graph's head symref, which
+/// `list_refs` skips), so it is discoverable, and local-only like all
+/// `refs/acetone/*`.
+pub const GRAPHS_REF_PREFIX: &str = "refs/acetone/graphs/";
 /// Namespace of branches (git-native). The standalone layout's branch
 /// prefix; see [`GraphRefNamespace`](crate::refns::GraphRefNamespace).
 pub const BRANCH_REF_PREFIX: &str = "refs/heads/";
@@ -156,23 +163,56 @@ impl Repository {
         store_options.object_format = options.object_format;
         let store = GitStore::create_with(path, store_options)?;
 
-        let empty = acetone_prolly::empty(&store, options.chunk_params)?;
-        let manifest = Manifest {
-            chunk_params: options.chunk_params,
-            schema: MapRoot::from_root(&empty),
-            nodes: MapRoot::from_root(&empty),
-            edges_fwd: MapRoot::from_root(&empty),
-            edges_rev: MapRoot::from_root(&empty),
-            indexes: Default::default(),
-            conflicts: None,
-        };
-        // The workspace ref points at a workspace tree that anchors the
-        // manifest's chunk set, so uncommitted state survives a foreign gc
-        // (huo). For the empty graph that is just the empty prolly root.
-        let anchors = manifest_chunk_set(&store, &manifest)?;
-        let tree = store.write_workspace_tree(&manifest.encode(), &anchors)?;
-        store.write_ref(WORKTREE_WORKSPACE_REF, None, &tree)?;
+        provision_empty_workspace(&store, options.chunk_params)?;
         let namespace = GraphRefNamespace::standalone();
+        store.set_head(namespace.head_ref(), &namespace.branch_ref(DEFAULT_BRANCH))?;
+        Ok(Repository {
+            store,
+            workspace: DEFAULT_WORKSPACE.to_owned(),
+            namespace,
+        })
+    }
+
+    /// Add a co-tenant acetone graph named `graph` to the **existing** git
+    /// repository at `path` (ADR-0050). Unlike [`init`](Self::init), which
+    /// creates a fresh bare repository that *is* the graph, this initialises an
+    /// acetone graph *inside* a repository that already holds code: the graph's
+    /// branches live under `refs/heads/acetone/<graph>/*`, its current-branch
+    /// pointer at `refs/acetone/<graph>/HEAD`, and the code's `refs/heads/*` and
+    /// git `HEAD` are left completely untouched.
+    ///
+    /// A direct marker ref `refs/acetone/graphs/<graph>` records the graph so
+    /// [`open`](Self::open) can detect the mode. `options.object_format` is
+    /// ignored — the existing repository's object format governs; only
+    /// `options.chunk_params` is used, for the empty graph.
+    ///
+    /// Errors with [`GraphError::InvalidGraphName`] if `graph` is not a valid
+    /// single ref-path component, and [`GraphError::GraphExists`] if the
+    /// repository already hosts a graph by that name.
+    pub fn init_co_tenant(
+        path: &Path,
+        graph: &str,
+        options: InitOptions,
+    ) -> Result<Repository, GraphError> {
+        validate_graph_name(graph)?;
+        let store = GitStore::open_discovering(path)?;
+
+        let marker = format!("{GRAPHS_REF_PREFIX}{graph}");
+        if store.read_ref(&marker)?.is_some() {
+            return Err(GraphError::GraphExists {
+                name: graph.to_owned(),
+            });
+        }
+
+        provision_empty_workspace(&store, options.chunk_params)?;
+        // Record the graph with a direct marker ref (points at an empty blob —
+        // its existence and name are the signal, ADR-0050).
+        let filler = store.put(b"")?;
+        store.write_ref(&marker, None, &filler)?;
+
+        let namespace = GraphRefNamespace::co_tenant(graph);
+        // The graph's own current-branch pointer; the code's git HEAD is not
+        // touched.
         store.set_head(namespace.head_ref(), &namespace.branch_ref(DEFAULT_BRANCH))?;
         Ok(Repository {
             store,
@@ -192,12 +232,17 @@ impl Repository {
     /// `path` up to the discovery boundary (filesystem root or a
     /// `GIT_CEILING_DIRECTORIES` entry), and with [`GraphError::NoWorkspace`]
     /// if the discovered git repository was never initialised by acetone.
+    ///
+    /// The ref layout — standalone or co-tenant — is detected from the graph
+    /// marker refs (ADR-0050): a repository with a `refs/acetone/graphs/<name>`
+    /// marker opens in co-tenant mode for that graph; otherwise standalone.
     pub fn open(path: &Path) -> Result<Repository, GraphError> {
         let store = GitStore::open_discovering(path)?;
+        let namespace = detect_namespace(&store)?;
         let repo = Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
-            namespace: GraphRefNamespace::standalone(),
+            namespace,
         };
         repo.ensure_workspace()?;
         // Fail fast: the workspace manifest must decode, so a damaged
@@ -1268,6 +1313,96 @@ fn check_referential_integrity(
 
 fn workspace_ref(name: &str) -> String {
     format!("{WORKSPACE_REF_PREFIX}{name}")
+}
+
+/// Write the empty-graph workspace: build the empty manifest under
+/// `chunk_params`, anchor its chunk set in a workspace tree, and point the
+/// per-worktree workspace ref at it. Shared by [`Repository::init`] (standalone)
+/// and [`Repository::init_co_tenant`]; the two differ only in the ref layout
+/// they then set up, not in the empty graph they start from.
+fn provision_empty_workspace(
+    store: &GitStore,
+    chunk_params: ChunkParams,
+) -> Result<(), GraphError> {
+    let empty = acetone_prolly::empty(store, chunk_params)?;
+    let manifest = Manifest {
+        chunk_params,
+        schema: MapRoot::from_root(&empty),
+        nodes: MapRoot::from_root(&empty),
+        edges_fwd: MapRoot::from_root(&empty),
+        edges_rev: MapRoot::from_root(&empty),
+        indexes: Default::default(),
+        conflicts: None,
+    };
+    // The workspace ref points at a workspace tree that anchors the manifest's
+    // chunk set, so uncommitted state survives a foreign gc (huo). For the
+    // empty graph that is just the empty prolly root.
+    let anchors = manifest_chunk_set(store, &manifest)?;
+    let tree = store.write_workspace_tree(&manifest.encode(), &anchors)?;
+    store.write_ref(WORKTREE_WORKSPACE_REF, None, &tree)?;
+    Ok(())
+}
+
+/// Detect a repository's ref layout from its co-tenant graph markers
+/// (ADR-0050): no marker ⇒ standalone; exactly one ⇒ co-tenant for that graph.
+/// More than one is [`GraphError::MultipleGraphs`] (multi-graph selection is
+/// deferred). The marker is a *direct* ref, so `list_refs` enumerates it.
+fn detect_namespace(store: &GitStore) -> Result<GraphRefNamespace, GraphError> {
+    let markers = store.list_refs(GRAPHS_REF_PREFIX)?;
+    match markers.as_slice() {
+        [] => Ok(GraphRefNamespace::standalone()),
+        [(name, _)] => {
+            let graph = name.strip_prefix(GRAPHS_REF_PREFIX).unwrap_or(name);
+            Ok(GraphRefNamespace::co_tenant(graph))
+        }
+        _ => Err(GraphError::MultipleGraphs {
+            names: markers
+                .into_iter()
+                .map(|(name, _)| {
+                    name.strip_prefix(GRAPHS_REF_PREFIX)
+                        .unwrap_or(&name)
+                        .to_owned()
+                })
+                .collect(),
+        }),
+    }
+}
+
+/// Validate a co-tenant graph name: it namespaces the graph's refs
+/// (`refs/heads/acetone/<name>/*`, ADR-0050), so it must be a single, well-formed
+/// ref-path component. Rejects the empty string, any `/` (which would split the
+/// namespace), `..` (traversal-shaped), a leading `.` or a trailing `.lock`
+/// (git ref-format rules), and ASCII control/space/special characters git
+/// forbids in ref components. The store door (`validated_ref_name`) is the final
+/// backstop; this keeps the rejection close to the caller.
+fn validate_graph_name(graph: &str) -> Result<(), GraphError> {
+    let reject = |reason: &'static str| {
+        Err(GraphError::InvalidGraphName {
+            name: graph.to_owned(),
+            reason,
+        })
+    };
+    if graph.is_empty() {
+        return reject("empty");
+    }
+    if graph.contains('/') {
+        return reject("must be a single ref-path component (no '/')");
+    }
+    if graph == "." || graph == ".." || graph.contains("..") {
+        return reject("must not contain '..'");
+    }
+    if graph.starts_with('.') {
+        return reject("must not start with '.'");
+    }
+    if graph.ends_with(".lock") {
+        return reject("must not end with '.lock'");
+    }
+    if graph.chars().any(|c| {
+        c.is_ascii_control() || matches!(c, ' ' | '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+    }) {
+        return reject("contains a character git forbids in a ref component");
+    }
+    Ok(())
 }
 
 /// The key of a staged batch op (present on both `Put` and `Delete`).

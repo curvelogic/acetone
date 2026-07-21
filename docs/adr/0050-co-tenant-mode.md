@@ -71,9 +71,36 @@ changes regardless.
 
 ### Mode selection (acetone-mgf)
 
-`init` gains an opt-in for co-tenant mode; the mode is recorded by the existence
-of the co-tenant head symref (`refs/acetone/<graph>/HEAD`) and detected at
-`open`, which then constructs `co_tenant(graph)` rather than `standalone()`.
+Co-tenant mode is entered through a distinct entry point,
+`Repository::init_co_tenant(path, graph, options)`, which adds a graph to an
+**existing** repository (`GitStore::open_discovering`) rather than creating a
+fresh one like standalone `init` — co-tenancy *is* "add acetone to a repo that
+already holds code", leaving the code's `refs/heads/*` and git `HEAD` untouched.
+`open` detects the mode and constructs `co_tenant(graph)` vs `standalone()`.
+
+Two mechanics differ from this ADR's first sketch, forced by how the store
+works:
+
+- **The mode marker is a *direct* ref, not the head symref.** `RefStore::list_refs`
+  skips symbolic refs, so the co-tenant head symref (`refs/acetone/<graph>/HEAD`)
+  cannot be *discovered* at `open`. A direct marker ref
+  `refs/acetone/graphs/<graph>` (pointing at a filler empty blob) records each
+  hosted graph; `open` enumerates `refs/acetone/graphs/` — none ⇒ standalone,
+  one ⇒ that co-tenant graph, several ⇒ an error (multi-graph selection is
+  deferred). The head symref still carries the *current-branch pointer*; the
+  direct marker carries the *discoverable mode signal*. The graph name is
+  validated at `init_co_tenant` (a single well-formed ref component), with the
+  store door as the final backstop.
+
+- **Co-tenant ref writes need an injected committer.** Bare acetone repositories
+  never log ref updates, but the user's non-bare repository has
+  `core.logAllRefUpdates` on, so every acetone ref move writes a reflog — which
+  the isolated (no-config) store cannot stamp, failing `MissingCommitter`. The
+  store's isolated open now injects acetone's own fixed identity
+  (`committer.name`/`committer.email`) as a config override — identity strings
+  only, no programs or paths, so the reduced-trust posture (ADR-0034) is intact
+  — giving co-tenant ref moves a consistent, auditable reflog.
+
 Standalone remains the default, so `acetone init` in a fresh directory is
 unchanged and `git clone` still shows the graph on `main`.
 

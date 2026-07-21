@@ -212,7 +212,21 @@ impl GitStore {
     /// store opens (see the module docs). Isolated config, trust pinned to
     /// [`gix::sec::Trust::Reduced`]; discovery never relaxes this posture.
     fn isolated_open_options() -> gix::open::Options {
-        gix::open::Options::isolated().with(gix::sec::Trust::Reduced)
+        // Isolated (no ambient config) means gix has no committer identity for
+        // reflog entries. Bare acetone repositories never log ref updates, but a
+        // co-tenant graph lives in the user's *non-bare* repository where
+        // `core.logAllRefUpdates` is on, so every acetone ref move writes a
+        // reflog — which needs a committer or fails `MissingCommitter`
+        // (ADR-0050). Inject acetone's own fixed identity so those reflog
+        // entries are stamped consistently and independently of the user's git
+        // config. These are identity *strings* only — no programs or paths — so
+        // they do not weaken the reduced-trust posture.
+        gix::open::Options::isolated()
+            .with(gix::sec::Trust::Reduced)
+            .config_overrides([
+                "committer.name=acetone",
+                "committer.email=acetone@acetone.invalid",
+            ])
     }
 
     /// Walk up from `path` to the nearest enclosing git repository and return

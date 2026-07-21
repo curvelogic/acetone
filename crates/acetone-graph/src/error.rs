@@ -214,4 +214,34 @@ pub enum GraphError {
         /// The underlying I/O error.
         source: std::io::Error,
     },
+    /// A co-tenant `init` was asked to add a graph whose name is not a valid
+    /// single ref-path component (empty, containing `/` or `..`, or otherwise
+    /// rejected by git's ref-format rules). The graph name namespaces the
+    /// graph's refs (ADR-0050), so it must be a well-formed ref component.
+    #[error("invalid graph name {name:?}: {reason}")]
+    InvalidGraphName {
+        /// The offending graph name.
+        name: String,
+        /// Why it was rejected.
+        reason: &'static str,
+    },
+    /// A co-tenant `init` was asked to add a graph that this repository already
+    /// hosts (its marker ref already exists).
+    #[error("graph {name:?} already exists in this repository")]
+    GraphExists {
+        /// The graph name.
+        name: String,
+    },
+    /// `open` found more than one co-tenant graph marker in the repository.
+    /// Selecting among several graphs is not supported in 0.3 (single graph
+    /// per repository); the layout is parameterised for it but the ergonomics
+    /// are deferred (ADR-0050).
+    #[error(
+        "repository hosts multiple acetone graphs ({names:?}); selecting among \
+         them is not supported yet"
+    )]
+    MultipleGraphs {
+        /// The graph names found.
+        names: Vec<String>,
+    },
 }

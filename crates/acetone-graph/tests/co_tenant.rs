@@ -1,0 +1,163 @@
+//! Co-tenant mode (ADR-0050, acetone-mgf): an acetone graph living inside an
+//! ordinary code repository, on its own ref namespace. This is Phase 8 exit
+//! criterion 1 — a graph on its own ref inside a repo that also holds code,
+//! with code branches and graph branches coexisting untouched.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::process::Command;
+
+use acetone_graph::repo::{InitOptions, Repository};
+use acetone_model::Value;
+use acetone_model::graph_keys::NodeKey;
+use acetone_model::records::NodeRecord;
+use acetone_model::schema::{LabelDef, SchemaEntry};
+
+/// Run `git -C <dir> <args>`, asserting success, returning trimmed stdout.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        // A deterministic identity so committing needs no ambient git config.
+        .args([
+            "-c",
+            "user.name=Code Dev",
+            "-c",
+            "user.email=dev@example.invalid",
+        ])
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .expect("utf8")
+        .trim()
+        .to_owned()
+}
+
+fn node(key: i64) -> NodeKey {
+    NodeKey::new("N", vec![Value::Int(key)]).expect("key")
+}
+
+#[test]
+fn a_graph_co_tenants_a_code_repo_without_touching_it() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).expect("mkdir");
+
+    // 1. An ordinary code repository with one commit on `main`.
+    git(&project, &["-c", "init.defaultBranch=main", "init"]);
+    std::fs::write(project.join("README.md"), "the source code").expect("write");
+    git(&project, &["add", "README.md"]);
+    git(&project, &["commit", "-m", "code: initial commit"]);
+    let code_commit = git(&project, &["rev-parse", "refs/heads/main"]);
+    let code_head = git(&project, &["symbolic-ref", "HEAD"]);
+    assert_eq!(code_head, "refs/heads/main", "sanity: code is on main");
+
+    // 2. Add an acetone graph as a co-tenant of that repository.
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    {
+        let mut tx = graph.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.put_node(
+            &node(1),
+            &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(42))])),
+        )
+        .expect("node");
+        tx.commit("graph: first commit", &[], None).expect("commit");
+    }
+
+    // 3. The code is completely untouched.
+    assert_eq!(
+        git(&project, &["rev-parse", "refs/heads/main"]),
+        code_commit,
+        "the code branch must not move"
+    );
+    assert_eq!(
+        git(&project, &["symbolic-ref", "HEAD"]),
+        "refs/heads/main",
+        "the user's git HEAD must stay on their code"
+    );
+
+    // 4. The graph lives on its own ref namespace, with its own head pointer.
+    let graph_branch = git(&project, &["rev-parse", "refs/heads/acetone/g/main"]);
+    assert!(!graph_branch.is_empty(), "the graph branch has a commit");
+    assert_ne!(graph_branch, code_commit, "graph and code are distinct");
+    assert_eq!(
+        git(&project, &["symbolic-ref", "refs/acetone/g/HEAD"]),
+        "refs/heads/acetone/g/main",
+        "the graph's current-branch pointer is its private symref, not HEAD"
+    );
+    // Both branches are listed by git — they coexist.
+    let branches = git(
+        &project,
+        &["for-each-ref", "--format=%(refname)", "refs/heads/"],
+    );
+    assert!(branches.contains("refs/heads/main"), "code branch present");
+    assert!(
+        branches.contains("refs/heads/acetone/g/main"),
+        "graph branch present alongside it"
+    );
+
+    // 5. Reopen: the layout is detected as co-tenant, and the graph reads back.
+    drop(graph);
+    let reopened = Repository::open(&project).expect("reopen");
+    assert_eq!(
+        reopened.namespace().branch_prefix(),
+        "refs/heads/acetone/g/",
+        "open detects co-tenant mode from the graph marker"
+    );
+    assert_eq!(
+        reopened.current_branch().expect("branch").as_deref(),
+        Some("refs/heads/acetone/g/main"),
+        "the graph is on its namespaced branch"
+    );
+    assert!(
+        reopened
+            .workspace_snapshot()
+            .expect("snapshot")
+            .get_node(&node(1))
+            .expect("get")
+            .is_some(),
+        "the graph's data survives the round trip"
+    );
+    // The code working tree is still intact.
+    assert_eq!(
+        std::fs::read_to_string(project.join("README.md")).expect("read"),
+        "the source code"
+    );
+}
+
+#[test]
+fn init_co_tenant_rejects_bad_graph_names_and_duplicates() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).expect("mkdir");
+    git(&project, &["-c", "init.defaultBranch=main", "init"]);
+    std::fs::write(project.join("f"), "x").expect("write");
+    git(&project, &["add", "f"]);
+    git(&project, &["commit", "-m", "code"]);
+
+    for bad in ["", "a/b", "..", "a..b", ".hidden", "a b", "a~b"] {
+        assert!(
+            Repository::init_co_tenant(&project, bad, InitOptions::default()).is_err(),
+            "graph name {bad:?} must be rejected"
+        );
+    }
+
+    // A valid graph initialises once; a second attempt for the same name fails.
+    Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("first init");
+    assert!(
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).is_err(),
+        "re-initialising the same graph must fail"
+    );
+}
