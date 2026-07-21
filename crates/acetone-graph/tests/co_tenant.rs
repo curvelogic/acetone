@@ -79,15 +79,51 @@ fn seed_graph(graph: &Repository, n: i64) {
     tx.commit("graph: seed", &[], None).expect("commit");
 }
 
+/// Whether object `hash` exists as a *loose* file in `project/.git/objects`.
+fn loose_object_exists(project: &Path, hash: &str) -> bool {
+    project
+        .join(".git/objects")
+        .join(&hash[..2])
+        .join(&hash[2..])
+        .exists()
+}
+
+/// Whether object `hash` is retrievable at all (loose or packed).
+fn object_retrievable(project: &Path, hash: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["cat-file", "-e", hash])
+        .status()
+        .expect("cat-file")
+        .success()
+}
+
 #[test]
-fn gc_preserves_objects_reachable_only_from_code_history() {
-    // Phase 8 exit criterion 2 (gc half): an object reachable only from the
-    // code history — never from any graph ref — must survive the graph's gc.
+fn gc_consolidates_code_objects_without_losing_them() {
+    // Phase 8 exit criterion 2 (gc half): the graph's gc must keep every object
+    // reachable from the code history (never from any graph ref).
+    //
+    // acetone's gc repacks its *reachable set* (seeded from ALL refs) and prunes
+    // the now-redundant loose copies (consolidate::prune_loose only deletes
+    // objects it just packed). So "the code object still exists" is NOT the
+    // discriminating property — a non-reachable object is never pruned either,
+    // so that assertion would pass even under a graph-scoped-reachability
+    // regression. What actually distinguishes the two is that the code blob is
+    // DRAWN INTO the pack: its loose file is consolidated away yet it stays
+    // retrievable. Under graph-scoped reachability the code blob would not be
+    // packed, so its loose file would remain and this test would fail.
     let (project, _dir, code_commit, code_blob) = code_repo();
+    // Precondition: the freshly-committed code blob is loose, not yet packed.
+    assert!(
+        loose_object_exists(&project, &code_blob),
+        "precondition: code blob is loose before gc"
+    );
+
     let graph =
         Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
     seed_graph(&graph, 50);
-    // Churn the graph so gc has loose objects to consolidate/prune.
+    // Churn the graph so gc has loose objects to consolidate.
     for round in 0..20i64 {
         let mut tx = graph.begin_write().expect("begin");
         tx.put_node(
@@ -104,17 +140,21 @@ fn gc_preserves_objects_reachable_only_from_code_history() {
 
     graph.gc().expect("gc");
 
-    // The code commit AND its blob — reachable only from refs/heads/main — still
-    // exist. `git cat-file -e` exits non-zero if the object is gone.
-    for obj in [&code_commit, &code_blob] {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&project)
-            .args(["cat-file", "-e", obj])
-            .status()
-            .expect("cat-file");
-        assert!(out.success(), "code object {obj} was pruned by graph gc");
-    }
+    // The discriminator: the code blob was in gc's reachable set, so it is now
+    // packed (loose file gone) AND still retrievable. A graph-scoped gc would
+    // leave the loose file in place, failing the first assertion.
+    assert!(
+        !loose_object_exists(&project, &code_blob),
+        "gc must consolidate the code blob into a pack (proving it was reachable)"
+    );
+    assert!(
+        object_retrievable(&project, &code_blob),
+        "the consolidated code blob must remain retrievable"
+    );
+    assert!(
+        object_retrievable(&project, &code_commit),
+        "the code commit must remain retrievable"
+    );
     // And the code branch itself is untouched.
     assert_eq!(
         git(&project, &["rev-parse", "refs/heads/main"]),
@@ -137,6 +177,12 @@ fn migrate_rewrites_only_graph_refs_leaving_code_untouched() {
         .read_ref("refs/heads/acetone/g/main")
         .expect("read")
         .expect("graph branch exists");
+    // The exact set of branch NAMES before migrate — nothing under refs/heads/
+    // should appear or disappear (only the graph branch's target may change).
+    let branch_names_before = git(
+        &project,
+        &["for-each-ref", "--format=%(refname)", "refs/heads/"],
+    );
 
     // Re-chunk migrate: version-preserving but rewrites every graph commit hash.
     let new_params = ChunkParams::new(2048, 13, 131072).expect("params");
@@ -162,6 +208,14 @@ fn migrate_rewrites_only_graph_refs_leaving_code_untouched() {
         git(&project, &["symbolic-ref", "HEAD"]),
         "refs/heads/main",
         "migrate must not touch git HEAD"
+    );
+    assert_eq!(
+        git(
+            &project,
+            &["for-each-ref", "--format=%(refname)", "refs/heads/"]
+        ),
+        branch_names_before,
+        "migrate must not create or delete any branch"
     );
     // The graph data survives the rewrite.
     let reopened = Repository::open(&project).expect("reopen");
