@@ -38,18 +38,23 @@ fn named_head_pointer_reads_sets_and_peels_like_git_head() {
         "the pointer's symbolic target is the current branch, even unborn"
     );
     assert!(
-        store
-            .head_commit_id(PTR)
-            .expect("peel unborn")
-            .is_none(),
+        store.head_commit_id(PTR).expect("peel unborn").is_none(),
         "an unborn pointer has no commit"
     );
 
-    // Give the branch a commit: the pointer now peels to it.
+    // Give the branch a commit: the pointer now peels to it, and still reads
+    // its (now born) branch as the current branch.
     let commit = store
         .create_commit(&NewCommit::new(b"m", "s", "commit on the graph branch"))
         .expect("create_commit");
-    store.write_ref(BRANCH, None, &commit).expect("create branch");
+    store
+        .write_ref(BRANCH, None, &commit)
+        .expect("create branch");
+    assert_eq!(
+        store.read_head(PTR).expect("read pointer").as_deref(),
+        Some(BRANCH),
+        "a born branch is still the current branch"
+    );
     assert_eq!(
         store.head_commit_id(PTR).expect("peel"),
         Some(commit),
@@ -63,10 +68,7 @@ fn named_head_pointer_reads_sets_and_peels_like_git_head() {
         .write_ref(DETACHED, None, &commit)
         .expect("object-valued ref");
     assert!(
-        store
-            .read_head(DETACHED)
-            .expect("read detached")
-            .is_none(),
+        store.read_head(DETACHED).expect("read detached").is_none(),
         "a detached (object-valued) pointer has no current branch"
     );
 
@@ -77,6 +79,17 @@ fn named_head_pointer_reads_sets_and_peels_like_git_head() {
             .expect("read absent")
             .is_none()
     );
+
+    // A pointer that is neither bare `HEAD` nor under `refs/` is rejected at the
+    // validation door, not silently treated as absent.
+    assert!(matches!(
+        store.read_head("bogus-pointer"),
+        Err(StoreError::InvalidRefName { .. })
+    ));
+    assert!(matches!(
+        store.set_head("bogus-pointer", BRANCH),
+        Err(StoreError::InvalidRefName { .. })
+    ));
 }
 
 #[test]

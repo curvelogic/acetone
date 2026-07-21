@@ -54,6 +54,15 @@ impl GraphRefNamespace {
     /// `refs/tags/acetone/<graph>/*`, and the graph's current-branch pointer at
     /// `refs/acetone/<graph>/HEAD` — a local-only symref, so the shared git
     /// `HEAD` stays with the user's code checkout.
+    ///
+    /// **Precondition:** `graph` must be a single valid ref-path component — no
+    /// empty string, `/`, `..`, or other characters git's ref-format rejects.
+    /// This constructor does not validate it (it is infallible and builds ref
+    /// *paths*); the caller that chooses the graph name — mode selection at
+    /// `init`, `acetone-mgf` — validates it. Malformed names are still caught at
+    /// the store door (`validated_ref_name`) before any ref write, so they
+    /// cannot escape the ref namespace; the contract only keeps the failure
+    /// close to its cause.
     pub fn co_tenant(graph: &str) -> Self {
         GraphRefNamespace {
             branch_prefix: format!("refs/heads/acetone/{graph}/"),

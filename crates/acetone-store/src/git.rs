@@ -314,20 +314,26 @@ impl GitStore {
                 .map_err(|e| StoreError::backend("reading HEAD", e))?;
             return Ok(head.id().map(|id| Hash::from_oid(id.detach())));
         }
-        // Generic named pointer: follow the symref to the commit it resolves to.
-        // A detached pointer resolves to its object; an unborn or absent pointer
-        // (target branch does not exist) has no commit, mirroring HEAD's `None`.
+        // Generic named pointer. Resolve it to the commit its current branch
+        // points at, distinguishing "no commit" from store damage — unlike a
+        // blanket `follow_to_object()` error swallow, which would report a
+        // corrupt or cyclic pointer as an empty graph and let `ensure_workspace`
+        // bootstrap over real history.
         let full_name = validated_ref_name(pointer)?;
         let reference = self
             .repo
             .try_find_reference(full_name.as_bstr())
             .map_err(|e| StoreError::backend("reading head pointer", e))?;
         match reference {
-            Some(mut reference) => match reference.follow_to_object() {
-                Ok(id) => Ok(Some(Hash::from_oid(id.detach()))),
-                Err(_) => Ok(None),
-            },
+            // An absent pointer has no current branch.
             None => Ok(None),
+            Some(reference) => match reference.target() {
+                // Detached: the pointer holds a commit directly.
+                gix::refs::TargetRef::Object(oid) => Ok(Some(Hash::from_oid(oid.to_owned()))),
+                // Symbolic: resolve the branch tip via `read_ref`, which reports
+                // an unborn branch as `Ok(None)` and genuine damage as `Err`.
+                gix::refs::TargetRef::Symbolic(name) => self.read_ref(&name.as_bstr().to_string()),
+            },
         }
     }
 
@@ -969,9 +975,15 @@ impl RefStore for GitStore {
             name: pointer_name,
             deref: false,
         };
+        // Keep the standalone error context byte-identical to before ADR-0050.
+        let context = if pointer == "HEAD" {
+            "setting HEAD"
+        } else {
+            "setting head pointer"
+        };
         self.repo
             .edit_reference(edit)
-            .map_err(|e| StoreError::backend("setting head pointer", e))?;
+            .map_err(|e| StoreError::backend(context, e))?;
         Ok(())
     }
 
