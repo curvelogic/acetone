@@ -1,6 +1,6 @@
 # ADR-0047: Deliver the operator's manual as an mdBook published to GitHub Pages
 
-*Status: proposed — brainstormed with Greg 2026-07-20; pending his review of this ADR and the epic design (`acetone-4zy`) · Date: 2026-07-20 · Bead: acetone-4zy.1 · Relates: ADR-0026 (packaging), ADR-0046 (frozen 0.2 API — the rustdoc seam), `docs/notes/operational-constraints.md`*
+*Status: accepted — approved by Greg 2026-07-21; brainstormed 2026-07-20 · Date: 2026-07-20 · Bead: acetone-4zy.1 · Relates: ADR-0026 (packaging), ADR-0046 (frozen 0.2 API — the rustdoc seam), `docs/notes/operational-constraints.md`*
 
 ## Context
 
@@ -64,8 +64,12 @@ Adopt **mdBook published to GitHub Pages** (option A).
 
 5. **rustdoc seam, deferred.** The library chapter links to the frozen 0.2
    surface (`STABILITY.md`) for now. It becomes a docs.rs link or a second
-   rustdoc build step **only once the crates.io publication call is settled** (a
-   separate roadmap-review item). No work is committed to that here.
+   rustdoc build step **only once the crates.io publication call is settled**.
+   That call now has a standing answer (Greg, 2026-07-21): **acetone is not
+   published to crates.io until the project is judged mature enough, or an
+   external need forces it** — so the docs.rs half of "API documentation" stays
+   deliberately parked and the manual links `STABILITY.md` in the meantime. No
+   work is committed to that here.
 
 6. **Authoring rule.** Because acetone is at 41% TCK, **every Cypher/CLI example
    is executed against the acetone binary while authoring**; the manual documents
