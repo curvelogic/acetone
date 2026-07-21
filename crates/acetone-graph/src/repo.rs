@@ -512,9 +512,11 @@ impl Repository {
     /// Merge the version named by `theirs` into the current branch (spec §7,
     /// shaping Decision 4; acetone-14c.2).
     ///
-    /// Preconditions: the workspace has no uncommitted changes
-    /// ([`GraphError::DirtyWorkspace`]) and the checked-out ref is a branch
-    /// ([`GraphError::NoCurrentBranch`]) — merging advances that branch.
+    /// Preconditions, checked in this order: the checked-out ref is a branch
+    /// ([`GraphError::NoCurrentBranch`]) — merging advances that branch, so a
+    /// detached HEAD is unmergeable whatever the workspace state (acetone-060)
+    /// — and the workspace has no uncommitted changes
+    /// ([`GraphError::DirtyWorkspace`]).
     ///
     /// The four outcomes ([`MergeOutcome`]): **AlreadyUpToDate** when
     /// `theirs` is already an ancestor of our head; **FastForward** when our
