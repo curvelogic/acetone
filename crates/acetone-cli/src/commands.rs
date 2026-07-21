@@ -180,7 +180,8 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     // Short branch name (None when detached), head hash, dirtiness, merge
     // state and the workspace counts — the same facts both paths report.
     let branch = repo.current_branch()?.map(|full| {
-        full.strip_prefix(acetone_core::graph::repo::BRANCH_REF_PREFIX)
+        repo.namespace()
+            .branch_name(&full)
             .unwrap_or(&full)
             .to_owned()
     });
@@ -350,7 +351,8 @@ fn branch(repo_path: &Path, name: Option<&str>, json: bool) -> Result<()> {
         None => {
             let current = repo.current_branch()?;
             let current_short = current.as_deref().map(|full| {
-                full.strip_prefix(acetone_core::graph::repo::BRANCH_REF_PREFIX)
+                repo.namespace()
+                    .branch_name(full)
                     .unwrap_or(full)
                     .to_owned()
             });

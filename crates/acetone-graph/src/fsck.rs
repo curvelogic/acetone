@@ -49,7 +49,8 @@ use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore, StoreErro
 
 use crate::error::GraphError;
 use crate::repo::{
-    BRANCH_REF_PREFIX, Repository, Snapshot, WORKSPACE_REF_PREFIX, WORKTREE_WORKSPACE_REF,
+    BRANCH_REF_PREFIX, Repository, Snapshot, TAG_REF_PREFIX, WORKSPACE_REF_PREFIX,
+    WORKTREE_WORKSPACE_REF,
 };
 
 /// How serious a [`Finding`] is.
@@ -246,9 +247,6 @@ impl FsckReport {
         });
     }
 }
-
-/// Full ref name of the tag namespace (git-native, transferable — spec §3.5).
-const TAG_REF_PREFIX: &str = "refs/tags/";
 
 /// Cross-version memoisation, so verifying deep history stays close to
 /// O(distinct chunks) rather than O(history × tree): a map root or whole

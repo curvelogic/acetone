@@ -173,8 +173,9 @@ pub fn run(
         None => import_into_workspace(repo, records, &opts, &trailers),
         Some(branch) => {
             let original = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
-            let original = original
-                .strip_prefix("refs/heads/")
+            let original = repo
+                .namespace()
+                .branch_name(&original)
                 .unwrap_or(&original)
                 .to_owned();
             if branch == &original {

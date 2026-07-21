@@ -45,9 +45,7 @@ use acetone_prolly::{ChunkParams, bulk_load, scan};
 use acetone_store::{CommitStore, GitStore, Hash, RefStore, RewriteCommit};
 
 use crate::error::GraphError;
-use crate::repo::{
-    BRANCH_REF_PREFIX, Repository, WORKTREE_WORKSPACE_REF, manifest_chunk_set, summarise,
-};
+use crate::repo::{Repository, WORKTREE_WORKSPACE_REF, manifest_chunk_set, summarise};
 
 /// A transform applied to every graph version during a migration: it maps one
 /// version's manifest to a new manifest, writing any new chunks to `store`. It
@@ -158,9 +156,10 @@ pub fn rewrite_history(
     }
 
     let store = repo.store();
+    let namespace = repo.namespace();
     let mut refs: Vec<(String, Hash)> = Vec::new();
-    refs.extend(store.list_refs(BRANCH_REF_PREFIX)?);
-    refs.extend(store.list_refs("refs/tags/")?);
+    refs.extend(store.list_refs(namespace.branch_prefix())?);
+    refs.extend(store.list_refs(namespace.tag_prefix())?);
 
     let order = topo_order(store, &refs)?;
 

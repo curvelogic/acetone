@@ -505,7 +505,8 @@ fn shell_prompt(repo_path: &std::path::Path, fresh: bool) -> String {
                 .ok()
                 .flatten()
                 .map(|full| {
-                    full.strip_prefix(acetone_core::graph::repo::BRANCH_REF_PREFIX)
+                    repo.namespace()
+                        .branch_name(&full)
                         .unwrap_or(full.as_str())
                         .to_owned()
                 })
