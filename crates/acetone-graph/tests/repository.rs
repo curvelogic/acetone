@@ -159,6 +159,54 @@ fn a_detached_worktree_bootstraps_from_its_own_commit_not_the_branch_tip() {
 }
 
 #[test]
+fn merge_from_detached_head_reports_no_current_branch_not_dirty() {
+    // acetone-060: with a detached HEAD and a workspace that differs from the
+    // checked-out commit, merge() must report the *accurate* precondition
+    // failure — NoCurrentBranch (there is no branch to advance) — not the
+    // incidental DirtyWorkspace. The on-a-branch check runs before the dirty
+    // check. (Reachable once co-tenant mode drives its own head pointer, Phase
+    // 8; constructed here directly.)
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    // Two commits on main; the workspace ends at c2.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "a"), &record(&[])).expect("put");
+    let c1 = tx.commit("c1", &[], None).expect("commit");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "b"), &record(&[])).expect("put");
+    tx.commit("c2", &[], None).expect("commit");
+
+    // Detach HEAD at the earlier commit, leaving acetone's workspace ref at c2.
+    // `git update-ref --no-deref` rewrites only HEAD, so the reopened repo is
+    // BOTH detached (current_branch None) AND dirty (workspace c2 ≠ head c1).
+    let git_dir = repo.store().git_dir().to_path_buf();
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&git_dir)
+        .args(["update-ref", "--no-deref", "HEAD"])
+        .arg(c1.to_hex())
+        .status()
+        .expect("run git update-ref");
+    assert!(status.success(), "git update-ref --no-deref HEAD failed");
+
+    let repo = Repository::open(&dir.path().join("graph.git")).expect("reopen");
+    assert!(
+        repo.current_branch().expect("branch").is_none(),
+        "HEAD is detached"
+    );
+    assert!(
+        repo.is_dirty().expect("dirty"),
+        "workspace differs from the detached commit"
+    );
+
+    let err = repo.merge("main", "merge").expect_err("merge must fail");
+    assert!(
+        matches!(err, GraphError::NoCurrentBranch),
+        "detached HEAD must report NoCurrentBranch, not DirtyWorkspace; got {err:?}"
+    );
+}
+
+#[test]
 fn init_creates_empty_workspace_that_reopens() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());

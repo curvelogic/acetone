@@ -512,9 +512,11 @@ impl Repository {
     /// Merge the version named by `theirs` into the current branch (spec §7,
     /// shaping Decision 4; acetone-14c.2).
     ///
-    /// Preconditions: the workspace has no uncommitted changes
-    /// ([`GraphError::DirtyWorkspace`]) and the checked-out ref is a branch
-    /// ([`GraphError::NoCurrentBranch`]) — merging advances that branch.
+    /// Preconditions, checked in this order: the checked-out ref is a branch
+    /// ([`GraphError::NoCurrentBranch`]) — merging advances that branch, so a
+    /// detached HEAD is unmergeable whatever the workspace state (acetone-060)
+    /// — and the workspace has no uncommitted changes
+    /// ([`GraphError::DirtyWorkspace`]).
     ///
     /// The four outcomes ([`MergeOutcome`]): **AlreadyUpToDate** when
     /// `theirs` is already an ancestor of our head; **FastForward** when our
@@ -544,10 +546,15 @@ impl Repository {
     /// result is both map-clean and graph-valid.
     pub fn merge(&self, theirs: &str, message: &str) -> Result<MergeOutcome, GraphError> {
         let _lock = WriteLock::acquire(self.store.git_dir())?;
+        // On-a-branch first: merge advances the current branch, so a detached
+        // HEAD is unmergeable regardless of workspace state. Reporting
+        // NoCurrentBranch before DirtyWorkspace gives the accurate cause when a
+        // detached workspace also differs from its checked-out commit
+        // (acetone-060).
+        let branch = self.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
         if self.is_dirty()? {
             return Err(GraphError::DirtyWorkspace);
         }
-        let branch = self.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
         let theirs = self.resolve_commit(theirs)?;
 
         // An unborn branch has no head to merge against; adopt `theirs`
