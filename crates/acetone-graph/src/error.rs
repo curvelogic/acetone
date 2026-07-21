@@ -232,6 +232,15 @@ pub enum GraphError {
         /// The graph name.
         name: String,
     },
+    /// A co-tenant `init` targeted a repository that already contains a
+    /// standalone acetone workspace of its own. Co-tenant init starts a fresh
+    /// graph and shares the per-worktree workspace ref, so it cannot be layered
+    /// onto an existing acetone repository (ADR-0050).
+    #[error(
+        "repository already contains a standalone acetone workspace; cannot add \
+         a co-tenant graph to it"
+    )]
+    ExistingAcetoneWorkspace,
     /// `open` found more than one co-tenant graph marker in the repository.
     /// Selecting among several graphs is not supported in 0.3 (single graph
     /// per repository); the layout is parameterised for it but the ergonomics

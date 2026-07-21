@@ -138,6 +138,43 @@ fn a_graph_co_tenants_a_code_repo_without_touching_it() {
 }
 
 #[test]
+fn an_interrupted_co_tenant_init_never_lets_a_write_reach_code() {
+    // Marker-first ordering (ADR-0050): if init is interrupted after the graph
+    // marker is written but before the workspace exists, `open` must still see
+    // co-tenant mode and refuse (NoWorkspace) — never fall back to standalone,
+    // which would let a later write land on the user's `refs/heads/main`.
+    let dir = tempfile::tempdir().expect("tmp");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).expect("mkdir");
+    git(&project, &["-c", "init.defaultBranch=main", "init"]);
+    std::fs::write(project.join("README.md"), "code").expect("write");
+    git(&project, &["add", "README.md"]);
+    git(&project, &["commit", "-m", "code"]);
+    let code_commit = git(&project, &["rev-parse", "refs/heads/main"]);
+
+    // Simulate a crash mid-init: only the graph marker exists (a direct ref at
+    // the empty blob); no workspace ref, no head symref.
+    let empty_blob = git(&project, &["hash-object", "-w", "/dev/null"]);
+    git(
+        &project,
+        &["update-ref", "refs/acetone/graphs/g", &empty_blob],
+    );
+
+    // `open` must detect co-tenant mode and refuse — not present a usable
+    // standalone repo whose writes would move the code branch.
+    assert!(
+        Repository::open(&project).is_err(),
+        "an interrupted co-tenant init must not open as a usable standalone repo"
+    );
+    // The code is untouched regardless.
+    assert_eq!(
+        git(&project, &["rev-parse", "refs/heads/main"]),
+        code_commit
+    );
+    assert_eq!(git(&project, &["symbolic-ref", "HEAD"]), "refs/heads/main");
+}
+
+#[test]
 fn init_co_tenant_rejects_bad_graph_names_and_duplicates() {
     let dir = tempfile::tempdir().expect("tmp");
     let project = dir.path().join("project");

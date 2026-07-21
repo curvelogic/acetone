@@ -187,8 +187,10 @@ impl Repository {
     /// `options.chunk_params` is used, for the empty graph.
     ///
     /// Errors with [`GraphError::InvalidGraphName`] if `graph` is not a valid
-    /// single ref-path component, and [`GraphError::GraphExists`] if the
-    /// repository already hosts a graph by that name.
+    /// single ref-path component, [`GraphError::GraphExists`] if the repository
+    /// already hosts a graph (0.3 is single-graph), and
+    /// [`GraphError::ExistingAcetoneWorkspace`] if it already contains a
+    /// standalone acetone workspace.
     pub fn init_co_tenant(
         path: &Path,
         graph: &str,
@@ -197,18 +199,39 @@ impl Repository {
         validate_graph_name(graph)?;
         let store = GitStore::open_discovering(path)?;
 
-        let marker = format!("{GRAPHS_REF_PREFIX}{graph}");
-        if store.read_ref(&marker)?.is_some() {
+        // Preconditions, checked before ANY write so a rejected init leaves the
+        // repository — and the user's code — completely untouched.
+        // (1) The repository must not already host an acetone graph. Reporting
+        //     the existing graph's name covers both a same-graph re-init and a
+        //     second (unsupported) graph, and — crucially — refusing *before*
+        //     writing the marker keeps a failed second init from leaving a
+        //     stray marker that would make `open` see multiple graphs.
+        if let Some((existing, _)) = store.list_refs(GRAPHS_REF_PREFIX)?.first() {
+            let name = existing.strip_prefix(GRAPHS_REF_PREFIX).unwrap_or(existing);
             return Err(GraphError::GraphExists {
-                name: graph.to_owned(),
+                name: name.to_owned(),
             });
         }
+        // (2) Nor a standalone acetone workspace: co-tenant init starts a fresh
+        //     graph and shares the per-worktree workspace ref, so it cannot be
+        //     layered onto an existing acetone repository.
+        if store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some() {
+            return Err(GraphError::ExistingAcetoneWorkspace);
+        }
+
+        // Write the marker FIRST (ADR-0050). The marker is what makes `open`
+        // choose the safe co-tenant layout, so it must exist before the
+        // workspace ref does: were the order reversed, a crash between
+        // provisioning the workspace and writing the marker would leave a repo
+        // that `open` reads as *standalone* — and a later write would commit
+        // onto the user's `refs/heads/main`, destroying code. Marker-first, any
+        // interrupted init instead opens as co-tenant and fails safely
+        // (`NoWorkspace`/`NoCurrentBranch`), touching only `refs/acetone/*`.
+        let filler = store.put(b"")?;
+        let marker = format!("{GRAPHS_REF_PREFIX}{graph}");
+        store.write_ref(&marker, None, &filler)?;
 
         provision_empty_workspace(&store, options.chunk_params)?;
-        // Record the graph with a direct marker ref (points at an empty blob —
-        // its existence and name are the signal, ADR-0050).
-        let filler = store.put(b"")?;
-        store.write_ref(&marker, None, &filler)?;
 
         let namespace = GraphRefNamespace::co_tenant(graph);
         // The graph's own current-branch pointer; the code's git HEAD is not
