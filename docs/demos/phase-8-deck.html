@@ -180,7 +180,7 @@
   <a href="#s8" aria-label="Review gate"></a>
   <a href="#s9" aria-label="Security gate"></a>
   <a href="#s10" aria-label="ADRs"></a>
-  <a href="#s11" aria-label="Two rulings"></a>
+  <a href="#s11" aria-label="gc ruling delivered"></a>
   <a href="#s12" aria-label="Live demo"></a>
   <a href="#s13" aria-label="For Greg"></a>
 </nav>
@@ -198,10 +198,10 @@
         <span class="chip good"><span class="dot"></span>Graph on its own ref</span>
         <span class="chip good"><span class="dot"></span>gc &amp; migrate stay in lane</span>
         <span class="chip good"><span class="dot"></span>Read-old-write-new</span>
-        <span class="chip good"><span class="dot"></span>5 ADRs · 0048–0052</span>
+        <span class="chip good"><span class="dot"></span>6 ADRs · 0048–0053</span>
       </div>
     </div>
-    <div class="foot">epic acetone-g5g · 2026-07-22 · main @ 881aebf</div>
+    <div class="foot">epic acetone-g5g · 2026-07-22 · main @ befbdca</div>
     <div class="num">01 / 13</div>
   </section>
 
@@ -272,23 +272,23 @@
   <!-- 5 · Exit criterion 2 -->
   <section class="slide" id="s5">
     <div class="slide-inner">
-      <p class="eyebrow">Exit criterion 2 · acetone-iva (#148) · ADR-0051</p>
-      <div class="ec"><span class="dot"></span>MET — with a reading to ratify</div>
+      <p class="eyebrow">Exit criterion 2 · acetone-wao (#152) · ADR-0051 (B)</p>
+      <div class="ec"><span class="dot"></span>MET under reading B — delivered</div>
       <h2>gc and migrate stay in the graph's lane.</h2>
-      <p class="lede">The co-tenancy promise that matters: <strong>the graph never rewrites or moves your code history</strong>. Proven by property tests — a code-only object survives <code>gc</code>, code refs survive <code>migrate</code> — with a discriminator that only passes if the reachable set genuinely includes code.</p>
+      <p class="lede">The co-tenancy promise that matters: <strong>the graph never rewrites, moves, or even repacks your code history</strong>. Greg ruled reading <strong>(B) graph-scoped</strong> at the boundary and had it delivered with full assurance — <code>acetone gc</code> touches only the graph's objects.</p>
       <div class="grid cols-2" style="margin-top:20px">
-        <div class="card">
-          <div class="tag">PROVEN</div>
-          <h3>Code survives both</h3>
-          <p>An object reachable only from code history is still retrievable after <code>acetone gc</code>; every code ref is intact after <code>migrate</code>. No code ref moves; no commit hash changes.</p>
+        <div class="card lead">
+          <div class="tag">GRAPH-SCOPED · acetone-wao</div>
+          <h3>Only the graph's objects</h3>
+          <p><code>consolidate</code> packs only objects reachable from the graph's refs, with a prune guard so nothing reachable from a <em>non-graph</em> ref is ever pruned. A code-only object stays <strong>loose and out of acetone's pack</strong> — the discriminator reading A could not pass. Standalone byte-identical.</p>
         </div>
         <div class="card">
           <div class="tag">THE FRESH-REVIEW CATCH</div>
-          <h3>A vacuous test, hardened</h3>
-          <p>The first <code>gc</code> proof would have passed even if scoping were wrong. The review forced a <strong>loose-file discriminator</strong>: a code blob is drawn into <code>gc</code>'s pack — consolidated yet still retrievable — which only holds if <code>gc</code> sees code.</p>
+          <h3>Clones caught</h3>
+          <p>Review found <code>owns_ref</code> claimed <code>refs/remotes/*</code> — a <em>clone's</em> code — as the graph's. Fixed layout-aware, with a remotes discriminator test verified to fail under the bug.</p>
         </div>
       </div>
-      <p style="margin-top:18px">⚑ <strong>Reading (A), shipped:</strong> <code>acetone gc</code> repacks the whole repo's reachable set, like <code>git gc</code> — byte-preserving, <code>fsck</code>-clean, nothing moved. This is the recorded interpretation of "touch only graph refs". Ruling on <strong>slide 11</strong>.</p>
+      <p style="margin-top:18px">This graph-only pack is what lets <code>.keep</code> protect it (<strong>slide 11</strong>) without freezing your code's packing. <code>migrate</code> is graph-scoped via the same namespace seam.</p>
     </div>
     <div class="num">05 / 13</div>
   </section>
@@ -311,7 +311,7 @@
 <div class="l"><span class="o">production build (v1-only)  decode(v2)  →   </span><span class="no">UnsupportedVersion(2)</span></div>
         </div>
       </div>
-      <p style="margin-top:16px"><code>FORMAT_VERSION</code> stays <strong>1</strong> — zero format change, zero golden churn. The v2 above is a test-only synthetic; a <em>real</em> v2 is deferred to the first change that warrants one. Ruling on <strong>slide 11</strong>.</p>
+      <p style="margin-top:16px"><code>FORMAT_VERSION</code> stays <strong>1</strong> — zero format change, zero golden churn. The v2 above is a test-only synthetic; a <em>real</em> v2 is deferred to the first change that warrants one. <strong>Ratified</strong> (option B) at the boundary.</p>
     </div>
     <div class="num">06 / 13</div>
   </section>
@@ -360,16 +360,16 @@
       <p class="eyebrow">Milestone security gate</p>
       <div class="ec"><span class="dot"></span>GATE READY — no blocker / high</div>
       <h2>Hostile repos, ref injection, destructive scoping.</h2>
-      <p class="lede">A dedicated fresh-Opus security review swept the whole phase diff (<code>959d1ab..HEAD</code>), focused on the three surfaces Phase 8 opened — and cleared all three.</p>
+      <p class="lede">Two fresh-Opus security passes — the first over the phase diff, and a re-touch over the reworked <code>gc</code> (<code>wao</code> + <code>5cw</code>) — both <strong>READY</strong>, no blocker or high.</p>
       <div class="grid cols-3" style="margin-top:22px">
-        <div class="card"><div class="tag">INPUT HANDLING ✓</div><h3>Total on hostile bytes</h3><p>The dispatch adds no panic path; <code>u32::try_from</code> blocks a <code>2^32+k</code> truncation-alias; the index-map DoS guard is intact.</p></div>
-        <div class="card"><div class="tag">REF / PATH INJECTION ✓</div><h3>Namespace containment</h3><p>Every write passes <code>validated_ref_name</code>; <code>co_tenant</code> only <em>suffixes</em> a validated prefix — no crafted name escapes or traverses. A forged head symref can't advance a code ref.</p></div>
-        <div class="card"><div class="tag">DESTRUCTIVE SCOPING ✓</div><h3>Code history preserved</h3><p><code>migrate</code> enumerates only graph ref-prefixes; <code>gc</code> keeps code as an un-prunable root — proven by a non-vacuous test.</p></div>
+        <div class="card"><div class="tag">INPUT HANDLING ✓</div><h3>Total on hostile bytes</h3><p>The dispatch adds no panic path; <code>u32::try_from</code> blocks a <code>2^32+k</code> truncation-alias; ref-resolution failures, symref cycles and missing targets are skipped, never panic.</p></div>
+        <div class="card"><div class="tag">REF / PATH INJECTION ✓</div><h3>Namespace containment</h3><p>Every write passes <code>validated_ref_name</code>; <code>co_tenant</code> only <em>suffixes</em> a validated prefix; <code>owns_ref</code> is a proper path-boundary match. A forged head symref can't advance a code ref.</p></div>
+        <div class="card"><div class="tag">NO LAST-COPY DELETION ✓</div><h3>Safety ≠ classification</h3><p><code>gc</code> can't delete an object's last copy <em>even if <code>owns_ref</code> were wrong</em>: pruning is gated on membership in a freshly <code>fsync</code>ed pack behind a set-equality tripwire; the guard is purely subtractive.</p></div>
       </div>
       <div class="chips" style="margin-top:22px">
         <span class="chip good"><span class="dot"></span>No new dependencies</span>
-        <span class="chip good"><span class="dot"></span>Reduced-trust posture intact</span>
-        <span class="chip"><span class="dot" style="color:var(--faint)"></span>2 pre-existing items rediscovered (dfh, write_ref CAS)</span>
+        <span class="chip good"><span class="dot"></span>git <code>.keep</code> behaviour reproduced on 2.48.1</span>
+        <span class="chip"><span class="dot" style="color:var(--faint)"></span>3 LOW notes filed (c2a) · 2 pre-existing (dfh, write_ref CAS)</span>
       </div>
     </div>
     <div class="num">09 / 13</div>
@@ -378,51 +378,46 @@
   <!-- 10 · ADRs -->
   <section class="slide" id="s10">
     <div class="slide-inner">
-      <p class="eyebrow">The ratification agenda</p>
-      <h2>Five ADRs — the shape of co-tenancy.</h2>
-      <p class="lede">Four are <em>accepted, pending your ratification</em>; ADR-0051 is <em>proposed</em>, flagged for your ruling. Three ratify as recorded; two carry a live <strong>ruling</strong> beyond ratification (next slide).</p>
+      <p class="eyebrow">The decisions · resolved at the boundary</p>
+      <h2>Six ADRs — the shape of co-tenancy.</h2>
+      <p class="lede">You ratified 0048/0049/0050, ratified 0052 (option B), and ruled 0051 to <strong>(B)</strong> — which was then delivered. ADR-0053 (<code>.keep</code>) came out of delivering B. Spec §10 was updated at 0048's ratification.</p>
       <div class="table-wrap" style="margin-top:20px">
         <table>
-          <thead><tr><th>ADR</th><th>Decision</th><th>For you</th></tr></thead>
+          <thead><tr><th>ADR</th><th>Decision</th><th>Status</th></tr></thead>
           <tbody>
-            <tr><td><code>0048</code></td><td>Format evolution: <b>read-old-write-new is default</b>; rewrite-<code>migrate</code> is opt-in.</td><td>Ratify</td></tr>
-            <tr><td><code>0049</code></td><td><b><code>GraphRefNamespace</code></b>: one value maps logical refs → physical paths; one path, two layouts.</td><td>Ratify</td></tr>
-            <tr><td><code>0050</code></td><td><b>Co-tenant layout + named head pointer</b>: the layout, not the code path, decides where refs live.</td><td>Ratify</td></tr>
-            <tr><td><code>0051</code></td><td><b>Co-tenant <code>gc</code> semantics</b>: ships reading (A), repo-wide repack like <code>git gc</code>.</td><td>⚑ Rule A / B</td></tr>
-            <tr><td><code>0052</code></td><td><b>Dispatch machinery + synthetic-v2 proof</b>; defer a real <code>format_version 2</code>.</td><td>⚑ Rule</td></tr>
+            <tr><td><code>0048</code></td><td>Format evolution: <b>read-old-write-new is default</b>; rewrite-<code>migrate</code> is opt-in.</td><td>Ratified</td></tr>
+            <tr><td><code>0049</code></td><td><b><code>GraphRefNamespace</code></b>: one value maps logical refs → physical paths; one path, two layouts.</td><td>Ratified</td></tr>
+            <tr><td><code>0050</code></td><td><b>Co-tenant layout + named head pointer</b>: the layout, not the code path, decides where refs live.</td><td>Ratified</td></tr>
+            <tr><td><code>0051</code></td><td><b>Co-tenant <code>gc</code> is graph-scoped (B)</b>: packs only the graph's objects, leaves code storage untouched.</td><td>Ruled (B) · delivered</td></tr>
+            <tr><td><code>0052</code></td><td><b>Dispatch machinery + synthetic-v2 proof</b>; defer a real <code>format_version 2</code>.</td><td>Ratified (B)</td></tr>
+            <tr><td><code>0053</code></td><td><b><code>.keep</code>-marked packs</b>: survive a foreign <code>git gc</code> so acetone's deltas aren't undone.</td><td>Accepted · ratify</td></tr>
           </tbody>
         </table>
       </div>
-      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">One reviewer note to fold in at ratification: spec §10 still frames <code>migrate</code> as <em>the</em> evolution path — it gains a read-old-write-new sentence when you ratify ADR-0048 (governing-doc edit, deferred deliberately).</p>
+      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">Only ADR-0053 still awaits your ratification — the rest are settled and recorded in each ADR's status line.</p>
     </div>
     <div class="num">10 / 13</div>
   </section>
 
-  <!-- 11 · Two rulings -->
+  <!-- 11 · gc ruling delivered -->
   <section class="slide" id="s11">
     <div class="slide-inner">
-      <p class="eyebrow">Two rulings · your call at the boundary</p>
-      <h2>Where the recorded reading needs your sign-off.</h2>
+      <p class="eyebrow">The gc ruling, delivered · ADR-0051 (B) + ADR-0053</p>
+      <h2>Why (B) — and the durability it buys.</h2>
+      <p class="lede">You chose (B) over the simpler (A) interim for a concrete reason: only a <strong>graph-only</strong> pack can be protected from a foreign <code>git gc</code> without acetone taking over your code's storage.</p>
       <div class="grid cols-2" style="margin-top:20px">
-        <div class="card rule">
-          <div class="tag">ADR-0051 · co-tenant gc</div>
-          <h3>How wide does <code>gc</code> reach?</h3>
-          <ul class="clean" style="margin-top:12px">
-            <li><b>(A) shipped —</b> repack the whole repo's reachable set, code included, like <code>git gc</code>. Byte-preserving, <code>fsck</code>-clean, nothing moved. Simple; whole-repo maintenance.</li>
-            <li><b>(B) alternative —</b> scope <code>gc</code>'s pack to the graph's refs while still treating code refs as un-prunable roots. Stronger isolation; a more intricate reachability split. No format impact.</li>
-          </ul>
-          <p style="margin-top:12px"><strong>Recommend (A)</strong> — and confirm it as the reading of exit criterion 2's <code>gc</code> half.</p>
+        <div class="card lead">
+          <div class="tag">THE PROBLEM YOU NAMED</div>
+          <h3><code>git gc</code> degrades our storage</h3>
+          <p>A co-tenant repo's owner runs <code>git gc</code> — and git's automatic <code>gc.auto</code> fires routinely, silently. It re-deltifies acetone's pack by git's own heuristics, undoing the content-aware deltas (ADR-0011) that recover ~7×. Safe, but lossy — every time.</p>
         </div>
-        <div class="card rule">
-          <div class="tag">ADR-0052 · exit criterion 3</div>
-          <h3>Is a synthetic v2 enough for 0.3?</h3>
-          <ul class="clean" style="margin-top:12px">
-            <li><b>Shipped —</b> the dispatch <em>machinery</em> + a test-only synthetic v2 proving coexistence. <code>FORMAT_VERSION</code> stays 1; zero golden churn. A real v2 lands through this seam at the first genuine format change.</li>
-            <li><b>Alternative —</b> require a <em>real</em> <code>format_version 2</code> to ship in 0.3 (re-pins every manifest/commit golden; changes the on-disk format purely to demonstrate).</li>
-          </ul>
-          <p style="margin-top:12px"><strong>Recommend shipped</strong> — the ADR-0025 "engine now, real use deferred" precedent you accepted at 0.2.</p>
+        <div class="card lead">
+          <div class="tag">THE FIX (B) UNLOCKS</div>
+          <h3>A <code>.keep</code> git won't touch</h3>
+          <p>acetone marks its graph-only pack <code>.keep</code>; <code>git repack</code> skips it, so the deltas survive. Under (A) — a pack containing <em>code</em> — the same <code>.keep</code> would freeze your code's packing. (B) is what makes the fix clean. Proven against a real <code>git repack -a -d</code>.</p>
         </div>
       </div>
+      <p style="margin-top:18px">ADR-0052's exit-criterion-3 reading (machinery + synthetic v2) you <strong>ratified</strong> — a real <code>format_version 2</code> lands through the same seam when one is warranted.</p>
     </div>
     <div class="num">11 / 13</div>
   </section>
@@ -437,7 +432,7 @@
         <li><b>Init a graph as a co-tenant</b> inside a repo that already holds code, and show the marker + selected namespace.</li>
         <li><b>List the refs</b> — <code>refs/heads/main</code> (code) beside <code>refs/heads/acetone/&lt;graph&gt;/*</code> and the local-only head symref; show git <code>HEAD</code> never moved.</li>
         <li><b>Commit graph data</b>, then a code commit, and show each tenant's history advancing independently in one object store.</li>
-        <li><b>Run <code>acetone gc</code></b> and show a code-only object still retrievable afterwards (reading A in action).</li>
+        <li><b>Run <code>acetone gc</code></b> and show a code-only object left <em>loose and out of acetone's pack</em> (reading B), then a foreign <code>git repack -a -d</code> leaving acetone's <code>.keep</code> pack intact.</li>
         <li><b>Walk the version dispatch</b> — the retained-decoder table that lets a v1 and a v2 commit coexist with no rewrite.</li>
       </ul>
     </div>
@@ -449,14 +444,12 @@
     <div class="slide-inner">
       <p class="eyebrow">Yours to close</p>
       <h2>Ratify, rule, and close the gate.</h2>
-      <p class="lede">All three 0.3 exit criteria are met and merged; <code>main</code> is green at <code>881aebf</code>. The boundary is yours.</p>
+      <p class="lede">All three 0.3 exit criteria are met and merged — criterion 2 under the reading (B) you ruled, delivered with full assurance. <code>main</code> is green at <code>befbdca</code>. Almost everything is settled; two small things remain yours.</p>
       <div class="grid cols-2" style="margin-top:20px">
         <div class="card">
-          <div class="tag">THE DECISIONS</div>
+          <div class="tag">WHAT REMAINS FOR YOU</div>
           <ul class="clean" style="margin-top:10px">
-            <li><b>Ratify</b> ADRs 0048, 0049, 0050.</li>
-            <li><b>Rule</b> on ADR-0051 — <code>gc</code> reading (A) vs (B), and confirm the exit-criterion-2 interpretation.</li>
-            <li><b>Rule</b> on ADR-0052 — accept the machinery + synthetic-v2 reading of exit criterion 3, or require a real v2.</li>
+            <li><b>Ratify</b> ADR-0053 (<code>.keep</code> durability) — the one ADR still pending; 0048/0049/0050/0052 ratified, 0051 ruled (B).</li>
             <li><b>Close</b> the exit-criteria gate (epic <code>acetone-g5g</code>) — agents never close it.</li>
           </ul>
         </div>
@@ -466,7 +459,7 @@
             <div class="r"><span class="id">ejj</span><span class="t">migrate hardening: annotated-tag objects + atomic multi-ref swing</span></div>
             <div class="r"><span class="id">xg6</span><span class="t">CLI <code>acetone init --co-tenant</code> flag</span></div>
             <div class="r"><span class="id">eo7</span><span class="t">co-tenant init hardening: legacy-workspace guard + edge tests</span></div>
-            <div class="r"><span class="id">§10</span><span class="t">spec read-old-write-new sentence, at ADR-0048 ratification</span></div>
+            <div class="r"><span class="id">c2a</span><span class="t">gc security hardening: 3 LOW notes from the re-touch</span></div>
           </div>
         </div>
       </div>

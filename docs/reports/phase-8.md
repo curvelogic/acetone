@@ -1,19 +1,25 @@
 # Phase 8 report — alongside code
 
-*Epic `acetone-g5g` · target 0.3 · base `main @ 959d1ab` (v0.2.0) · this report at branch tip including `acetone-5yr`*
+*Epic `acetone-g5g` · target 0.3 · base `main @ 959d1ab` (v0.2.0) · this report covers the phase through `acetone-5cw` (PR #153)*
 
 Phase 8 makes an acetone graph a **co-tenant of an ordinary git repository**:
 its own ref, living alongside code history in one object store, with code
 branches and graph branches coexisting untouched. There was no on-disk format
 obstacle to this — the obstacle was four behavioural assumptions baked into the
 ref/store layer, all of which had to flip *together*. This phase flips them
-behind one concept (`GraphRefNamespace`), proves that the destructive operations
-(`gc`, `migrate`) stay in the graph's lane, and ships the machinery for evolving
-the format *without rewriting shared history*.
+behind one concept (`GraphRefNamespace`), makes the destructive operations
+(`gc`, `migrate`) stay in the graph's lane — `gc` **graph-scoped** so it never
+disturbs the user's code storage, and `.keep`-protected so a foreign `git gc`
+cannot degrade it — and ships the machinery for evolving the format *without
+rewriting shared history*.
 
 Everything landed autonomously under the usual gate: per bead a design recorded
 in the bead, TDD, a fresh strongest-tier (Opus) adversarial review with no
-implementation context, fix/re-review, squash-merge on green CI, close.
+implementation context, fix/re-review, squash-merge on green CI, close. At the
+boundary Greg ratified ADRs 0048/0049/0050, ratified ADR-0052 (option B), and
+ruled ADR-0051 to reading **(B) graph-scoped** — which was then *delivered with
+full assurance* (`acetone-wao` + `acetone-5cw`, ADR-0053) rather than shipped as
+the reading-(A) interim, so exit criterion 2 is met under the adopted semantics.
 
 ## What shipped
 
@@ -26,6 +32,8 @@ implementation context, fix/re-review, squash-merge on green CI, close.
 | `acetone-mgf` | #147 | **Co-tenant mode selection** (ADR-0050) — `init` opt-in + an on-disk marker + open-time detection, wiring the `co_tenant` namespace. **Exit criterion 1.** Review caught a code-loss crash window between marker write and first commit → fixed to marker-first ordering. |
 | `acetone-iva` | #148 | **gc/migrate ref-scoping proof** (ADR-0051) — property tests that a code-only object survives `gc` and code refs survive `migrate`. **Exit criterion 2.** Review caught a vacuous gc test → strengthened with a loose-file discriminator that only passes if `gc`'s reachable set genuinely includes code. |
 | `acetone-5yr` | #149 | **`format_version` dispatch machinery** (ADR-0052) — `Manifest::decode` dispatches on the manifest's version to a table of retained per-version decoders, instead of rejecting any non-current version. **Exit criterion 3.** Read-old, write-new: old commits stay readable through their era's decoder; new writes emit the current format; nothing is rewritten. |
+| `acetone-wao` | #152 | **Graph-scoped `gc`** (ADR-0051 reading B) — `consolidate_scoped` packs only objects reachable from the graph's refs, with a prune guard so no object reachable from a non-graph ref is ever disturbed; `GraphRefNamespace::owns_ref` classifies. **Delivers exit criterion 2's gc-half under (B)**, replacing the (A) interim; standalone byte-identical. Review caught a blocker — `owns_ref` misclassified `refs/remotes/*` (a clone's code) as the graph's → fixed layout-aware, with a remotes discriminator test. |
+| `acetone-5cw` | #153 | **`.keep`-marked packs** (ADR-0053) — acetone marks its consolidation pack `.keep` so a foreign `git gc`/`git repack` (incl. `gc.auto`) leaves its content-aware deltas intact. Only possible cleanly *because* the pack is now graph-only (B). Proven against the real `git repack -a -d`. |
 
 ## Gate evidence — 0.3 exit criteria
 
@@ -38,13 +46,19 @@ branches are never touched. `acetone-mgf` (#147) adds the init opt-in, the marke
 and open-time detection that selects this layout. **Met.**
 
 **Exit criterion 2 — `migrate` and `gc` provably touch only graph refs.**
-`acetone-iva` (#148) proves it with property tests: an object reachable only from
-code history survives `gc`, and code refs survive `migrate`. The `gc` half is met
-under the **interpretation recorded in ADR-0051 (reading A)**: acetone `gc`
-repacks the whole repository's reachable set (code included, exactly as `git gc`
-would) but moves no code ref and changes no commit hash — the co-tenancy promise
-*"the graph never rewrites or moves your code history"* holds. **Met — with an
-interpretation for Greg to rule on (see Decisions).**
+`migrate` is graph-scoped via the `GraphRefNamespace` seam (`acetone-iva` proves
+code refs and git `HEAD` survive it). For `gc`, Greg **ruled reading (B)** at the
+boundary and directed it be *delivered with full assurance*: `acetone-wao` (#152)
+makes `consolidate` pack only objects reachable from the graph's refs and adds an
+explicit prune guard over non-graph refs, so acetone leaves the user's code
+objects' storage exactly as git had it — it neither repacks nor prunes them. The
+proof was rewritten to the discriminating (B) property: after `gc` a code-only
+object is **still loose and not in any acetone pack**, yet retrievable, while the
+graph's own loose objects are consolidated away (a property reading A could not
+satisfy). A second test covers the realistic clone shape — a code object
+reachable only from `refs/remotes/*` is guarded identically. Standalone
+consolidation is byte-identical (its graph refs are all refs, so the guard is
+empty). **Met under the adopted reading (B).**
 
 **Exit criterion 3 — a `format_version` bump applied live via read-old-write-new, no rewrite, no force-push.**
 `acetone-5yr` (#149) ships the dispatch machinery (ADR-0052). Because the manifest
@@ -54,16 +68,15 @@ several versions side by side, old ones readable, none rewritten. Proven by a
 coexistence test: a content-addressed store holds a v1 and a (synthetic) v2
 manifest together, both decode, the v1 object's hash is unchanged by the v2 write,
 and re-encoding still emits current-format bytes at the same address. **Met in the
-"machinery shipped + cross-version coexistence proven" sense — a deliberate
-deviation (option B, ADR-0052) from shipping a real `format_version = 2`, for
-Greg to rule on (see Decisions).**
+"machinery shipped + cross-version coexistence proven" sense — Greg ratified this
+reading (ADR-0052, option B) at the boundary, deferring a real `format_version = 2`
+to the first genuine format change.**
 
-## Decisions taken — ADRs 0048–0052 (the ratification agenda)
+## Decisions — ADRs 0048–0053 (ratified / ruled at the boundary)
 
-Four (0048, 0049, 0050, 0052) are `accepted — pending ratification at the Phase 8
-boundary`; **ADR-0051 is `proposed — flagged for Greg's ruling`** (an
-exit-criterion interpretation, not yet accepted). Two carry an explicit **ruling**
-for Greg beyond plain ratification.
+Greg's boundary rulings (2026-07-22), now recorded in each ADR's status line:
+0048, 0049, 0050 **ratified**; 0052 **ratified (option B)**; 0051 **ruled (B)**
+and delivered; ADR-0053 (`.keep` durability) taken in the course of delivering B.
 
 - **ADR-0048 — Format evolution: read-old-write-new is the default; rewrite-`migrate` is opt-in.**
   Rewriting history to cross a format boundary changes every commit hash and needs
@@ -85,30 +98,36 @@ for Greg beyond plain ratification.
   current-branch pointer live. Standalone keeps the git-`HEAD` fast path and is
   byte-identical. *Ratify.*
 
-- **ADR-0051 — Co-tenant `gc` semantics — ⚑ RULING.**
-  Ships **reading (A)**: `acetone gc` repacks the whole repository's reachable set
-  (code + graph), like `git gc` — byte-preserving, `fsck`-clean, no ref moved, no
-  hash changed. This is the recorded interpretation of exit criterion 2's `gc`
-  half. **Reading (B)** — scope `gc`'s reachable set/pack to the graph's refs while
-  still treating code refs as un-prunable roots — is the deferred, stronger
-  alternative (more intricate reachability split; no format impact either way).
-  **Greg rules: accept (A) as shipped, or direct (B).**
+- **ADR-0051 — Co-tenant `gc` semantics — RULED (B), delivered.**
+  Greg ruled reading **(B) graph-scoped** — `acetone gc` packs only the graph's
+  objects and leaves the user's code storage untouched — and chose to *deliver it
+  with full assurance* rather than ship the reading-(A) interim. Delivered in
+  `acetone-wao` (#152): graph-scoped consolidation with a non-graph prune guard,
+  the proof rewritten to (B), standalone byte-identical. The earlier (A) —
+  repo-global repack — is retired. This is the reading that lets ADR-0053 protect
+  acetone's pack without freezing the user's code-object packing.
 
-- **ADR-0052 — `format_version` dispatch machinery; synthetic-v2 proof; defer a real v2 — ⚑ RULING.**
+- **ADR-0052 — `format_version` dispatch machinery; synthetic-v2 proof; defer a real v2 — RATIFIED (option B).**
   Ships the dispatch machinery and proves it with a *test-only* synthetic
   `format_version = 2`, keeping `FORMAT_VERSION = 1` — **zero format change, zero
-  golden churn** (option B). A real shipped v2 is deferred to the first genuine
-  format change, which will land through this same seam (the ADR-0025 "engine now,
-  real demonstration deferred" precedent, which Greg accepted at 0.2). This is a
-  deliberate deviation from ADR-0048's note anticipating a real v2 in Phase 8, so
-  **exit criterion 3 is met in the "machinery + coexistence proven" sense**.
-  **Greg rules: accept that reading, or require a real `format_version = 2` before
-  the gate closes.**
+  golden churn**. A real shipped v2 is deferred to the first genuine format change,
+  which will land through this same seam (the ADR-0025 "engine now, real
+  demonstration deferred" precedent). Greg ratified this reading of exit criterion
+  3 at the boundary.
+
+- **ADR-0053 — `.keep`-marked consolidation packs — accepted (in delivering B).**
+  A foreign `git gc`/`git repack` (including git's automatic `gc.auto`, which a
+  co-tenant repo's owner triggers routinely) would re-deltify acetone's pack and
+  undo its content-aware deltas — safe-but-lossy, silently. acetone now marks its
+  pack `.keep` so git leaves it alone; `supersede_packs` retires the marker with
+  the pack. Cleanly possible only because reading (B) makes the pack graph-only.
+  Proven against the real `git repack -a -d`.
 
 ## Review findings summary
 
 Every code PR passed a fresh Opus adversarial review with no implementation
-context; the fresh reviewer caught a real defect on the two exit-criterion PRs:
+context; the fresh reviewer caught a real defect on most of the substantive PRs
+— the gate is load-bearing:
 
 - **`acetone-mgf` (#147):** a code-loss crash window between writing the co-tenant
   marker and the first commit — fixed to marker-first ordering so a crash leaves a
@@ -124,6 +143,16 @@ context; the fresh reviewer caught a real defect on the two exit-criterion PRs:
   the address a real `GitStore` assigns, not a mock. One minor (spec §10 wording,
   below), one informational (the exit-criterion-3 deviation is ADR-owned and
   flagged, not a quiet under-delivery).
+- **`acetone-wao` (#152):** review found a **blocker** — `owns_ref`'s fallthrough
+  claimed `refs/remotes/*`, `refs/notes/*`, `refs/stash`, `refs/replace/*` as the
+  graph's, so a graph in a *cloned* code repo (the normal case) would draw its
+  remote-tracking code objects into acetone's pack. Fixed layout-aware
+  (`owns_whole_repo` flag: standalone owns all, co-tenant owns only its prefixes +
+  `refs/acetone/*`), with a new discriminator test verified to fail under the bug.
+- **`acetone-5cw` (#153):** APPROVE — the reviewer independently reproduced the git
+  `.keep` behaviour and confirmed no object-loss path and that the durability test
+  truly discriminates. One optional wording nit on `ensure_keep`'s failure
+  semantics, addressed by a doc clarification.
 
 ## Milestone security review
 
@@ -164,13 +193,29 @@ Low/informational (no gate action): co-tenant marker refs are local-only, so the
 hostile-marker scenarios are only reachable via a hand-delivered on-disk `.git`,
 not a network clone — and even then all writes stay namespace-scoped and
 validated; `detect_namespace` does not re-validate a name read from an existing
-marker but this yields no escape. The ADR-0051 gc reading (A) — `acetone gc`
-repacking code objects — is a deliberate exit-criterion interpretation for Greg,
-not a defect.
+marker but this yields no escape.
 
 Pre-existing, rediscovered and out of Phase 8 scope: the `write_ref` CAS TOCTOU vs
 a non-acetone writer (acknowledged in-code) and `gc`'s lock-free reachability
 (`acetone-dfh`, P3). Neither is introduced or worsened by this phase.
+
+**Security re-touch over the reworked `gc` (`acetone-wao` + `acetone-5cw`).** The
+first sweep predated the reading-(B) rework, so a focused fresh-Opus security pass
+ran over the new consolidation internals (`d1d8b8c..HEAD`): the graph-scoped
+reachability + prune guard, `owns_ref` as a security boundary (can a crafted ref
+name get a code ref repacked/pruned, or escape the graph namespace?), `.keep`
+path handling, and panic/totality on a hostile repo. **Verdict: READY** — no
+blocker/high. The central finding: `gc` can never delete the last copy of any
+object *regardless of whether `owns_ref` is correct*, because pruning is gated on
+membership in a freshly `fsync`ed pack behind a set-equality tripwire and the
+prune guard is strictly subtractive — `owns_ref` governs only ownership/efficiency
+(what gets repacked vs left as git arranged it). Ref-resolution failures, symref
+cycles, missing targets and dangling refs are all skipped without panic; both
+walks are iterative and size-capped. Three LOW/latent notes, none blocking, filed
+as `acetone-c2a`: a multi-graph `refs/acetone/` over-claim the current
+single-graph restriction makes unreachable; an unvalidated marker-derived graph
+name (bounded to deletion-safe misclassification); and a pre-existing
+sidecar-stem path use reachable only via direct `.git` tampering.
 
 ## Open risks and deferred work
 
@@ -186,14 +231,19 @@ a non-acetone writer (acknowledged in-code) and `gc`'s lock-free reachability
   to co-tenant `gc` scoping; lock-free check races a concurrent `git worktree add`.
 - **A real `format_version = 2`** is deferred to the first genuine format change
   (ADR-0052), landing through the shipped dispatch seam.
-- **Spec §10 wording (minor).** §10 still frames `migrate` as *the* evolution
-  mechanism; it should gain a read-old-write-new/dispatch sentence when Greg
-  ratifies ADR-0048 (a governing-doc edit, deliberately deferred to ratification).
+- **A foreign `git repack` may leave duplicate storage** for a window (git packs
+  some graph objects into its own pack before acetone next consolidates) — harmless
+  duplication the next `acetone gc` resolves (ADR-0053).
 
-**Gate readiness: the milestone security review returned READY (no blocker/high),
-so on security grounds the gate is ready to close.** The two exit-criterion
-interpretations (ADR-0051 gc reading, ADR-0052 exit-criterion-3 reading) are
-Greg's to rule on at the boundary; the gate (`acetone-g5g`) is his to close.
+Spec §10 was updated at ADR-0048's ratification to record the read-old-write-new
+default (PR #151), closing the earlier wording gap.
+
+**Gate readiness.** All three exit criteria are met — criterion 2 under the
+adopted reading (B), delivered with full assurance. Greg has ratified ADRs
+0048/0049/0050/0052 and ruled 0051 (B); ADR-0053 is accepted pending ratification.
+The milestone security review (and the re-touch over the reworked `gc`) returned
+READY. What remains is Greg's to do: ratify ADR-0053, and close the exit-criteria
+gate (`acetone-g5g`) — which agents never close.
 
 ## The demo
 
