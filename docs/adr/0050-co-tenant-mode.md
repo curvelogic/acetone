@@ -1,6 +1,6 @@
 # ADR-0050: Co-tenant mode — a graph on its own ref namespace inside a code repository
 
-*Status: accepted — pending ratification at the Phase 8 / 0.3 boundary · Date: 2026-07-21 · Bead: acetone-5w6 (and children acetone-0e4, acetone-mgf, acetone-iva)*
+*Status: accepted — ratified by Greg at the Phase 8 / 0.3 boundary (2026-07-22) · Date: 2026-07-21 · Bead: acetone-5w6 (and children acetone-0e4, acetone-mgf, acetone-iva)*
 
 ## Context
 

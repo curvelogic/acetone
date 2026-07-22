@@ -1,6 +1,6 @@
 # ADR-0048: Format evolution — read-old-write-new is the default, rewrite-migrate is opt-in
 
-*Status: accepted — pending ratification at the Phase 8 / 0.3 boundary · Date: 2026-07-21 · Bead: acetone-fev*
+*Status: accepted — ratified by Greg at the Phase 8 / 0.3 boundary (2026-07-22) · Date: 2026-07-21 · Bead: acetone-fev*
 
 ## Context
 
