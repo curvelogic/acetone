@@ -147,6 +147,17 @@ fn loose_commit_only_on_ref(project: &Path, refname: &str) -> String {
     blob
 }
 
+/// The stem (`pack-<hash>`) of acetone's current consolidation pack, read from
+/// its sidecar list under the shared `.git`.
+fn acetone_pack_stem(project: &Path) -> String {
+    let text = std::fs::read_to_string(project.join(".git/acetone-consolidation-packs"))
+        .expect("consolidation-packs sidecar");
+    text.lines()
+        .rfind(|l| !l.is_empty())
+        .expect("at least one consolidation pack")
+        .to_owned()
+}
+
 /// Count loose object files under `project/.git/objects` (the two-hex shards).
 fn loose_object_count(project: &Path) -> usize {
     let objects = project.join(".git/objects");
@@ -262,6 +273,95 @@ fn gc_scopes_to_the_graph_and_leaves_code_storage_untouched() {
     assert_eq!(
         git(&project, &["rev-parse", "refs/heads/main"]),
         code_commit
+    );
+}
+
+#[test]
+fn a_kept_pack_survives_a_foreign_git_gc_and_falls_when_the_keep_is_removed() {
+    // ADR-0053: acetone marks its consolidation pack `.keep` so a foreign
+    // `git gc`/`git repack` — which a co-tenant repo's owner runs routinely,
+    // including git's automatic `gc.auto` — leaves acetone's content-aware
+    // REF_DELTAs (ADR-0011) intact instead of re-deltifying them to a poor
+    // baseline. This proves the `.keep` is present and *load-bearing*: with it
+    // the pack survives a full `git repack -a -d`; without it the same repack
+    // folds it away.
+    let (project, _dir, _c, _b) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 60);
+    for round in 0..30i64 {
+        let mut tx = graph.begin_write().expect("begin");
+        tx.put_node(
+            &node(round % 60),
+            &NodeRecord::new(
+                [],
+                BTreeMap::from([("v".to_owned(), Value::Int(3000 + round))]),
+            ),
+        )
+        .expect("node");
+        tx.commit(&format!("graph: churn {round}"), &[], None)
+            .expect("commit");
+    }
+    let stats = graph.gc().expect("gc");
+    assert!(
+        stats.deltas > 0,
+        "churn should produce REF_DELTAs worth protecting (got {})",
+        stats.deltas
+    );
+
+    let stem = acetone_pack_stem(&project);
+    let pack = project.join(format!(".git/objects/pack/{stem}.pack"));
+    let keep = project.join(format!(".git/objects/pack/{stem}.keep"));
+    assert!(pack.exists(), "acetone pack {stem}.pack present after gc");
+    assert!(keep.exists(), "acetone pack must be marked .keep after gc");
+    let pack_size = std::fs::metadata(&pack).expect("meta").len();
+
+    // A foreign, aggressive repack of the whole repository.
+    git(&project, &["repack", "-a", "-d"]);
+
+    // With the `.keep`, git left acetone's pack (and its deltas) exactly in place.
+    assert!(pack.exists(), "kept pack must survive `git repack -a -d`");
+    assert_eq!(
+        std::fs::metadata(&pack).expect("meta").len(),
+        pack_size,
+        "kept pack must be byte-unchanged by the foreign repack"
+    );
+    assert!(
+        keep.exists(),
+        "the .keep marker survives the foreign repack too"
+    );
+    git(&project, &["fsck", "--strict"]);
+    // Reopen (a fresh handle sees the new pack layout) and confirm the graph reads.
+    let reopened = Repository::open(&project).expect("reopen");
+    assert!(
+        reopened
+            .workspace_snapshot()
+            .expect("snapshot")
+            .get_node(&node(0))
+            .expect("get")
+            .is_some(),
+        "graph still readable after a foreign repack"
+    );
+
+    // The `.keep` is load-bearing: remove it and the same repack folds the pack
+    // away — proving it was what protected acetone's deltas.
+    std::fs::remove_file(&keep).expect("rm keep");
+    git(&project, &["repack", "-a", "-d"]);
+    assert!(
+        !pack.exists(),
+        "without .keep, `git repack -a -d` must fold acetone's pack into git's"
+    );
+    // No object was lost — git repacked them into its own pack.
+    git(&project, &["fsck", "--strict"]);
+    let reopened = Repository::open(&project).expect("reopen");
+    assert!(
+        reopened
+            .workspace_snapshot()
+            .expect("snapshot")
+            .get_node(&node(0))
+            .expect("get")
+            .is_some(),
+        "graph still readable after its pack was folded into git's"
     );
 }
 

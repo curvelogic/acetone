@@ -411,10 +411,12 @@ impl GitStore {
         let dir = self.repo().common_dir().join("objects").join("pack");
         let pack_path = dir.join(format!("{stem}.pack"));
         let idx_path = dir.join(format!("{stem}.idx"));
+        let keep_path = dir.join(format!("{stem}.keep"));
         // Content-addressed: if this exact pack is already durably installed,
         // do not touch it (truncating the only copy of pruned objects is fatal).
+        // Still ensure the `.keep` marker exists — a prior run may predate it.
         if pack_path.exists() && idx_path.exists() {
-            return Ok(());
+            return ensure_keep(&dir, &keep_path);
         }
         std::fs::create_dir_all(&dir)
             .map_err(|e| StoreError::backend("creating objects/pack", e))?;
@@ -430,11 +432,17 @@ impl GitStore {
         std::fs::rename(&idx_tmp, &idx_path)
             .map_err(|e| StoreError::backend("publishing pack index", e))?;
         fsync_dir(&dir)?;
+        // Mark the pack `.keep` (ADR-0053): a foreign `git gc`/`git repack`
+        // (including git's automatic `gc.auto`, which a co-tenant repo's owner
+        // triggers routinely) skips a kept pack, so acetone's content-aware
+        // REF_DELTAs (ADR-0011) survive instead of being re-deltified back to a
+        // poorly-compressed baseline. Written after the pack is durable; its
+        // loss is a missed optimisation, never data loss. acetone manages the
+        // kept pack's retirement itself via `supersede_packs`.
+        ensure_keep(&dir, &keep_path)?;
         Ok(())
     }
 
-    /// Delete loose object files for objects now in the new pack. Gated on
-    /// membership in `packed`, so nothing is deleted that was not preserved.
     /// Delete the loose copies of the objects we just packed — except any also
     /// in `guard` (reachable from a non-graph ref), whose loose representation
     /// is left exactly as it was so `gc` never disturbs storage the graph does
@@ -494,6 +502,9 @@ impl GitStore {
             if contained {
                 remove_if_present(&dir.join(format!("{stem}.pack")))?;
                 remove_if_present(&idx_path)?;
+                // Retire the superseded pack's `.keep` too, so it does not
+                // outlive its pack (ADR-0053).
+                remove_if_present(&dir.join(format!("{stem}.keep")))?;
                 pruned += 1;
             } else {
                 survivors.push(stem.clone());
@@ -793,6 +804,33 @@ fn remove_if_present(path: &std::path::Path) -> Result<(), StoreError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(StoreError::backend("removing superseded pack file", e)),
     }
+}
+
+/// The body of a consolidation pack's `.keep` marker. git ignores the content;
+/// it records why the pack is kept for a human reading the objects directory.
+const KEEP_REASON: &str = "acetone consolidation pack (ADR-0011 delta encoding, ADR-0053 durability).\n\
+     Content-aware REF_DELTAs; do not repack — acetone manages this pack's\n\
+     lifecycle via its own consolidation (git repack/gc skips kept packs).\n";
+
+/// Ensure `<stem>.keep` exists next to a consolidation pack so a foreign
+/// `git gc`/`git repack` leaves it (and its deltas) alone (ADR-0053). Idempotent
+/// and cheap; durability is a directory `fsync` (not a temp-and-rename — a torn
+/// `.keep` is impossible since git reads only its existence, never its content).
+///
+/// Called from `install_pack` *after* the pack and index are durable, so a
+/// failure here aborts the `consolidate` run **before** any pruning — a safe,
+/// recoverable state (the pack is installed and valid; the loose sources are
+/// untouched; the next run heals the missing marker and prunes). This is
+/// deliberately loud rather than swallowed: silently skipping the marker would
+/// let a later `git gc` quietly undo the deltas the marker exists to protect.
+fn ensure_keep(dir: &std::path::Path, keep_path: &std::path::Path) -> Result<(), StoreError> {
+    if keep_path.exists() {
+        return Ok(());
+    }
+    std::fs::write(keep_path, KEEP_REASON)
+        .map_err(|e| StoreError::backend("writing pack .keep", e))?;
+    fsync_dir(dir)?;
+    Ok(())
 }
 
 /// Write `data` to `path` and `fsync` it, so the bytes are on stable storage
