@@ -115,6 +115,31 @@ impl GraphRefNamespace {
     pub fn head_ref(&self) -> &str {
         &self.head_ref
     }
+
+    /// Whether the ref `full` (a full name, e.g. `refs/heads/main`) belongs to
+    /// this graph — the ownership test `gc` uses to decide what it may repack
+    /// (ADR-0051 reading B). A ref under `refs/heads/` or `refs/tags/` is the
+    /// graph's only if it sits under this namespace's branch/tag prefix, so a
+    /// co-tenant's *code* branches and tags are foreign; git `HEAD` is the
+    /// graph's only in the standalone layout (co-tenant leaves git `HEAD` to the
+    /// code checkout); every other ref — in particular acetone's own
+    /// `refs/acetone/*` head pointer and worktree anchors — is the graph's.
+    ///
+    /// In the standalone layout the branch/tag prefixes are `refs/heads/` /
+    /// `refs/tags/` and the head pointer is git `HEAD`, so *every* ref is owned
+    /// and the guard set is empty — consolidation is unchanged.
+    pub fn owns_ref(&self, full: &str) -> bool {
+        if full.starts_with("refs/heads/") {
+            return full.starts_with(&self.branch_prefix);
+        }
+        if full.starts_with("refs/tags/") {
+            return full.starts_with(&self.tag_prefix);
+        }
+        if full == "HEAD" {
+            return self.head_ref == "HEAD";
+        }
+        true
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +174,46 @@ mod tests {
         let ns = GraphRefNamespace::standalone();
         assert_eq!(ns.branch_ref("main"), "refs/heads/main");
         assert_eq!(ns.tag_ref("v1"), "refs/tags/v1");
+    }
+
+    #[test]
+    fn standalone_owns_every_ref() {
+        // In the standalone layout there is no foreign ref: gc's guard set is
+        // empty, so consolidation packs the whole reachable set as before.
+        let ns = GraphRefNamespace::standalone();
+        for r in [
+            "refs/heads/main",
+            "refs/heads/acetone/g/main",
+            "refs/tags/v1",
+            "HEAD",
+            "refs/acetone/worktree-anchors/abc",
+            "refs/acetone/g/HEAD",
+        ] {
+            assert!(ns.owns_ref(r), "standalone should own {r}");
+        }
+    }
+
+    #[test]
+    fn co_tenant_owns_only_its_own_refs() {
+        let ns = GraphRefNamespace::co_tenant("g");
+        // The graph's own refs — packable.
+        for r in [
+            "refs/heads/acetone/g/main",
+            "refs/tags/acetone/g/v1",
+            "refs/acetone/g/HEAD",
+            "refs/acetone/worktree-anchors/abc",
+        ] {
+            assert!(ns.owns_ref(r), "co-tenant should own {r}");
+        }
+        // The user's code refs and git HEAD — foreign, the prune guard.
+        for r in [
+            "refs/heads/main",
+            "refs/heads/feature/x",
+            "refs/tags/v1.0",
+            "HEAD",
+        ] {
+            assert!(!ns.owns_ref(r), "co-tenant must not own {r}");
+        }
     }
 
     #[test]

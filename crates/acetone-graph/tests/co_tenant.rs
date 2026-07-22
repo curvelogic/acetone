@@ -99,20 +99,62 @@ fn object_retrievable(project: &Path, hash: &str) -> bool {
         .success()
 }
 
+/// Count loose object files under `project/.git/objects` (the two-hex shards).
+fn loose_object_count(project: &Path) -> usize {
+    let objects = project.join(".git/objects");
+    let Ok(shards) = std::fs::read_dir(&objects) else {
+        return 0;
+    };
+    let mut count = 0;
+    for shard in shards.flatten() {
+        let name = shard.file_name();
+        let name = name.to_string_lossy();
+        if name.len() == 2
+            && name.chars().all(|c| c.is_ascii_hexdigit())
+            && let Ok(files) = std::fs::read_dir(shard.path())
+        {
+            count += files.flatten().count();
+        }
+    }
+    count
+}
+
+/// Whether object `hash` appears in any pack index under `project`.
+fn packed_object_exists(project: &Path, hash: &str) -> bool {
+    let pack_dir = project.join(".git/objects/pack");
+    let Ok(entries) = std::fs::read_dir(&pack_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("idx") {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(project)
+                .args(["verify-pack", "-v"])
+                .arg(&path)
+                .output()
+                .expect("verify-pack");
+            if String::from_utf8_lossy(&out.stdout).contains(hash) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[test]
-fn gc_consolidates_code_objects_without_losing_them() {
-    // Phase 8 exit criterion 2 (gc half): the graph's gc must keep every object
-    // reachable from the code history (never from any graph ref).
-    //
-    // acetone's gc repacks its *reachable set* (seeded from ALL refs) and prunes
-    // the now-redundant loose copies (consolidate::prune_loose only deletes
-    // objects it just packed). So "the code object still exists" is NOT the
-    // discriminating property — a non-reachable object is never pruned either,
-    // so that assertion would pass even under a graph-scoped-reachability
-    // regression. What actually distinguishes the two is that the code blob is
-    // DRAWN INTO the pack: its loose file is consolidated away yet it stays
-    // retrievable. Under graph-scoped reachability the code blob would not be
-    // packed, so its loose file would remain and this test would fail.
+fn gc_scopes_to_the_graph_and_leaves_code_storage_untouched() {
+    // Phase 8 exit criterion 2 (gc half), reading (B) — ADR-0051, Greg-ruled.
+    // acetone gc packs only objects reachable from the *graph's* refs; a
+    // co-tenant's code objects form a prune guard, so their storage is left
+    // exactly as git had it. The discriminator: after gc the code blob is STILL
+    // LOOSE (acetone neither packed nor pruned it) and still retrievable, while
+    // the graph's own loose objects have been consolidated away. Reading (A) —
+    // the repo-global repack that shipped in acetone-iva — would instead have
+    // drawn the code blob into acetone's pack and deleted its loose file; that
+    // is precisely what (B) must not do, so this test fails under a regression
+    // to (A).
     let (project, _dir, code_commit, code_blob) = code_repo();
     // Precondition: the freshly-committed code blob is loose, not yet packed.
     assert!(
@@ -138,23 +180,36 @@ fn gc_consolidates_code_objects_without_losing_them() {
             .expect("commit");
     }
 
+    let loose_before = loose_object_count(&project);
     graph.gc().expect("gc");
+    let loose_after = loose_object_count(&project);
 
-    // The discriminator: the code blob was in gc's reachable set, so it is now
-    // packed (loose file gone) AND still retrievable. A graph-scoped gc would
-    // leave the loose file in place, failing the first assertion.
+    // (B): the code blob's storage is untouched — still loose, still retrievable,
+    // and NOT drawn into any acetone pack.
     assert!(
-        !loose_object_exists(&project, &code_blob),
-        "gc must consolidate the code blob into a pack (proving it was reachable)"
+        loose_object_exists(&project, &code_blob),
+        "reading B: gc must leave the code blob's loose file in place (not pack/prune it)"
+    );
+    assert!(
+        !packed_object_exists(&project, &code_blob),
+        "reading B: the code blob must not appear in an acetone pack"
     );
     assert!(
         object_retrievable(&project, &code_blob),
-        "the consolidated code blob must remain retrievable"
+        "the code blob must remain retrievable"
     );
     assert!(
         object_retrievable(&project, &code_commit),
         "the code commit must remain retrievable"
     );
+
+    // gc really did consolidate the graph — not a no-op that would trivially
+    // leave the code blob loose: the graph's loose objects were packed away.
+    assert!(
+        loose_after < loose_before,
+        "gc must consolidate the graph's loose objects ({loose_before} -> {loose_after})"
+    );
+
     // And the code branch itself is untouched.
     assert_eq!(
         git(&project, &["rev-parse", "refs/heads/main"]),
