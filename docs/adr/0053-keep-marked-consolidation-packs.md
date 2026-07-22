@@ -1,6 +1,6 @@
 # ADR-0053: `.keep`-mark acetone's consolidation pack so a foreign `git gc` cannot degrade it
 
-*Status: accepted — pending ratification at the Phase 8 / 0.3 boundary · Date: 2026-07-22 · Bead: acetone-5cw*
+*Status: accepted — ratified by Greg at the Phase 8 / 0.3 boundary (2026-07-22) · Date: 2026-07-22 · Bead: acetone-5cw*
 
 ## Context
 
