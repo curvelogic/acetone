@@ -63,6 +63,11 @@ pub enum Command {
         /// Object format (hash function) for the new repository.
         #[arg(long, default_value = "sha1", value_parser = ["sha1", "sha256"])]
         object_format: String,
+        /// Create the graph as a **co-tenant** of an existing git repository,
+        /// on its own ref namespace (`refs/heads/acetone/<GRAPH>/*`) alongside
+        /// the code, instead of a standalone repository. GRAPH names the graph.
+        #[arg(long, value_name = "GRAPH")]
+        co_tenant: Option<String>,
         /// Directory to create the repository in (default: --repo, or `.`).
         path: Option<PathBuf>,
     },

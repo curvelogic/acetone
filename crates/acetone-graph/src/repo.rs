@@ -214,8 +214,14 @@ impl Repository {
         }
         // (2) Nor a standalone acetone workspace: co-tenant init starts a fresh
         //     graph and shares the per-worktree workspace ref, so it cannot be
-        //     layered onto an existing acetone repository.
-        if store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some() {
+        //     layered onto an existing acetone repository. Check both the
+        //     per-worktree ref and the legacy pre-ADR-0014 shared workspace ref,
+        //     so a legacy standalone repository is rejected too (otherwise a
+        //     co-tenant graph could be layered onto it, and a later write would
+        //     race two workspaces over the same refs).
+        if store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some()
+            || store.read_ref(&workspace_ref(DEFAULT_WORKSPACE))?.is_some()
+        {
             return Err(GraphError::ExistingAcetoneWorkspace);
         }
 

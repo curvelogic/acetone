@@ -18,7 +18,7 @@ use crate::cli::Command;
 use crate::json::{emit_json, key_tuple_to_json, value_to_json};
 use crate::value::{format_label, format_value, parse_kv, parse_value, sanitise_line};
 
-use crate::output::outln;
+use crate::output::{errln, outln};
 
 use serde_json::{Value as Json, json};
 
@@ -27,8 +27,9 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
     match command {
         Command::Init {
             object_format,
+            co_tenant,
             path,
-        } => init(repo_path, &object_format, path),
+        } => init(repo_path, &object_format, co_tenant.as_deref(), path),
         Command::Status { json } => status(repo_path, json),
         Command::Commit { message, trailer } => commit(repo_path, &message, &trailer),
         Command::Log { json } => log(repo_path, json),
@@ -151,7 +152,12 @@ fn fsck(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn init(repo_path: &Path, object_format: &str, path: Option<PathBuf>) -> Result<()> {
+fn init(
+    repo_path: &Path,
+    object_format: &str,
+    co_tenant: Option<&str>,
+    path: Option<PathBuf>,
+) -> Result<()> {
     let target = path.unwrap_or_else(|| repo_path.to_owned());
     let object_format = match object_format {
         "sha1" => ObjectFormat::Sha1,
@@ -159,14 +165,38 @@ fn init(repo_path: &Path, object_format: &str, path: Option<PathBuf>) -> Result<
         // Unreachable: clap's value_parser restricts the flag to these two.
         other => bail!("unsupported object format {other:?}"),
     };
+    let nondefault_format = !matches!(object_format, ObjectFormat::Sha1);
     let mut options = InitOptions::default();
     options.object_format = object_format;
-    Repository::init(&target, options)
-        .with_context(|| format!("initialising repository at {}", target.display()))?;
-    outln!(
-        "Initialized empty acetone repository in {}",
-        target.display()
-    );
+    if let Some(graph) = co_tenant {
+        // Co-tenant mode (ADR-0050): the graph lives inside an existing git
+        // repository, on its own ref namespace, alongside the code. The object
+        // format follows the host repository, so `--object-format` does not
+        // apply here — warn if the user explicitly asked for a non-default one.
+        if nondefault_format {
+            errln!(
+                "note: --object-format is ignored with --co-tenant; the graph shares the host repository's object format"
+            );
+        }
+        Repository::init_co_tenant(&target, graph, options).with_context(|| {
+            format!(
+                "initialising co-tenant graph {graph:?} in the repository at {}",
+                target.display()
+            )
+        })?;
+        outln!(
+            "Initialized co-tenant acetone graph {graph:?} in {} \
+             (branches under refs/heads/acetone/{graph}/)",
+            target.display()
+        );
+    } else {
+        Repository::init(&target, options)
+            .with_context(|| format!("initialising repository at {}", target.display()))?;
+        outln!(
+            "Initialized empty acetone repository in {}",
+            target.display()
+        );
+    }
     Ok(())
 }
 
