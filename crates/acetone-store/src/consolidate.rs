@@ -814,8 +814,15 @@ const KEEP_REASON: &str = "acetone consolidation pack (ADR-0011 delta encoding, 
 
 /// Ensure `<stem>.keep` exists next to a consolidation pack so a foreign
 /// `git gc`/`git repack` leaves it (and its deltas) alone (ADR-0053). Idempotent
-/// and cheap; a missing `.keep` only risks a lost optimisation, never data, so
-/// the write is best-effort-durable (content then a directory `fsync`).
+/// and cheap; durability is a directory `fsync` (not a temp-and-rename — a torn
+/// `.keep` is impossible since git reads only its existence, never its content).
+///
+/// Called from `install_pack` *after* the pack and index are durable, so a
+/// failure here aborts the `consolidate` run **before** any pruning — a safe,
+/// recoverable state (the pack is installed and valid; the loose sources are
+/// untouched; the next run heals the missing marker and prunes). This is
+/// deliberately loud rather than swallowed: silently skipping the marker would
+/// let a later `git gc` quietly undo the deltas the marker exists to protect.
 fn ensure_keep(dir: &std::path::Path, keep_path: &std::path::Path) -> Result<(), StoreError> {
     if keep_path.exists() {
         return Ok(());
