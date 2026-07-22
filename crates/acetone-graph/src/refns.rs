@@ -31,6 +31,12 @@ pub struct GraphRefNamespace {
     branch_prefix: String,
     tag_prefix: String,
     head_ref: String,
+    /// Whether this layout owns the *whole* repository — true for standalone
+    /// (the repo is the graph, so every ref, including `refs/remotes/*` and the
+    /// like, is the graph's), false for co-tenant (only the graph's own
+    /// prefixes and `refs/acetone/*` are owned; the rest is the user's code).
+    /// Drives [`Self::owns_ref`]'s treatment of refs outside branches/tags/HEAD.
+    owns_whole_repo: bool,
 }
 
 impl GraphRefNamespace {
@@ -44,6 +50,7 @@ impl GraphRefNamespace {
             branch_prefix: BRANCH_REF_PREFIX.to_owned(),
             tag_prefix: TAG_REF_PREFIX.to_owned(),
             head_ref: "HEAD".to_owned(),
+            owns_whole_repo: true,
         }
     }
 
@@ -68,6 +75,7 @@ impl GraphRefNamespace {
             branch_prefix: format!("refs/heads/acetone/{graph}/"),
             tag_prefix: format!("refs/tags/acetone/{graph}/"),
             head_ref: format!("refs/acetone/{graph}/HEAD"),
+            owns_whole_repo: false,
         }
     }
 
@@ -115,6 +123,39 @@ impl GraphRefNamespace {
     pub fn head_ref(&self) -> &str {
         &self.head_ref
     }
+
+    /// Whether the ref `full` (a full name, e.g. `refs/heads/main`) belongs to
+    /// this graph — the ownership test `gc` uses to decide what it may repack
+    /// (ADR-0051 reading B). A ref under `refs/heads/` or `refs/tags/` is the
+    /// graph's only if it sits under this namespace's branch/tag prefix, so a
+    /// co-tenant's *code* branches and tags are foreign; git `HEAD` is the
+    /// graph's only in the standalone layout (co-tenant leaves git `HEAD` to the
+    /// code checkout).
+    ///
+    /// Refs of any *other* shape — `refs/remotes/*`, `refs/notes/*`,
+    /// `refs/stash`, `refs/replace/*` — are handled by layout: in **standalone**
+    /// the repo *is* the graph, so they are the graph's (and consolidation is
+    /// byte-identical to before graph-scoping existed — the guard is empty). In
+    /// **co-tenant** they are the user's code (a clone's remote-tracking refs,
+    /// the user's notes/stash), so they are foreign and guarded; only acetone's
+    /// own `refs/acetone/*` (head pointer, worktree anchors) is the graph's.
+    /// Getting this wrong for `refs/remotes/*` would draw a cloned repo's code
+    /// objects into acetone's pack — exactly what reading B forbids.
+    pub fn owns_ref(&self, full: &str) -> bool {
+        if full.starts_with("refs/heads/") {
+            return full.starts_with(&self.branch_prefix);
+        }
+        if full.starts_with("refs/tags/") {
+            return full.starts_with(&self.tag_prefix);
+        }
+        if full == "HEAD" {
+            return self.head_ref == "HEAD";
+        }
+        // Any other ref shape: standalone owns the whole repo; co-tenant owns
+        // only acetone's own private refs and guards the rest (the user's
+        // remotes, notes, stash, replace).
+        self.owns_whole_repo || full.starts_with("refs/acetone/")
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +190,60 @@ mod tests {
         let ns = GraphRefNamespace::standalone();
         assert_eq!(ns.branch_ref("main"), "refs/heads/main");
         assert_eq!(ns.tag_ref("v1"), "refs/tags/v1");
+    }
+
+    #[test]
+    fn standalone_owns_every_ref() {
+        // In the standalone layout there is no foreign ref: gc's guard set is
+        // empty, so consolidation packs the whole reachable set as before —
+        // including a standalone graph that has been pushed/cloned and so has
+        // remote-tracking, notes or stash refs.
+        let ns = GraphRefNamespace::standalone();
+        for r in [
+            "refs/heads/main",
+            "refs/heads/acetone/g/main",
+            "refs/tags/v1",
+            "HEAD",
+            "refs/acetone/worktree-anchors/abc",
+            "refs/acetone/g/HEAD",
+            "refs/remotes/origin/main",
+            "refs/notes/commits",
+            "refs/stash",
+            "refs/replace/0123456789abcdef0123456789abcdef01234567",
+        ] {
+            assert!(ns.owns_ref(r), "standalone should own {r}");
+        }
+    }
+
+    #[test]
+    fn co_tenant_owns_only_its_own_refs() {
+        let ns = GraphRefNamespace::co_tenant("g");
+        // The graph's own refs — packable.
+        for r in [
+            "refs/heads/acetone/g/main",
+            "refs/tags/acetone/g/v1",
+            "refs/acetone/g/HEAD",
+            "refs/acetone/worktree-anchors/abc",
+        ] {
+            assert!(ns.owns_ref(r), "co-tenant should own {r}");
+        }
+        // The user's code refs, git HEAD, AND the other ref shapes a real
+        // (usually cloned) code repo carries — remote-tracking, notes, stash,
+        // replace — are foreign: the prune guard. Owning any of these would
+        // draw the user's code objects into acetone's pack (reading A).
+        for r in [
+            "refs/heads/main",
+            "refs/heads/feature/x",
+            "refs/tags/v1.0",
+            "HEAD",
+            "refs/remotes/origin/main",
+            "refs/remotes/upstream/release",
+            "refs/notes/commits",
+            "refs/stash",
+            "refs/replace/0123456789abcdef0123456789abcdef01234567",
+        ] {
+            assert!(!ns.owns_ref(r), "co-tenant must not own {r}");
+        }
     }
 
     #[test]

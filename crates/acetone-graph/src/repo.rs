@@ -955,7 +955,16 @@ impl Repository {
         for (anchor, _) in self.store.list_refs(WORKTREE_ANCHOR_PREFIX)? {
             self.store.delete_ref(&anchor)?;
         }
-        Ok(self.store.consolidate(ConsolidateOptions::default())?)
+        // Reading B (ADR-0051): pack only objects reachable from refs this graph
+        // owns; a co-tenant's code refs form a prune guard so their objects are
+        // preserved and their storage left untouched. In the standalone layout
+        // the namespace owns every ref, so this is the whole reachable set.
+        let namespace = &self.namespace;
+        Ok(self
+            .store
+            .consolidate_scoped(ConsolidateOptions::default(), &|name| {
+                namespace.owns_ref(name)
+            })?)
     }
 
     /// Whether the repository has any linked worktree — git records one

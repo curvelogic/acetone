@@ -157,6 +157,25 @@ impl GitStore {
     /// and are picked up by the next consolidation. Ordinary readers need no
     /// coordination.
     pub fn consolidate(&self, options: ConsolidateOptions) -> Result<ConsolidateStats, StoreError> {
+        // Every ref is a graph root: this is the standalone reading — pack the
+        // whole reachable set, no guard. Behaviour is identical to before the
+        // graph-scoping seam existed.
+        self.consolidate_scoped(options, &|_name| true)
+    }
+
+    /// Consolidate, packing only objects reachable from refs the `is_graph_ref`
+    /// predicate accepts (ADR-0051 reading B, `acetone-wao`). Objects reachable
+    /// from *rejected* (non-graph, e.g. co-tenant code) refs form a **prune
+    /// guard**: their loose copies are never deleted, so `gc` leaves storage the
+    /// graph does not own exactly as it found it. A standalone repository passes
+    /// an accept-all predicate (via [`Self::consolidate`]), for which the guard
+    /// is empty and the packed set is the whole reachable set — byte-identical
+    /// to the pre-scoping behaviour.
+    pub fn consolidate_scoped(
+        &self,
+        options: ConsolidateOptions,
+        is_graph_ref: &dyn Fn(&str) -> bool,
+    ) -> Result<ConsolidateStats, StoreError> {
         // Serialise consolidations (and their sidecar updates) on this
         // repository; released when this call returns.
         let _gc_guard = gix::lock::Marker::acquire_to_hold_resource(
@@ -166,8 +185,16 @@ impl GitStore {
         )
         .map_err(|e| StoreError::backend("locking for consolidation", e))?;
 
-        let reachable = self.reachable_objects()?;
+        // Split the refs into the graph's roots (what we pack) and the rest
+        // (the prune guard — objects we must not disturb).
+        let (pack_roots, guard_roots) = self.classify_ref_roots(is_graph_ref)?;
+        let reachable = self.reachable_from(&pack_roots)?;
         let present: HashSet<ObjectId> = reachable.iter().map(|(oid, _)| *oid).collect();
+        let guard: HashSet<ObjectId> = self
+            .reachable_from(&guard_roots)?
+            .into_iter()
+            .map(|(oid, _)| oid)
+            .collect();
         let hints = self.load_hints(&present)?;
         let plan = Plan::build(&reachable, &hints);
 
@@ -211,7 +238,7 @@ impl GitStore {
         self.install_pack(&stem, &pack.bytes, &idx)?;
 
         let pruned_loose = if options.prune_loose {
-            self.prune_loose(&packed)?
+            self.prune_loose(&packed, &guard)?
         } else {
             0
         };
@@ -232,15 +259,16 @@ impl GitStore {
         })
     }
 
-    /// Enumerate every object reachable from the repository's refs, with its
-    /// git kind. Walks the object graph iteratively (commits → tree + parents,
-    /// trees → entries, tags → target) using only object decoding, so it needs
-    /// no extra gix features and cannot overflow the stack on a hostile deep
-    /// tree.
-    fn reachable_objects(&self) -> Result<Vec<(ObjectId, gix::object::Kind)>, StoreError> {
-        use gix::object::Kind;
-
-        let mut stack: Vec<ObjectId> = Vec::new();
+    /// Resolve the repository's refs to root object ids, split by the
+    /// `is_graph_ref` predicate: refs it accepts seed the set we pack, refs it
+    /// rejects seed the prune guard. Symbolic chains are resolved to the named
+    /// object (annotated tags are *not* peeled — the tag object is itself
+    /// reachable); a dangling ref anchors nothing and is skipped. The predicate
+    /// sees each ref's full name (e.g. `refs/heads/main`).
+    fn classify_ref_roots(
+        &self,
+        is_graph_ref: &dyn Fn(&str) -> bool,
+    ) -> Result<(Vec<ObjectId>, Vec<ObjectId>), StoreError> {
         let references = self
             .repo()
             .references()
@@ -248,17 +276,35 @@ impl GitStore {
         let all = references
             .all()
             .map_err(|e| StoreError::backend("iterating refs for consolidation", e))?;
+        let mut pack_roots: Vec<ObjectId> = Vec::new();
+        let mut guard_roots: Vec<ObjectId> = Vec::new();
         for reference in all {
             let mut reference = reference
                 .map_err(|e| StoreError::corrupt("ref for consolidation", e.to_string()))?;
-            // Resolve symbolic chains to the object the ref names (without
-            // peeling annotated tags — the tag object is itself reachable).
-            // A dangling ref anchors nothing; skip it rather than fail the gc.
+            let name = reference.name().as_bstr().to_string();
             if let Ok(id) = reference.follow_to_object() {
-                stack.push(id.detach());
+                let oid = id.detach();
+                if is_graph_ref(&name) {
+                    pack_roots.push(oid);
+                } else {
+                    guard_roots.push(oid);
+                }
             }
         }
+        Ok((pack_roots, guard_roots))
+    }
 
+    /// Enumerate every object reachable from `roots`, with its git kind. Walks
+    /// the object graph iteratively (commits → tree + parents, trees → entries,
+    /// tags → target) using only object decoding, so it needs no extra gix
+    /// features and cannot overflow the stack on a hostile deep tree.
+    fn reachable_from(
+        &self,
+        roots: &[ObjectId],
+    ) -> Result<Vec<(ObjectId, gix::object::Kind)>, StoreError> {
+        use gix::object::Kind;
+
+        let mut stack: Vec<ObjectId> = roots.to_vec();
         let mut seen: HashSet<ObjectId> = HashSet::new();
         let mut out: Vec<(ObjectId, Kind)> = Vec::new();
         while let Some(oid) = stack.pop() {
@@ -389,10 +435,22 @@ impl GitStore {
 
     /// Delete loose object files for objects now in the new pack. Gated on
     /// membership in `packed`, so nothing is deleted that was not preserved.
-    fn prune_loose(&self, packed: &HashSet<ObjectId>) -> Result<usize, StoreError> {
+    /// Delete the loose copies of the objects we just packed — except any also
+    /// in `guard` (reachable from a non-graph ref), whose loose representation
+    /// is left exactly as it was so `gc` never disturbs storage the graph does
+    /// not own (ADR-0051 reading B). For a standalone repository `guard` is
+    /// empty, so every packed object's loose copy is pruned as before.
+    fn prune_loose(
+        &self,
+        packed: &HashSet<ObjectId>,
+        guard: &HashSet<ObjectId>,
+    ) -> Result<usize, StoreError> {
         let objects_dir = self.repo().common_dir().join("objects");
         let mut pruned = 0usize;
         for oid in packed {
+            if guard.contains(oid) {
+                continue;
+            }
             let hex = oid.to_string();
             let (shard, rest) = hex.split_at(2);
             let path = objects_dir.join(shard).join(rest);
