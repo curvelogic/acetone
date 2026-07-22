@@ -1,6 +1,6 @@
 # ADR-0052: Ship the format_version dispatch machinery; prove it with a synthetic v2, defer a real v2
 
-*Status: accepted — pending ratification at the Phase 8 / 0.3 boundary · Date: 2026-07-22 · Bead: acetone-5yr*
+*Status: **accepted — ratified (option B) by Greg at the Phase 8 / 0.3 boundary, 2026-07-22**: ship the dispatch machinery + prove it with a synthetic v2, defer a real `format_version = 2` to the first genuine format change. Exit criterion 3 met in the "machinery shipped + cross-version coexistence proven" sense. · Date: 2026-07-22 · Bead: acetone-5yr*
 
 ## Context
 

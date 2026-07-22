@@ -1,6 +1,6 @@
-# ADR-0051: Co-tenant `gc` is a repo-global repack — code objects are preserved, not left untouched
+# ADR-0051: Co-tenant `gc` is graph-scoped — it packs only the graph's objects and leaves code storage untouched
 
-*Status: proposed — flagged for Greg's ruling at the Phase 8 / 0.3 boundary (exit-criterion interpretation) · Date: 2026-07-21 · Bead: acetone-iva*
+*Status: superseded by the boundary ruling — Greg ruled **(B) graph-scoped** at the Phase 8 / 0.3 boundary (2026-07-22) and directed it be **delivered with full assurance** before co-tenancy is considered complete (not shipped as an (A) interim). (A) is the shipped starting point being replaced; (B) lands via `acetone-wao` (graph-scoped consolidation + re-proof) then `acetone-5cw` (`.keep` durability vs foreign `git gc`). · Date: 2026-07-21 (ruled 2026-07-22) · Bead: acetone-iva → acetone-wao*
 
 ## Context
 
@@ -39,41 +39,67 @@ So there are two coherent readings of "touch only graph refs":
 
 ## Decision
 
-**Ship (A) for 0.3 and record it as the interpretation of exit criterion 2's
-`gc` half; flag (B) as a deferred alternative for Greg's ruling at the
-boundary.**
+**(B) graph-scoped is the adopted semantics.** Greg ruled at the Phase 8 / 0.3
+boundary (2026-07-22): `acetone gc` must leave objects it does not own physically
+untouched — pack and prune only objects reachable from the *graph's* refs, never
+the user's code objects. It is to be **delivered with full assurance** (not
+shipped as an (A) interim).
 
-Rationale for (A) as the default: acetone `gc` is a deliberate, user-invoked
-maintenance action (not something that runs on every write), and repacking the
-reachable set is precisely what `git gc` does to the same repository — so it is
-neither surprising nor lossy. The co-tenancy promise that matters — *the graph
-never rewrites or moves the user's code history* — is kept: no code ref moves, no
-commit hash changes, every object stays retrievable. The `acetone-iva` proof
-test asserts the discriminating property (a code blob is drawn into `gc`'s pack —
-its loose file consolidated away yet still retrievable — which only holds if
-`gc`'s reachable set includes code), so a regression to graph-scoped reachability
-would fail it.
+(A) — the repo-global repack that shipped in `acetone-iva` — was the honest
+interim: it kept every code object retrievable and `fsck`-clean and moved no code
+ref, so exit criterion 2's "survive `gc`" held. But it *repacked* the user's code
+objects into an acetone-authored pack, rewriting the physical storage of code the
+graph does not own. Two things make (B) the right end state:
 
-This is an **exit-criterion interpretation**, which is Greg's call at the phase
-boundary. It is recorded here, and prominently in the Phase 8 report, as the
-shipped reading with (B) as the alternative he may prefer.
+- **Ownership.** "Alongside code" means acetone disturbs nothing it was not handed.
+  Repacking a co-tenant's code objects — even byte-preservingly — is a surprise a
+  guest should not spring.
+- **Durability against foreign `git gc`.** A co-tenant repo's owner runs `git gc`
+  (and git's *automatic* `gc.auto`) for their code, routinely and often silently.
+  Under (A) acetone's pack contains code objects, so protecting it with a `.keep`
+  (ADR-0053, `acetone-5cw`) would freeze the user's code-object packing under
+  acetone — invasive. Under (B) acetone's pack is graph-only, so it can be
+  `.keep`-protected to preserve acetone's content-aware deltas **without** touching
+  how the user's code is packed. (B) is the reading that makes the durability fix
+  clean.
+
+### How (B) is realised (`acetone-wao`)
+
+`consolidate` seeds its *reachable-to-pack* set from the graph's refs only
+(via the repository's `GraphRefNamespace`), not `references().all()`. It
+additionally computes the set reachable from **non-graph** refs as an explicit
+**prune-guard**: a loose object in that guard set is never pruned, even if it is
+also graph-reachable (a shared object stays as git left it). Because a
+standalone repo's graph refs *are* all of `refs/heads/*` + `refs/tags/*` + `HEAD`,
+the graph-scoped set equals the all-refs set there, so **standalone consolidation
+is byte-identical** to today; only co-tenant mode narrows. The `packed == present`
+tripwire is retained against the graph-reachable `present`. The `acetone-iva`
+proof is rewritten: a code-only object **survives `gc` and is *not* in acetone's
+pack** (its loose/packed representation is left as git had it), which is the
+discriminating property (A) could not satisfy.
 
 ## Consequences
 
-- **Exit criterion 2 is met under reading (A)** and proven by `acetone-iva`. The
-  phase report states the interpretation explicitly rather than leaving "touch
-  only graph refs" ambiguous.
-- **`gc` repacks code objects.** In a co-tenant repository, `acetone gc`
-  repacks and prunes-loose the user's code objects along with the graph's —
-  byte-preserving and `fsck`-clean, equivalent to `git gc`, but it is whole-repo
-  maintenance, not graph-only.
-- **Foreclosed for now:** the stronger (B) guarantee. Adopting it later means
-  scoping `consolidate`'s reachable set (and pack) to the graph's refs while
-  *still* treating code refs as roots that must not be pruned — a more intricate
-  reachability split. No format impact either way.
-- **Revisit if:** Greg rules for (B) at the boundary, or a co-tenant user finds
-  acetone repacking their code objects undesirable (e.g. it disturbs their own
-  pack tuning). Until then (A) stands, documented.
+- **Exit criterion 2's `gc` half is met under (B)** once `acetone-wao` lands:
+  `acetone gc` provably touches only graph objects, and a code-only object is
+  preserved *and* left in git's own storage (not consolidated into acetone's
+  pack). The `acetone-iva` proof is rewritten to assert that discriminating
+  property. Until `wao` merges, (A) is what the code does — the honest interim.
+- **`acetone gc` no longer repacks code objects.** In a co-tenant repository it
+  packs and prunes-loose only the graph's objects; the user's code objects are
+  left exactly as git arranged them (loose or in git's packs), with an explicit
+  prune-guard so nothing reachable from a non-graph ref is ever pruned.
+- **Standalone is unchanged.** A standalone repo's graph refs are all of
+  `refs/heads/*` + `refs/tags/*` + `HEAD`, so the graph-scoped reachable set
+  equals the all-refs set and consolidation is byte-identical to today.
+- **This unblocks the durability fix.** With a graph-only pack, `acetone-5cw`
+  (ADR-0053) can mark it `.keep` so a foreign `git gc`/`git repack` (and
+  `gc.auto`) leaves acetone's content-aware deltas intact — without freezing the
+  user's code-object packing.
+- **Cost:** `consolidate` walks non-graph refs too (for the prune-guard), so it
+  is not blind to code history — but it never *repacks* it, which is the
+  expensive and intrusive part. The efficiency and ownership wins are in what it
+  writes and deletes, not in what it reads.
 
 No format impact: `gc` changes object *storage*, never object *content* or
 `format_version`.

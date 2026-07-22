@@ -1,6 +1,6 @@
 # ADR-0049: `GraphRefNamespace` — one parameterised ref layout, standalone and co-tenant
 
-*Status: accepted — pending ratification at the Phase 8 / 0.3 boundary · Date: 2026-07-21 · Bead: acetone-gns*
+*Status: accepted — ratified by Greg at the Phase 8 / 0.3 boundary (2026-07-22) · Date: 2026-07-21 · Bead: acetone-gns*
 
 ## Context
 
