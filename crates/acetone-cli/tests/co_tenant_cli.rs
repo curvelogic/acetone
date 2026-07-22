@@ -127,7 +127,7 @@ fn init_co_tenant_on_a_non_git_directory_errors_clearly() {
 }
 
 #[test]
-fn init_co_tenant_twice_reports_the_existing_graph() {
+fn init_co_tenant_refuses_a_second_graph_and_names_the_existing_one() {
     let (_dir, repo) = code_repo();
     assert!(
         acetone(&repo, &["init", "--co-tenant", "assets"])

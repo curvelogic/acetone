@@ -18,7 +18,7 @@ use crate::cli::Command;
 use crate::json::{emit_json, key_tuple_to_json, value_to_json};
 use crate::value::{format_label, format_value, parse_kv, parse_value, sanitise_line};
 
-use crate::output::outln;
+use crate::output::{errln, outln};
 
 use serde_json::{Value as Json, json};
 
@@ -165,13 +165,19 @@ fn init(
         // Unreachable: clap's value_parser restricts the flag to these two.
         other => bail!("unsupported object format {other:?}"),
     };
+    let nondefault_format = !matches!(object_format, ObjectFormat::Sha1);
     let mut options = InitOptions::default();
     options.object_format = object_format;
     if let Some(graph) = co_tenant {
         // Co-tenant mode (ADR-0050): the graph lives inside an existing git
         // repository, on its own ref namespace, alongside the code. The object
         // format follows the host repository, so `--object-format` does not
-        // apply here.
+        // apply here — warn if the user explicitly asked for a non-default one.
+        if nondefault_format {
+            errln!(
+                "note: --object-format is ignored with --co-tenant; the graph shares the host repository's object format"
+            );
+        }
         Repository::init_co_tenant(&target, graph, options).with_context(|| {
             format!(
                 "initialising co-tenant graph {graph:?} in the repository at {}",
