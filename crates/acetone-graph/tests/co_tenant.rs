@@ -99,6 +99,46 @@ fn object_retrievable(project: &Path, hash: &str) -> bool {
         .success()
 }
 
+/// Create a loose blob + tree + commit reachable *only* from `refname` (using
+/// a throwaway index so the real index and `main` are untouched), and return
+/// the blob's hash. Models a code object a cloned repo carries under
+/// `refs/remotes/*` — reachable from a non-graph ref, not from any branch.
+fn loose_commit_only_on_ref(project: &Path, refname: &str) -> String {
+    let index = project.join(".git/acetone-test-index");
+    let run = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .env("GIT_INDEX_FILE", &index)
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout)
+            .expect("utf8")
+            .trim()
+            .to_owned()
+    };
+    std::fs::write(project.join("remote-only.txt"), "remote-only content").expect("write");
+    let blob = run(&["hash-object", "-w", "remote-only.txt"]);
+    run(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},remote-only.txt"),
+    ]);
+    let tree = run(&["write-tree"]);
+    let commit = run(&["commit-tree", &tree, "-m", "remote-only commit"]);
+    run(&["update-ref", refname, &commit]);
+    std::fs::remove_file(project.join("remote-only.txt")).ok();
+    std::fs::remove_file(&index).ok();
+    blob
+}
+
 /// Count loose object files under `project/.git/objects` (the two-hex shards).
 fn loose_object_count(project: &Path) -> usize {
     let objects = project.join(".git/objects");
@@ -214,6 +254,61 @@ fn gc_scopes_to_the_graph_and_leaves_code_storage_untouched() {
     assert_eq!(
         git(&project, &["rev-parse", "refs/heads/main"]),
         code_commit
+    );
+}
+
+#[test]
+fn gc_guards_code_reachable_only_from_remote_tracking_refs() {
+    // Reading B, the realistic co-tenant shape: a graph added to a *cloned* code
+    // repo, which carries the code under `refs/remotes/origin/*` (and may carry
+    // notes/stash). Those are the user's code, not the graph's — gc must guard
+    // them exactly like `refs/heads/*` code branches. A code object reachable
+    // ONLY from a remote-tracking ref must stay loose and out of acetone's pack;
+    // owning it (the fallthrough bug) would draw a clone's code into acetone's
+    // pack — reading A in disguise.
+    let (project, _dir, _code_commit, _code_blob) = code_repo();
+    let remote_blob = loose_commit_only_on_ref(&project, "refs/remotes/origin/main");
+    assert!(
+        loose_object_exists(&project, &remote_blob),
+        "precondition: remote-only code blob is loose"
+    );
+
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 30);
+    for round in 0..10i64 {
+        let mut tx = graph.begin_write().expect("begin");
+        tx.put_node(
+            &node(round % 30),
+            &NodeRecord::new(
+                [],
+                BTreeMap::from([("v".to_owned(), Value::Int(2000 + round))]),
+            ),
+        )
+        .expect("node");
+        tx.commit(&format!("graph: churn {round}"), &[], None)
+            .expect("commit");
+    }
+
+    graph.gc().expect("gc");
+
+    // The remote-tracking code object is guarded: still loose, never packed by
+    // acetone, still retrievable.
+    assert!(
+        loose_object_exists(&project, &remote_blob),
+        "reading B: gc must not pack/prune a code object reachable only from refs/remotes/*"
+    );
+    assert!(
+        object_retrievable(&project, &remote_blob),
+        "the remote-only code blob must remain retrievable"
+    );
+    // The remote-tracking ref itself is untouched.
+    assert!(
+        object_retrievable(
+            &project,
+            &git(&project, &["rev-parse", "refs/remotes/origin/main"])
+        ),
+        "the remote-tracking ref's commit must remain retrievable"
     );
 }
 
