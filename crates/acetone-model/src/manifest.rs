@@ -31,6 +31,16 @@
 //! is strict and total: exactly the canonical bytes, every height and
 //! parameter validated, never a panic on untrusted input. Any change is
 //! a `format_version` bump (spec §10).
+//!
+//! **Read-old-write-new (ADR-0048, ADR-0052).** Because the version is
+//! read before the body, [`Manifest::decode`] *dispatches* on it rather
+//! than demanding the current version: [`Manifest::DECODERS`] holds one
+//! retained body reader per format acetone has ever shipped (today just
+//! version 1). New writes always emit `FORMAT_VERSION`; older commits are
+//! read through their era's decoder; nothing is rewritten, so a single
+//! repository may hold commits at several versions side by side. A version
+//! with no retained decoder — a repository from a *newer* build — is
+//! rejected, not guessed at.
 
 use crate::cbor::{
     MAJOR_ARRAY, MAJOR_BYTES, MAJOR_MAP, MAJOR_UNSIGNED, Reader, canonical_str_cmp, write_head,
@@ -46,6 +56,12 @@ use thiserror::Error;
 /// encoding, value encoding, chunking parameters, map layouts or the
 /// manifest schema increments it.
 pub const FORMAT_VERSION: u32 = 1;
+
+/// A retained body decoder for one format version: reads `body` from a
+/// reader positioned just after the outer `[format_version, _]` head.
+/// [`Manifest::DECODERS`] keys one of these per version acetone has shipped
+/// — the read-old-write-new machinery of ADR-0048/ADR-0052.
+type BodyDecoder = fn(&mut Reader) -> Result<Manifest, ManifestDecodeError>;
 
 /// Errors from decoding a manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -133,53 +149,89 @@ impl Manifest {
         let mut out = Vec::new();
         write_head(&mut out, MAJOR_ARRAY, 2);
         write_head(&mut out, MAJOR_UNSIGNED, u64::from(FORMAT_VERSION));
+        self.write_body(&mut out);
+        out
+    }
+
+    /// Write the version-`FORMAT_VERSION` body map (everything inside the
+    /// outer `[format_version, body]` envelope). Factored out so the
+    /// envelope and the body have separate, testable seams — mirroring the
+    /// decode side, where [`Self::read_body_current`] reads exactly this.
+    fn write_body(&self, out: &mut Vec<u8>) {
         let fields = 6 + u64::from(self.conflicts.is_some());
-        write_head(&mut out, MAJOR_MAP, fields);
+        write_head(out, MAJOR_MAP, fields);
         // Canonical key order (verified against canonical_str_cmp in
         // tests): nodes, schema, indexes, conflicts?, edges_fwd,
         // edges_rev, chunk_params.
-        write_text(&mut out, "nodes");
-        write_map_root(&mut out, &self.nodes);
-        write_text(&mut out, "schema");
-        write_map_root(&mut out, &self.schema);
-        write_text(&mut out, "indexes");
+        write_text(out, "nodes");
+        write_map_root(out, &self.nodes);
+        write_text(out, "schema");
+        write_map_root(out, &self.schema);
+        write_text(out, "indexes");
         let mut indexes: Vec<(&String, &MapRoot)> = self.indexes.iter().collect();
         indexes.sort_by(|a, b| canonical_str_cmp(a.0, b.0));
-        write_head(&mut out, MAJOR_MAP, indexes.len() as u64);
+        write_head(out, MAJOR_MAP, indexes.len() as u64);
         for (name, root) in indexes {
-            write_text(&mut out, name);
-            write_map_root(&mut out, root);
+            write_text(out, name);
+            write_map_root(out, root);
         }
         if let Some(conflicts) = &self.conflicts {
-            write_text(&mut out, "conflicts");
-            write_map_root(&mut out, conflicts);
+            write_text(out, "conflicts");
+            write_map_root(out, conflicts);
         }
-        write_text(&mut out, "edges_fwd");
-        write_map_root(&mut out, &self.edges_fwd);
-        write_text(&mut out, "edges_rev");
-        write_map_root(&mut out, &self.edges_rev);
-        write_text(&mut out, "chunk_params");
-        write_head(&mut out, MAJOR_ARRAY, 3);
+        write_text(out, "edges_fwd");
+        write_map_root(out, &self.edges_fwd);
+        write_text(out, "edges_rev");
+        write_map_root(out, &self.edges_rev);
+        write_text(out, "chunk_params");
+        write_head(out, MAJOR_ARRAY, 3);
         write_head(
-            &mut out,
+            out,
             MAJOR_UNSIGNED,
             u64::from(self.chunk_params.min_bytes()),
         );
         write_head(
-            &mut out,
+            out,
             MAJOR_UNSIGNED,
             u64::from(self.chunk_params.mask_bits()),
         );
         write_head(
-            &mut out,
+            out,
             MAJOR_UNSIGNED,
             u64::from(self.chunk_params.max_bytes()),
         );
-        out
     }
 
     /// Decode, strictly: exactly the bytes [`Self::encode`] produces.
+    ///
+    /// Read-old-write-new (ADR-0048, ADR-0052): the outer envelope is the
+    /// stable `[format_version, body]`, so decode reads the version *first*
+    /// and dispatches to the retained decoder for that version. Today
+    /// [`Self::DECODERS`] holds exactly the current format; a future format
+    /// bump adds a row and keeps the older reader, so a repository may hold
+    /// commits at several versions side by side and old commits stay
+    /// readable with no history rewrite. A version with no retained decoder
+    /// (a repository written by a *newer* build) is rejected with
+    /// [`ManifestDecodeError::UnsupportedVersion`] rather than misread.
     pub fn decode(bytes: &[u8]) -> Result<Self, ManifestDecodeError> {
+        Self::decode_with(bytes, Self::DECODERS)
+    }
+
+    /// The retained per-version body decoders, keyed by the
+    /// `format_version` each reads. New writes always emit
+    /// `FORMAT_VERSION`; this table only ever *grows* (a format bump adds a
+    /// row and never removes one), so every version acetone has shipped
+    /// stays readable. See ADR-0048.
+    const DECODERS: &'static [(u32, BodyDecoder)] = &[(FORMAT_VERSION, Manifest::decode_v1_body)];
+
+    /// Read the `[format_version, body]` envelope and dispatch `body` to the
+    /// matching decoder in `decoders`. Shared by [`Self::decode`] (which
+    /// passes [`Self::DECODERS`]) and by tests that supply a multi-version
+    /// table to prove cross-version coexistence.
+    fn decode_with(
+        bytes: &[u8],
+        decoders: &[(u32, BodyDecoder)],
+    ) -> Result<Self, ManifestDecodeError> {
         let mut reader = Reader::new(bytes);
         let arity = reader.read_head(MAJOR_ARRAY)?;
         if arity != 2 {
@@ -188,9 +240,33 @@ impl Manifest {
             ));
         }
         let version = reader.read_head(MAJOR_UNSIGNED)?;
-        if version != u64::from(FORMAT_VERSION) {
-            return Err(ManifestDecodeError::UnsupportedVersion(version));
+        let decoder = u32::try_from(version).ok().and_then(|v| {
+            decoders
+                .iter()
+                .find_map(|(ver, d)| (*ver == v).then_some(d))
+        });
+        match decoder {
+            Some(decode_body) => decode_body(&mut reader),
+            None => Err(ManifestDecodeError::UnsupportedVersion(version)),
         }
+    }
+
+    /// Decode a version-1 (current-format) body, positioned just after the
+    /// outer `[format_version, _]` head. Strict and total: exactly the bytes
+    /// [`Self::write_body`] produces, no trailing bytes.
+    fn decode_v1_body(reader: &mut Reader) -> Result<Self, ManifestDecodeError> {
+        let manifest = Self::read_body_current(reader)?;
+        if reader.remaining() != 0 {
+            return Err(ManifestDecodeError::Cbor(ValueDecodeError::TrailingBytes));
+        }
+        Ok(manifest)
+    }
+
+    /// Read exactly the current-format body map, leaving the reader
+    /// positioned immediately after it (no trailing-bytes check — the caller
+    /// owns end-of-input policy, so a future body that *extends* this one can
+    /// reuse it). Its inverse is [`Self::write_body`].
+    fn read_body_current(reader: &mut Reader) -> Result<Self, ManifestDecodeError> {
         let fields = reader.read_head(MAJOR_MAP)?;
         let conflicts_present = match fields {
             6 => false,
@@ -201,11 +277,11 @@ impl Manifest {
                 ));
             }
         };
-        expect_field(&mut reader, "nodes")?;
-        let nodes = read_map_root(&mut reader)?;
-        expect_field(&mut reader, "schema")?;
-        let schema = read_map_root(&mut reader)?;
-        expect_field(&mut reader, "indexes")?;
+        expect_field(reader, "nodes")?;
+        let nodes = read_map_root(reader)?;
+        expect_field(reader, "schema")?;
+        let schema = read_map_root(reader)?;
+        expect_field(reader, "indexes")?;
         let count = reader.read_head(MAJOR_MAP)?;
         if count > reader.remaining() as u64 {
             return Err(ManifestDecodeError::Cbor(ValueDecodeError::LengthOverrun {
@@ -227,35 +303,32 @@ impl Manifest {
                     "index names must be strictly ascending",
                 ));
             }
-            let root = read_map_root(&mut reader)?;
+            let root = read_map_root(reader)?;
             previous = Some(name.clone());
             indexes.insert(name, root);
         }
         let conflicts = if conflicts_present {
-            expect_field(&mut reader, "conflicts")?;
-            Some(read_map_root(&mut reader)?)
+            expect_field(reader, "conflicts")?;
+            Some(read_map_root(reader)?)
         } else {
             None
         };
-        expect_field(&mut reader, "edges_fwd")?;
-        let edges_fwd = read_map_root(&mut reader)?;
-        expect_field(&mut reader, "edges_rev")?;
-        let edges_rev = read_map_root(&mut reader)?;
-        expect_field(&mut reader, "chunk_params")?;
+        expect_field(reader, "edges_fwd")?;
+        let edges_fwd = read_map_root(reader)?;
+        expect_field(reader, "edges_rev")?;
+        let edges_rev = read_map_root(reader)?;
+        expect_field(reader, "chunk_params")?;
         let arity = reader.read_head(MAJOR_ARRAY)?;
         if arity != 3 {
             return Err(ManifestDecodeError::Shape(
                 "chunk_params must be [min_bytes, mask_bits, max_bytes]",
             ));
         }
-        let min_bytes = read_u32(&mut reader)?;
-        let mask_bits = read_u32(&mut reader)?;
-        let max_bytes = read_u32(&mut reader)?;
+        let min_bytes = read_u32(reader)?;
+        let mask_bits = read_u32(reader)?;
+        let max_bytes = read_u32(reader)?;
         let chunk_params = ChunkParams::new(min_bytes, mask_bits, max_bytes)
             .map_err(|e| ManifestDecodeError::InvalidParams(e.to_string()))?;
-        if reader.remaining() != 0 {
-            return Err(ManifestDecodeError::Cbor(ValueDecodeError::TrailingBytes));
-        }
         Ok(Manifest {
             chunk_params,
             schema,
@@ -452,5 +525,144 @@ mod tests {
         assert_eq!(root.hash(), m.nodes.hash);
         assert_eq!(root.height(), m.nodes.height);
         assert_eq!(MapRoot::from_root(&root), m.nodes);
+    }
+
+    // -------------------------------------------------------------------
+    // Read-old-write-new (acetone-5yr, ADR-0048/ADR-0052).
+    //
+    // A *synthetic* format_version 2 exists only here, to prove the
+    // dispatch machinery: its body is the current body map wrapped in a
+    // two-element array `[body_map, minor]`, a shape the shipped v1
+    // decoder rejects and a v2 decoder accepts. No v2 ships in the binary.
+    // -------------------------------------------------------------------
+
+    /// Encode `m` as a synthetic `format_version = 2` manifest:
+    /// `[2, [<current body map>, minor]]`.
+    fn encode_v2(m: &Manifest, minor: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_head(&mut out, MAJOR_ARRAY, 2);
+        write_head(&mut out, MAJOR_UNSIGNED, 2);
+        write_head(&mut out, MAJOR_ARRAY, 2);
+        m.write_body(&mut out);
+        write_head(&mut out, MAJOR_UNSIGNED, u64::from(minor));
+        out
+    }
+
+    /// A retained decoder for the synthetic v2: reads the current body map
+    /// (reusing the shipped reader) plus the v2-only `minor` field.
+    fn decode_v2(reader: &mut Reader) -> Result<Manifest, ManifestDecodeError> {
+        let arity = reader.read_head(MAJOR_ARRAY)?;
+        if arity != 2 {
+            return Err(ManifestDecodeError::Shape("v2 body must be [body, minor]"));
+        }
+        let manifest = Manifest::read_body_current(reader)?;
+        let _minor = reader.read_head(MAJOR_UNSIGNED)?;
+        if reader.remaining() != 0 {
+            return Err(ManifestDecodeError::Cbor(ValueDecodeError::TrailingBytes));
+        }
+        Ok(manifest)
+    }
+
+    /// Git-blob content address, exactly as `GitStore` would compute it, so
+    /// the coexistence test reasons about real object identities.
+    fn blob_hash(bytes: &[u8]) -> Hash {
+        let oid = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, bytes)
+            .expect("SHA-1 blob hashing is infallible for in-memory data");
+        Hash::from_bytes(oid.as_bytes()).expect("git digest is a valid hash width")
+    }
+
+    #[test]
+    fn decode_dispatches_to_the_matching_version() {
+        let decoders: &[(u32, BodyDecoder)] =
+            &[(FORMAT_VERSION, Manifest::decode_v1_body), (2, decode_v2)];
+        let m = manifest(false);
+        // v1 bytes route to the v1 decoder; v2 bytes to the v2 decoder;
+        // both reconstruct the same manifest.
+        assert_eq!(Manifest::decode_with(&m.encode(), decoders).unwrap(), m);
+        assert_eq!(
+            Manifest::decode_with(&encode_v2(&m, 1), decoders).unwrap(),
+            m
+        );
+        // A version present in neither table row is still rejected.
+        let mut v9 = Vec::new();
+        write_head(&mut v9, MAJOR_ARRAY, 2);
+        write_head(&mut v9, MAJOR_UNSIGNED, 9);
+        write_head(&mut v9, MAJOR_MAP, 0);
+        assert_eq!(
+            Manifest::decode_with(&v9, decoders),
+            Err(ManifestDecodeError::UnsupportedVersion(9))
+        );
+    }
+
+    #[test]
+    fn read_old_write_new_coexistence() {
+        // The read-old-write-new proof: one content-addressed store holds a
+        // v1 commit's manifest and a v2 commit's manifest together; both
+        // read, the v1 object is untouched by the v2 write, and re-writing
+        // still emits current-format bytes at the same address.
+        let decoders: &[(u32, BodyDecoder)] =
+            &[(FORMAT_VERSION, Manifest::decode_v1_body), (2, decode_v2)];
+        let m = manifest(true);
+        let v1_bytes = m.encode();
+        let v2_bytes = encode_v2(&m, 7);
+
+        let mut store: BTreeMap<Hash, Vec<u8>> = BTreeMap::new();
+        let v1_hash = blob_hash(&v1_bytes);
+        let v2_hash = blob_hash(&v2_bytes);
+        store.insert(v1_hash, v1_bytes.clone());
+        // Writing the v2 object is purely additive: distinct address, and
+        // the v1 object's bytes/address are unchanged (no rewrite).
+        store.insert(v2_hash, v2_bytes);
+        assert_ne!(v1_hash, v2_hash, "distinct versions are distinct objects");
+        assert_eq!(
+            store.get(&v1_hash),
+            Some(&v1_bytes),
+            "v1 object unchanged by the v2 write"
+        );
+
+        // Both decode, through their retained decoder, to the same manifest.
+        let d1 = Manifest::decode_with(store.get(&v1_hash).unwrap(), decoders).expect("v1 decodes");
+        let d2 = Manifest::decode_with(store.get(&v2_hash).unwrap(), decoders).expect("v2 decodes");
+        assert_eq!(d1, m);
+        assert_eq!(d2, m);
+
+        // Write-new: re-encoding emits current-format (v1) bytes, so the v1
+        // object address is stable across the upgrade — no force-push.
+        assert_eq!(d1.encode(), v1_bytes);
+        assert_eq!(blob_hash(&d1.encode()), v1_hash);
+    }
+
+    #[test]
+    fn production_build_reads_only_current_format() {
+        // The shipped DECODERS table has exactly the current format: a v2
+        // (future) manifest is rejected, never guessed at.
+        let m = manifest(false);
+        assert_eq!(
+            Manifest::decode(&encode_v2(&m, 1)),
+            Err(ManifestDecodeError::UnsupportedVersion(2))
+        );
+        // The v1 body reader cannot read v2's array-shaped body even if it
+        // were (wrongly) registered for version 2 — the formats are genuinely
+        // distinct, not merely version-tagged.
+        assert!(
+            Manifest::decode_with(&encode_v2(&m, 1), &[(2, Manifest::decode_v1_body)]).is_err()
+        );
+    }
+
+    #[test]
+    fn version_beyond_u32_is_unsupported_not_mis_dispatched() {
+        // 2^32 + 1: a naive `version as u32` would truncate to 1 and
+        // mis-dispatch this to the v1 decoder. The u32::try_from guard
+        // rejects it as an unknown version instead, reporting the full u64.
+        let mut bytes = Vec::new();
+        write_head(&mut bytes, MAJOR_ARRAY, 2);
+        write_head(&mut bytes, MAJOR_UNSIGNED, u64::from(u32::MAX) + 2);
+        write_head(&mut bytes, MAJOR_MAP, 0);
+        assert_eq!(
+            Manifest::decode(&bytes),
+            Err(ManifestDecodeError::UnsupportedVersion(
+                u64::from(u32::MAX) + 2
+            ))
+        );
     }
 }
