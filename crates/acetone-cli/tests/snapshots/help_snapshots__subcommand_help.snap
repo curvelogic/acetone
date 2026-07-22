@@ -13,6 +13,7 @@ Arguments:
 Options:
       --object-format <OBJECT_FORMAT>  Object format (hash function) for the new repository [default: sha1] [possible values: sha1, sha256]
       --repo <REPO>                    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --co-tenant <GRAPH>              Create the graph as a **co-tenant** of an existing git repository, on its own ref namespace (`refs/heads/acetone/<GRAPH>/*`) alongside the code, instead of a standalone repository. GRAPH names the graph
   -h, --help                           Print help
 
 ========== acetone status --help ==========

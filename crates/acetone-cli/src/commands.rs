@@ -27,8 +27,9 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
     match command {
         Command::Init {
             object_format,
+            co_tenant,
             path,
-        } => init(repo_path, &object_format, path),
+        } => init(repo_path, &object_format, co_tenant.as_deref(), path),
         Command::Status { json } => status(repo_path, json),
         Command::Commit { message, trailer } => commit(repo_path, &message, &trailer),
         Command::Log { json } => log(repo_path, json),
@@ -151,7 +152,12 @@ fn fsck(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn init(repo_path: &Path, object_format: &str, path: Option<PathBuf>) -> Result<()> {
+fn init(
+    repo_path: &Path,
+    object_format: &str,
+    co_tenant: Option<&str>,
+    path: Option<PathBuf>,
+) -> Result<()> {
     let target = path.unwrap_or_else(|| repo_path.to_owned());
     let object_format = match object_format {
         "sha1" => ObjectFormat::Sha1,
@@ -161,12 +167,30 @@ fn init(repo_path: &Path, object_format: &str, path: Option<PathBuf>) -> Result<
     };
     let mut options = InitOptions::default();
     options.object_format = object_format;
-    Repository::init(&target, options)
-        .with_context(|| format!("initialising repository at {}", target.display()))?;
-    outln!(
-        "Initialized empty acetone repository in {}",
-        target.display()
-    );
+    if let Some(graph) = co_tenant {
+        // Co-tenant mode (ADR-0050): the graph lives inside an existing git
+        // repository, on its own ref namespace, alongside the code. The object
+        // format follows the host repository, so `--object-format` does not
+        // apply here.
+        Repository::init_co_tenant(&target, graph, options).with_context(|| {
+            format!(
+                "initialising co-tenant graph {graph:?} in the repository at {}",
+                target.display()
+            )
+        })?;
+        outln!(
+            "Initialized co-tenant acetone graph {graph:?} in {} \
+             (branches under refs/heads/acetone/{graph}/)",
+            target.display()
+        );
+    } else {
+        Repository::init(&target, options)
+            .with_context(|| format!("initialising repository at {}", target.display()))?;
+        outln!(
+            "Initialized empty acetone repository in {}",
+            target.display()
+        );
+    }
     Ok(())
 }
 
