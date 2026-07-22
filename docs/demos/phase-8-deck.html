@@ -1,0 +1,483 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent (house style) */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck { height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .card.lead { border-left: 3px solid var(--accent); }
+  .card.rule { border-left: 3px solid var(--warn); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  /* Terminal box: FIXED dark ground in BOTH themes, so the hard-coded light
+     text always has contrast (a var(--ink) background flips to near-white in
+     dark mode — the pale-on-pale bug from the 0.1.1 deck). */
+  .term {
+    background: #0d141a; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65; border: 1px solid #22313a;
+  }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term-title { font-family: var(--mono); font-size: 11px; color: #6d7f88; margin-left: auto; letter-spacing: .04em; }
+  .term .p { color: #2dd4bf; }
+  .term .c { color: #e8eef0; }
+  .term .o { color: #8b9aa2; }
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+  .term .g { color: #7fb3ff; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+
+  .ec { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: var(--good); background: var(--good-soft); padding: 4px 10px; border-radius: 999px; margin-bottom: 12px; }
+</style>
+<title>Acetone · Phase 8 sprint demo</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Where we are"></a>
+  <a href="#s3" aria-label="One concept"></a>
+  <a href="#s4" aria-label="Exit criterion 1"></a>
+  <a href="#s5" aria-label="Exit criterion 2"></a>
+  <a href="#s6" aria-label="Exit criterion 3"></a>
+  <a href="#s7" aria-label="Two strategies"></a>
+  <a href="#s8" aria-label="Review gate"></a>
+  <a href="#s9" aria-label="Security gate"></a>
+  <a href="#s10" aria-label="ADRs"></a>
+  <a href="#s11" aria-label="Two rulings"></a>
+  <a href="#s12" aria-label="Live demo"></a>
+  <a href="#s13" aria-label="For Greg"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · Phase 8 boundary</p>
+      <h1>Alongside code.</h1>
+      <p class="lede">Until now an acetone repository <em>was</em> the graph — it owned <code>HEAD</code>, <code>refs/heads/*</code>, every object. Phase 8 makes a graph a <strong>co-tenant of an ordinary git repository</strong>: its own ref, living beside your code, in one object store. Code branches and graph branches coexist — and neither <code>gc</code> nor a format bump ever touches the other's history.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>epic acetone-g5g · 0.3</span>
+        <span class="chip good"><span class="dot"></span>Graph on its own ref</span>
+        <span class="chip good"><span class="dot"></span>gc &amp; migrate stay in lane</span>
+        <span class="chip good"><span class="dot"></span>Read-old-write-new</span>
+        <span class="chip good"><span class="dot"></span>5 ADRs · 0048–0052</span>
+      </div>
+    </div>
+    <div class="foot">epic acetone-g5g · 2026-07-22 · main @ 881aebf</div>
+    <div class="num">01 / 13</div>
+  </section>
+
+  <!-- 2 · Where we are -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>No format obstacle — four behavioural assumptions.</h2>
+      <p class="lede">Storing a graph beside code needs no new on-disk format. What stood in the way were four assumptions baked into the ref/store layer, each true only because the repo <em>was</em> the graph. They had to flip <strong>together</strong>, or a half-converted repo corrupts one tenant to serve the other.</p>
+      <div class="flow" style="margin-top:26px">
+        <div class="step"><div class="k">HEAD</div><div class="v">the graph checkout</div><div class="d">→ the graph's ref, wherever it lives</div></div>
+        <div class="step"><div class="k">refs/heads/*</div><div class="v">unqualified</div><div class="d">→ namespaced, so graph + code coexist</div></div>
+        <div class="step"><div class="k">migrate</div><div class="v">rewrites all refs</div><div class="d">→ only the graph's</div></div>
+        <div class="step"><div class="k">gc</div><div class="v">walks all refs</div><div class="d">→ never prunes code-only history</div></div>
+      </div>
+      <p style="margin-top:22px">The wrong shape is <strong>two divergent code paths</strong> — standalone and co-tenant drifting apart bug by bug. Phase 8 flips all four behind a single value, so there is one code path and only the <em>layout</em> differs.</p>
+    </div>
+    <div class="num">02 / 13</div>
+  </section>
+
+  <!-- 3 · One concept -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">The one concept · ADR-0049</p>
+      <h2>One value maps logical refs to physical paths.</h2>
+      <p class="lede"><code>GraphRefNamespace</code> is the seam every ref-path decision now passes through. A <code>Repository</code> builds one at <code>init</code>/<code>open</code>; the code never branches on "mode", only the namespace value differs. Two layouts, one path.</p>
+      <div class="grid cols-2" style="margin-top:22px">
+        <div class="card lead">
+          <div class="tag">STANDALONE · the default, forever</div>
+          <h3>The repo is the graph</h3>
+          <p>Branches <code>refs/heads/*</code>, tags <code>refs/tags/*</code>, head pointer git <code>HEAD</code>. Clone-shows-graph-on-<code>main</code> ergonomics, unchanged. The <code>gns</code> refactor is <strong>byte-identical</strong> — every store/graph/CLI test and every pinned chunk golden passed untouched.</p>
+        </div>
+        <div class="card lead">
+          <div class="tag">CO-TENANT · new in 0.3</div>
+          <h3>The graph is a guest</h3>
+          <p>Branches <code>refs/heads/acetone/&lt;graph&gt;/*</code>, tags <code>refs/tags/acetone/&lt;graph&gt;/*</code>, and the graph's current-branch pointer at a <strong>local-only</strong> symref <code>refs/acetone/&lt;graph&gt;/HEAD</code>. Your git <code>HEAD</code> and code branches are never touched.</p>
+        </div>
+      </div>
+      <p style="margin-top:18px"><span class="chip"><span class="dot" style="color:var(--faint)"></span>proxy-safe</span> &nbsp;The <code>acetone/</code> prefix lives <em>under</em> <code>refs/heads</code> — a subnamespace proxies allow, where a top-level <code>refs/acetone/*</code> would 403 (operational-constraints note).</p>
+    </div>
+    <div class="num">03 / 13</div>
+  </section>
+
+  <!-- 4 · Exit criterion 1 -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">Exit criterion 1 · acetone-mgf (#147)</p>
+      <div class="ec"><span class="dot"></span>MET</div>
+      <h2>A graph on its own ref, code untouched beside it.</h2>
+      <p class="lede">Init opts a graph into co-tenant mode, drops a marker, and open-time detection selects the co-tenant namespace. The result: two tenants' refs in one repository, visibly distinct, mutually undisturbed.</p>
+      <div class="term" style="margin-top:20px">
+        <div class="term-bar"><i></i><i></i><i></i><span class="term-title">git for-each-ref — one repo, two tenants</span></div>
+        <div class="term-body">
+<div class="l"><span class="o">$</span> <span class="c">git for-each-ref --format='%(refname)'</span></div>
+<div class="l"><span class="g">refs/heads/main</span><span class="o">                     ← your code, on the shared HEAD</span></div>
+<div class="l"><span class="g">refs/heads/feature/parser</span><span class="o">           ← your code branch</span></div>
+<div class="l"><span class="p">refs/heads/acetone/assets/main</span><span class="o">      ← the graph, namespaced</span></div>
+<div class="l"><span class="p">refs/acetone/assets/HEAD</span><span class="o">            ← graph's branch pointer (local-only)</span></div>
+<div class="l"><span class="o">$</span> <span class="c">git symbolic-ref HEAD</span></div>
+<div class="l"><span class="g">refs/heads/main</span><span class="ok">                     ✓ your checkout, never moved</span></div>
+        </div>
+      </div>
+      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">Co-tenant <code>init</code> is wired at the library layer; the <code>acetone init --co-tenant</code> CLI flag is a tracked follow-up (<code>acetone-xg6</code>).</p>
+    </div>
+    <div class="num">04 / 13</div>
+  </section>
+
+  <!-- 5 · Exit criterion 2 -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">Exit criterion 2 · acetone-iva (#148) · ADR-0051</p>
+      <div class="ec"><span class="dot"></span>MET — with a reading to ratify</div>
+      <h2>gc and migrate stay in the graph's lane.</h2>
+      <p class="lede">The co-tenancy promise that matters: <strong>the graph never rewrites or moves your code history</strong>. Proven by property tests — a code-only object survives <code>gc</code>, code refs survive <code>migrate</code> — with a discriminator that only passes if the reachable set genuinely includes code.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card">
+          <div class="tag">PROVEN</div>
+          <h3>Code survives both</h3>
+          <p>An object reachable only from code history is still retrievable after <code>acetone gc</code>; every code ref is intact after <code>migrate</code>. No code ref moves; no commit hash changes.</p>
+        </div>
+        <div class="card">
+          <div class="tag">THE FRESH-REVIEW CATCH</div>
+          <h3>A vacuous test, hardened</h3>
+          <p>The first <code>gc</code> proof would have passed even if scoping were wrong. The review forced a <strong>loose-file discriminator</strong>: a code blob is drawn into <code>gc</code>'s pack — consolidated yet still retrievable — which only holds if <code>gc</code> sees code.</p>
+        </div>
+      </div>
+      <p style="margin-top:18px">⚑ <strong>Reading (A), shipped:</strong> <code>acetone gc</code> repacks the whole repo's reachable set, like <code>git gc</code> — byte-preserving, <code>fsck</code>-clean, nothing moved. This is the recorded interpretation of "touch only graph refs". Ruling on <strong>slide 11</strong>.</p>
+    </div>
+    <div class="num">05 / 13</div>
+  </section>
+
+  <!-- 6 · Exit criterion 3 -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">Exit criterion 3 · acetone-5yr (#149) · ADR-0052</p>
+      <div class="ec"><span class="dot"></span>MET — machinery + coexistence proven</div>
+      <h2>Evolve the format without rewriting shared history.</h2>
+      <p class="lede">The manifest envelope is the stable <code>[format_version, body]</code>: read the version <em>first</em>. So <code>decode</code> now <strong>dispatches</strong> to a retained per-version decoder instead of rejecting anything non-current. Old commits read through their era's decoder; new writes emit the current format; a repository holds both, side by side, with nothing rewritten.</p>
+      <div class="term" style="margin-top:20px">
+        <div class="term-bar"><i></i><i></i><i></i><span class="term-title">read-old-write-new — one store, two versions</span></div>
+        <div class="term-body">
+<div class="l"><span class="o"># a content-addressed store holds a v1 commit AND a v2 commit</span></div>
+<div class="l"><span class="c">decode</span>(v1_bytes)  <span class="o">→</span> <span class="ok">Manifest ✓</span>   <span class="o">via the retained v1 decoder</span></div>
+<div class="l"><span class="c">decode</span>(v2_bytes)  <span class="o">→</span> <span class="ok">Manifest ✓</span>   <span class="o">via the v2 decoder</span></div>
+<div class="l"><span class="o">blob_hash(v1)  unchanged by the v2 write   </span><span class="ok">✓ no rewrite</span></div>
+<div class="l"><span class="o">re-encode(v1)  → same bytes, same address  </span><span class="ok">✓ no force-push</span></div>
+<div class="l"><span class="o">production build (v1-only)  decode(v2)  →   </span><span class="no">UnsupportedVersion(2)</span></div>
+        </div>
+      </div>
+      <p style="margin-top:16px"><code>FORMAT_VERSION</code> stays <strong>1</strong> — zero format change, zero golden churn. The v2 above is a test-only synthetic; a <em>real</em> v2 is deferred to the first change that warrants one. Ruling on <strong>slide 11</strong>.</p>
+    </div>
+    <div class="num">06 / 13</div>
+  </section>
+
+  <!-- 7 · Two strategies -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">The forward gate · ADR-0048</p>
+      <h2>Two evolution strategies; the default is the safe one.</h2>
+      <p class="lede">Crossing a format boundary can be done two ways. They pull in opposite directions, so Phase 8 settled which is the default <em>before</em> the first bump could land.</p>
+      <div class="grid cols-2" style="margin-top:22px">
+        <div class="card lead">
+          <div class="tag">READ-OLD-WRITE-NEW · default</div>
+          <h3>Retain decoders, never rewrite</h3>
+          <p>The binary keeps a reader per shipped format and dispatches on version. Old commits stay put; new writes use the current format. <strong>No hash changes, no force-push</strong> — the only strategy compatible with a repo shared with code and collaborators.</p>
+        </div>
+        <div class="card">
+          <div class="tag">REWRITE-MIGRATE · opt-in</div>
+          <h3>Bring history up to current</h3>
+          <p>Re-encodes every reachable commit — which changes every hash and needs a force-push. Fine for a standalone repo that <em>is</em> the graph and wants a single-format history or to reclaim old-object space. A deliberate act, never automatic.</p>
+        </div>
+      </div>
+      <p style="margin-top:18px">acetone offers <strong>both</strong>; the choice is the operator's, defaulting to the non-destructive one. Nothing on the normal read/write path ever rewrites history to cross a format boundary.</p>
+    </div>
+    <div class="num">07 / 13</div>
+  </section>
+
+  <!-- 8 · Review gate -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">The review gate</p>
+      <h2>A fresh reviewer on every PR — still earning its keep.</h2>
+      <p class="lede">Every code PR was reviewed by a fresh strongest-tier (Opus) subagent with no implementation context, prompted to break it. On the two exit-criterion PRs it found a <strong>real</strong> defect the implementer had missed.</p>
+      <div class="grid cols-3" style="margin-top:22px">
+        <div class="card lead"><div class="tag">acetone-mgf · #147</div><h3>A code-loss crash window</h3><p>The marker was written before the first commit — a crash in between left a corrupt co-tenant. Fixed to <strong>marker-first, recoverable</strong> ordering.</p></div>
+        <div class="card lead"><div class="tag">acetone-iva · #148</div><h3>A vacuous gc proof</h3><p>The test would pass even if <code>gc</code> scoping were wrong. Hardened with a <strong>loose-file discriminator</strong> that fails on the wrong reachable set.</p></div>
+        <div class="card"><div class="tag">acetone-5yr · #149</div><h3>Clean — verified honest</h3><p>APPROVE: v1 decode byte-identical, decoders panic-free/total, freeze intact. The reviewer checked the coexistence test's hash against the <em>real</em> <code>GitStore</code> path — not a mock.</p></div>
+      </div>
+    </div>
+    <div class="num">08 / 13</div>
+  </section>
+
+  <!-- 9 · Security gate -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="eyebrow">Milestone security gate</p>
+      <div class="ec"><span class="dot"></span>GATE READY — no blocker / high</div>
+      <h2>Hostile repos, ref injection, destructive scoping.</h2>
+      <p class="lede">A dedicated fresh-Opus security review swept the whole phase diff (<code>959d1ab..HEAD</code>), focused on the three surfaces Phase 8 opened — and cleared all three.</p>
+      <div class="grid cols-3" style="margin-top:22px">
+        <div class="card"><div class="tag">INPUT HANDLING ✓</div><h3>Total on hostile bytes</h3><p>The dispatch adds no panic path; <code>u32::try_from</code> blocks a <code>2^32+k</code> truncation-alias; the index-map DoS guard is intact.</p></div>
+        <div class="card"><div class="tag">REF / PATH INJECTION ✓</div><h3>Namespace containment</h3><p>Every write passes <code>validated_ref_name</code>; <code>co_tenant</code> only <em>suffixes</em> a validated prefix — no crafted name escapes or traverses. A forged head symref can't advance a code ref.</p></div>
+        <div class="card"><div class="tag">DESTRUCTIVE SCOPING ✓</div><h3>Code history preserved</h3><p><code>migrate</code> enumerates only graph ref-prefixes; <code>gc</code> keeps code as an un-prunable root — proven by a non-vacuous test.</p></div>
+      </div>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip good"><span class="dot"></span>No new dependencies</span>
+        <span class="chip good"><span class="dot"></span>Reduced-trust posture intact</span>
+        <span class="chip"><span class="dot" style="color:var(--faint)"></span>2 pre-existing items rediscovered (dfh, write_ref CAS)</span>
+      </div>
+    </div>
+    <div class="num">09 / 13</div>
+  </section>
+
+  <!-- 10 · ADRs -->
+  <section class="slide" id="s10">
+    <div class="slide-inner">
+      <p class="eyebrow">The ratification agenda</p>
+      <h2>Five ADRs — the shape of co-tenancy.</h2>
+      <p class="lede">Four are <em>accepted, pending your ratification</em>; ADR-0051 is <em>proposed</em>, flagged for your ruling. Three ratify as recorded; two carry a live <strong>ruling</strong> beyond ratification (next slide).</p>
+      <div class="table-wrap" style="margin-top:20px">
+        <table>
+          <thead><tr><th>ADR</th><th>Decision</th><th>For you</th></tr></thead>
+          <tbody>
+            <tr><td><code>0048</code></td><td>Format evolution: <b>read-old-write-new is default</b>; rewrite-<code>migrate</code> is opt-in.</td><td>Ratify</td></tr>
+            <tr><td><code>0049</code></td><td><b><code>GraphRefNamespace</code></b>: one value maps logical refs → physical paths; one path, two layouts.</td><td>Ratify</td></tr>
+            <tr><td><code>0050</code></td><td><b>Co-tenant layout + named head pointer</b>: the layout, not the code path, decides where refs live.</td><td>Ratify</td></tr>
+            <tr><td><code>0051</code></td><td><b>Co-tenant <code>gc</code> semantics</b>: ships reading (A), repo-wide repack like <code>git gc</code>.</td><td>⚑ Rule A / B</td></tr>
+            <tr><td><code>0052</code></td><td><b>Dispatch machinery + synthetic-v2 proof</b>; defer a real <code>format_version 2</code>.</td><td>⚑ Rule</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">One reviewer note to fold in at ratification: spec §10 still frames <code>migrate</code> as <em>the</em> evolution path — it gains a read-old-write-new sentence when you ratify ADR-0048 (governing-doc edit, deferred deliberately).</p>
+    </div>
+    <div class="num">10 / 13</div>
+  </section>
+
+  <!-- 11 · Two rulings -->
+  <section class="slide" id="s11">
+    <div class="slide-inner">
+      <p class="eyebrow">Two rulings · your call at the boundary</p>
+      <h2>Where the recorded reading needs your sign-off.</h2>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card rule">
+          <div class="tag">ADR-0051 · co-tenant gc</div>
+          <h3>How wide does <code>gc</code> reach?</h3>
+          <ul class="clean" style="margin-top:12px">
+            <li><b>(A) shipped —</b> repack the whole repo's reachable set, code included, like <code>git gc</code>. Byte-preserving, <code>fsck</code>-clean, nothing moved. Simple; whole-repo maintenance.</li>
+            <li><b>(B) alternative —</b> scope <code>gc</code>'s pack to the graph's refs while still treating code refs as un-prunable roots. Stronger isolation; a more intricate reachability split. No format impact.</li>
+          </ul>
+          <p style="margin-top:12px"><strong>Recommend (A)</strong> — and confirm it as the reading of exit criterion 2's <code>gc</code> half.</p>
+        </div>
+        <div class="card rule">
+          <div class="tag">ADR-0052 · exit criterion 3</div>
+          <h3>Is a synthetic v2 enough for 0.3?</h3>
+          <ul class="clean" style="margin-top:12px">
+            <li><b>Shipped —</b> the dispatch <em>machinery</em> + a test-only synthetic v2 proving coexistence. <code>FORMAT_VERSION</code> stays 1; zero golden churn. A real v2 lands through this seam at the first genuine format change.</li>
+            <li><b>Alternative —</b> require a <em>real</em> <code>format_version 2</code> to ship in 0.3 (re-pins every manifest/commit golden; changes the on-disk format purely to demonstrate).</li>
+          </ul>
+          <p style="margin-top:12px"><strong>Recommend shipped</strong> — the ADR-0025 "engine now, real use deferred" precedent you accepted at 0.2.</p>
+        </div>
+      </div>
+    </div>
+    <div class="num">11 / 13</div>
+  </section>
+
+  <!-- 12 · Live demo -->
+  <section class="slide" id="s12">
+    <div class="slide-inner">
+      <p class="eyebrow">The live demo · one step per turn</p>
+      <h2>Drive the phase's own code, step by step.</h2>
+      <p class="lede">After the deck, the actual code — announced, run, output quoted, explained, then a pause before the next step.</p>
+      <ul class="clean" style="margin-top:20px">
+        <li><b>Init a graph as a co-tenant</b> inside a repo that already holds code, and show the marker + selected namespace.</li>
+        <li><b>List the refs</b> — <code>refs/heads/main</code> (code) beside <code>refs/heads/acetone/&lt;graph&gt;/*</code> and the local-only head symref; show git <code>HEAD</code> never moved.</li>
+        <li><b>Commit graph data</b>, then a code commit, and show each tenant's history advancing independently in one object store.</li>
+        <li><b>Run <code>acetone gc</code></b> and show a code-only object still retrievable afterwards (reading A in action).</li>
+        <li><b>Walk the version dispatch</b> — the retained-decoder table that lets a v1 and a v2 commit coexist with no rewrite.</li>
+      </ul>
+    </div>
+    <div class="num">12 / 13</div>
+  </section>
+
+  <!-- 13 · For Greg -->
+  <section class="slide" id="s13">
+    <div class="slide-inner">
+      <p class="eyebrow">Yours to close</p>
+      <h2>Ratify, rule, and close the gate.</h2>
+      <p class="lede">All three 0.3 exit criteria are met and merged; <code>main</code> is green at <code>881aebf</code>. The boundary is yours.</p>
+      <div class="grid cols-2" style="margin-top:20px">
+        <div class="card">
+          <div class="tag">THE DECISIONS</div>
+          <ul class="clean" style="margin-top:10px">
+            <li><b>Ratify</b> ADRs 0048, 0049, 0050.</li>
+            <li><b>Rule</b> on ADR-0051 — <code>gc</code> reading (A) vs (B), and confirm the exit-criterion-2 interpretation.</li>
+            <li><b>Rule</b> on ADR-0052 — accept the machinery + synthetic-v2 reading of exit criterion 3, or require a real v2.</li>
+            <li><b>Close</b> the exit-criteria gate (epic <code>acetone-g5g</code>) — agents never close it.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="tag">CARRIES PAST THE BOUNDARY (P3)</div>
+          <div class="risk" style="margin-top:8px">
+            <div class="r"><span class="id">ejj</span><span class="t">migrate hardening: annotated-tag objects + atomic multi-ref swing</span></div>
+            <div class="r"><span class="id">xg6</span><span class="t">CLI <code>acetone init --co-tenant</code> flag</span></div>
+            <div class="r"><span class="id">eo7</span><span class="t">co-tenant init hardening: legacy-workspace guard + edge tests</span></div>
+            <div class="r"><span class="id">§10</span><span class="t">spec read-old-write-new sentence, at ADR-0048 ratification</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip good"><span class="dot"></span>Exit 1 · graph on its own ref</span>
+        <span class="chip good"><span class="dot"></span>Exit 2 · gc/migrate scoped</span>
+        <span class="chip good"><span class="dot"></span>Exit 3 · read-old-write-new</span>
+      </div>
+    </div>
+    <div class="foot">docs/reports/phase-8.md · ADRs 0048–0052 · epic acetone-g5g</div>
+    <div class="num">13 / 13</div>
+  </section>
+
+</main>
