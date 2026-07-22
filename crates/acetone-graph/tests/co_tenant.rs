@@ -110,6 +110,14 @@ fn loose_commit_only_on_ref(project: &Path, refname: &str) -> String {
             .arg("-C")
             .arg(project)
             .env("GIT_INDEX_FILE", &index)
+            // A deterministic identity so commit-tree needs no ambient git
+            // config (CI runners have none).
+            .args([
+                "-c",
+                "user.name=Code Dev",
+                "-c",
+                "user.email=dev@example.invalid",
+            ])
             .args(args)
             .output()
             .expect("git");
