@@ -5003,6 +5003,7 @@ pub mod acetone_cypher::parser
 pub const acetone_cypher::parser::MAX_AST_DEPTH: usize
 pub const acetone_cypher::parser::MAX_DEPTH: usize
 pub fn acetone_cypher::parser::parse(&str) -> core::result::Result<acetone_cypher::ast::Query, acetone_cypher::error::ParseError>
+pub fn acetone_cypher::parser::parse_literal(&str) -> core::result::Result<acetone_cypher::exec::value::Value, acetone_cypher::error::ParseError>
 pub mod acetone_cypher::persist
 pub enum acetone_cypher::persist::PersistError
 pub acetone_cypher::persist::PersistError::AmbiguousIdentity
@@ -5176,6 +5177,7 @@ pub struct acetone_cypher::session::Session<'r>
 impl<'r> acetone_cypher::session::Session<'r>
 pub fn acetone_cypher::session::Session<'r>::new(&'r acetone_graph::repo::Repository) -> Self
 pub fn acetone_cypher::session::Session<'r>::query_at(&self, &str, &str) -> core::result::Result<acetone_cypher::exec::run::QueryResult, acetone_cypher::session::QueryError>
+pub fn acetone_cypher::session::Session<'r>::query_at_with(&self, &str, &str, &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>, &acetone_cypher::exec::governor::QueryLimits) -> core::result::Result<acetone_cypher::exec::run::QueryResult, acetone_cypher::session::QueryError>
 pub fn acetone_cypher::session::Session<'r>::run(&self, &str) -> core::result::Result<acetone_cypher::session::Outcome, acetone_cypher::session::QueryError>
 pub fn acetone_cypher::session::Session<'r>::run_with(&self, &str, &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>, &acetone_cypher::exec::governor::QueryLimits) -> core::result::Result<acetone_cypher::session::Outcome, acetone_cypher::session::QueryError>
 impl<'r> core::marker::Freeze for acetone_cypher::session::Session<'r>
@@ -5385,3 +5387,4 @@ pub fn acetone_cypher::span::Span::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::span::Span
 pub type acetone_cypher::span::Span::Output = T
 pub fn acetone_cypher::parse(&str) -> core::result::Result<acetone_cypher::ast::Query, acetone_cypher::error::ParseError>
+pub fn acetone_cypher::parse_literal(&str) -> core::result::Result<acetone_cypher::exec::value::Value, acetone_cypher::error::ParseError>
