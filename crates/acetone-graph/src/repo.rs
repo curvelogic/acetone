@@ -930,6 +930,15 @@ impl Repository {
         let tip = self.head_commit()?.ok_or(GraphError::MergeState(
             "merge in progress but the branch is unborn",
         ))?;
+        // Defensive (acetone-mws, m2 — the same guard `commit` applies): a
+        // MERGE_HEAD already in the branch tip's history is stale, a prior
+        // completion whose `delete_ref` failed. There is no live merge to
+        // validate against, so derive nothing rather than fabricate
+        // "violations" from ordinary uncommitted work; the next commit
+        // clears the stale ref. (Read-only path: the ref is left in place.)
+        if self.is_ancestor(&theirs, &tip)? {
+            return Ok(Vec::new());
+        }
         let base = self
             .merge_base(&tip, &theirs)?
             .ok_or_else(|| GraphError::NoMergeBase {

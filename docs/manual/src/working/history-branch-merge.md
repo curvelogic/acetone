@@ -188,18 +188,20 @@ merge: in progress, 1 conflict(s) to resolve (`acetone resolve --all-ours|--all-
 nodes: 12, edges: 15, schema entries: 7
 ```
 
-And because conflicts are data, you inspect them with a query. Each row
-carries the property in question and all three values — the common ancestor
-(`base`), the current branch (`ours`) and the merged-in branch (`theirs`) —
-plus the merged node itself as a `_Conflict`-labelled virtual element:
+And because conflicts are data, you inspect them with a query. Each row opens
+with a `kind` column classifying the conflict — `cell` here, the graph-level
+violation classes later in this chapter — and carries the property in
+question and all three values: the common ancestor (`base`), the current
+branch (`ours`) and the merged-in branch (`theirs`), plus the merged node
+itself as a `_Conflict`-labelled virtual element:
 
 ```console
 $ acetone query 'CALL acetone.conflicts()'
-┌─────────┬────────────────────────┬──────────┬───────┬───────┬────────┬───────────────────────────────────────────────────────────────────┐
-│ label   │ key                    │ property │ base  │ ours  │ theirs │ node                                                              │
-├─────────┼────────────────────────┼──────────┼───────┼───────┼────────┼───────────────────────────────────────────────────────────────────┤
-│ Service │ "Service" ["identity"] │ version  │ 2.4.1 │ 2.4.2 │ 2.5.0  │ (:_Conflict:Service {name: identity, tier: core, version: 2.4.2}) │
-└─────────┴────────────────────────┴──────────┴───────┴───────┴────────┴───────────────────────────────────────────────────────────────────┘
+┌──────┬─────────┬────────────────────────┬──────────┬───────┬───────┬────────┬───────────────────────────────────────────────────────────────────┐
+│ kind │ label   │ key                    │ property │ base  │ ours  │ theirs │ node                                                              │
+├──────┼─────────┼────────────────────────┼──────────┼───────┼───────┼────────┼───────────────────────────────────────────────────────────────────┤
+│ cell │ Service │ "Service" ["identity"] │ version  │ 2.4.1 │ 2.4.2 │ 2.5.0  │ (:_Conflict:Service {name: identity, tier: core, version: 2.4.2}) │
+└──────┴─────────┴────────────────────────┴──────────┴───────┴───────┴────────┴───────────────────────────────────────────────────────────────────┘
 1 row
 ```
 
@@ -241,31 +243,47 @@ shipped, so take the incoming side:
 
 ```console
 $ acetone resolve --all-theirs
-resolved 1 conflict(s) — run `acetone commit` to complete the merge
-$ acetone query 'CALL acetone.conflicts()'
-┌───────┬─────┬──────────┬──────┬──────┬────────┬──────┐
-│ label │ key │ property │ base │ ours │ theirs │ node │
-├───────┼─────┼──────────┼──────┼──────┼────────┼──────┤
-└───────┴─────┴──────────┴──────┴──────┴────────┴──────┘
-0 rows
+resolved 1 conflict(s), but the resolved graph has 1 graph-level violation(s):
+  dangling relationship "Service" ["identity"] -"RUNS_ON"-> "Host" ["db2"]: destination node "Host" ["db2"] is absent
+repair the graph (delete the dangling relationship, restore the endpoint, or fix the constraint breach), then `acetone commit` to complete — or `acetone merge --abort` to back out
 ```
 
-Done? Not quite. `acetone commit` completes a merge, and before it does, it
-**re-validates the merged graph**:
+The cell conflict is settled — and resolving it has exposed the **second
+kind of conflict**: a **graph-level violation**. Each side was internally
+consistent — `main` deleted `db2` and every edge touching it; `bump-identity`
+added an edge to a `db2` that existed — but their combination contains an
+edge whose target node no longer exists. While the `version` conflict was
+outstanding the merged graph was incomplete, so acetone could not judge it;
+now that every cell conflict is resolved it re-validates the whole graph, and
+reports the breach the same way it reports everything else — as data. The
+`kind` column names the violation class, and `property` says which endpoint
+of the relationship is absent:
+
+```console
+$ acetone query 'CALL acetone.conflicts()'
+┌───────────────┬─────────┬────────────────────────────────────────────────────┬──────────┬──────┬──────┬────────┬──────┐
+│ kind          │ label   │ key                                                │ property │ base │ ours │ theirs │ node │
+├───────────────┼─────────┼────────────────────────────────────────────────────┼──────────┼──────┼──────┼────────┼──────┤
+│ dangling-edge │ RUNS_ON │ "Service" ["identity"] -"RUNS_ON"-> "Host" ["db2"] │ dst      │ NULL │ NULL │ NULL   │ NULL │
+└───────────────┴─────────┴────────────────────────────────────────────────────┴──────────┴──────┴──────┴────────┴──────┘
+1 row
+```
+
+There is no side to pick for a violation, so `resolve` does not apply;
+completion is gated on it instead. `acetone commit` **re-validates the merged
+graph** before writing the two-parent commit, and refuses while any violation
+remains — naming each one:
 
 ```console
 $ acetone commit -m "merge bump-identity"
-error: committing workspace: cannot commit: the merge leaves graph-level violations (dangling edge or constraint breach) — repair the graph, then commit
+error: committing workspace: cannot commit: the merge leaves 1 graph-level violation(s) — repair the graph (delete the dangling relationship, restore the endpoint, or fix the constraint breach), then commit: dangling relationship "Service" ["identity"] -"RUNS_ON"-> "Host" ["db2"]: destination node "Host" ["db2"] is absent
 ```
 
-This is the second kind of conflict: a **graph-level violation**. Each side
-was internally consistent — `main` deleted `db2` and every edge touching it;
-`bump-identity` added an edge to a `db2` that existed — but their combination
-contains an edge whose target node no longer exists. A dangling edge is
-invisible to `MATCH` (patterns only traverse edges with both endpoints), and
-the commit error does not name the culprit. The tool that does is
-[`acetone fsck`](maintenance-and-migration.md), which checks the workspace
-along with committed history:
+A dangling edge is invisible to `MATCH` (patterns only traverse edges with
+both endpoints), so the conflict report and the commit refusal above are how
+you find out about one mid-merge.
+[`acetone fsck`](maintenance-and-migration.md) confirms the same breach
+independently, checking the workspace along with committed history:
 
 ```console
 $ acetone fsck

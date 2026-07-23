@@ -242,6 +242,61 @@ fn pure_graph_violation_merge_reports_violations_via_conflicts() {
 }
 
 #[test]
+fn a_stale_merge_head_derives_no_conflicts() {
+    // Defensive, mirroring commit's m2 guard: a MERGE_HEAD already in the
+    // branch tip's history is stale (a prior completion whose delete_ref
+    // failed) — there is no live merge, so `conflicts()` must not re-derive
+    // violations against the stale base. Without the guard, the uncommitted
+    // node below (missing its required property — the graph layer does not
+    // enforce constraints on ordinary writes) would be falsely reported as a
+    // merge conflict.
+    use acetone_model::schema::{LabelDef, SchemaEntry};
+    use acetone_store::RefStore;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+
+    let def = LabelDef::new(
+        vec!["id".to_string()],
+        BTreeMap::new(),
+        ["email".to_string()], // existence-required
+        [],
+    )
+    .expect("label def");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "N".into(),
+        def,
+    })
+    .expect("schema");
+    tx.put_node(&node(1), &record(&[("email", Value::String("a@x".into()))]))
+        .expect("put");
+    let old = tx.commit("base", &[], None).expect("commit");
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(2), &record(&[("email", Value::String("b@x".into()))]))
+        .expect("put");
+    tx.commit("tip", &[], None).expect("commit");
+
+    // Simulate the failed post-completion delete: MERGE_HEAD names an
+    // ancestor of the branch tip.
+    repo.store()
+        .write_ref("refs/worktree/acetone/merge-head", None, &old)
+        .expect("set stale merge head");
+
+    // An uncommitted write that a validation against `old` would flag.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(3), &record(&[])).expect("put");
+    tx.save().expect("save");
+
+    assert_eq!(
+        repo.conflicts().expect("conflicts"),
+        Vec::new(),
+        "a stale MERGE_HEAD is not a live merge: no conflicts may be derived from it"
+    );
+}
+
+#[test]
 fn surfaced_violations_are_deterministic() {
     // Invariant #4 extends to reporting: the same workspace yields the same
     // violations in the same (category-then-key) order, call after call.
