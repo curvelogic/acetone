@@ -9,9 +9,10 @@ copies of the [asset registry](../getting-started/asset-registry.md),
 actually broke them the way each section describes — killed locks, flipped
 bytes in objects, deleted chunks, damaged refs — and ran the recovery. The
 transcripts are quoted verbatim from those sessions (each section is
-self-contained; commit hashes differ between sessions), with one cosmetic
-change: the repositories lived in temporary directories, shown throughout as
-`/srv/registry`. Where a scenario could not be honestly reproduced it is
+self-contained; commit hashes differ between sessions), with two cosmetic
+changes: the repositories lived in temporary directories, shown throughout as
+`/srv/registry`, and the `(no columns)` line write-only queries print is
+dropped, as elsewhere in this manual. Where a scenario could not be honestly reproduced it is
 clearly labelled as such.
 
 A quick index:
@@ -116,7 +117,6 @@ repository, delete the file and retry:
 ```console
 $ rm /srv/registry/acetone-refs.lock
 $ acetone query 'MATCH (s:Service {name: "billing"}) SET s.version = "7.0.3"'
-(no columns)
 1 property set
 ```
 
