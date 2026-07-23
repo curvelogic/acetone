@@ -248,19 +248,21 @@ fsck: 1 error(s), 0 advisory(ies)
 error: repository has integrity errors
 ```
 
-**Recovery.** Delete the ref, or repoint it at a commit that exists. Ref
-surgery is one of the few places this manual reaches for plain git — ref
-deletion does not touch graph data:
+**Recovery.** Delete the branch, or repoint it at a commit that exists.
+Deletion is `acetone branch --delete` — it removes only the ref, never
+graph data, and it works on a damaged ref too:
 
 ```console
-$ git update-ref -d refs/heads/ghost
+$ acetone branch --delete ghost
+deleted branch "ghost" (was deadbeefdeadbeefdeadbeefdeadbeefdeadbeef)
 $ acetone fsck
 fsck: clean
 ```
 
 If the branch *should* exist, find the commit it ought to name (`acetone
-log` on a healthy clone, or `git reflog` if you have one) and
-`git update-ref refs/heads/<name> <commit>` instead of deleting.
+log` on a healthy clone, or `git reflog` if you have one) and plant the
+branch there instead: delete the damaged ref as above, then
+`acetone branch <name> <commit>`.
 
 ### A symbolic ref that resolves to nothing
 
@@ -448,17 +450,20 @@ On branch main
 HEAD: 26405c52d75030aa4c20b862af6f12aa0f354eb3
 workspace: clean
 nodes: 12, edges: 15, schema entries: 7
-$ git update-ref -d refs/heads/parked
+$ acetone branch --delete parked
+deleted branch "parked" (was 26405c52d75030aa4c20b862af6f12aa0f354eb3)
 ```
 
 Two details worth reading twice:
 
-- The `git update-ref` carries **three** arguments: new value *and expected
-  old value*. That makes it a compare-and-swap — it fails rather than
-  clobber if anything else moved `main` meanwhile.
-- Winding a branch back is the one recovery in this chapter that rewrites
-  (local) history. If `main` has been pushed or pulled elsewhere, prefer a
-  *forward* fix: commit the correcting change instead.
+- **Winding an existing branch back** is the one step here that still
+  needs plain git: `acetone branch` creates and deletes branches but never
+  moves one. The `git update-ref` carries **three** arguments: new value
+  *and expected old value*. That makes it a compare-and-swap — it fails
+  rather than clobber if anything else moved `main` meanwhile.
+- Winding a branch back is also the one recovery in this chapter that
+  rewrites (local) history. If `main` has been pushed or pulled elsewhere,
+  prefer a *forward* fix: commit the correcting change instead.
 
 ### Undoing a bad commit
 
@@ -503,9 +508,8 @@ error: cannot resolve "e04f9ee4e2ae6b044fa6e40aecbe83a69b727bfc" to a branch, re
 ```
 
 So: if you might want a wound-back commit again, put a branch on it before
-winding back. (Creating a branch at an arbitrary commit is `git update-ref
-refs/heads/<name> <commit>` for now — the CLI's `branch` command currently
-creates branches only at the current head.)
+winding back — `acetone branch keep-this <commit>` plants a branch at any
+commit you name.
 
 Reassuringly, even `git gc --prune=now` did not touch uncommitted work: the
 workspace we had dirtied beforehand survived it intact —
