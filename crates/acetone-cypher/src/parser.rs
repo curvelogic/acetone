@@ -95,6 +95,7 @@ fn is_reserved(word: &str) -> bool {
 pub fn parse(input: &str) -> Result<Query, ParseError> {
     let tokens = lex(input)?;
     let mut parser = Parser {
+        source: input,
         tokens,
         pos: 0,
         depth: 0,
@@ -121,13 +122,16 @@ fn quantifier_kind(name: &str) -> Option<QuantifierKind> {
     }
 }
 
-struct Parser {
+struct Parser<'a> {
+    /// The query text the tokens were lexed from, for diagnostics that
+    /// quote raw source (e.g. the bare-refspec suggestion after `AT`).
+    source: &'a str,
     tokens: Vec<Token>,
     pos: usize,
     depth: usize,
 }
 
-impl Parser {
+impl Parser<'_> {
     // --- token plumbing ----------------------------------------------------
 
     fn peek(&self) -> &Token {
@@ -512,7 +516,7 @@ impl Parser {
                     let span = self.bump().span;
                     Some(AtRef::Parameter { name, span })
                 }
-                _ => return Err(self.unexpected("a refspec string or parameter after AT")),
+                _ => return Err(self.bare_refspec_error()),
             }
         } else {
             None
@@ -529,6 +533,49 @@ impl Parser {
             where_clause,
             span: start.to(self.prev_span()),
         }))
+    }
+
+    /// The error for a non-string, non-parameter token after `AT`
+    /// (acetone-dm3). A bare commit hash or branch name — which may lex as
+    /// several adjacent tokens: `3db804f9` is integer `3` then ident
+    /// `db804f9` — gets an actionable suggestion quoting the raw source
+    /// text. Anything else (a reserved word, punctuation, end of input)
+    /// keeps the generic message: the refspec is missing, not unquoted.
+    fn bare_refspec_error(&self) -> ParseError {
+        let refspec_like = match &self.peek().kind {
+            TokenKind::Integer(_) | TokenKind::IntegerTooLarge(_) | TokenKind::Float(_) => true,
+            TokenKind::Ident {
+                name,
+                backquoted: false,
+            } => !is_reserved(name),
+            _ => false,
+        };
+        if !refspec_like {
+            return self.unexpected("a refspec string or parameter after AT");
+        }
+        // Reassemble the refspec the user wrote: the run of tokens with no
+        // intervening whitespace, sliced from the source (token-level
+        // reconstruction would be lossy — `4e5c0148` lexes through a
+        // float).
+        let start = self.peek().span;
+        let mut end = start;
+        let mut n = 1;
+        loop {
+            let next = self.peek_at(n);
+            if next.kind == TokenKind::Eof || next.span.start != end.end {
+                break;
+            }
+            end = next.span;
+            n += 1;
+        }
+        let raw = &self.source[start.start..end.end];
+        ParseError::QueryStructure {
+            message: format!(
+                "a refspec after AT must be a string literal or a parameter \
+                 — try AT '{raw}' (or AT $ref)"
+            ),
+            span: Span::new(start.start, end.end),
+        }
     }
 
     fn projection(&mut self, start: Span, is_with: bool) -> Result<Projection, ParseError> {
@@ -1047,7 +1094,27 @@ impl Parser {
                 break;
             }
         }
-        let mut expr = self.expr_postfix()?;
+        // openCypher's smallest integer: a magnitude of exactly 2^63 only
+        // fits i64 when negated, so the innermost unary minus folds into
+        // the literal (TCK Literals2–4 "Return the smallest integer").
+        // Folding is token-level, so `- 9223372036854775808` folds too;
+        // any other route to an `IntegerTooLarge` token — bare, a larger
+        // magnitude, or a *binary* minus — errors in `expr_atom`.
+        let mut expr = match self.peek().kind {
+            TokenKind::IntegerTooLarge(magnitude)
+                if magnitude == i64::MIN.unsigned_abs()
+                    && matches!(prefixes.last(), Some((UnaryOp::Minus, _))) =>
+            {
+                let token_span = self.bump().span;
+                let (_, minus_span) = prefixes.pop().expect("last prefix checked above");
+                let literal = Expr::Literal {
+                    value: Literal::Integer(i64::MIN),
+                    span: minus_span.to(token_span),
+                };
+                self.expr_postfix_from(literal)?
+            }
+            _ => self.expr_postfix()?,
+        };
         for (op, span) in prefixes.into_iter().rev() {
             let full = span.to(expr.span());
             expr = Expr::Unary {
@@ -1060,7 +1127,14 @@ impl Parser {
     }
 
     fn expr_postfix(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.expr_atom()?;
+        let atom = self.expr_atom()?;
+        self.expr_postfix_from(atom)
+    }
+
+    /// The postfix loop (property access, indexing/slicing, `IS [NOT]
+    /// NULL`) applied to an already-parsed head expression.
+    fn expr_postfix_from(&mut self, expr: Expr) -> Result<Expr, ParseError> {
+        let mut expr = expr;
         loop {
             if self.at(&TokenKind::Dot) {
                 self.bump();
@@ -1155,6 +1229,15 @@ impl Parser {
                     span: token.span,
                 })
             }
+            // Not directly preceded by a foldable unary minus (see
+            // `expr_unary`), so this magnitude cannot fit an i64.
+            TokenKind::IntegerTooLarge(magnitude) => Err(ParseError::Lex {
+                message: format!(
+                    "integer literal {magnitude} is out of range \
+                     (integers span -9223372036854775808 to 9223372036854775807)"
+                ),
+                span: token.span,
+            }),
             TokenKind::Float(x) => {
                 self.bump();
                 Ok(Expr::Literal {
@@ -1874,6 +1957,118 @@ mod tests {
         };
         assert!(matches!(&m.at_ref, Some(AtRef::Parameter { name, .. }) if name == "ref"));
         assert!(m.where_clause.is_some());
+    }
+
+    #[test]
+    fn at_bare_refspec_error_suggests_quoting() {
+        // A digit-leading abbreviated commit hash lexes as integer + ident;
+        // the error must reproduce the raw text and tell the user to quote.
+        let e = parse_err("MATCH (n) AT 3db804f9 RETURN n");
+        assert!(e.to_string().contains("AT '3db804f9'"), "{e}");
+
+        // A full 40-hex-character hash.
+        let e = parse_err("MATCH (n) AT 4cdc014851d5c50e2bfa9b3d4a2e1a2b3c4d5e6f RETURN n");
+        assert!(
+            e.to_string()
+                .contains("AT '4cdc014851d5c50e2bfa9b3d4a2e1a2b3c4d5e6f'"),
+            "{e}"
+        );
+
+        // A hash whose leading digits form a float-looking prefix (4e5...).
+        let e = parse_err("MATCH (n) AT 4e5c014851 RETURN n");
+        assert!(e.to_string().contains("AT '4e5c014851'"), "{e}");
+
+        // An unquoted branch name gets the same suggestion.
+        let e = parse_err("MATCH (n) AT main RETURN n");
+        assert!(e.to_string().contains("AT 'main'"), "{e}");
+
+        // Punctuated refspecs are reassembled from the adjacent-token run.
+        let e = parse_err("MATCH (n) AT feature/foo-1.2 RETURN n");
+        assert!(e.to_string().contains("AT 'feature/foo-1.2'"), "{e}");
+    }
+
+    #[test]
+    fn at_without_refspec_keeps_the_generic_error() {
+        // A reserved word after AT means the refspec is missing, not
+        // unquoted — suggesting AT 'RETURN' would mislead.
+        let e = parse_err("MATCH (n) AT RETURN n");
+        assert!(
+            e.to_string()
+                .contains("a refspec string or parameter after AT"),
+            "{e}"
+        );
+        let e = parse_err("MATCH (n) AT");
+        assert!(
+            e.to_string()
+                .contains("a refspec string or parameter after AT"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn i64_min_literal_parses_in_all_bases() {
+        for q in [
+            "RETURN -9223372036854775808 AS literal",
+            "RETURN -0x8000000000000000 AS literal",
+            "RETURN -0o1000000000000000000000 AS literal",
+            // Folding is token-level, so whitespace after '-' is allowed.
+            "RETURN - 9223372036854775808 AS literal",
+        ] {
+            let query = parse_ok(q);
+            let expr = only_return_expr(&query);
+            assert!(
+                matches!(
+                    expr,
+                    Expr::Literal {
+                        value: Literal::Integer(n),
+                        ..
+                    } if *n == i64::MIN
+                ),
+                "{q} should fold to i64::MIN, got {expr:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn double_minus_folds_the_inner_minus_only() {
+        // `--2^63` is -(i64::MIN): parses (one minus folds into the
+        // literal), and the remaining negation overflows at runtime.
+        let q = parse_ok("RETURN --9223372036854775808");
+        let Expr::Unary {
+            op: UnaryOp::Minus,
+            operand,
+            ..
+        } = only_return_expr(&q)
+        else {
+            panic!("expected an outer unary minus");
+        };
+        assert!(matches!(
+            **operand,
+            Expr::Literal {
+                value: Literal::Integer(i64::MIN),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn out_of_range_integers_error_cleanly() {
+        for q in [
+            // 2^63 with no unary minus to fold.
+            "RETURN 9223372036854775808",
+            "RETURN 0x8000000000000000",
+            "RETURN 0o1000000000000000000000",
+            // One below i64::MIN.
+            "RETURN -9223372036854775809",
+            "RETURN -0x8000000000000001",
+            // Binary minus is subtraction, not literal negation.
+            "RETURN 1-9223372036854775808",
+            // u64::MAX negated.
+            "RETURN -18446744073709551615",
+        ] {
+            let e = parse_err(q);
+            assert!(e.to_string().contains("out of range"), "{q}: {e}");
+        }
     }
 
     #[test]

@@ -344,6 +344,28 @@ mod tests {
     }
 
     #[test]
+    fn i64_min_literal_evaluates() {
+        for q in [
+            "RETURN -9223372036854775808",
+            "RETURN -0x8000000000000000",
+            "RETURN -0o1000000000000000000000",
+        ] {
+            assert!(
+                matches!(single(q), Value::Int(i64::MIN)),
+                "{q} should evaluate to i64::MIN"
+            );
+        }
+        // The remaining negation of --2^63 overflows at runtime, cleanly.
+        let err = run_query(
+            "RETURN --9223372036854775808",
+            &EmptyGraph,
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, QueryError::Exec(ExecError::Overflow { .. })));
+    }
+
+    #[test]
     fn runtime_errors_surface() {
         let err = run_query("RETURN 1 / 0", &EmptyGraph, &BTreeMap::new()).unwrap_err();
         assert!(matches!(

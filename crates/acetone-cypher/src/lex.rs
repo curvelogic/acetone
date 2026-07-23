@@ -16,6 +16,13 @@ pub enum TokenKind {
         backquoted: bool,
     },
     Integer(i64),
+    /// An integer literal whose magnitude overflows `i64` but fits `u64`
+    /// (decimal, hex or octal). The parser folds a single immediately
+    /// preceding unary minus into `i64::MIN` when the magnitude is exactly
+    /// 2^63 (openCypher's smallest integer, TCK Literals2–4); reached any
+    /// other way it is an out-of-range error. Magnitudes beyond `u64::MAX`
+    /// stay lex errors — no negation could recover them.
+    IntegerTooLarge(u64),
     Float(f64),
     Str(String),
     /// `$name` or `$0`.
@@ -59,6 +66,7 @@ impl TokenKind {
         match self {
             TokenKind::Ident { name, .. } => format!("'{name}'"),
             TokenKind::Integer(n) => format!("integer {n}"),
+            TokenKind::IntegerTooLarge(n) => format!("out-of-range integer {n}"),
             TokenKind::Float(x) => format!("float {x}"),
             TokenKind::Str(_) => "string literal".into(),
             TokenKind::Parameter(name) => format!("parameter ${name}"),
@@ -389,10 +397,24 @@ fn lex_number(input: &str, at: usize) -> Result<(TokenKind, usize), ParseError> 
             if width == 0 {
                 return Err(lex_error("missing digits after numeric prefix", at, at + 2));
             }
-            let value = i64::from_str_radix(&digits[..width], radix).map_err(|e| {
-                lex_error(format!("invalid integer literal: {e}"), at, at + 2 + width)
-            })?;
-            return Ok((TokenKind::Integer(value), 2 + width));
+            let kind = match i64::from_str_radix(&digits[..width], radix) {
+                Ok(value) => TokenKind::Integer(value),
+                // Overflowed i64 but a valid u64 magnitude: defer to the
+                // parser, which can still fold `-0x8000000000000000` to
+                // i64::MIN. Any other failure (invalid digit, beyond
+                // u64::MAX) is a lex error as before.
+                Err(_) => match u64::from_str_radix(&digits[..width], radix) {
+                    Ok(magnitude) => TokenKind::IntegerTooLarge(magnitude),
+                    Err(e) => {
+                        return Err(lex_error(
+                            format!("invalid integer literal: {e}"),
+                            at,
+                            at + 2 + width,
+                        ));
+                    }
+                },
+            };
+            return Ok((kind, 2 + width));
         }
     }
 
@@ -440,11 +462,18 @@ fn lex_number(input: &str, at: usize) -> Result<(TokenKind, usize), ParseError> 
     } else {
         match text.parse::<i64>() {
             Ok(n) => Ok((TokenKind::Integer(n), width)),
-            Err(e) => Err(lex_error(
-                format!("invalid integer literal: {e}"),
-                at,
-                at + width,
-            )),
+            // `text` is all ASCII digits, so failure here is overflow. A
+            // u64 magnitude defers to the parser (which folds
+            // `-9223372036854775808` to i64::MIN); beyond u64 it is a lex
+            // error as before.
+            Err(_) => match text.parse::<u64>() {
+                Ok(magnitude) => Ok((TokenKind::IntegerTooLarge(magnitude), width)),
+                Err(e) => Err(lex_error(
+                    format!("invalid integer literal: {e}"),
+                    at,
+                    at + width,
+                )),
+            },
         }
     }
 }
@@ -522,10 +551,41 @@ mod tests {
 
     #[test]
     fn integer_overflow_is_an_error_not_a_panic() {
+        // Beyond even u64: no unary minus could recover this, so it is
+        // rejected at lex time.
         assert!(matches!(
             lex("99999999999999999999"),
             Err(ParseError::Lex { .. })
         ));
+    }
+
+    #[test]
+    fn i64_overflowing_magnitudes_lex_as_a_dedicated_token() {
+        // 2^63: one past i64::MAX. The parser folds a preceding unary
+        // minus into i64::MIN; bare, it is rejected there instead.
+        let two_to_63 = 9_223_372_036_854_775_808_u64;
+        for input in [
+            "9223372036854775808",
+            "0x8000000000000000",
+            "0o1000000000000000000000",
+        ] {
+            assert_eq!(
+                kinds(input),
+                vec![TokenKind::IntegerTooLarge(two_to_63), TokenKind::Eof],
+                "{input}"
+            );
+        }
+        // Anything up to u64::MAX still lexes; the parser rejects it with
+        // a clear out-of-range message.
+        assert_eq!(
+            kinds("18446744073709551615"),
+            vec![TokenKind::IntegerTooLarge(u64::MAX), TokenKind::Eof]
+        );
+        // The i64 boundary itself is an ordinary integer.
+        assert_eq!(
+            kinds("9223372036854775807"),
+            vec![TokenKind::Integer(i64::MAX), TokenKind::Eof]
+        );
     }
 
     #[test]
