@@ -16,6 +16,29 @@ fine.)
 
 ## [Unreleased]
 
+### Added
+
+- **`acetone commit --allow-empty`** (and library
+  `Transaction::commit_allow_empty`): deliberately record a commit with no
+  content change — a marker commit — now that plain `commit` refuses one
+  (ADR-0055).
+- **Streaming counts**: `Snapshot::node_count`/`edge_count`/
+  `schema_entry_count` count without materialising records; `acetone status`
+  uses them, so status stays cheap on large graphs.
+
+### Changed
+
+- **Repository lifecycle hardening** (ADR-0055): `Transaction::commit` now
+  refuses a commit that would record no change
+  (`GraphError::NothingToCommit`) — merge completions are exempt, and the
+  guard now lives in the library rather than as a CLI-side check; an
+  interrupted `checkout` (crash between its two ref updates) is recovered by
+  simply re-running the same checkout, and the update ordering is a
+  documented contract; `Repository::open` is now strictly read-only — a
+  fresh `git worktree add` worktree reads its checked-out commit directly
+  and gains its workspace ref on first write, so read-only commands work on
+  read-only filesystems and never contend with a writer.
+
 ## [0.3.0] - 2026-07-23
 
 A **co-tenancy** release: an acetone graph can now live inside an ordinary git

@@ -502,7 +502,11 @@ fn multiple_ops_on_one_key_in_a_transaction_settle_on_the_final_state() {
         )
         .expect("n");
         tx.delete_node(&node("Host", "y")).expect("del");
-        tx.commit("put then delete", &[], None).expect("commit");
+        // Put-then-delete nets to no manifest change, which a plain `commit`
+        // now refuses (acetone-k78); the empty commit is opted in because
+        // this test drives index maintenance through the commit path.
+        tx.commit_allow_empty("put then delete", &[], None)
+            .expect("commit");
     }
     // Only x (us) remains; y never reaches the index.
     assert_eq!(

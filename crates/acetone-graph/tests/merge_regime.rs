@@ -93,7 +93,10 @@ fn commit_delta(repo: &Repository, prev: &Graph, next: &Graph, message: &str) ->
         tx.put_edge(&edge(*e), &EdgeRecord::default())
             .expect("put edge");
     }
-    let commit = tx.commit(message, &[], None).expect("commit");
+    // An arbitrary delta may be empty (prev == next); the harness needs the
+    // commit either way, so opt in to empty commits (acetone-k78: plain
+    // `commit` refuses no-change commits).
+    let commit = tx.commit_allow_empty(message, &[], None).expect("commit");
     let manifest = repo
         .snapshot(&commit.to_hex())
         .expect("snapshot")

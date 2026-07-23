@@ -22,6 +22,17 @@
 //!   complete chunk set** of every map root in the manifest, so `git
 //!   gc`/`clone`/`push` preserve and transfer whole versions.
 //!
+//! # Lifecycle contracts (acetone-tqd, acetone-ayq)
+//!
+//! - [`Repository::open`] is **read-only**: no ref written, no object
+//!   stored, no lock taken. A worktree acetone has never written in reads
+//!   as a *virtual workspace* — its checked-out commit's committed state —
+//!   and its per-worktree workspace ref is materialised by the first write.
+//! - [`Repository::checkout_branch`] updates two refs in a fixed,
+//!   documented order (workspace first, checked-out ref second); a crash
+//!   between them is recovered by re-running the same checkout. See its
+//!   docs for the full contract.
+//!
 //! # Uncommitted workspaces and git gc (acetone-huo)
 //!
 //! The per-worktree workspace ref points at a **workspace tree**
@@ -265,6 +276,14 @@ impl Repository {
     /// The ref layout — standalone or co-tenant — is detected from the graph
     /// marker refs (ADR-0050): a repository with a `refs/acetone/graphs/<name>`
     /// marker opens in co-tenant mode for that graph; otherwise standalone.
+    ///
+    /// `open` is **read-only** (acetone-ayq): it writes no ref, stores no
+    /// object and takes no lock, so it works on a read-only filesystem and
+    /// never contends with a writer. A worktree acetone has never written in —
+    /// a fresh `git worktree add` — is *not* provisioned here: it reads as a
+    /// **virtual workspace** equal to its checked-out commit's committed
+    /// state, and the first write materialises its per-worktree workspace
+    /// ref.
     pub fn open(path: &Path) -> Result<Repository, GraphError> {
         let store = GitStore::open_discovering(path)?;
         let namespace = detect_namespace(&store)?;
@@ -273,47 +292,11 @@ impl Repository {
             workspace: DEFAULT_WORKSPACE.to_owned(),
             namespace,
         };
-        repo.ensure_workspace()?;
-        // Fail fast: the workspace manifest must decode, so a damaged
-        // repository is reported at open, not on first use.
+        // Fail fast (still read-only): the effective workspace manifest must
+        // decode, so a damaged repository — or a git repository acetone never
+        // initialised (`NoWorkspace`) — is reported at open, not on first use.
         repo.workspace_manifest()?;
         Ok(repo)
-    }
-
-    /// Ensure the current worktree has a workspace. If it already has one
-    /// (per-worktree or legacy ref), do nothing. Otherwise — a freshly
-    /// `git worktree add`ed worktree that acetone has not seen — bootstrap
-    /// its per-worktree workspace from the checked-out commit's committed
-    /// manifest, so opening a new worktree "just works" (ADR-0014). The
-    /// bootstrap takes the writer lock only in that first-time case; an
-    /// already-provisioned worktree opens lock-free.
-    ///
-    /// The checked-out commit is resolved via [`GitStore::head_commit_id`], so a
-    /// worktree at a **detached** `HEAD` bootstraps from its commit too, rather
-    /// than failing every operation with a spurious "no workspace" error
-    /// (acetone-cm9). Only a genuinely unborn `HEAD` (no commit at all) has
-    /// nothing to bootstrap from.
-    fn ensure_workspace(&self) -> Result<(), GraphError> {
-        if self.workspace_ref_value()?.is_some() || self.legacy_ref_value()?.is_some() {
-            return Ok(());
-        }
-        let _lock = WriteLock::acquire(self.store.git_dir())?;
-        // Re-check under the lock: another process may have bootstrapped.
-        if self.workspace_ref_value()?.is_some() {
-            return Ok(());
-        }
-        match self.store.head_commit_id(self.namespace.head_ref())? {
-            Some(commit) => {
-                let manifest_hash = self.commit_manifest_hash(&commit)?;
-                let tree = self.workspace_tree_for(&manifest_hash)?;
-                self.cas_workspace(None, &tree)
-            }
-            // No workspace and an unborn HEAD (no commit): nothing to bootstrap
-            // from.
-            None => Err(GraphError::NoWorkspace {
-                name: self.workspace.clone(),
-            }),
-        }
     }
 
     /// Build the workspace tree (`{manifest, chunks/}`, huo) for the manifest
@@ -363,13 +346,26 @@ impl Repository {
     /// The manifest blob hash of the current workspace, resolving the ref
     /// target (a workspace tree, or a bare manifest blob for a pre-huo
     /// workspace) to the manifest blob.
+    ///
+    /// When *neither* workspace ref exists — a worktree acetone has never
+    /// written in, e.g. a fresh `git worktree add` (branch or detached,
+    /// acetone-cm9) — the workspace is **virtual**: it reads as the
+    /// checked-out commit's committed manifest, resolved read-only, and no
+    /// ref is written (acetone-ayq). The first write materialises the
+    /// per-worktree ref via [`cas_workspace`](Self::cas_workspace)'s
+    /// expected-`None` create, always under the writer lock, so there is no
+    /// provisioning race. Only a genuinely unborn `HEAD` with no workspace
+    /// ref has no state to read at all ([`GraphError::NoWorkspace`]).
     fn workspace_manifest_hash(&self) -> Result<Hash, GraphError> {
-        let target = self
-            .workspace_ref_target()?
-            .ok_or_else(|| GraphError::NoWorkspace {
+        if let Some(target) = self.workspace_ref_target()? {
+            return Ok(self.store.workspace_manifest_hash(&target)?);
+        }
+        match self.store.head_commit_id(self.namespace.head_ref())? {
+            Some(commit) => self.commit_manifest_hash(&commit),
+            None => Err(GraphError::NoWorkspace {
                 name: self.workspace.clone(),
-            })?;
-        Ok(self.store.workspace_manifest_hash(&target)?)
+            }),
+        }
     }
 
     /// The current workspace manifest (decoded and validated).
@@ -426,17 +422,7 @@ impl Repository {
                 // init state (an empty graph under the manifest's own
                 // chunk parameters).
                 let manifest = read_manifest_chunk(&self.store, &workspace)?;
-                let empty = acetone_prolly::empty(&self.store, manifest.chunk_params)?;
-                let blank = Manifest {
-                    chunk_params: manifest.chunk_params,
-                    schema: MapRoot::from_root(&empty),
-                    nodes: MapRoot::from_root(&empty),
-                    edges_fwd: MapRoot::from_root(&empty),
-                    edges_rev: MapRoot::from_root(&empty),
-                    indexes: Default::default(),
-                    conflicts: None,
-                };
-                Ok(manifest != blank)
+                Ok(!is_blank(&self.store, &manifest)?)
             }
             Some(head) => {
                 let head_manifest_hash = self.commit_manifest_hash(&head)?;
@@ -481,34 +467,72 @@ impl Repository {
 
     /// Check out branch `name`: point the checked-out ref at it and reset
     /// the workspace to its committed manifest. Refuses to discard
-    /// uncommitted changes ([`GraphError::DirtyWorkspace`]). Takes the
+    /// uncommitted changes ([`GraphError::DirtyWorkspace`]) — precisely,
+    /// refuses whenever the checkout would *change the workspace content*
+    /// while it differs from the checked-out commit; when the workspace
+    /// already holds exactly the target branch's committed manifest, nothing
+    /// can be discarded and only the checked-out ref moves. Takes the
     /// single-writer lock (the workspace moves).
+    ///
+    /// # Ordering contract and crash recovery (acetone-tqd)
+    ///
+    /// A checkout is two ref updates, in this fixed order: (1) the workspace
+    /// ref advances to the target's committed manifest (compare-and-swap),
+    /// then (2) the checked-out ref moves to the branch. The pair is not
+    /// atomic; a crash between the two leaves the **recoverable** interrupted
+    /// state "workspace = target's committed content, checked-out ref = old
+    /// branch", which reads as dirty. Recovery is to **re-run the same
+    /// checkout**: it finds the workspace already at the target's manifest
+    /// and idempotently completes step (2). (Committing from the interrupted
+    /// state also stays safe — it records the target's committed content onto
+    /// the *old* branch, an explicit commit with correct parentage.) Checking
+    /// out any *other* branch from that state still refuses with
+    /// [`GraphError::DirtyWorkspace`].
+    ///
+    /// Workspace-first is deliberate: with the opposite order, the
+    /// interrupted state would pair the *new* branch's checked-out ref with
+    /// the *old* branch's workspace content, and a `commit` from it would
+    /// silently write the old branch's content onto the new branch — data on
+    /// the wrong history. Neither order can wedge the repository now, but
+    /// only workspace-first keeps every escape hatch safe.
     pub fn checkout_branch(&self, name: &str) -> Result<(), GraphError> {
         let _lock = WriteLock::acquire(self.store.git_dir())?;
-        if self.is_dirty()? {
-            return Err(GraphError::DirtyWorkspace);
-        }
         let full = self.namespace.branch_ref(name);
-        let target = self
-            .store
-            .read_ref(&full)?
-            .ok_or_else(|| GraphError::NoSuchBranch {
-                name: name.to_owned(),
-            })?;
-        let manifest_hash = self.commit_manifest_hash(&target)?;
-        // Reset the workspace to the branch's manifest. CAS the per-worktree
-        // ref against its own current value (None when this is the first
-        // write after an ADR-0014 migration — the CAS then creates it). Skip
-        // only when the per-worktree ref already resolves to that manifest.
+        let target = self.store.read_ref(&full)?;
+        // Fast path and crash recovery in one: when the branch exists and the
+        // per-worktree workspace ref already resolves to exactly its committed
+        // manifest, the workspace step is complete (either a no-op checkout
+        // between branches at the same commit, or step (2) of an interrupted
+        // checkout) — only the checked-out ref needs to move, and nothing can
+        // be discarded.
         let expected = self.workspace_ref_value()?;
         let current = match &expected {
             Some(hash) => Some(self.store.workspace_manifest_hash(hash)?),
             None => None,
         };
-        if current != Some(manifest_hash) {
-            let tree = self.workspace_tree_for(&manifest_hash)?;
-            self.cas_workspace(expected.as_ref(), &tree)?;
+        if let Some(target) = &target {
+            let manifest_hash = self.commit_manifest_hash(target)?;
+            if current == Some(manifest_hash) {
+                self.store.set_head(self.namespace.head_ref(), &full)?;
+                return Ok(());
+            }
         }
+        // The checkout would change workspace content: the dirty guard
+        // applies, and — preserving the established precedence — it is
+        // checked before a missing branch is reported.
+        if self.is_dirty()? {
+            return Err(GraphError::DirtyWorkspace);
+        }
+        let target = target.ok_or_else(|| GraphError::NoSuchBranch {
+            name: name.to_owned(),
+        })?;
+        let manifest_hash = self.commit_manifest_hash(&target)?;
+        // Reset the workspace to the branch's manifest. CAS the per-worktree
+        // ref against its own current value (None when this is the first
+        // write after an ADR-0014 migration or in a fresh worktree reading a
+        // virtual workspace — the CAS then creates it).
+        let tree = self.workspace_tree_for(&manifest_hash)?;
+        self.cas_workspace(expected.as_ref(), &tree)?;
         self.store.set_head(self.namespace.head_ref(), &full)?;
         Ok(())
     }
@@ -1063,17 +1087,17 @@ impl Repository {
         })
     }
 
-    /// The manifest blob hash inside a commit (re-adding the manifest
-    /// bytes to the content-addressed store is the identity operation, so
-    /// this needs no extra bookkeeping).
+    /// The manifest blob hash inside a commit, read from the commit's tree
+    /// — a pure read (acetone-ayq): no object is written, so every read path
+    /// that resolves a commit's manifest (open's fail-fast, snapshots, diff,
+    /// dirtiness) stays side-effect-free. Content addressing makes this the
+    /// same hash the historical re-`put` route returned.
     pub(crate) fn commit_manifest_hash(&self, commit: &Hash) -> Result<Hash, GraphError> {
-        let commit = self
-            .store
-            .read_commit(commit)?
+        self.store
+            .commit_manifest_id(commit)?
             .ok_or_else(|| GraphError::NotACommit {
                 name: commit.to_hex(),
-            })?;
-        Ok(self.store.put(&commit.manifest)?)
+            })
     }
 
     /// The manifest of the version at `commit` (its manifest blob, decoded).
@@ -1399,6 +1423,24 @@ fn check_referential_integrity(
 
 fn workspace_ref(name: &str) -> String {
     format!("{WORKSPACE_REF_PREFIX}{name}")
+}
+
+/// Whether `manifest` is exactly the blank state a fresh `init` writes: an
+/// empty graph under the manifest's own chunk parameters. The "no change yet"
+/// baseline for an unborn branch, shared by [`Repository::is_dirty`] and the
+/// no-change commit guard (acetone-k78).
+fn is_blank(store: &GitStore, manifest: &Manifest) -> Result<bool, GraphError> {
+    let empty = acetone_prolly::empty(store, manifest.chunk_params)?;
+    let blank = Manifest {
+        chunk_params: manifest.chunk_params,
+        schema: MapRoot::from_root(&empty),
+        nodes: MapRoot::from_root(&empty),
+        edges_fwd: MapRoot::from_root(&empty),
+        edges_rev: MapRoot::from_root(&empty),
+        indexes: Default::default(),
+        conflicts: None,
+    };
+    Ok(*manifest == blank)
 }
 
 /// Write the empty-graph workspace: build the empty manifest under
@@ -1851,14 +1893,47 @@ impl<'r> Transaction<'r> {
     /// git commit on the current branch and advance the branch ref.
     /// Returns the commit's address.
     ///
+    /// Refuses a commit that would record **no change**
+    /// ([`GraphError::NothingToCommit`], acetone-k78): after staged writes
+    /// apply, the workspace manifest must differ from the checked-out
+    /// commit's (or, on an unborn branch, from the blank init state). The
+    /// check is manifest-level, so a transaction whose operations net to no
+    /// change is refused too. A merge completion (`MERGE_HEAD` set) always
+    /// commits — it records two-parent history even when the resolved
+    /// content equals ours. A deliberate empty commit is the explicit
+    /// opt-in [`commit_allow_empty`](Self::commit_allow_empty).
+    ///
     /// The commit anchors the complete chunk set of every map in the
     /// manifest, so the whole version survives `git gc` and travels with
     /// `clone`/`push`/`fetch` (spec §3.5).
     pub fn commit(
+        self,
+        message: &str,
+        trailers: &[(String, String)],
+        author: Option<Signature>,
+    ) -> Result<Hash, GraphError> {
+        self.commit_impl(message, trailers, author, false)
+    }
+
+    /// Like [`commit`](Self::commit), but permits a commit that records no
+    /// change — a deliberate empty commit (a marker, a CI convention), the
+    /// analogue of `git commit --allow-empty`. Everything else is identical:
+    /// same anchoring, same merge-completion semantics, same branch advance.
+    pub fn commit_allow_empty(
+        self,
+        message: &str,
+        trailers: &[(String, String)],
+        author: Option<Signature>,
+    ) -> Result<Hash, GraphError> {
+        self.commit_impl(message, trailers, author, true)
+    }
+
+    fn commit_impl(
         mut self,
         message: &str,
         trailers: &[(String, String)],
         author: Option<Signature>,
+        allow_empty: bool,
     ) -> Result<Hash, GraphError> {
         let repo = self.repo;
         // Committing advances a branch, so a detached-HEAD worktree cannot
@@ -1960,6 +2035,21 @@ impl<'r> Transaction<'r> {
             // No merge in progress, yet the workspace still holds a conflicts
             // map: a wedged merge-in-progress workspace with no MERGE_HEAD.
             return Err(GraphError::MergeInProgress);
+        }
+
+        // No-change guard (acetone-k78): an ordinary commit must record a
+        // change. Manifest-level, evaluated after the staged writes applied
+        // (`base_hash` is the post-save workspace manifest hash), so staged
+        // operations that net to nothing are refused too. Merge completions
+        // (merge_head above) are exempt: they record two-parent history.
+        if !allow_empty && merge_head.is_none() {
+            let unchanged = match &parent {
+                Some(tip) => repo.commit_manifest_hash(tip)? == self.base_hash,
+                None => is_blank(&repo.store, &self.manifest)?,
+            };
+            if unchanged {
+                return Err(GraphError::NothingToCommit);
+            }
         }
 
         let manifest_bytes = self.manifest.encode();
@@ -2259,6 +2349,25 @@ impl<'s> Snapshot<'s> {
             n += 1;
         }
         Ok(n)
+    }
+
+    /// The number of nodes, by a streaming scan of the node map — unlike
+    /// [`nodes`](Self::nodes), no record is decoded or materialised, so
+    /// counting stays cheap at scale (acetone-k78, security review LOW-2).
+    pub fn node_count(&self) -> Result<usize, GraphError> {
+        self.count(&self.manifest.nodes)
+    }
+
+    /// The number of edges (from the forward map), by a streaming scan —
+    /// the counting analogue of [`edges`](Self::edges).
+    pub fn edge_count(&self) -> Result<usize, GraphError> {
+        self.count(&self.manifest.edges_fwd)
+    }
+
+    /// The number of schema entries, by a streaming scan — the counting
+    /// analogue of [`schema_entries`](Self::schema_entries).
+    pub fn schema_entry_count(&self) -> Result<usize, GraphError> {
+        self.count(&self.manifest.schema)
     }
 
     /// Point lookup of a node.

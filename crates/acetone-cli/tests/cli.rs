@@ -515,6 +515,39 @@ fn query_command_table_is_never_row_capped() {
 /// no signal — an exploration trap. The query still returns 0 rows and exits 0,
 /// but a non-error advisory naming the label lands on stderr.
 #[test]
+fn allow_empty_opts_in_to_marker_commits() {
+    // acetone-k78: plain `commit` refuses a no-change commit (library guard,
+    // no longer a CLI-side check); `--allow-empty` deliberately records one —
+    // including the empty root commit on a brand-new repository.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    // Refused without the flag, on the empty root…
+    let out = acetone(&repo, &["commit", "-m", "empty root"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("nothing to commit"));
+
+    // …allowed with it.
+    let out = acetone(&repo, &["commit", "-m", "root marker", "--allow-empty"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("committed "));
+
+    // And again on a clean workspace with history: refused, then allowed.
+    let out = acetone(&repo, &["commit", "-m", "again"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("nothing to commit"));
+    let out = acetone(&repo, &["commit", "-m", "marker", "--allow-empty"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Two commits exist; the workspace stays clean.
+    let out = acetone(&repo, &["log"]);
+    assert_eq!(stdout(&out).lines().count(), 2, "{}", stdout(&out));
+    let out = acetone(&repo, &["status"]);
+    assert!(stdout(&out).contains("workspace: clean"));
+}
+
+#[test]
 fn undeclared_label_match_in_a_schema_free_repo_advises_on_stderr() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path().join("repo");

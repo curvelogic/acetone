@@ -54,7 +54,10 @@ proptest! {
         for (id, v) in &a {
             tx.put_node(&node(*id), &record(*v)).expect("put");
         }
-        let v1 = tx.commit("a", &[], None).expect("commit a");
+        // Arbitrary versions may be empty or identical; the property needs
+        // both commits either way (acetone-k78: plain `commit` refuses
+        // no-change commits).
+        let v1 = tx.commit_allow_empty("a", &[], None).expect("commit a");
 
         // v2 = version b: delete the ids that are gone, upsert the rest.
         let mut tx = repo.begin_write().expect("begin");
@@ -66,7 +69,7 @@ proptest! {
         for (id, v) in &b {
             tx.put_node(&node(*id), &record(*v)).expect("put");
         }
-        let v2 = tx.commit("b", &[], None).expect("commit b");
+        let v2 = tx.commit_allow_empty("b", &[], None).expect("commit b");
 
         // The model difference, keyed by encoded node key.
         let mut want: BTreeMap<Vec<u8>, ChangeKind> = BTreeMap::new();
@@ -108,7 +111,9 @@ proptest! {
         for ((s, d), v) in &a {
             tx.put_edge(&edge(*s, *d), &edge_record(*v)).expect("put edge");
         }
-        let v1 = tx.commit("a", &[], None).expect("commit a");
+        // Empty commits opted in for the same reason as the node property
+        // above (a=b leaves version b unchanged).
+        let v1 = tx.commit_allow_empty("a", &[], None).expect("commit a");
 
         let mut tx = repo.begin_write().expect("begin");
         for (s, d) in a.keys() {
@@ -119,7 +124,7 @@ proptest! {
         for ((s, d), v) in &b {
             tx.put_edge(&edge(*s, *d), &edge_record(*v)).expect("put edge");
         }
-        let v2 = tx.commit("b", &[], None).expect("commit b");
+        let v2 = tx.commit_allow_empty("b", &[], None).expect("commit b");
 
         // The model edge difference, keyed by encoded forward edge key.
         let mut want: BTreeMap<Vec<u8>, ChangeKind> = BTreeMap::new();

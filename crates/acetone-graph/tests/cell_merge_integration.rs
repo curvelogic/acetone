@@ -458,7 +458,10 @@ fn commit_edits(
         tx.put_node(&node(*id), &two_prop_record(cur_a, cur_b))
             .expect("put");
     }
-    let commit = tx.commit(msg, &[], None).expect("commit");
+    // An arbitrary edit script may be a no-op (base unchanged); the property
+    // still needs the commit to exist, so opt in to the empty commit
+    // (acetone-k78: `commit` refuses no-change commits by default).
+    let commit = tx.commit_allow_empty(msg, &[], None).expect("commit");
     repo.snapshot(&commit.to_hex())
         .expect("snapshot")
         .manifest()

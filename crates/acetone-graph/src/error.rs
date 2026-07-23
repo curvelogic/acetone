@@ -88,6 +88,16 @@ pub enum GraphError {
     /// discard.
     #[error("workspace has uncommitted changes; commit them first")]
     DirtyWorkspace,
+    /// `commit` found no change to record: the workspace manifest matches the
+    /// checked-out commit's (or, on an unborn branch, is still the blank init
+    /// state). A deliberate empty commit — a marker, a CI convention — is the
+    /// explicit opt-in
+    /// [`Transaction::commit_allow_empty`](crate::repo::Transaction::commit_allow_empty).
+    #[error(
+        "nothing to commit (workspace matches HEAD); use an allow-empty commit \
+         to record one deliberately"
+    )]
+    NothingToCommit,
     /// The workspace is mid-merge (`conflicts` map present); this
     /// operation is not available until the merge completes (Phase 4
     /// delivers merge completion).
