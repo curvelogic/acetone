@@ -300,9 +300,9 @@ $ acetone query --at 190d782b20d1ff3be951eff63306389bfd46898c 'MATCH (s:Service)
 2 rows
 ```
 
-One caveat worth knowing at this point: `acetone log` currently follows the
-**first-parent** chain only, so the branch's commit does not appear in it
-after the merge:
+One nuance worth knowing at this point: plain `acetone log` follows the
+**first-parent** chain — the current branch's own changelog — so the
+branch's commit does not appear in it after the merge:
 
 ```console
 $ acetone log
@@ -311,7 +311,20 @@ f0f0ccbf51a7a02ab0dcb5b7face69acd0e7bece merge decommission-app1
 190d782b20d1ff3be951eff63306389bfd46898c asset registry: initial inventory
 ```
 
-Because the repository is plain git underneath, git shows the full picture:
+`acetone log --all` shows the whole commit graph instead — every branch's
+commits, with both parent hashes on merge commits:
+
+```console
+$ acetone log --all
+f0f0ccbf51a7a02ab0dcb5b7face69acd0e7bece merge decommission-app1
+    merge: 815427f405191decace4f423ef78a67e997fd6e8 12d48bc3bfc7059cfdcef41d40449cc341fc06b9
+815427f405191decace4f423ef78a67e997fd6e8 postgres upgraded to 16.4
+12d48bc3bfc7059cfdcef41d40449cc341fc06b9 decommission app1: move identity and billing to app3
+190d782b20d1ff3be951eff63306389bfd46898c asset registry: initial inventory
+```
+
+And because the repository is plain git underneath, git can draw the same
+picture as a graph:
 
 ```console
 $ git log --oneline --graph --all
