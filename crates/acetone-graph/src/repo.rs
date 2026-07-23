@@ -59,10 +59,10 @@ use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_model::schema::{IndexDef, SchemaEntry};
 use acetone_prolly::{BatchOp, ChunkParams, Root, collect_reachable_chunks};
 use acetone_store::{
-    ChunkStore, CommitStore, ConsolidateOptions, ConsolidateStats, GitStore, GitStoreOptions, Hash,
-    NewCommit, ObjectFormat, RefStore, Signature, StoreError,
+    ChunkStore, Commit, CommitStore, ConsolidateOptions, ConsolidateStats, GitStore,
+    GitStoreOptions, Hash, NewCommit, ObjectFormat, RefStore, Signature, StoreError,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::ops::Bound;
 use std::path::Path;
 
@@ -467,6 +467,31 @@ impl Repository {
             }),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Delete branch `name`, returning the commit it pointed at. Refuses to
+    /// delete the checked-out branch ([`GraphError::BranchCheckedOut`]) —
+    /// that would leave `HEAD` naming a branch that does not exist.
+    ///
+    /// Deletion is ref plumbing only: no object is removed, so the deleted
+    /// branch's commits remain reachable by hash (and recoverable by
+    /// re-creating a branch there) until an aggressive **git** gc expires
+    /// them — `acetone gc` is representation-only and never deletes.
+    pub fn delete_branch(&self, name: &str) -> Result<Hash, GraphError> {
+        let full = self.namespace.branch_ref(name);
+        if self.current_branch()?.as_deref() == Some(full.as_str()) {
+            return Err(GraphError::BranchCheckedOut {
+                name: name.to_owned(),
+            });
+        }
+        let target = self
+            .store
+            .read_ref(&full)?
+            .ok_or_else(|| GraphError::NoSuchBranch {
+                name: name.to_owned(),
+            })?;
+        self.store.delete_ref(&full)?;
+        Ok(target)
     }
 
     /// Check out branch `name`: point the checked-out ref at it and reset
@@ -1015,6 +1040,76 @@ impl Repository {
                 message: commit.message,
                 trailers: commit.trailers,
                 parents: commit.parents,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// The commit history reachable from **every** branch (`log --all`),
+    /// newest first. Where [`log`](Self::log) follows the first-parent chain
+    /// of a single head, this walks the whole commit graph, so branch-side
+    /// commits stay visible after a merge.
+    ///
+    /// The order is deterministic: reverse-topological (every commit before
+    /// any of its parents), with independent commits ordered by committer
+    /// timestamp, newest first, and finally by hash. No graph is rendered —
+    /// merge structure is carried honestly by each entry's `parents`, and
+    /// the repository is plain git underneath, so `git log --graph` remains
+    /// the topology drawing.
+    pub fn log_all(&self) -> Result<Vec<LogEntry>, GraphError> {
+        // Load every commit reachable from any branch tip.
+        let mut commits: BTreeMap<Hash, Commit> = BTreeMap::new();
+        let mut queue: Vec<Hash> = self.branches()?.into_iter().map(|(_, tip)| tip).collect();
+        while let Some(id) = queue.pop() {
+            if commits.contains_key(&id) {
+                continue;
+            }
+            let commit = self
+                .store
+                .read_commit(&id)?
+                .ok_or_else(|| GraphError::NotACommit { name: id.to_hex() })?;
+            queue.extend(commit.parents.iter().copied());
+            commits.insert(id, commit);
+        }
+        // Emit newest-first topologically (Kahn's algorithm over the child →
+        // parent edges): a commit becomes emittable once every reachable
+        // child of it has been emitted; among the emittable, the max-heap
+        // picks the newest committer timestamp, hash as the final tie-break,
+        // so the sequence is fully deterministic. Cycles cannot occur in
+        // valid git data; on hostile data the cyclic tail simply never
+        // becomes emittable and is dropped, mirroring `log`'s cycle guard.
+        let mut pending_children: BTreeMap<Hash, usize> =
+            commits.keys().map(|id| (*id, 0)).collect();
+        for commit in commits.values() {
+            for parent in &commit.parents {
+                if let Some(n) = pending_children.get_mut(parent) {
+                    *n += 1;
+                }
+            }
+        }
+        let mut ready: BinaryHeap<(i64, Hash)> = commits
+            .iter()
+            .filter(|(id, _)| pending_children[*id] == 0)
+            .map(|(id, c)| (c.committer.time_seconds, *id))
+            .collect();
+        let mut entries = Vec::with_capacity(commits.len());
+        while let Some((_, id)) = ready.pop() {
+            let Some(commit) = commits.get(&id) else {
+                continue; // unreachable: the heap is fed from `commits`
+            };
+            for parent in &commit.parents {
+                if let Some(n) = pending_children.get_mut(parent) {
+                    *n -= 1;
+                    if *n == 0 {
+                        ready.push((commits[parent].committer.time_seconds, *parent));
+                    }
+                }
+            }
+            entries.push(LogEntry {
+                id,
+                message: commit.message.clone(),
+                trailers: commit.trailers.clone(),
+                parents: commit.parents.clone(),
             });
         }
         Ok(entries)

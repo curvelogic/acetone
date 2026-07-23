@@ -96,17 +96,42 @@ pub enum Command {
         allow_empty: bool,
     },
     /// Show commit history, newest first.
+    ///
+    /// By default follows the current branch's first-parent chain — the
+    /// branch's own changelog, in which merged-in branch commits do not
+    /// appear. `--all` covers the whole commit graph instead: every commit
+    /// reachable from any branch, each exactly once, newest first in a
+    /// deterministic topological order, with both parent hashes shown on
+    /// merge commits.
     Log {
+        /// Cover every branch (the whole commit graph), not just the
+        /// current branch's first-parent chain; merge commits show their
+        /// parent hashes.
+        #[arg(long)]
+        all: bool,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
         /// may change at any minor release.
         #[arg(long)]
         json: bool,
     },
-    /// List branches, or create one.
+    /// List branches, create one, or delete one.
     Branch {
-        /// Name of a new branch to create at the current head commit.
-        /// Omit to list existing branches.
+        /// Name of a new branch to create. Omit to list existing branches.
         name: Option<String>,
+        /// Where the new branch starts: a branch short name, full ref name
+        /// or commit hash (default: the current head commit). The new
+        /// branch is not checked out.
+        refspec: Option<String>,
+        /// Delete branch NAME instead. Ref removal only — no commit or
+        /// graph data is deleted, so the branch's commits stay reachable by
+        /// hash. Refuses to delete the checked-out branch.
+        #[arg(
+            short = 'd',
+            long = "delete",
+            value_name = "NAME",
+            conflicts_with_all = ["name", "refspec"]
+        )]
+        delete: Option<String>,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
         /// may change at any minor release.
         #[arg(long)]

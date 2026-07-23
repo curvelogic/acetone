@@ -18,25 +18,43 @@ will. Everything else matches.)
 
 ```console
 $ acetone log
-76f90ac99a55bff85f6aa72be28f71747f721e5c merge decommission-app1
-a8965d82134ee09e1c3573118953b05d5499748b postgres upgraded to 16.4
-d5a207be4fb0cd7a5ea3c3f0f3ba44d077b6aad6 asset registry: initial inventory
+d23309799d0583dc54b709db2a507a2736426acb merge decommission-app1
+3e59a55c23a9c2d8be568974106ee1d412026ffb postgres upgraded to 16.4
+4e04e05af4c92472342ade7ba874e9a2994d44cb asset registry: initial inventory
 ```
 
-One caveat, worth restating from Part I because you will notice it every time
-you merge: `acetone log` currently follows the **first-parent** chain only.
-The commit made on the `decommission-app1` branch is an ancestor of the merge
-commit, but it does not appear in this list. Since the repository is plain git
-underneath, git itself is the workaround — and shows the topology too:
+One nuance, worth restating from Part I because you will notice it every
+time you merge: plain `acetone log` follows the **first-parent** chain — the
+current branch's own changelog — so the commit made on the
+`decommission-app1` branch, although an ancestor of the merge commit, does
+not appear in the list above. `acetone log --all` covers the whole commit
+graph instead: every commit reachable from any branch, each exactly once,
+newest first, with both parent hashes shown on merge commits:
+
+```console
+$ acetone log --all
+d23309799d0583dc54b709db2a507a2736426acb merge decommission-app1
+merge: 3e59a55c23a9c2d8be568974106ee1d412026ffb 19f7e936e8edb5ae247f04cdc026a3af9eefea7e
+3e59a55c23a9c2d8be568974106ee1d412026ffb postgres upgraded to 16.4
+19f7e936e8edb5ae247f04cdc026a3af9eefea7e decommission app1: move identity and billing to app3
+4e04e05af4c92472342ade7ba874e9a2994d44cb asset registry: initial inventory
+```
+
+The `merge:` line reads `[ours, theirs]` — the first parent is the branch
+that was checked out, the second the branch merged in. (It sits flush at
+the start of the line, unlike a commit's trailers, which always render
+indented — so a trailer that happens to be *named* `merge` cannot pass
+itself off as merge structure.) And since the repository is plain git
+underneath, git itself can draw the topology:
 
 ```console
 $ git log --oneline --graph --all
-*   76f90ac merge decommission-app1
+*   d233097 merge decommission-app1
 |\
-| * 9896e15 decommission app1: move identity and billing to app3
-* | a8965d8 postgres upgraded to 16.4
+| * 19f7e93 decommission app1: move identity and billing to app3
+* | 3e59a55 postgres upgraded to 16.4
 |/
-* d5a207b asset registry: initial inventory
+* 4e04e05 asset registry: initial inventory
 ```
 
 History is also queryable from inside Cypher, where it lands as ordinary rows
@@ -47,9 +65,9 @@ $ acetone query 'CALL acetone.log()'
 ┌──────────────────────────────────────────┬───────────────────────────────────┐
 │ commit                                   │ subject                           │
 ├──────────────────────────────────────────┼───────────────────────────────────┤
-│ 76f90ac99a55bff85f6aa72be28f71747f721e5c │ merge decommission-app1           │
-│ a8965d82134ee09e1c3573118953b05d5499748b │ postgres upgraded to 16.4         │
-│ d5a207be4fb0cd7a5ea3c3f0f3ba44d077b6aad6 │ asset registry: initial inventory │
+│ d23309799d0583dc54b709db2a507a2736426acb │ merge decommission-app1           │
+│ 3e59a55c23a9c2d8be568974106ee1d412026ffb │ postgres upgraded to 16.4         │
+│ 4e04e05af4c92472342ade7ba874e9a2994d44cb │ asset registry: initial inventory │
 └──────────────────────────────────────────┴───────────────────────────────────┘
 3 rows
 ```
@@ -65,7 +83,7 @@ $ acetone query 'MATCH (s:Service {name: "identity"}) SET s.version = "2.4.2"'
 1 property set
 $ acetone status
 On branch main
-HEAD: 76f90ac99a55bff85f6aa72be28f71747f721e5c
+HEAD: d23309799d0583dc54b709db2a507a2736426acb
 workspace: dirty
 nodes: 13, edges: 15, schema entries: 7
 ```
@@ -83,7 +101,7 @@ commit and touches nothing in the workspace:
 
 ```console
 $ acetone branch bump-identity
-created branch "bump-identity" at 76f90ac99a55bff85f6aa72be28f71747f721e5c
+created branch "bump-identity" at d23309799d0583dc54b709db2a507a2736426acb
 ```
 
 Two things to know about this model:
@@ -99,7 +117,7 @@ Commit the version bump to get back to a clean state:
 
 ```console
 $ acetone commit -m "identity patch release 2.4.2"
-committed 5dd4d23fb47b5c8e6a5116f3cbec314960c453ae
+committed f0f5b30d664e6dfabbaf61f9c8efa315e9681de6
 ```
 
 ## Manufacturing a disagreement
@@ -115,7 +133,7 @@ registry along with everything attached to it:
 $ acetone query 'MATCH (h:Host {name: "db2"}) DETACH DELETE h'
 1 node deleted, 1 relationship deleted
 $ acetone commit -m "retire db2"
-committed be6139f397ad874e0161054cd65c11e5e0ad5e2c
+committed bce960e3498f2360d5e808b31288eb0ae7f245e0
 ```
 
 Meanwhile on `bump-identity`, the identity team ships 2.5.0 and — not knowing
@@ -129,7 +147,7 @@ $ acetone query 'MATCH (s:Service {name: "identity"}) SET s.version = "2.5.0"'
 $ acetone query 'MATCH (s:Service {name: "identity"}), (h:Host {name: "db2"}) CREATE (s)-[:RUNS_ON]->(h)'
 1 relationship created
 $ acetone commit -m "identity 2.5.0: scale out onto db2"
-committed 21c93ba6b9be11719d00e577598ed473134344e1
+committed c67b3adef6b307a471a52fe4d45be43e6b75f21d
 ```
 
 The two branches now disagree twice over: `main` says identity is 2.4.2 and
@@ -182,7 +200,7 @@ map awaiting your decision. `status` shows the state:
 ```console
 $ acetone status
 On branch main
-HEAD: be6139f397ad874e0161054cd65c11e5e0ad5e2c
+HEAD: bce960e3498f2360d5e808b31288eb0ae7f245e0
 workspace: dirty
 merge: in progress, 1 conflict(s) to resolve (`acetone resolve --all-ours|--all-theirs`, or write the conflicted entities directly), or `acetone merge --abort`
 nodes: 12, edges: 15, schema entries: 7
@@ -215,7 +233,7 @@ $ acetone merge --abort
 merge aborted — workspace restored to the branch tip
 $ acetone status
 On branch main
-HEAD: be6139f397ad874e0161054cd65c11e5e0ad5e2c
+HEAD: bce960e3498f2360d5e808b31288eb0ae7f245e0
 workspace: clean
 nodes: 12, edges: 14, schema entries: 7
 ```
@@ -311,10 +329,10 @@ Now the commit re-validates cleanly and writes the two-parent merge commit:
 
 ```console
 $ acetone commit -m "merge bump-identity"
-committed 89e656575a5e39c537289904a6819be56b4aa0b1
+committed beaae79967b545ac82fc27c2f812d4702b39e958
 $ acetone status
 On branch main
-HEAD: 89e656575a5e39c537289904a6819be56b4aa0b1
+HEAD: beaae79967b545ac82fc27c2f812d4702b39e958
 workspace: clean
 nodes: 12, edges: 14, schema entries: 7
 $ acetone query 'MATCH (s:Service {name: "identity"}) RETURN s.version'
@@ -326,22 +344,40 @@ $ acetone query 'MATCH (s:Service {name: "identity"}) RETURN s.version'
 1 row
 ```
 
-The full story — both merges, both branches — is in the git graph:
+The full story — both merges, both branches — is in `acetone log --all`:
+
+```console
+$ acetone log --all
+beaae79967b545ac82fc27c2f812d4702b39e958 merge bump-identity
+merge: bce960e3498f2360d5e808b31288eb0ae7f245e0 c67b3adef6b307a471a52fe4d45be43e6b75f21d
+c67b3adef6b307a471a52fe4d45be43e6b75f21d identity 2.5.0: scale out onto db2
+bce960e3498f2360d5e808b31288eb0ae7f245e0 retire db2
+f0f5b30d664e6dfabbaf61f9c8efa315e9681de6 identity patch release 2.4.2
+d23309799d0583dc54b709db2a507a2736426acb merge decommission-app1
+merge: 3e59a55c23a9c2d8be568974106ee1d412026ffb 19f7e936e8edb5ae247f04cdc026a3af9eefea7e
+3e59a55c23a9c2d8be568974106ee1d412026ffb postgres upgraded to 16.4
+19f7e936e8edb5ae247f04cdc026a3af9eefea7e decommission app1: move identity and billing to app3
+4e04e05af4c92472342ade7ba874e9a2994d44cb asset registry: initial inventory
+```
+
+(Commits that landed in the same second are ordered topologically, ties
+broken deterministically — so the two mid-branch commits may list in either
+order on your replay.) The same story as a drawing is git's department:
 
 ```console
 $ git log --oneline --graph --all
-*   89e6565 merge bump-identity
+*   beaae79 merge bump-identity
 |\
-| * 21c93ba identity 2.5.0: scale out onto db2
-* | be6139f retire db2
-* | 5dd4d23 identity patch release 2.4.2
+| * c67b3ad identity 2.5.0: scale out onto db2
+* | bce960e retire db2
+* | f0f5b30 identity patch release 2.4.2
 |/
-*   76f90ac merge decommission-app1
+*   d233097 merge decommission-app1
 |\
-| * 9896e15 decommission app1: move identity and billing to app3
-* | a8965d8 postgres upgraded to 16.4
+| * 19f7e93 decommission app1: move identity and billing to app3
+* | 3e59a55 postgres upgraded to 16.4
 |/
-* d5a207b asset registry: initial inventory
+* 4e04e05 asset registry: initial inventory
 ```
 
 ## Time travel
@@ -352,7 +388,7 @@ name, a full ref name or a commit hash. At the seed commit, the old placement
 is all still there:
 
 ```console
-$ acetone query --at d5a207be4fb0cd7a5ea3c3f0f3ba44d077b6aad6 'MATCH (s:Service)-[:RUNS_ON]->(h:Host) RETURN s.name, h.name ORDER BY s.name, h.name'
+$ acetone query --at 4e04e05af4c92472342ade7ba874e9a2994d44cb 'MATCH (s:Service)-[:RUNS_ON]->(h:Host) RETURN s.name, h.name ORDER BY s.name, h.name'
 ┌────────────┬────────┐
 │ s.name     │ h.name │
 ├────────────┼────────┤
@@ -404,7 +440,7 @@ tag *object*, which acetone peels through to the commit underneath —
 nested annotated tags included:
 
 ```console
-$ git tag inventory-v1 d5a207be4fb0cd7a5ea3c3f0f3ba44d077b6aad6
+$ git tag inventory-v1 4e04e05af4c92472342ade7ba874e9a2994d44cb
 $ acetone query --at inventory-v1 'MATCH (h:Host) RETURN count(h)'
 ┌──────────┐
 │ count(h) │
@@ -435,9 +471,9 @@ $ acetone query "CALL acetone.blame('Service', 'identity')"
 ┌─────────┬──────────┬──────────────────────────────────────────┐
 │ label   │ key      │ commit                                   │
 ├─────────┼──────────┼──────────────────────────────────────────┤
-│ Service │ identity │ 89e656575a5e39c537289904a6819be56b4aa0b1 │
-│ Service │ identity │ 5dd4d23fb47b5c8e6a5116f3cbec314960c453ae │
-│ Service │ identity │ d5a207be4fb0cd7a5ea3c3f0f3ba44d077b6aad6 │
+│ Service │ identity │ beaae79967b545ac82fc27c2f812d4702b39e958 │
+│ Service │ identity │ f0f5b30d664e6dfabbaf61f9c8efa315e9681de6 │
+│ Service │ identity │ 4e04e05af4c92472342ade7ba874e9a2994d44cb │
 └─────────┴──────────┴──────────────────────────────────────────┘
 3 rows
 ```

@@ -75,9 +75,9 @@ The pieces, in the order they appear:
 - **`Repository::init` / `Repository::open`** create or open a repository;
   `InitOptions` selects the object format (SHA-1 by default) and the
   co-tenant layout. The `Repository` value is the root of everything else:
-  branching (`create_branch`, `checkout_branch`), history (`log`, `diff`,
-  `snapshot`), merging (`merge`, `resolve_all`, `abort_merge`) and
-  maintenance (`reindex`, `gc`).
+  branching (`create_branch`, `delete_branch`, `checkout_branch`), history
+  (`log`, `log_all`, `diff`, `snapshot`), merging (`merge`, `resolve_all`,
+  `abort_merge`) and maintenance (`reindex`, `gc`).
 - **`Repository::begin_write`** starts the single-writer **`Transaction`**.
   Direct mutations (`put_node`, `put_edge`, `put_schema`, `delete_node`, …)
   accumulate in the transaction; `save()` atomically advances the workspace,

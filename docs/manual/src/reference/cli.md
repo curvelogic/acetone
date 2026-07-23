@@ -108,14 +108,23 @@ root commit; there is no `--allow-empty` yet. `--trailer` adds a `KEY=VALUE`
 commit trailer and may be repeated. During a merge, `commit` re-validates and
 completes the merge.
 
-### `acetone log`
+### `acetone log [--all]`
 
-Show commit history, newest first. Takes `--json`.
+Show commit history, newest first. By default follows the current branch's
+first-parent chain — the branch's own changelog, in which merged-in branch
+commits do not appear. `--all` covers the whole commit graph instead: every
+commit reachable from any branch, each exactly once, newest first in a
+deterministic topological order, with a `merge: <parent> <parent>` line on
+merge commits. Takes `--json` (each entry always carries its `parents`).
 
-### `acetone branch [NAME]`
+### `acetone branch [NAME [REFSPEC]] [--delete NAME]`
 
-With no argument, list branches; with `NAME`, create that branch at the
-current head commit. Takes `--json` (listing form).
+With no argument, list branches. With `NAME`, create that branch — at the
+current head commit by default, or at `REFSPEC` (a branch short name, full
+ref name or commit hash); the new branch is not checked out.
+`--delete NAME` (`-d`) deletes a branch instead: ref removal only — no
+commit or graph data is deleted, so the branch's commits stay reachable by
+hash — and the checked-out branch is refused. Takes `--json`.
 
 ### `acetone checkout <BRANCH>`
 
