@@ -81,11 +81,24 @@ pub struct ScenarioPlan {
     /// The query under test.
     pub query: Option<String>,
     pub expectation: Expectation,
+    /// Follow-up verifications (`When executing control query:`): each
+    /// runs *after* the query under test, against the post-write graph,
+    /// and carries its own expectation. The TCK uses at most one per
+    /// scenario today; a `Vec` keeps a corpus bump honest.
+    pub controls: Vec<ControlCheck>,
     /// The expected openCypher side effects (`And the side effects should
     /// be:`), keyed by effect name (`+nodes`, `-relationships`, …).
     /// `Some(empty)` for an explicit "no side effects"; `None` when the
     /// scenario declares none (a pure read).
     pub side_effects: Option<std::collections::BTreeMap<String, u64>>,
+}
+
+/// A control query and the result it must produce, verified against the
+/// graph state the query under test left behind.
+#[derive(Debug)]
+pub struct ControlCheck {
+    pub query: String,
+    pub expectation: Expectation,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -302,6 +315,7 @@ fn reduce_scenario(
         needs_procedures: false,
         query: None,
         expectation: Expectation::None,
+        controls: Vec::new(),
         side_effects: None,
     };
 
@@ -320,7 +334,13 @@ fn reduce_scenario(
             StepKind::Parameters => plan.has_parameters = true,
             StepKind::ProcedureExists => plan.needs_procedures = true,
             StepKind::ExecutingQuery(query) => plan.query = Some(query),
-            StepKind::ExecutingControlQuery(query) => plan.setup_queries.push(query),
+            // A control query verifies the graph *after* the query under
+            // test; it gets its own expectation slot — the `Then` steps
+            // that follow it must not overwrite the main expectation.
+            StepKind::ExecutingControlQuery(query) => plan.controls.push(ControlCheck {
+                query,
+                expectation: Expectation::None,
+            }),
             StepKind::ExpectResult {
                 ordered,
                 lists_unordered,
@@ -332,20 +352,22 @@ fn reduce_scenario(
                     },
                     None => (Vec::new(), Vec::new()),
                 };
-                plan.expectation = Expectation::Rows {
+                *expectation_slot(&mut plan) = Expectation::Rows {
                     header,
                     rows,
                     ordered,
                     lists_unordered,
                 };
             }
-            StepKind::ExpectEmptyResult => plan.expectation = Expectation::EmptyResult,
+            StepKind::ExpectEmptyResult => {
+                *expectation_slot(&mut plan) = Expectation::EmptyResult;
+            }
             StepKind::ExpectError {
                 error_type,
                 phase,
                 detail,
             } => {
-                plan.expectation = Expectation::Error {
+                *expectation_slot(&mut plan) = Expectation::Error {
                     error_type,
                     phase,
                     detail,
@@ -383,4 +405,13 @@ fn reduce_scenario(
         }
     }
     Ok(plan)
+}
+
+/// Where the next expectation step lands: the latest control check once
+/// one exists, the main expectation before that.
+fn expectation_slot(plan: &mut ScenarioPlan) -> &mut Expectation {
+    match plan.controls.last_mut() {
+        Some(check) => &mut check.expectation,
+        None => &mut plan.expectation,
+    }
 }

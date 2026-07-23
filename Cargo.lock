@@ -114,6 +114,7 @@ dependencies = [
  "gherkin",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
