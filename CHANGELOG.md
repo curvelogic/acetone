@@ -18,6 +18,14 @@ fine.)
 
 ### Added
 
+- **Query parameters on the CLI**: `acetone query --param KEY=VALUE`
+  (repeatable) binds `$KEY`; VALUE is parsed as a Cypher literal — number,
+  quoted string, `true`/`false`, `null`, or a list/map of literals — so
+  quoting and typing match the language, and a bare unquoted word errors
+  rather than silently binding a string. The shell gains `:param`/
+  `:param-clear`, `--param` composes with `--at`, and the library gains
+  `Session::query_at_with` and `acetone_cypher::parse_literal`.
+
 - **`acetone commit --allow-empty`** (and library
   `Transaction::commit_allow_empty`): deliberately record a commit with no
   content change — a marker commit — now that plain `commit` refuses one

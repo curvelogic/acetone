@@ -396,10 +396,11 @@ Arguments:
   <CYPHER>  The query text
 
 Options:
-      --at <AT>          Read at a specific ref (branch, tag or commit hash) instead of the current workspace state — whole-query time travel
-      --repo <REPO>      Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
-  -f, --format <FORMAT>  Output format [default: table] [possible values: table, json, csv]
-  -h, --help             Print help
+      --at <AT>            Read at a specific ref (branch, tag or commit hash) instead of the current workspace state — whole-query time travel
+      --repo <REPO>        Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+  -f, --format <FORMAT>    Output format [default: table] [possible values: table, json, csv]
+      --param <KEY=VALUE>  Bind a query parameter (repeatable): `--param KEY=VALUE`, where VALUE is a Cypher literal — a number, quoted string, true/false, null, or a list/map of literals. Quote strings through the shell: `--param 'name="billing"'`. The query reads it as `$KEY`
+  -h, --help               Print help
 
 ========== acetone fsck --help ==========
 Verify repository integrity.

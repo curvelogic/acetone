@@ -10,6 +10,7 @@
 
 use crate::ast::*;
 use crate::error::ParseError;
+use crate::exec::value::Value;
 use crate::lex::{Token, TokenKind, lex};
 use crate::span::Span;
 
@@ -109,6 +110,106 @@ pub fn parse(input: &str) -> Result<Query, ParseError> {
         });
     }
     Ok(query)
+}
+
+/// Parse `input` as a single openCypher **literal value** — the parser
+/// behind CLI and shell parameter binding (`--param KEY=VALUE`, `:param`).
+///
+/// Accepts exactly the language's literal grammar, so quoting and typing
+/// match a literal written inline in a query: integers, floats, `true`,
+/// `false`, `null` (case-insensitive), single- or double-quoted strings,
+/// sign-prefixed numbers, and lists/maps of literals. Anything else — a
+/// bare unquoted word, an operator expression, a `$parameter` — is an
+/// error, never silently a string: a typo'd `tru` or an unquoted `billing`
+/// must fail loudly rather than bind a string and match nothing.
+///
+/// Same hard properties as [`parse`]: no panics on any input, and nesting
+/// bounded by [`MAX_AST_DEPTH`] (measured iteratively before the recursive
+/// fold, so untrusted input cannot overflow the stack).
+pub fn parse_literal(input: &str) -> Result<Value, ParseError> {
+    let tokens = lex(input)?;
+    let mut parser = Parser {
+        source: input,
+        tokens,
+        pos: 0,
+        depth: 0,
+    };
+    let expr = parser.expression()?;
+    parser.expect_end()?;
+    // Sign prefixes are loop-collected (`--5` nests without parse-time
+    // recursion), so bound the AST depth iteratively before folding —
+    // the same two-stage guard `parse` uses.
+    let mut max = 0usize;
+    let mut stack: Vec<(&Expr, usize)> = vec![(&expr, 1)];
+    while let Some((e, depth)) = stack.pop() {
+        max = max.max(depth);
+        for child in e.children() {
+            stack.push((child, depth + 1));
+        }
+    }
+    if max > MAX_AST_DEPTH {
+        return Err(ParseError::RecursionLimit {
+            limit: MAX_AST_DEPTH,
+            span: expr.span(),
+        });
+    }
+    literal_value(&expr)
+}
+
+/// Fold a parsed expression into a [`Value`], accepting only the literal
+/// grammar (recursion bounded by the caller's depth check).
+fn literal_value(expr: &Expr) -> Result<Value, ParseError> {
+    let not_a_literal = |span: Span| ParseError::QueryStructure {
+        message: "expected a literal value (a number, a quoted string, true, \
+                  false, null, or a list/map of literals)"
+            .to_string(),
+        span,
+    };
+    match expr {
+        Expr::Literal { value, .. } => Ok(match value {
+            Literal::Null => Value::Null,
+            Literal::Boolean(b) => Value::Bool(*b),
+            Literal::Integer(n) => Value::Int(*n),
+            Literal::Float(x) => Value::Float(*x),
+            Literal::String(s) => Value::String(s.clone()),
+        }),
+        Expr::Unary { op, operand, span } => {
+            let inner = literal_value(operand)?;
+            match (op, inner) {
+                (UnaryOp::Minus, Value::Int(n)) => {
+                    n.checked_neg().map(Value::Int).ok_or(ParseError::Lex {
+                        message: format!(
+                            "integer literal {n} cannot be negated (integers span \
+                             -9223372036854775808 to 9223372036854775807)"
+                        ),
+                        span: *span,
+                    })
+                }
+                (UnaryOp::Minus, Value::Float(x)) => Ok(Value::Float(-x)),
+                (UnaryOp::Plus, value @ (Value::Int(_) | Value::Float(_))) => Ok(value),
+                _ => Err(not_a_literal(*span)),
+            }
+        }
+        Expr::ListLiteral { items, .. } => items
+            .iter()
+            .map(literal_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::List),
+        Expr::MapLiteral { entries, .. } => {
+            let mut map = std::collections::BTreeMap::new();
+            for (key, value) in entries {
+                map.insert(key.clone(), literal_value(value)?);
+            }
+            Ok(Value::Map(map))
+        }
+        // A bare word parses as a variable — the classic unquoted-string
+        // mistake, so the error teaches the quoting idiom.
+        Expr::Variable { name, span } => Err(ParseError::QueryStructure {
+            message: format!("bare word '{name}' is not a literal — quote strings: \"{name}\""),
+            span: *span,
+        }),
+        other => Err(not_a_literal(other.span())),
+    }
 }
 
 /// The quantifier keyword, if `name` names one.
@@ -1671,6 +1772,125 @@ mod tests {
             panic!("expected an expression item");
         };
         expr
+    }
+
+    // --- parse_literal (parameter binding) --------------------------------
+
+    /// `Value` has deliberate Cypher comparison semantics rather than a
+    /// derived `PartialEq`, so the tests compare Debug renderings.
+    fn literal_ok(input: &str) -> String {
+        match parse_literal(input) {
+            Ok(v) => format!("{v:?}"),
+            Err(e) => panic!("{input:?} should parse as a literal, got: {e}"),
+        }
+    }
+
+    fn literal_err(input: &str) -> ParseError {
+        match parse_literal(input) {
+            Ok(v) => panic!("{input:?} should not parse as a literal, got {v:?}"),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn parse_literal_scalars() {
+        assert_eq!(literal_ok("42"), format!("{:?}", Value::Int(42)));
+        assert_eq!(literal_ok("-7"), format!("{:?}", Value::Int(-7)));
+        assert_eq!(literal_ok("+7"), format!("{:?}", Value::Int(7)));
+        assert_eq!(literal_ok("--7"), format!("{:?}", Value::Int(7)));
+        assert_eq!(literal_ok("3.5"), format!("{:?}", Value::Float(3.5)));
+        assert_eq!(literal_ok("-2.5e2"), format!("{:?}", Value::Float(-250.0)));
+        assert_eq!(literal_ok("true"), format!("{:?}", Value::Bool(true)));
+        assert_eq!(literal_ok("FALSE"), format!("{:?}", Value::Bool(false)));
+        assert_eq!(literal_ok("null"), format!("{:?}", Value::Null));
+        // Both quote styles, exactly as the language lexes them.
+        let billing = format!("{:?}", Value::String("billing".into()));
+        assert_eq!(literal_ok("'billing'"), billing);
+        assert_eq!(literal_ok("\"billing\""), billing);
+        assert_eq!(
+            literal_ok(r"'it\'s'"),
+            format!("{:?}", Value::String("it's".into()))
+        );
+        // Surrounding whitespace is fine; empty string is a value.
+        assert_eq!(
+            literal_ok("  ''  "),
+            format!("{:?}", Value::String(String::new()))
+        );
+    }
+
+    #[test]
+    fn parse_literal_extreme_integers() {
+        // i64::MIN folds at the token level, like an inline query literal.
+        assert_eq!(
+            literal_ok("-9223372036854775808"),
+            format!("{:?}", Value::Int(i64::MIN))
+        );
+        let e = literal_err("9223372036854775808");
+        assert!(e.to_string().contains("out of range"), "{e}");
+        // Negating the folded i64::MIN would overflow — an error, not a panic.
+        let e = literal_err("--9223372036854775808");
+        assert!(e.to_string().contains("cannot be negated"), "{e}");
+    }
+
+    #[test]
+    fn parse_literal_collections() {
+        assert_eq!(
+            literal_ok("[1, 'two', true, null]"),
+            format!(
+                "{:?}",
+                Value::List(vec![
+                    Value::Int(1),
+                    Value::String("two".into()),
+                    Value::Bool(true),
+                    Value::Null,
+                ])
+            )
+        );
+        let expected: std::collections::BTreeMap<String, Value> = [
+            ("name".to_string(), Value::String("db1".into())),
+            ("port".to_string(), Value::Int(5432)),
+            (
+                "tags".to_string(),
+                Value::List(vec![Value::String("a".into())]),
+            ),
+        ]
+        .into();
+        assert_eq!(
+            literal_ok("{name: 'db1', port: 5432, tags: ['a']}"),
+            format!("{:?}", Value::Map(expected))
+        );
+        // A non-literal buried inside a collection still errors.
+        literal_err("[1, x]");
+        literal_err("{a: 1 + 2}");
+    }
+
+    #[test]
+    fn parse_literal_rejects_non_literals() {
+        // The classic unquoted string: the error teaches the quoting idiom.
+        let e = literal_err("billing");
+        assert!(
+            e.to_string().contains("quote strings: \"billing\""),
+            "unexpected message: {e}"
+        );
+        literal_err("1 + 2"); // an expression, not a literal
+        literal_err("$other"); // a parameter cannot bind a parameter
+        literal_err("size([1])"); // no function calls
+        literal_err("-'a'"); // a sign on a non-number
+        literal_err("42 extra"); // trailing garbage
+        literal_err(""); // nothing at all
+    }
+
+    #[test]
+    fn parse_literal_bounds_depth_without_panicking() {
+        // Sign prefixes nest the AST without parse-time recursion; the
+        // iterative depth check must reject this rather than overflow later.
+        let deep = format!("{}1", "-".repeat(100_000));
+        let e = literal_err(&deep);
+        assert!(matches!(e, ParseError::RecursionLimit { .. }), "{e}");
+        // At MAX_DEPTH the parser's own recursion guard kicks in first for
+        // bracketed nesting — either way: an error, never a crash.
+        let nested = format!("{}1{}", "[".repeat(1000), "]".repeat(1000));
+        literal_err(&nested);
     }
 
     #[test]

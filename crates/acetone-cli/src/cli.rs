@@ -319,6 +319,12 @@ pub enum Command {
         /// Output format.
         #[arg(short = 'f', long, default_value = "table", value_parser = ["table", "json", "csv"])]
         format: String,
+        /// Bind a query parameter (repeatable): `--param KEY=VALUE`, where
+        /// VALUE is a Cypher literal — a number, quoted string, true/false,
+        /// null, or a list/map of literals. Quote strings through the shell:
+        /// `--param 'name="billing"'`. The query reads it as `$KEY`.
+        #[arg(long = "param", value_name = "KEY=VALUE")]
+        param: Vec<String>,
     },
     /// Start an interactive Cypher shell (readline REPL).
     ///

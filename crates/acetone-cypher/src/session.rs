@@ -131,18 +131,24 @@ impl<'r> Session<'r> {
     /// [`Repository::snapshot`]). A write query is rejected — writes target the
     /// live workspace, never a historical version.
     pub fn query_at(&self, cypher: &str, refspec: &str) -> Result<QueryResult, QueryError> {
+        self.query_at_with(cypher, refspec, &BTreeMap::new(), &QueryLimits::default())
+    }
+
+    /// As [`Session::query_at`], with explicit query parameters and a governor
+    /// budget — the historical-read counterpart of [`Session::run_with`].
+    pub fn query_at_with(
+        &self,
+        cypher: &str,
+        refspec: &str,
+        parameters: &BTreeMap<String, Value>,
+        limits: &QueryLimits,
+    ) -> Result<QueryResult, QueryError> {
         let parsed = crate::parse(cypher)?;
         if is_write(&parsed) {
             return Err(QueryError::WriteAtVersion);
         }
         let snapshot = self.repo.snapshot(refspec)?;
-        self.run_read(
-            &parsed,
-            cypher,
-            &snapshot,
-            &BTreeMap::new(),
-            &QueryLimits::default(),
-        )
+        self.run_read(&parsed, cypher, &snapshot, parameters, limits)
     }
 
     /// Bind and execute a read against `snapshot`, resolving clause-group

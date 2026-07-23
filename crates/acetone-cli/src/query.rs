@@ -2,10 +2,11 @@
 //! execute an openCypher read query against a stored graph version, and
 //! render the result.
 
+use std::collections::BTreeMap;
 use std::io::{self, IsTerminal};
 
-use acetone_core::cypher::exec::QueryResult;
 use acetone_core::cypher::exec::value::{NodeValue, RelValue, Value};
+use acetone_core::cypher::exec::{QueryLimits, QueryResult};
 use acetone_core::cypher::session::{Outcome as QueryOutcome, Session};
 use acetone_core::graph::Repository;
 use anyhow::{Context, Result, anyhow};
@@ -42,20 +43,24 @@ impl Format {
 
 /// Run one query and print the result. Orchestration (parse → bind → execute →
 /// for a write, persist and save) lives in the library [`Session`] (ADR-0039);
-/// the CLI keeps only presentation.
+/// the CLI keeps only presentation. `param_specs` are the raw `--param
+/// KEY=VALUE` flags, parsed here so a bad binding fails before anything runs.
 pub fn run(
     repo_path: &std::path::Path,
     cypher: &str,
     at: Option<&str>,
     format: Format,
+    param_specs: &[String],
 ) -> Result<()> {
+    let params = parse_params(param_specs)?;
+    let limits = QueryLimits::default();
     let repo = Repository::open(repo_path).context("opening repository")?;
     let session = Session::new(&repo);
     match at {
         // A read against a past version; a write with `--at` is rejected.
         Some(refspec) => {
             let result = session
-                .query_at(cypher, refspec)
+                .query_at_with(cypher, refspec, &params, &limits)
                 .map_err(|e| at_error(e, cypher))?;
             // One-shot command: never cap (a scripted `query --format table`
             // piped to a file must get every row).
@@ -63,12 +68,45 @@ pub fn run(
         }
         None => {
             let outcome = session
-                .run(cypher)
+                .run_with(cypher, &params, &limits)
                 .map_err(|e| anyhow!("{}", e.render(cypher)))?;
             render_outcome(&outcome, format, None);
         }
     }
     Ok(())
+}
+
+/// Parse repeated `--param KEY=VALUE` flags into a parameter map. VALUE must
+/// be a Cypher **literal** (`parse_literal`): a bare unquoted word is an
+/// error, never silently a string — a typo'd `tru` must fail loudly rather
+/// than bind the string `"tru"` and quietly match nothing. Binding the same
+/// KEY twice is an error for the same reason.
+fn parse_params(specs: &[String]) -> Result<BTreeMap<String, Value>> {
+    let mut params = BTreeMap::new();
+    for spec in specs {
+        let Some((name, text)) = spec.split_once('=') else {
+            return Err(anyhow!(
+                "--param {}: expected KEY=VALUE (e.g. --param 'name=\"billing\"')",
+                sanitise_line(spec)
+            ));
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(anyhow!(
+                "--param {}: missing the parameter name before '='",
+                sanitise_line(spec)
+            ));
+        }
+        let value = acetone_core::cypher::parse_literal(text)
+            .map_err(|e| anyhow!("--param {}: {e}", sanitise_identifier(name)))?;
+        if params.insert(name.to_string(), value).is_some() {
+            return Err(anyhow!(
+                "--param {}: bound twice (each parameter takes one value)",
+                sanitise_identifier(name)
+            ));
+        }
+    }
+    Ok(params)
 }
 
 /// Render a query outcome: the rows, plus a write summary when a write ran.
@@ -517,6 +555,8 @@ enum Outcome {
 pub fn shell(repo_path: &std::path::Path) -> Result<()> {
     let mut format = Format::Table;
     let mut buffer = String::new();
+    // Session parameters (`:param`), passed to every statement as `$name`.
+    let mut params: BTreeMap<String, Value> = BTreeMap::new();
 
     if !io::stdin().is_terminal() {
         // Non-interactive: read lines plainly, no editing/history/prompts.
@@ -525,10 +565,13 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
         loop {
             line.clear();
             if stdin.read_line(&mut line).context("reading input")? == 0 {
-                flush_pending(repo_path, &mut buffer, &mut format); // run an unterminated final statement
+                // Run an unterminated final statement.
+                flush_pending(repo_path, &mut buffer, &mut format, &mut params);
                 break; // EOF
             }
-            if let Outcome::Quit = process_shell_line(repo_path, &mut buffer, &mut format, &line) {
+            if let Outcome::Quit =
+                process_shell_line(repo_path, &mut buffer, &mut format, &mut params, &line)
+            {
                 break;
             }
         }
@@ -555,7 +598,7 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
                     let _ = editor.add_history_entry(line.as_str());
                 }
                 if let Outcome::Quit =
-                    process_shell_line(repo_path, &mut buffer, &mut format, &line)
+                    process_shell_line(repo_path, &mut buffer, &mut format, &mut params, &line)
                 {
                     break;
                 }
@@ -567,7 +610,7 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
             }
             // Ctrl-D: run an unterminated final statement, then exit.
             Err(rustyline::error::ReadlineError::Eof) => {
-                flush_pending(repo_path, &mut buffer, &mut format);
+                flush_pending(repo_path, &mut buffer, &mut format, &mut params);
                 break;
             }
             Err(e) => {
@@ -627,6 +670,7 @@ fn process_shell_line(
     repo_path: &std::path::Path,
     buffer: &mut String,
     format: &mut Format,
+    params: &mut BTreeMap<String, Value>,
     raw: &str,
 ) -> Outcome {
     let line = raw.trim_end_matches(['\n', '\r']);
@@ -638,7 +682,7 @@ fn process_shell_line(
         let cmd = body.split_whitespace().next().unwrap_or("");
         let escapes = matches!(cmd, "quit" | "q" | "exit" | "cancel");
         if buffer.is_empty() || escapes {
-            match handle_meta(repo_path, trimmed, format, buffer) {
+            match handle_meta(repo_path, trimmed, format, params, buffer) {
                 Ok(true) => return Outcome::Quit,
                 Ok(false) => {}
                 // Errors go to stderr so they never interleave with result
@@ -667,7 +711,7 @@ fn process_shell_line(
     if query.is_empty() {
         return Outcome::Continue;
     }
-    if let Err(e) = run_in_shell(repo_path, &query, *format) {
+    if let Err(e) = run_in_shell(repo_path, &query, *format, params) {
         // Query errors go to stderr, keeping stdout as the pure result stream.
         errln!("error: {e:#}");
     }
@@ -677,21 +721,31 @@ fn process_shell_line(
 /// Run any unterminated statement still in the buffer — called at EOF so a
 /// piped statement with no trailing `;` (e.g. `printf 'RETURN 1' | acetone
 /// shell`) still executes rather than being silently dropped.
-fn flush_pending(repo_path: &std::path::Path, buffer: &mut String, format: &mut Format) {
+fn flush_pending(
+    repo_path: &std::path::Path,
+    buffer: &mut String,
+    format: &mut Format,
+    params: &mut BTreeMap<String, Value>,
+) {
     if !buffer.trim().is_empty() {
         // A blank line is already a statement terminator; reuse that path.
-        let _ = process_shell_line(repo_path, buffer, format, "");
+        let _ = process_shell_line(repo_path, buffer, format, params, "");
     }
 }
 
-fn run_in_shell(repo_path: &std::path::Path, cypher: &str, format: Format) -> Result<()> {
+fn run_in_shell(
+    repo_path: &std::path::Path,
+    cypher: &str,
+    format: Format,
+    params: &BTreeMap<String, Value>,
+) -> Result<()> {
     let repo = Repository::open(repo_path)?;
     // The library `Session` dispatches read vs write: a write goes through the
     // transactional path and advances the workspace (so subsequent shell queries
     // see it), exactly as `run` does — the shell never silently executes the read
     // side of a write. The user commits separately with `acetone commit`.
     let outcome = Session::new(&repo)
-        .run(cypher)
+        .run_with(cypher, params, &QueryLimits::default())
         .map_err(|e| anyhow!("{}", e.render(cypher)))?;
     render_outcome(&outcome, format, Some(SHELL_ROW_CAP));
     Ok(())
@@ -724,6 +778,7 @@ fn handle_meta(
     repo_path: &std::path::Path,
     line: &str,
     format: &mut Format,
+    params: &mut BTreeMap<String, Value>,
     buffer: &mut String,
 ) -> Result<bool> {
     let body = &line[1..];
@@ -751,7 +806,46 @@ fn handle_meta(
             outln!("  :declare-rel-type <TYPE>");
             outln!("  :declare-index <name> --label <L> --property <p>...");
             outln!("  :format, :f <table|json|csv>  result format");
+            outln!(
+                "  :param [<name> <literal>]     bind $name for later statements; bare :param lists"
+            );
+            outln!("  :param-clear [<name>]         drop one binding, or all of them");
             outln!("End a statement with ';' or a blank line.");
+        }
+        "param" => {
+            if rest.is_empty() {
+                if params.is_empty() {
+                    outln!("(no parameters)");
+                } else {
+                    for (name, value) in params.iter() {
+                        outln!("${} = {}", sanitise_identifier(name), render_value(value));
+                    }
+                }
+            } else {
+                // `:param <name> <literal>` — the literal is the rest of the
+                // line, so quoted strings may contain spaces.
+                let (name, text) = match rest.find(char::is_whitespace) {
+                    Some(i) => (&rest[..i], rest[i..].trim()),
+                    None => (rest, ""),
+                };
+                if text.is_empty() {
+                    anyhow::bail!(
+                        "usage: :param <name> <literal> (a number, a quoted string, \
+                         true/false, null, or a list/map of literals)"
+                    );
+                }
+                let value = acetone_core::cypher::parse_literal(text)
+                    .map_err(|e| anyhow!("parameter {}: {e}", sanitise_identifier(name)))?;
+                params.insert(name.to_string(), value);
+            }
+        }
+        "param-clear" => {
+            if rest.is_empty() {
+                params.clear();
+                outln!("(parameters cleared)");
+            } else if params.remove(rest).is_none() {
+                anyhow::bail!("no parameter named '{}'", sanitise_identifier(rest));
+            }
         }
         "format" | "f" => {
             if rest.is_empty() {

@@ -25,5 +25,5 @@ pub mod span;
 pub mod suggest;
 
 pub use error::ParseError;
-pub use parser::parse;
+pub use parser::{parse, parse_literal};
 pub use span::Span;
