@@ -27,7 +27,7 @@ nodes: 12, edges: 15, schema entries: 7
 
 ## The source files
 
-Three files feed the registry in this chapter. They are available next to
+Four files feed the registry in this chapter (the fourth, `hosts-updated.csv`, arrives later as the drift export). They are available next to
 this page — download them to the directory *containing* your repository, the
 same place `asset-registry.sh` lives, so the transcripts' `../` paths match.
 
@@ -538,7 +538,7 @@ node tables and then the edge tables (nodes first — dangling edges are
 refused):
 
 ```console
-$ mkdir rebuild && cd rebuild
+$ cd .. && mkdir rebuild && cd rebuild
 $ acetone init
 Initialized empty acetone repository in .
 $ acetone declare-label Team --key name
