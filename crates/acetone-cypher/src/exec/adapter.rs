@@ -304,19 +304,15 @@ pub(crate) fn convert_value(value: &ModelValue) -> Value {
     convert_value_at(value, 0)
 }
 
-/// Maximum nesting depth the stored-value walks will recurse into
-/// (acetone-5xp, defence in depth). Stored values are bounded at
-/// [`acetone_model::values::MAX_DEPTH`] (128) by both the CBOR encoder and
-/// decoder, so no decodable value can reach this cap — the guard exists so
-/// that a hostile or corrupt value that somehow bypassed those caps meets a
-/// defined, non-panicking bound here instead of unbounded recursion (a stack
-/// smash) on the read path.
-pub(crate) const MAX_VALUE_DEPTH: usize = 256;
-const _: () = assert!(
-    MAX_VALUE_DEPTH > acetone_model::values::MAX_DEPTH,
-    "the defence-in-depth cap must sit above the model's own encode/decode cap, \
-     or legitimate stored values would be degraded"
-);
+// The shared cap on runtime value nesting lives with the value type
+// (acetone-19x); here it bounds the stored-value walks as defence in depth
+// (acetone-5xp): stored values are bounded at
+// `acetone_model::values::MAX_DEPTH` (128) by both the CBOR encoder and
+// decoder, so no decodable value can reach this cap — the guard exists so
+// that a hostile or corrupt value that somehow bypassed those caps meets a
+// defined, non-panicking bound here instead of unbounded recursion (a stack
+// smash) on the read path.
+use crate::exec::value::MAX_VALUE_DEPTH;
 
 fn convert_value_at(value: &ModelValue, depth: usize) -> Value {
     if depth >= MAX_VALUE_DEPTH {

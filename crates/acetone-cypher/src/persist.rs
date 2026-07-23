@@ -459,7 +459,7 @@ fn deferred_type_name(value: &ModelValue) -> Option<&'static str> {
 
 /// Convert a runtime value to a storable model value. Maps, nodes,
 /// relationships and paths are not storable property values, and neither is
-/// anything nested past [`crate::exec::adapter::MAX_VALUE_DEPTH`]
+/// anything nested past [`crate::exec::value::MAX_VALUE_DEPTH`]
 /// (acetone-5xp): a runtime value can nest arbitrarily deep (e.g. a reduce
 /// that wraps a list each step), so the walk carries a depth counter and
 /// surfaces a clean error instead of recursing without bound. The model's
@@ -471,7 +471,7 @@ fn convert_value(value: &Value) -> Result<ModelValue, PersistError> {
 }
 
 fn convert_value_at(value: &Value, depth: usize) -> Result<ModelValue, PersistError> {
-    if depth >= crate::exec::adapter::MAX_VALUE_DEPTH {
+    if depth >= crate::exec::value::MAX_VALUE_DEPTH {
         return Err(PersistError::Value("list nested past the depth limit"));
     }
     Ok(match value {
