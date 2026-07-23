@@ -141,7 +141,7 @@ assert_contains "$DIFF" '+ node "Host" ["db3"]' "diff shows db3 added"
 
 # Re-importing an unchanged source is a no-op.
 OUT="$("$ACETONE" import --format csv ../hosts.csv --label Host)"
-assert_contains "$OUT" 'source unchanged; nothing imported' "unchanged re-import is a no-op"
+assert_contains "$OUT" 'import produced no graph changes; nothing to commit' "unchanged re-import is a no-op"
 
 # Relationships from CSV.
 OUT="$("$ACETONE" import --format csv ../runs_on.csv --edge RUNS_ON \
@@ -184,7 +184,7 @@ assert_contains "$("$ACETONE" status)" 'nodes: 14, edges: 17' \
 
 # Import as curation: the mirror branch. First --branch run creates the branch.
 OUT="$("$ACETONE" import --format csv ../hosts.csv --label Host --branch ingest)"
-assert_contains "$OUT" 'source unchanged; nothing imported' "mirror bootstrap is a no-op"
+assert_contains "$OUT" 'import produced no graph changes; nothing to commit' "mirror bootstrap is a no-op"
 assert_contains "$("$ACETONE" branch)" 'ingest' "mirror branch exists"
 
 # Curate on main.
@@ -214,7 +214,7 @@ assert_contains "$OUT" 'eu-west' "app2 rebuild (region change) landed from the s
 # Round trips: JSON export re-imports as a no-op.
 "$ACETONE" export --format json --label Service -o ../service-export.json > /dev/null
 OUT="$("$ACETONE" import --format json ../service-export.json --label Service)"
-assert_contains "$OUT" 'source unchanged; nothing imported' "JSON round trip is faithful"
+assert_contains "$OUT" 'import produced no graph changes; nothing to commit' "JSON round trip is faithful"
 
 # --- C. The library API example (reference/library-api.md) ------------------
 
