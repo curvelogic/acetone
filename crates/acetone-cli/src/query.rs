@@ -13,7 +13,7 @@ use anyhow::{Context, Result, anyhow};
 use unicode_width::UnicodeWidthStr;
 
 use crate::output::{errln, outln};
-use crate::value::sanitise_line;
+use crate::value::{sanitise_identifier, sanitise_line};
 
 /// Row cap applied to `--format table` output **in the interactive shell
 /// only** (spec: a large `MATCH (n) RETURN n` should not flood the terminal).
@@ -293,7 +293,7 @@ fn render_value(value: &Value) -> String {
         Value::Map(entries) => {
             let inner = entries
                 .iter()
-                .map(|(k, v)| format!("{}: {}", sanitise_line(k), render_value(v)))
+                .map(|(k, v)| format!("{}: {}", sanitise_identifier(k), render_value(v)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{{{inner}}}")
@@ -308,10 +308,12 @@ fn render_value(value: &Value) -> String {
 }
 
 fn render_node(node: &NodeValue) -> String {
+    // Labels and property keys are identifier-shaped: escaped to the
+    // stricter bar (zero-width included), unlike the property values.
     let labels: String = node
         .labels
         .iter()
-        .map(|l| format!(":{}", sanitise_line(l)))
+        .map(|l| format!(":{}", sanitise_identifier(l)))
         .collect();
     if node.properties.is_empty() {
         format!("({labels})")
@@ -319,7 +321,7 @@ fn render_node(node: &NodeValue) -> String {
         let props = node
             .properties
             .iter()
-            .map(|(k, v)| format!("{}: {}", sanitise_line(k), render_value(v)))
+            .map(|(k, v)| format!("{}: {}", sanitise_identifier(k), render_value(v)))
             .collect::<Vec<_>>()
             .join(", ");
         format!("({labels} {{{props}}})")
@@ -327,7 +329,7 @@ fn render_node(node: &NodeValue) -> String {
 }
 
 fn render_rel(rel: &RelValue) -> String {
-    format!("[:{}]", sanitise_line(&rel.rel_type))
+    format!("[:{}]", sanitise_identifier(&rel.rel_type))
 }
 
 /// JSON rendering (a minimal, dependency-free serialiser).
@@ -517,8 +519,9 @@ fn shell_prompt(repo_path: &std::path::Path, fresh: bool) -> String {
                 ""
             };
             // Ref-name validation already forbids control bytes, but sanitise
-            // the branch defensively — the prompt is repository-controlled text.
-            format!("acetone:{}{mark}> ", sanitise_line(&branch))
+            // the branch defensively — the prompt is repository-controlled,
+            // identifier-shaped text (zero-width spoofing included).
+            format!("acetone:{}{mark}> ", sanitise_identifier(&branch))
         }
         Err(_) => "acetone> ".to_string(),
     }

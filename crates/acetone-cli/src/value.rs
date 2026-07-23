@@ -58,20 +58,35 @@ pub(crate) fn is_unsafe_for_display(c: char) -> bool {
     c.is_control() || is_bidi_control(c)
 }
 
-/// Neutralise dangerous characters in a repository-controlled line of text
-/// destined for the terminal, leaving everything printable untouched.
+/// Zero-width / invisible format characters (acetone-0ds): rendered with no
+/// glyph, they enable identifier spoofing by invisibility — `Host` and
+/// `Ho<ZWSP>st` display identically while naming different labels, branches
+/// or property keys. Unlike the bidi set they have legitimate uses in
+/// *values* (emoji ZWJ sequences, soft hyphenation), so they are escaped
+/// only on identifier-shaped output ([`sanitise_identifier`]) — the bar the
+/// canonical identifier renderer [`format_label`]'s `{:?}` already meets —
+/// and never in sentence/value output ([`sanitise_line`]).
 ///
-/// Unlike [`format_label`]'s `{:?}` (right for identifier-shaped strings,
-/// where the quotes aid reading), this is for sentence- or line-shaped
-/// output — commit subjects, trailers, fsck findings — where quoting the
-/// whole line would hurt readability but ANSI/C1 sequences and bidirectional
-/// overrides from a hostile clone must never reach the terminal raw (see
-/// [`is_unsafe_for_display`]).
-pub fn sanitise_line(s: &str) -> String {
-    if s.chars().any(is_unsafe_for_display) {
+/// Homoglyph confusables (e.g. Cyrillic а for Latin a) are a recorded
+/// residual: they cannot be escaped without mangling legitimate non-ASCII
+/// identifiers, and `{:?}` does not treat them either.
+pub(crate) fn is_zero_width(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}'                 // SOFT HYPHEN
+        | '\u{180E}'               // MONGOLIAN VOWEL SEPARATOR
+        | '\u{200B}'..='\u{200D}'  // ZWSP, ZWNJ, ZWJ
+        | '\u{2060}'..='\u{2064}'  // WORD JOINER, invisible operators
+        | '\u{FEFF}'               // ZERO WIDTH NO-BREAK SPACE / BOM
+    )
+}
+
+/// Escape every character matching `is_unsafe` with its `escape_default`
+/// form, leaving the rest untouched (allocation-free when clean).
+fn escape_matching(s: &str, is_unsafe: impl Fn(char) -> bool) -> String {
+    if s.chars().any(&is_unsafe) {
         s.chars()
             .map(|c| {
-                if is_unsafe_for_display(c) {
+                if is_unsafe(c) {
                     c.escape_default().to_string()
                 } else {
                     c.to_string()
@@ -81,6 +96,32 @@ pub fn sanitise_line(s: &str) -> String {
     } else {
         s.to_owned()
     }
+}
+
+/// Neutralise dangerous characters in a repository-controlled line of text
+/// destined for the terminal, leaving everything printable untouched.
+///
+/// Unlike [`format_label`]'s `{:?}` (right for identifier-shaped strings,
+/// where the quotes aid reading), this is for sentence- or line-shaped
+/// output — commit subjects, trailers, fsck findings — where quoting the
+/// whole line would hurt readability but ANSI/C1 sequences and bidirectional
+/// overrides from a hostile clone must never reach the terminal raw (see
+/// [`is_unsafe_for_display`]). Zero-width characters are deliberately left
+/// alone here: values legitimately contain emoji ZWJ sequences
+/// ([`is_zero_width`]).
+pub fn sanitise_line(s: &str) -> String {
+    escape_matching(s, is_unsafe_for_display)
+}
+
+/// Neutralise dangerous characters in a repository-controlled
+/// **identifier-shaped** string — a label, relationship type, property key
+/// or branch name — destined for the terminal unquoted. Everything
+/// [`sanitise_line`] escapes, plus the zero-width/invisible format set
+/// ([`is_zero_width`]): identifiers distinguished only by an invisible
+/// character must never render identically. This matches the escaping bar
+/// of [`format_label`]'s `{:?}`, minus the surrounding quotes.
+pub fn sanitise_identifier(s: &str) -> String {
+    escape_matching(s, |c| is_unsafe_for_display(c) || is_zero_width(c))
 }
 
 /// Render a label, relationship type or other identifier-shaped string for
@@ -153,6 +194,40 @@ mod tests {
                 .replace("{{", "{")
                 .replace("}}", "}")
         );
+    }
+
+    #[test]
+    fn sanitise_identifier_escapes_zero_width_characters() {
+        // Invisible format characters enable identifier spoofing ("Host" vs
+        // "Ho<ZWSP>st"): on identifier-shaped output they are escaped, the
+        // same bar `format_label`'s `{:?}` already meets (acetone-0ds).
+        for c in [
+            '\u{ad}',   // SOFT HYPHEN
+            '\u{180e}', // MONGOLIAN VOWEL SEPARATOR
+            '\u{200b}', // ZERO WIDTH SPACE
+            '\u{200c}', // ZERO WIDTH NON-JOINER
+            '\u{200d}', // ZERO WIDTH JOINER
+            '\u{2060}', // WORD JOINER
+            '\u{2064}', // INVISIBLE PLUS
+            '\u{feff}', // ZERO WIDTH NO-BREAK SPACE / BOM
+        ] {
+            let out = sanitise_identifier(&format!("Ho{c}st"));
+            assert!(!out.contains(c), "raw {c:?} leaked: {out}");
+            assert_eq!(out, format!("Ho{}st", c.escape_default()));
+        }
+        // Controls and bidi overrides keep the sanitise_line bar.
+        assert_eq!(sanitise_identifier("a\u{202e}b"), "a\\u{202e}b");
+        assert_eq!(sanitise_identifier("a\x1bb"), "a\\u{1b}b");
+        // Ordinary identifiers, including non-ASCII, pass untouched.
+        assert_eq!(sanitise_identifier("déjà_vu"), "déjà_vu");
+    }
+
+    #[test]
+    fn sanitise_line_leaves_zero_width_in_values_untouched() {
+        // Value output is exempt from the zero-width treatment (acetone-0ds):
+        // emoji ZWJ sequences are legitimate property data.
+        assert_eq!(sanitise_line("👩‍👧"), "👩‍👧"); // family emoji: U+200D inside
+        assert_eq!(sanitise_line("soft\u{ad}hyphen"), "soft\u{ad}hyphen");
     }
 
     #[test]

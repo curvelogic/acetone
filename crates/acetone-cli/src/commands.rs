@@ -16,7 +16,9 @@ use anyhow::{Context, Result, bail};
 
 use crate::cli::Command;
 use crate::json::{emit_json, key_tuple_to_json, value_to_json};
-use crate::value::{format_label, format_value, parse_kv, parse_value, sanitise_line};
+use crate::value::{
+    format_label, format_value, parse_kv, parse_value, sanitise_identifier, sanitise_line,
+};
 
 use crate::output::{errln, outln};
 
@@ -252,9 +254,10 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
 
     match &branch {
         // Branch names are repository-controlled (a hostile clone's refs) and
-        // ref validation permits multibyte bidi, so sanitise before the
-        // terminal — as the shell prompt and `:log` already do.
-        Some(short) => outln!("On branch {}", sanitise_line(short)),
+        // ref validation permits multibyte bidi and zero-width characters, so
+        // sanitise to the identifier bar before the terminal — as the shell
+        // prompt does.
+        Some(short) => outln!("On branch {}", sanitise_identifier(short)),
         None => outln!("Not on any branch (detached)"),
     }
     match &head {
@@ -404,9 +407,10 @@ fn branch(repo_path: &Path, name: Option<&str>, json: bool) -> Result<()> {
                 } else {
                     " "
                 };
-                // Branch names are repository-controlled; sanitise (bidi and
-                // control characters) before the terminal.
-                outln!("{marker} {}", sanitise_line(&short));
+                // Branch names are repository-controlled identifiers;
+                // sanitise (control, bidi and zero-width characters) before
+                // the terminal.
+                outln!("{marker} {}", sanitise_identifier(&short));
             }
         }
         Some(name) => {

@@ -105,6 +105,24 @@ pub enum GraphError {
         /// Branch name.
         name: String,
     },
+    /// A node lookup supplied the wrong number of key values for the label's
+    /// declared key tuple (e.g. `CALL acetone.blame` on a composite-key label
+    /// with the CLI's single-column key plumbing). Without this guard the
+    /// lookup would silently find nothing (acetone-596).
+    #[error(
+        "label {label:?} declares a {expected}-column key {columns}, but {got} key value(s) \
+         were given — pass one value per key column"
+    )]
+    KeyArityMismatch {
+        /// The label whose key tuple was mismatched.
+        label: String,
+        /// The declared key property names, rendered (e.g. `["dc", "rack"]`).
+        columns: String,
+        /// The declared key arity.
+        expected: usize,
+        /// The number of key values supplied.
+        got: usize,
+    },
     /// A node the operation targets does not exist.
     #[error("no node {label:?} with key {key}")]
     NoSuchNode {

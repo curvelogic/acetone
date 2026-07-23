@@ -52,7 +52,7 @@ impl WriteLock {
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let holder = std::fs::read_to_string(&path)
-                    .map(|s| s.trim().to_owned())
+                    .map(|s| sanitise_holder(s.trim()))
                     .unwrap_or_else(|_| "unknown holder".to_owned());
                 Err(GraphError::Locked { holder, path })
             }
@@ -64,6 +64,41 @@ impl WriteLock {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Sanitise the lock file's holder string before it enters
+/// [`GraphError::Locked`]'s message (acetone-6tt, defence in depth): the file
+/// is read verbatim from the local git dir, so a poisoned lock could carry
+/// raw ANSI/control bytes or bidi overrides into the terminal. Escapes every
+/// control character plus the bidirectional formatting set (U+061C,
+/// U+200E–200F, U+202A–202E, U+2066–2069 — the class the CLI escapes on all
+/// repository-controlled output), and caps the result so a multi-KB file
+/// cannot balloon the error message. Well-formed acetone lock contents
+/// (`pid=… unix-time=…`) pass through untouched.
+fn sanitise_holder(raw: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    let is_unsafe = |c: char| {
+        c.is_control()
+            || matches!(c,
+                '\u{061C}'                 // ARABIC LETTER MARK
+                | '\u{200E}' | '\u{200F}'  // LRM, RLM
+                | '\u{202A}'..='\u{202E}'  // LRE, RLE, PDF, LRO, RLO
+                | '\u{2066}'..='\u{2069}'  // LRI, RLI, FSI, PDI
+            )
+    };
+    let mut out = String::new();
+    for (index, c) in raw.chars().enumerate() {
+        if index == MAX_CHARS {
+            out.push('…');
+            break;
+        }
+        if is_unsafe(c) {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 impl Drop for WriteLock {
@@ -93,6 +128,51 @@ mod tests {
         drop(lock);
         let third = WriteLock::acquire(dir.path()).expect("acquire after release");
         assert!(third.path().exists());
+    }
+
+    #[test]
+    fn poisoned_lock_holder_is_sanitised_in_the_error() {
+        // acetone-6tt: the holder string is read verbatim from a file a local
+        // attacker could poison; ANSI/control bytes and bidi overrides must
+        // never reach the terminal raw through the error message.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hostile = "pid=1 \x1b[31mred\u{202e}desrever";
+        std::fs::write(dir.path().join(WRITER_LOCK_FILE), hostile).expect("plant lock");
+        let err = WriteLock::acquire(dir.path()).expect_err("must refuse");
+        match &err {
+            GraphError::Locked { holder, .. } => {
+                assert!(!holder.contains('\x1b'), "raw ESC leaked: {holder:?}");
+                assert!(
+                    !holder.contains('\u{202e}'),
+                    "raw bidi override leaked: {holder:?}"
+                );
+                assert!(
+                    holder.contains("\\u{1b}") && holder.contains("\\u{202e}"),
+                    "escaped forms expected, got: {holder}"
+                );
+                assert!(holder.contains("pid=1"), "printable text kept: {holder}");
+            }
+            other => panic!("expected Locked, got {other:?}"),
+        }
+        // What the user actually sees (Display) is clean too.
+        let message = err.to_string();
+        assert!(!message.contains('\x1b') && !message.contains('\u{202e}'));
+    }
+
+    #[test]
+    fn oversize_lock_holder_is_truncated() {
+        // A poisoned multi-KB lock file must not balloon the error message.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(WRITER_LOCK_FILE), "x".repeat(10_000)).expect("plant lock");
+        let message = WriteLock::acquire(dir.path())
+            .expect_err("must refuse")
+            .to_string();
+        assert!(
+            message.len() < 1_000,
+            "holder must be capped, message is {} bytes",
+            message.len()
+        );
+        assert!(message.contains('…'), "truncation must be visible");
     }
 
     #[test]

@@ -436,15 +436,23 @@ impl ProcedureProvider for RepoProcedures<'_> {
                 // The key is a single-column value: a string (int-or-string
                 // heuristic, matching the CLI's put-node/get-node argument
                 // parsing) or an integer literal.
-                let (key_value, key_display) = match &args[1] {
-                    Value::String(s) => (parse_scalar(s), s.clone()),
-                    Value::Int(n) => (acetone_model::Value::Int(*n), n.to_string()),
+                let key_value = match &args[1] {
+                    Value::String(s) => parse_scalar(s),
+                    Value::Int(n) => acetone_model::Value::Int(*n),
                     other => {
                         return Err(format!(
                             "acetone.blame key must be a string or integer, got {}",
                             other.type_name()
                         ));
                     }
+                };
+                // Echo the key column from the value actually looked up, not
+                // the raw argument: a string the heuristic reinterpreted
+                // ('007' -> Int(7)) must not echo a key that was never probed.
+                let key_display = match &key_value {
+                    acetone_model::Value::Int(n) => n.to_string(),
+                    acetone_model::Value::String(s) => s.clone(),
+                    other => acetone_model::display::format_value(other),
                 };
                 let node_key =
                     NodeKey::new(label.as_str(), vec![key_value]).map_err(|e| e.to_string())?;
