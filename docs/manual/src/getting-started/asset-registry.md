@@ -57,27 +57,34 @@ The schema declarations demonstrate three features beyond plain keys:
 ## Building it
 
 The whole registry is built by the script below — also available as
-[`asset-registry.sh`](asset-registry.sh) next to this page. Run it in an
-empty directory with `acetone` on your `PATH`; it is exactly the workflow of
-[the previous chapter](first-graph.md), scaled up: init, declare, create,
-commit once.
+[`asset-registry.sh`](asset-registry.sh) next to this page. It is exactly the
+workflow of [the previous chapter](first-graph.md), scaled up: init, declare,
+create, commit once.
 
 ```sh
 {{#include asset-registry.sh}}
 ```
 
-Running it prints each step's confirmation and ends with the seed commit:
+One thing to know before running it: the script does `acetone init` in the
+**current directory**, and `init` refuses a directory that is not empty — so
+keep the script file itself *outside* the directory the graph will live in.
+Download it next to where you want the repository, then create a fresh, empty
+directory and invoke the script by path from inside it, with `acetone` on
+your `PATH`. It prints each step's confirmation and ends with the seed
+commit:
 
 ```console
+$ ls
+asset-registry.sh
 $ mkdir registry && cd registry
-$ sh asset-registry.sh
+$ sh ../asset-registry.sh
 Initialized empty acetone repository in .
 declared label "Team" key ["name"]
 ...
-committed 36ecda1611ec97ca85af3a36eb8b9b960dd9b0c1
+committed 190d782b20d1ff3be951eff63306389bfd46898c
 $ acetone status
 On branch main
-HEAD: 36ecda1611ec97ca85af3a36eb8b9b960dd9b0c1
+HEAD: 190d782b20d1ff3be951eff63306389bfd46898c
 workspace: clean
 nodes: 12, edges: 15, schema entries: 7
 $ acetone schema
@@ -199,7 +206,7 @@ multi-step change — plan it on a **branch**:
 
 ```console
 $ acetone branch decommission-app1
-created branch "decommission-app1" at 36ecda1611ec97ca85af3a36eb8b9b960dd9b0c1
+created branch "decommission-app1" at 190d782b20d1ff3be951eff63306389bfd46898c
 $ acetone checkout decommission-app1
 switched to branch "decommission-app1"
 ```
@@ -213,7 +220,7 @@ $ acetone query 'CREATE (:Host {name: "app3", region: "eu-west", os: "linux"})'
 $ acetone query 'MATCH (s:Service)-[r:RUNS_ON]->(:Host {name: "app1"}), (h:Host {name: "app3"}) CREATE (s)-[:RUNS_ON]->(h) DELETE r'
 2 relationships created, 2 relationships deleted
 $ acetone commit -m "decommission app1: move identity and billing to app3"
-committed e79f0e9d15ce8e63e3dd824edaff2754a57a81bd
+committed 12d48bc3bfc7059cfdcef41d40449cc341fc06b9
 ```
 
 Meanwhile life goes on: back on `main`, an unrelated change lands —
@@ -224,7 +231,7 @@ switched to branch "main"
 $ acetone query 'MATCH (s:Service {name: "postgres"}) SET s.version = "16.4"'
 1 property set
 $ acetone commit -m "postgres upgraded to 16.4"
-committed c53d3d3f2eb891f2ba567248c14d2c3fa750f0e5
+committed 815427f405191decace4f423ef78a67e997fd6e8
 ```
 
 `diff` shows the graph-level difference between any two versions. Note that
@@ -248,7 +255,7 @@ sides' changes, key by key:
 
 ```console
 $ acetone merge decommission-app1 -m "merge decommission-app1"
-merge commit 86e2684b66cfb885e97ea7be1bf1957c3b89453b
+merge commit f0f0ccbf51a7a02ab0dcb5b7face69acd0e7bece
 ```
 
 The changes did not touch the same properties of the same entities, so the
@@ -283,7 +290,7 @@ And the pre-merge world remains a query away — at the seed commit, `app1`
 still carried its services:
 
 ```console
-$ acetone query --at 36ecda1611ec97ca85af3a36eb8b9b960dd9b0c1 'MATCH (s:Service)-[:RUNS_ON]->(h:Host {name: "app1"}) RETURN s.name ORDER BY s.name'
+$ acetone query --at 190d782b20d1ff3be951eff63306389bfd46898c 'MATCH (s:Service)-[:RUNS_ON]->(h:Host {name: "app1"}) RETURN s.name ORDER BY s.name'
 ┌──────────┐
 │ s.name   │
 ├──────────┤
@@ -299,21 +306,21 @@ after the merge:
 
 ```console
 $ acetone log
-86e2684b66cfb885e97ea7be1bf1957c3b89453b merge decommission-app1
-c53d3d3f2eb891f2ba567248c14d2c3fa750f0e5 postgres upgraded to 16.4
-36ecda1611ec97ca85af3a36eb8b9b960dd9b0c1 asset registry: initial inventory
+f0f0ccbf51a7a02ab0dcb5b7face69acd0e7bece merge decommission-app1
+815427f405191decace4f423ef78a67e997fd6e8 postgres upgraded to 16.4
+190d782b20d1ff3be951eff63306389bfd46898c asset registry: initial inventory
 ```
 
 Because the repository is plain git underneath, git shows the full picture:
 
 ```console
 $ git log --oneline --graph --all
-*   86e2684 merge decommission-app1
+*   f0f0ccb merge decommission-app1
 |\
-| * e79f0e9 decommission app1: move identity and billing to app3
-* | c53d3d3 postgres upgraded to 16.4
+| * 12d48bc decommission app1: move identity and billing to app3
+* | 815427f postgres upgraded to 16.4
 |/
-* 36ecda1 asset registry: initial inventory
+* 190d782 asset registry: initial inventory
 ```
 
 ## Where the registry goes next

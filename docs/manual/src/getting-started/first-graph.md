@@ -19,7 +19,7 @@ Have a look at what appeared:
 
 ```console
 $ ls
-acetone-pack-bases  config  description  HEAD  hooks  info  objects  refs
+config  description  HEAD  hooks  info  objects  refs
 ```
 
 That is a **bare git repository**. There is no working tree of files to edit —
@@ -45,9 +45,10 @@ $ acetone query 'CREATE (:Host {name: "web1"})'
 error: cannot persist node: none of the labels ["Host"] declares a key, so this node has no identity (Invariant #3) — declare one first, e.g. `acetone declare-label "Host" --key <property>`
 ```
 
-(Once at least one label exists, misspelling a label fails earlier and more
-tersely: `error: line 1, column 8: unknown label "Host" (not declared in the
-schema)`.)
+(Once at least one label exists, referencing an undeclared label fails
+earlier, when the query is bound — and a near-miss of a declared label gets a
+suggestion: `error: line 1, column 8: unknown label "Hots" (not declared in
+the schema) — did you mean "Host"?`.)
 
 So declare the schema first — two labels, keyed by `name`, and one
 relationship type:
