@@ -131,7 +131,7 @@ fails rather than hang or corrupt anything. Simulating exactly that
 ```console
 $ touch acetone-refs.lock
 $ acetone branch audit-fixes
-error: creating branch "audit-fixes": git backend error while locking refs for compare-and-swap: The lock for resource '/…/registry/acetone-refs' could not be obtained after 5.00s after 26 attempt(s). The lockfile at '/…/registry/acetone-refs.lock' might need manual deletion.: The lock for resource '/…/registry/acetone-refs' could not be obtained after 5.00s after 26 attempt(s). The lockfile at '/…/registry/acetone-refs.lock' might need manual deletion.
+error: creating branch "audit-fixes": git backend error while locking refs for compare-and-swap: The lock for resource '/…/registry/acetone-refs' could not be obtained after 5.00s after 26 attempt(s). The lockfile at '/…/registry/acetone-refs.lock' might need manual deletion.
 ```
 
 Recovery is manual and safe: **first confirm no acetone process is running

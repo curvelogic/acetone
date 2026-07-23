@@ -150,13 +150,18 @@ pub enum StoreError {
     /// Any error surfaced by the underlying git substrate (I/O, zlib,
     /// packfile decoding, lock contention…), tagged with what the store was
     /// doing at the time.
-    #[error("git backend error while {context}: {source}")]
+    ///
+    /// The cause is part of this variant's `Display` (call sites across the
+    /// workspace flatten errors with `to_string()`, so the message must be
+    /// self-contained) and therefore deliberately **not** exposed through
+    /// `source()`: a chain-walking printer such as the CLI's `anyhow`
+    /// `{:#}` would otherwise render the same text twice (acetone-cbl.3).
+    #[error("git backend error while {context}: {cause}")]
     Backend {
         /// What the store was doing.
         context: &'static str,
         /// The underlying error.
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        cause: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
 
@@ -164,11 +169,11 @@ impl StoreError {
     /// Wrap a backend error with operation context.
     pub(crate) fn backend(
         context: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
+        cause: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
         StoreError::Backend {
             context,
-            source: Box::new(source),
+            cause: Box::new(cause),
         }
     }
 

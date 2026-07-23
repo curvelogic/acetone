@@ -56,7 +56,7 @@ impl WriteLock {
                     .unwrap_or_else(|_| "unknown holder".to_owned());
                 Err(GraphError::Locked { holder, path })
             }
-            Err(source) => Err(GraphError::LockIo { path, source }),
+            Err(cause) => Err(GraphError::LockIo { path, cause }),
         }
     }
 
