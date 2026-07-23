@@ -361,7 +361,11 @@ fn log(repo_path: &Path, all: bool, json: bool) -> Result<()> {
     // Default: the current branch's first-parent chain (its own changelog).
     // `--all`: every commit reachable from any branch, deterministic
     // newest-first topological order (acetone-b6q).
-    let entries = if all { repo.log_all()? } else { repo.log(None)? };
+    let entries = if all {
+        repo.log_all()?
+    } else {
+        repo.log(None)?
+    };
     if json {
         // serde_json escapes control characters, so hostile-clone messages
         // and trailers cannot inject raw terminal escapes here (no

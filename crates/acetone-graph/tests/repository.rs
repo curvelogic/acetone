@@ -1203,19 +1203,22 @@ fn changing_a_key_of_a_label_used_only_as_secondary_is_allowed() {
 fn merged_history(dir: &Path) -> (Repository, [acetone_store::Hash; 4]) {
     let repo = init_repo(dir);
     let mut tx = repo.begin_write().expect("begin");
-    tx.put_node(&node("Host", "web1"), &record(&[])).expect("put");
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("put");
     let base = tx.commit("base", &[], None).expect("commit");
 
     repo.create_branch("side", Some(&base.to_hex()))
         .expect("branch");
     repo.checkout_branch("side").expect("checkout side");
     let mut tx = repo.begin_write().expect("begin");
-    tx.put_node(&node("Host", "web2"), &record(&[])).expect("put");
+    tx.put_node(&node("Host", "web2"), &record(&[]))
+        .expect("put");
     let side = tx.commit("side work", &[], None).expect("commit");
 
     repo.checkout_branch("main").expect("checkout main");
     let mut tx = repo.begin_write().expect("begin");
-    tx.put_node(&node("Host", "web3"), &record(&[])).expect("put");
+    tx.put_node(&node("Host", "web3"), &record(&[]))
+        .expect("put");
     let main_second = tx.commit("main work", &[], None).expect("commit");
 
     let merge = match repo.merge("side", "merge side").expect("merge") {
@@ -1284,7 +1287,8 @@ fn delete_branch_removes_the_ref_and_returns_its_tip() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
     let mut tx = repo.begin_write().expect("begin");
-    tx.put_node(&node("Host", "web1"), &record(&[])).expect("put");
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("put");
     let head = tx.commit("base", &[], None).expect("commit");
     repo.create_branch("rescue", None).expect("branch");
 
@@ -1313,7 +1317,8 @@ fn delete_branch_refuses_the_checked_out_branch() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
     let mut tx = repo.begin_write().expect("begin");
-    tx.put_node(&node("Host", "web1"), &record(&[])).expect("put");
+    tx.put_node(&node("Host", "web1"), &record(&[]))
+        .expect("put");
     tx.commit("base", &[], None).expect("commit");
 
     match repo.delete_branch(DEFAULT_BRANCH) {

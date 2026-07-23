@@ -3080,10 +3080,7 @@ fn log_all_shows_branch_side_commits_and_merge_parents() {
     );
     // Newest-first: the merge commit is the first line; the root the last.
     assert!(text.starts_with(&format!("{merge} merge side")), "{text}");
-    assert!(
-        text.trim_end().ends_with(&format!("{base} base")),
-        "{text}"
-    );
+    assert!(text.trim_end().ends_with(&format!("{base} base")), "{text}");
 
     // JSON: same entry shape as plain log --json, more rows, parents intact.
     let out = acetone(&repo, &["log", "--all", "--json"]);
@@ -3152,7 +3149,10 @@ fn branch_takes_a_start_point_and_supports_deletion() {
     let out = acetone(&repo, &["branch", "rescue2", "rescue", "--json"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let v = json_stdout(&out);
-    assert_eq!(v, serde_json::json!({ "created": "rescue2", "hash": first }));
+    assert_eq!(
+        v,
+        serde_json::json!({ "created": "rescue2", "hash": first })
+    );
 
     // An unresolvable start point is a clear error, and creates nothing.
     let out = acetone(&repo, &["branch", "ghost", "nonesuch"]);
@@ -3191,7 +3191,10 @@ fn branch_takes_a_start_point_and_supports_deletion() {
     let out = acetone(&repo, &["branch", "--delete", "rescue2", "--json"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let v = json_stdout(&out);
-    assert_eq!(v, serde_json::json!({ "deleted": "rescue2", "hash": first }));
+    assert_eq!(
+        v,
+        serde_json::json!({ "deleted": "rescue2", "hash": first })
+    );
 
     // The checked-out branch is protected, with a clear refusal.
     let out = acetone(&repo, &["branch", "--delete", "main"]);
