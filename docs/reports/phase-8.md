@@ -1,6 +1,6 @@
 # Phase 8 report — alongside code
 
-*Epic `acetone-g5g` · target 0.3 · base `main @ 959d1ab` (v0.2.0) · this report covers the phase through `acetone-5cw` (PR #153)*
+*Epic `acetone-g5g` · target 0.3 · base `main @ 959d1ab` (v0.2.0) · this report covers the phase through `acetone-xg6` (PR #156)*
 
 Phase 8 makes an acetone graph a **co-tenant of an ordinary git repository**:
 its own ref, living alongside code history in one object store, with code
@@ -34,6 +34,7 @@ the reading-(A) interim, so exit criterion 2 is met under the adopted semantics.
 | `acetone-5yr` | #149 | **`format_version` dispatch machinery** (ADR-0052) — `Manifest::decode` dispatches on the manifest's version to a table of retained per-version decoders, instead of rejecting any non-current version. **Exit criterion 3.** Read-old, write-new: old commits stay readable through their era's decoder; new writes emit the current format; nothing is rewritten. |
 | `acetone-wao` | #152 | **Graph-scoped `gc`** (ADR-0051 reading B) — `consolidate_scoped` packs only objects reachable from the graph's refs, with a prune guard so no object reachable from a non-graph ref is ever disturbed; `GraphRefNamespace::owns_ref` classifies. **Delivers exit criterion 2's gc-half under (B)**, replacing the (A) interim; standalone byte-identical. Review caught a blocker — `owns_ref` misclassified `refs/remotes/*` (a clone's code) as the graph's → fixed layout-aware, with a remotes discriminator test. |
 | `acetone-5cw` | #153 | **`.keep`-marked packs** (ADR-0053) — acetone marks its consolidation pack `.keep` so a foreign `git gc`/`git repack` (incl. `gc.auto`) leaves its content-aware deltas intact. Only possible cleanly *because* the pack is now graph-only (B). Proven against the real `git repack -a -d`. |
+| `acetone-xg6` + `acetone-eo7` | #156 | **`acetone init --co-tenant <graph>` on the CLI** — makes co-tenant init reachable from the shipped tool (it was library-only), wiring to `Repository::init_co_tenant`; plus the `eo7` legacy-workspace guard (reject a pre-ADR-0014 standalone workspace) and CLI edge-case tests. Pulled into the phase at the boundary — see the process note below. |
 
 ## Gate evidence — 0.3 exit criteria
 
@@ -223,10 +224,6 @@ sidecar-stem path use reachable only via direct `.git` tampering.
   and make the ref swings a single atomic transaction. `migrate` already
   namespace-scopes via the `gns` seam; this is robustness, not a correctness gap
   for the exit criteria.
-- **`acetone-xg6` — CLI `--co-tenant` flag (P3).** Co-tenant init is wired at the
-  library layer; exposing it on the CLI is a follow-up.
-- **`acetone-eo7` — co-tenant init hardening (P3).** Legacy-workspace guard +
-  edge-case tests.
 - **`acetone-dfh` — gc `has_linked_worktrees` TOCTOU (P3, pre-existing).** Relevant
   to co-tenant `gc` scoping; lock-free check races a concurrent `git worktree add`.
 - **A real `format_version = 2`** is deferred to the first genuine format change
@@ -238,12 +235,31 @@ sidecar-stem path use reachable only via direct `.git` tampering.
 Spec §10 was updated at ADR-0048's ratification to record the read-old-write-new
 default (PR #151), closing the earlier wording gap.
 
+## Process note — a feature isn't delivered until it's reachable
+
+Co-tenant init shipped as `Repository::init_co_tenant` (`acetone-mgf`) with the CLI
+surface split into a separate P3 bead (`acetone-xg6`) and deferred past the
+boundary. Because the exit criteria were framed around the **mechanism** (a graph
+on its own ref; `gc`/`migrate` scoped; a format bump via read-old-write-new),
+every criterion went green at the library layer while the feature stayed
+unreachable from the shipped tool — a user could not create a co-tenant graph
+without writing Rust. Surfaced at the boundary (Greg: *"how was it ever deferred?
+it is effectively deferring the feature"*), `xg6` (+ `eo7`) was pulled into the
+phase and delivered under the full gate before closing.
+
+The lesson, recorded so it doesn't recur: **a user-facing feature is not delivered
+until it is reachable through the shipped interface**, and exit criteria / bead
+decomposition should say so — "the mechanism works" must not be allowed to stand
+in for "the feature is usable". (Whether to codify this as a working agreement in
+`CLAUDE.md` is Greg's call — flagged here, not changed unilaterally.)
+
 **Gate readiness.** All three exit criteria are met — criterion 2 under the
-adopted reading (B), delivered with full assurance. Greg has ratified ADRs
-0048/0049/0050/0052 and ruled 0051 (B); ADR-0053 is accepted pending ratification.
-The milestone security review (and the re-touch over the reworked `gc`) returned
-READY. What remains is Greg's to do: ratify ADR-0053, and close the exit-criteria
-gate (`acetone-g5g`) — which agents never close.
+adopted reading (B), delivered with full assurance — and co-tenancy is now usable
+end-to-end through the `acetone` CLI (`init --co-tenant …` through `gc`). Greg has
+ratified ADRs 0048/0049/0050/0052/0053 and ruled 0051 (B). The milestone security
+review (and the re-touch over the reworked `gc`) returned READY. What remains is
+Greg's to do: **close the exit-criteria gate (`acetone-g5g`)** — which agents
+never close.
 
 ## The demo
 
