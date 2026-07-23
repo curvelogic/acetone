@@ -46,7 +46,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: v
         # The workspace version is the first top-level `version = "…"` in the
         # root Cargo.toml (under [workspace.package]); the binary inherits it.
@@ -75,12 +75,17 @@ jobs:
           # both slices, so x86_64 is a plain cross-compile (a CLI needs no
           # signing). This avoids depending on an Intel `macos-13` runner, which
           # GitHub is retiring (an unavailable one leaves the job queued forever).
-          - os: macos-latest # Apple silicon runner
+          #
+          # Pinned to macos-15, not macos-latest: the `latest` label migrated to
+          # macOS 26 (actions/runner-images#14167), and release binaries should
+          # not silently change SDK / deployment baseline when GitHub moves the
+          # alias. Bump this pin deliberately, as its own reviewed change.
+          - os: macos-15 # Apple silicon runner
             target: aarch64-apple-darwin
-          - os: macos-latest # Apple silicon runner, cross-compiling to x86_64
+          - os: macos-15 # Apple silicon runner, cross-compiling to x86_64
             target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
           toolchain: stable
@@ -115,7 +120,7 @@ jobs:
       - name: Upload build artifacts
         # Hand the archives to the single release job; do NOT touch the draft
         # release here (parallel draft creation races — see header).
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: acetone-${{ matrix.target }}
           path: |
@@ -134,9 +139,11 @@ jobs:
       # Checkout FIRST — it cleans the workspace, so it must precede the
       # artifact download (which writes into dist/). We need the tree for
       # CHANGELOG.md.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download build artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        # v8 verifies the download digest and fails on mismatch by default
+        # (digest-mismatch: error) — desirable hardening for release assets.
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
@@ -169,7 +176,7 @@ jobs:
         # `v<version>`, targeting the built commit. The tag ref is not created
         # until the draft is published (by you, in the UI). The body is the
         # curated CHANGELOG section (body_path), not auto-generated notes.
-        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           draft: true
           tag_name: ${{ needs.prepare.outputs.tag }}
