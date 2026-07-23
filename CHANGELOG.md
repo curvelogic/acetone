@@ -23,7 +23,7 @@ and no on-disk format change (`format_version 1`; 0.1–0.3.0 repositories are
 read and written unchanged) — this release hardens the workbench against
 hostile input, closes constraint-enforcement and terminal-spoofing gaps found
 by dogfooding, ships a complete operator's manual, and automates the release
-path. openCypher TCK conformance rises to **1602 / 3897 (41.1%)** from 1595.
+path. openCypher TCK conformance rises to **1602 / 3897 (41.1%)** from 1596 at 0.3.0.
 
 ### Added
 
