@@ -80,7 +80,11 @@ pub fn run(
 /// be a Cypher **literal** (`parse_literal`): a bare unquoted word is an
 /// error, never silently a string — a typo'd `tru` must fail loudly rather
 /// than bind the string `"tru"` and quietly match nothing. Binding the same
-/// KEY twice is an error for the same reason.
+/// KEY twice is an error for the same reason. KEY may be written with or
+/// without the query's `$` sigil (`--param '$name=…'` binds `$name`) —
+/// mirroring how the parameter appears in the query is an obvious thing to
+/// type, and without the strip it would silently bind the unreachable name
+/// `"$name"`.
 fn parse_params(specs: &[String]) -> Result<BTreeMap<String, Value>> {
     let mut params = BTreeMap::new();
     for spec in specs {
@@ -91,6 +95,7 @@ fn parse_params(specs: &[String]) -> Result<BTreeMap<String, Value>> {
             ));
         };
         let name = name.trim();
+        let name = name.strip_prefix('$').unwrap_or(name);
         if name.is_empty() {
             return Err(anyhow!(
                 "--param {}: missing the parameter name before '='",
@@ -823,12 +828,14 @@ fn handle_meta(
                 }
             } else {
                 // `:param <name> <literal>` — the literal is the rest of the
-                // line, so quoted strings may contain spaces.
+                // line, so quoted strings may contain spaces. As with
+                // `--param`, the name may carry the query's `$` sigil.
                 let (name, text) = match rest.find(char::is_whitespace) {
                     Some(i) => (&rest[..i], rest[i..].trim()),
                     None => (rest, ""),
                 };
-                if text.is_empty() {
+                let name = name.strip_prefix('$').unwrap_or(name);
+                if name.is_empty() || text.is_empty() {
                     anyhow::bail!(
                         "usage: :param <name> <literal> (a number, a quoted string, \
                          true/false, null, or a list/map of literals)"
@@ -840,11 +847,12 @@ fn handle_meta(
             }
         }
         "param-clear" => {
-            if rest.is_empty() {
+            let target = rest.strip_prefix('$').unwrap_or(rest);
+            if target.is_empty() {
                 params.clear();
                 outln!("(parameters cleared)");
-            } else if params.remove(rest).is_none() {
-                anyhow::bail!("no parameter named '{}'", sanitise_identifier(rest));
+            } else if params.remove(target).is_none() {
+                anyhow::bail!("no parameter named '{}'", sanitise_identifier(target));
             }
         }
         "format" | "f" => {

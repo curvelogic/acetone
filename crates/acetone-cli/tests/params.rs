@@ -185,6 +185,43 @@ fn malformed_value_errors_name_the_parameter() {
 }
 
 #[test]
+fn key_may_carry_the_dollar_sigil() {
+    let dir = seeded_repo();
+    // Writing the KEY the way it appears in the query (`--param '$n=…'`)
+    // binds `$n`, not the unreachable name `"$n"`.
+    let s = ok(&acetone(
+        dir.path(),
+        &[
+            "query",
+            "RETURN $n AS n",
+            "--format",
+            "json",
+            "--param",
+            "$n=42",
+        ],
+    ));
+    assert!(s.contains("\"n\": 42"), "sigil-prefixed KEY binds: {s}");
+
+    // Exactly one sigil is stripped, so `$n` and `n` are the same binding —
+    // giving both is the duplicate error.
+    let o = acetone(
+        dir.path(),
+        &["query", "RETURN $n", "--param", "$n=1", "--param", "n=2"],
+    );
+    assert!(!o.status.success());
+    assert!(stderr(&o).contains("bound twice"), "{}", stderr(&o));
+
+    // A sigil with nothing after it is still a missing name.
+    let o = acetone(dir.path(), &["query", "RETURN 1", "--param", "$=1"]);
+    assert!(!o.status.success());
+    assert!(
+        stderr(&o).contains("missing the parameter name"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
 fn params_work_with_at_time_travel() {
     let dir = seeded_repo();
     // Advance the workspace past the seed commit: rename-by-recreate isn't
@@ -260,9 +297,10 @@ fn shell(repo: &Path, input: &str) -> Output {
 #[test]
 fn shell_param_binds_lists_and_clears() {
     let dir = seeded_repo();
+    // `:param $name …` — the sigil is accepted here too, binding `name`.
     let o = shell(
         dir.path(),
-        ":param name 'billing'\n\
+        ":param $name 'billing'\n\
          :param\n\
          MATCH (s:Service {name: $name}) RETURN s.replicas AS r;\n\
          :param-clear name\n\

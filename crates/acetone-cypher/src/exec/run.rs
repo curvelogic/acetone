@@ -16,12 +16,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::{AtRef, Direction};
 use crate::bind::bound::*;
+use crate::exec::eval::ResourceLimit;
 use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
 use crate::exec::governor::{Governor, QueryLimits};
 use crate::exec::source::{
     GraphSource, NoProcedures, ProcedureProvider, SingleVersion, VersionResolver,
 };
-use crate::exec::value::{EntityId, NodeValue, PathValue, RelValue, Value};
+use crate::exec::value::{EntityId, MAX_VALUE_DEPTH, NodeValue, PathValue, RelValue, Value};
 use crate::exec::write::{MutableGraph, WriteChanges, WriteSummary};
 
 /// A completed query's output.
@@ -175,6 +176,22 @@ fn run_versioned(
     parameters: &BTreeMap<String, Value>,
     governor: &Governor,
 ) -> Result<(QueryResult, WriteChanges), ExecError> {
+    // Parameter ingestion is the one door where a value deeper than the
+    // construction cap (acetone-19x) can arrive pre-built — handed straight
+    // to the library API by an embedder, bypassing every `ensure_nestable`
+    // seam. Refuse it here, before any recursive walk (`distinct_key`,
+    // comparison, format, clone, drop of derived values) can touch it; the
+    // checker itself is iterative, so it is safe on any depth. Every public
+    // entry point (`run_query`, the `execute*` family, `Session::run_with`,
+    // `Session::query_at_with`) funnels through this function.
+    for value in parameters.values() {
+        if value.nesting_exceeds(MAX_VALUE_DEPTH) {
+            return Err(ExecError::ResourceExceeded {
+                limit: ResourceLimit::ValueDepth,
+                span: crate::span::Span::new(0, 0),
+            });
+        }
+    }
     let base = resolver.base();
     // Write clauses mutate an overlay over the base version; reads in later
     // clauses see it. `AT` clauses resolve their own read-only sources.

@@ -652,6 +652,10 @@ $ acetone query 'MATCH (s:Service {name: $name}) RETURN s.name'
 error: line 1, column 25: missing parameter 'name'
 ```
 
+(The converse — a `--param` the query never mentions — is accepted
+silently, as in Neo4j, so one standard set of bindings can serve many
+queries.)
+
 `--param` composes with `--at`, so a parameterised lookup works against a
 past version too. In the [shell](../reference/cli.md), `:param <name>
 <literal>` binds a parameter for every following statement (`:param` alone

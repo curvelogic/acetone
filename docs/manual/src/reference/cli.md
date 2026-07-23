@@ -217,7 +217,9 @@ the query's `$KEY`; VALUE is parsed as a Cypher literal — a number, quoted
 string, `true`/`false`, `null`, or a list/map of literals — so quoting and
 typing match the same text written inline (a bare unquoted word is an error,
 never silently a string; see the
-[cookbook](../working/query-cookbook.md#parameters)). Advisories (non-error
+[cookbook](../working/query-cookbook.md#parameters)). KEY may be written
+with or without the `$` sigil; a `--param` the query never uses is accepted
+silently, as in Neo4j. Advisories (non-error
 diagnostics, e.g. a match on an undeclared label) go to stderr and never
 affect rows or exit status.
 
