@@ -48,8 +48,8 @@ repositories are read and written unchanged.
   objects reachable from the graph's refs, with an explicit guard so nothing
   reachable from a non-graph ref (including `refs/remotes/*` in clones) is
   ever repacked or pruned — the user's code storage is left exactly as git had
-  it. Property tests prove a code-only object survives `gc` untouched and code
-  refs survive `migrate`.
+  it. Tests prove a code-only object survives `gc` untouched and code refs
+  survive `migrate`.
 - **Consolidation packs are `.keep`-marked** (ADR-0053), so a foreign
   `git gc`/`git repack` — including git's automatic `gc.auto` — leaves
   acetone's content-aware deltas intact. Proven against the real

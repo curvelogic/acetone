@@ -19,17 +19,19 @@ The **curated headline surface** — the items re-exported flat at the
   `EdgeRecord`.
 - Store: `Hash`, `ObjectFormat`.
 
-**Semver policy:** within the **0.2.x** series, changes to this surface are
-**additive only** (new items, new methods) — no removals, renames, or
-signature changes. A breaking change requires **0.3.0**. (Pre-1.0, so a bumped
-*minor* is the breaking-change signal.)
+**Semver policy:** within a **patch series** (0.2.x, 0.3.x, …), changes to
+this surface are **additive only** (new items, new methods) — no removals,
+renames, or signature changes. A breaking change requires bumping the
+**minor** version (0.2.x → 0.3.0 → 0.4.0, …). Pre-1.0, a bumped minor is the
+*permission* for breakage, not a promise of it — 0.3.0, for instance, changed
+nothing in this surface.
 
 ## What is NOT guaranteed
 
 - **Deep access.** `acetone-core` also re-exports the constituent crates as
   modules (`acetone_core::cypher`, `::graph`, `::model`, `::store`) for full
   access. Items reachable **only** through these modules — anything not in the
-  curated list above — may change in any 0.2.x release. Depend on the crate-root
+  curated list above — may change in any release. Depend on the crate-root
   re-exports for stability; reach into the modules only when you accept churn.
 - **The CLI.** `acetone`'s command surface and output formats (including
   `--json`) are a **separate** product surface (spec §7) and are not covered by
