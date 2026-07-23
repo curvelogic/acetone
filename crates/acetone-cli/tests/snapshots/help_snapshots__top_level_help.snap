@@ -11,7 +11,7 @@ Commands:
   status            Show the current branch, head commit and workspace state
   commit            Turn the workspace's staged changes into a commit
   log               Show commit history, newest first
-  branch            List branches, or create one
+  branch            List branches, create one, or delete one
   checkout          Switch the checked-out branch
   diff              Show the graph-level difference between two versions
   merge             Merge another version into the current branch
