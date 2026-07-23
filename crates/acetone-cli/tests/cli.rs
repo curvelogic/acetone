@@ -1808,6 +1808,81 @@ fn merge_conflict_resolved_by_ordinary_write() {
     assert!(stdout(&q).contains("merged"), "{}", stdout(&q));
 }
 
+#[test]
+fn merge_renders_edge_and_schema_conflicts() {
+    // acetone-5fh: the CLI's conflict rendering for the Edges and Schema maps
+    // (`render_conflict`) had no coverage — only node conflicts were ever
+    // printed. Build a merge that conflicts on an edge property AND a schema
+    // entry, and assert both render as their own line.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["declare-rel-type", "R"]).status.success());
+    assert!(acetone(&repo, &["put-node", "N", "1"]).status.success());
+    assert!(acetone(&repo, &["put-node", "N", "2"]).status.success());
+    assert!(
+        acetone(&repo, &["put-edge", "N", "1", "R", "N", "2"])
+            .status
+            .success()
+    );
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (:N {id: 1})-[r:R]->(:N) SET r.w = 0"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+
+    // ours: edge w=1 and label X keyed on `a`.
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (:N {id: 1})-[r:R]->(:N) SET r.w = 1"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        acetone(&repo, &["declare-label", "X", "--key", "a"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+
+    // theirs: edge w=2 and label X keyed on `b`.
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    let out = acetone(
+        &repo,
+        &["query", "MATCH (:N {id: 1})-[r:R]->(:N) SET r.w = 2"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        acetone(&repo, &["declare-label", "X", "--key", "b"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+
+    let out = acetone(&repo, &["merge", "other", "-m", "merge"]);
+    assert!(!out.status.success(), "the merge must conflict");
+    let text = stdout(&out);
+    assert!(text.contains("2 conflict(s)"), "{text}");
+    // The schema conflict renders as a schema line (hex key — schema keys
+    // have no friendly decoding).
+    assert!(text.contains("schema "), "{text}");
+    // The edge conflict renders as an edge line naming the diverged property.
+    assert!(text.contains("edge "), "{text}");
+    assert!(text.contains("property \"w\""), "{text}");
+
+    // The escape hatch backs the merge out cleanly.
+    let out = acetone(&repo, &["merge", "--abort"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&acetone(&repo, &["status"])).contains("workspace: clean"));
+}
+
 /// acetone-c8b: the shell must run write queries through the transactional
 /// write path (advancing the workspace), not silently execute only the read
 /// side and discard the mutation.

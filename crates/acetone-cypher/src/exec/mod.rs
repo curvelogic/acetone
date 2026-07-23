@@ -12,7 +12,7 @@ pub mod store_source;
 pub mod value;
 pub mod write;
 
-pub use adapter::{GraphSnapshot, catalogue_from_schema, virtual_diff_node};
+pub use adapter::{GraphSnapshot, catalogue_from_schema, key_names_from_schema, virtual_diff_node};
 pub use eval::{ExecError, ResourceLimit, Row};
 pub use governor::{Governor, QueryLimits};
 pub use run::{
