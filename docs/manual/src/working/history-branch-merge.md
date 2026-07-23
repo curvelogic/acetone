@@ -378,21 +378,16 @@ error: line 1, column 22: a refspec after AT must be a string literal or a param
 
 ### Tags
 
-Tags make natural time-travel anchors — "the state we audited in July". Two
-caveats in the current release, both worth knowing before you rely on them:
-
-- Only **branch** short names resolve bare. A tag must be given by its full
-  ref name, `refs/tags/<name>`.
-- Only **lightweight** tags (`git tag <name> <commit>`) work with `--at`/`AT`
-  today. An annotated tag (`git tag -a`) points at a tag *object*, which the
-  query path does not yet peel — you get
-  `error: object … is a tag, expected a commit`.
+Tags make natural time-travel anchors — "the state we audited in July". A
+tag's short name resolves bare, exactly like a branch name, and both kinds
+of git tag work: a **lightweight** tag (`git tag <name> <commit>`) points
+straight at the commit, and an **annotated** tag (`git tag -a`) points at a
+tag *object*, which acetone peels through to the commit underneath —
+nested annotated tags included:
 
 ```console
 $ git tag inventory-v1 d5a207be4fb0cd7a5ea3c3f0f3ba44d077b6aad6
 $ acetone query --at inventory-v1 'MATCH (h:Host) RETURN count(h)'
-error: cannot resolve "inventory-v1" to a branch, ref or commit
-$ acetone query --at refs/tags/inventory-v1 'MATCH (h:Host) RETURN count(h)'
 ┌──────────┐
 │ count(h) │
 ├──────────┤
@@ -400,6 +395,13 @@ $ acetone query --at refs/tags/inventory-v1 'MATCH (h:Host) RETURN count(h)'
 └──────────┘
 1 row
 ```
+
+Refspecs resolve in git's own order (the first match wins): an exact
+`refs/…` path, then `refs/tags/<name>`, then `refs/heads/<name>`, then a
+commit hash. So in the unlikely event that one name is both a tag and a
+branch, the **tag** wins — just as it would for `git rev-parse` — and the
+full ref name (`refs/heads/<name>`) always reaches the branch
+unambiguously.
 
 (Git ancestry refspecs — `main~5`, `HEAD^` — are a planned convenience and
 not yet resolved.)
@@ -427,7 +429,7 @@ one row per change with `_Added`/`_Removed`/`_Modified` virtual elements you
 can filter like any other rows:
 
 ```console
-$ acetone query "CALL acetone.diff('refs/tags/inventory-v1', 'main')"
+$ acetone query "CALL acetone.diff('inventory-v1', 'main')"
 ┌──────────┬─────────┬─────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────┐
 │ kind     │ label   │ key                                                 │ node                                                              │
 ├──────────┼─────────┼─────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────┤

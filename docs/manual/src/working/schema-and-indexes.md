@@ -278,9 +278,9 @@ $ acetone query --at refs/tags/inventory-v1 'MATCH (i:Interface) RETURN count(i)
 error: line 1, column 7: unknown label "Interface" (not declared in the schema)
 ```
 
-(`acetone schema` always shows the current workspace's schema — it has no
-`--at`. The `schema entries` count in `acetone status` is a quick check of
-how many declarations a version carries.)
+(`acetone schema` takes `--at` too, printing the declarations of exactly
+that version. The `schema entries` count in `acetone status` is a quick
+check of how many declarations a version carries.)
 
 Everything this chapter added is still sitting in the workspace; seal it:
 

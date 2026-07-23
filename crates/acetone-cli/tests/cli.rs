@@ -987,6 +987,99 @@ fn query_clause_group_at_reads_a_past_version() {
     assert!(stderr(&out).contains("cannot resolve"), "{}", stderr(&out));
 }
 
+/// Tags as time-travel anchors (acetone-lqq): `--at` and in-language `AT`
+/// accept a tag's *short* name — lightweight or annotated — and an annotated
+/// tag is peeled to its target commit rather than failing with
+/// "object … is a tag, expected a commit".
+#[test]
+fn query_at_resolves_short_tag_names_and_peels_annotated_tags() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    assert!(
+        acetone(&repo, &["put-node", "Host", "a", "--prop", "x=1"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "one host"])
+            .status
+            .success()
+    );
+    let first = git_rev_parse(&repo, "refs/heads/main");
+    // A lightweight and an annotated tag on the first commit, made with
+    // plain git — exactly how a user would tag an audited state.
+    let tag = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-C", repo.to_str().unwrap()])
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .expect("git tag");
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+    };
+    tag(&["tag", "audit-light", &first]);
+    tag(&["tag", "-a", "audit-annot", "-m", "audited", &first]);
+
+    assert!(
+        acetone(&repo, &["put-node", "Host", "b", "--prop", "x=2"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "two hosts"])
+            .status
+            .success()
+    );
+
+    // --at with each tag's short name reads the tagged (one-host) version.
+    for name in ["audit-light", "audit-annot"] {
+        let out = acetone(
+            &repo,
+            &[
+                "query",
+                "MATCH (h:Host) RETURN count(*) AS n",
+                "--format",
+                "csv",
+                "--at",
+                name,
+            ],
+        );
+        assert!(out.status.success(), "--at {name}: {}", stderr(&out));
+        assert_eq!(stdout(&out).trim(), "n\n1", "--at {name}");
+    }
+
+    // The full ref path of the annotated tag peels too (the originally
+    // reported failure mode).
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN count(*) AS n",
+            "--format",
+            "csv",
+            "--at",
+            "refs/tags/audit-annot",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "n\n1");
+
+    // In-language AT with a short annotated tag name, from a current base.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) AT 'audit-annot' RETURN count(*) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "n\n1");
+}
+
 #[test]
 fn cypher_write_path_persists_and_stays_consistent() {
     // The Phase 3 loop: declare schema, edit via Cypher, read back in fresh

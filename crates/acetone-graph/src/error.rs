@@ -69,8 +69,8 @@ pub enum GraphError {
         /// Workspace name.
         name: String,
     },
-    /// A refspec did not resolve to a branch, ref or commit.
-    #[error("cannot resolve {refspec:?} to a branch, ref or commit")]
+    /// A refspec did not resolve to a tag, branch, ref or commit.
+    #[error("cannot resolve {refspec:?} to a tag, branch, ref or commit")]
     UnresolvedRefspec {
         /// The refspec as given.
         refspec: String,
