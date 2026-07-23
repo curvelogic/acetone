@@ -504,7 +504,7 @@ objects:
 ```console
 $ git gc --prune=now
 $ acetone query --at e04f9ee4e2ae6b044fa6e40aecbe83a69b727bfc 'MATCH (s:Service) RETURN s.name'
-error: cannot resolve "e04f9ee4e2ae6b044fa6e40aecbe83a69b727bfc" to a branch, ref or commit
+error: cannot resolve "e04f9ee4e2ae6b044fa6e40aecbe83a69b727bfc" to a tag, branch, ref or commit
 ```
 
 So: if you might want a wound-back commit again, put a branch on it before

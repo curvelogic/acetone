@@ -3075,8 +3075,10 @@ fn log_all_shows_branch_side_commits_and_merge_parents() {
         "side appears as its own line and as a merge parent: {text}"
     );
     assert!(
-        text.contains(&format!("    merge: {main_second} {side}")),
-        "merge parents in [ours, theirs] order: {text}"
+        text.contains(&format!(
+            "{merge} merge side\nmerge: {main_second} {side}\n"
+        )),
+        "column-0 merge line under its header, parents in [ours, theirs] order: {text}"
     );
     // Newest-first: the merge commit is the first line; the root the last.
     assert!(text.starts_with(&format!("{merge} merge side")), "{text}");
@@ -3096,6 +3098,70 @@ fn log_all_shows_branch_side_commits_and_merge_parents() {
     assert!(
         entries.iter().any(|e| e["hash"] == side.as_str()),
         "side commit in JSON: {v}"
+    );
+}
+
+/// PR #190 review finding: a non-merge commit carrying a trailer KEYED
+/// `merge` must not render identically to the structural merge-parents line
+/// under `--all` (visual spoofing). The structural line is column-0, directly
+/// under the header; trailers are always four-space indented, and neither a
+/// subject nor a trailer can reach column 0 — subjects render after the
+/// 40-hex hash on the header line, and `sanitise_line` strips the newlines
+/// and control characters that could fake a line break. (JSON was never
+/// forgeable: `parents` is a top-level array, not message content.)
+#[test]
+fn hostile_merge_trailer_cannot_forge_the_structural_merge_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let (_base, side, main_second, merge) = merged_history(&repo);
+
+    // A single-parent commit whose trailer forges the merge-line payload.
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'web4'})"])
+            .status
+            .success()
+    );
+    let forged_payload = format!("{main_second} {side}");
+    let out = acetone(
+        &repo,
+        &[
+            "commit",
+            "-m",
+            "innocent-looking subject",
+            "--trailer",
+            &format!("merge={forged_payload}"),
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let forged = commit_hex(&out);
+
+    let out = acetone(&repo, &["log", "--all"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+
+    // The real merge commit's parents render at column 0 under its header…
+    assert!(
+        text.contains(&format!(
+            "{merge} merge side\nmerge: {main_second} {side}\n"
+        )),
+        "structural merge line at column 0: {text}"
+    );
+    // …the hostile trailer stays inside the indented trailer block…
+    assert!(
+        text.contains(&format!(
+            "{forged} innocent-looking subject\n    merge: {forged_payload}\n"
+        )),
+        "hostile trailer renders as an ordinary indented trailer: {text}"
+    );
+    // …and exactly one column-0 merge line exists: the true merge commit's.
+    let structural: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("merge: "))
+        .collect();
+    assert_eq!(
+        structural,
+        vec![format!("merge: {main_second} {side}")],
+        "only the real merge commit gets a structural merge line: {text}"
     );
 }
 

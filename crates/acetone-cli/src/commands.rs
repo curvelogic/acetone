@@ -403,12 +403,17 @@ fn log(repo_path: &Path, all: bool, json: bool) -> Result<()> {
         let subject = entry.message.lines().next().unwrap_or("");
         outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
         // Under --all, merge structure is shown honestly: a merge commit's
-        // parent hashes, printed before any trailers (so a hostile
-        // `merge:` trailer cannot pre-empt the real line). The default
-        // first-parent output is unchanged.
+        // parent hashes, at COLUMN 0 directly under the header line. The
+        // position is what makes it unforgeable (PR #190 review): trailers
+        // always render four-space indented, and no message content can
+        // reach column 0 — subjects render after the 40-hex hash on the
+        // header line, and `sanitise_line` strips the newlines and control
+        // characters that could fake a line break. A hostile trailer keyed
+        // `merge` therefore stays visibly inside the indented trailer
+        // block. The default first-parent output is unchanged.
         if all && entry.parents.len() > 1 {
             let parents: Vec<String> = entry.parents.iter().map(|p| p.to_hex()).collect();
-            outln!("    merge: {}", parents.join(" "));
+            outln!("merge: {}", parents.join(" "));
         }
         for (key, value) in &entry.trailers {
             outln!("    {}: {}", sanitise_line(key), sanitise_line(value));

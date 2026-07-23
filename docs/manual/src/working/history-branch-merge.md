@@ -34,15 +34,18 @@ newest first, with both parent hashes shown on merge commits:
 ```console
 $ acetone log --all
 d23309799d0583dc54b709db2a507a2736426acb merge decommission-app1
-    merge: 3e59a55c23a9c2d8be568974106ee1d412026ffb 19f7e936e8edb5ae247f04cdc026a3af9eefea7e
+merge: 3e59a55c23a9c2d8be568974106ee1d412026ffb 19f7e936e8edb5ae247f04cdc026a3af9eefea7e
 3e59a55c23a9c2d8be568974106ee1d412026ffb postgres upgraded to 16.4
 19f7e936e8edb5ae247f04cdc026a3af9eefea7e decommission app1: move identity and billing to app3
 4e04e05af4c92472342ade7ba874e9a2994d44cb asset registry: initial inventory
 ```
 
 The `merge:` line reads `[ours, theirs]` — the first parent is the branch
-that was checked out, the second the branch merged in. And since the
-repository is plain git underneath, git itself can draw the topology:
+that was checked out, the second the branch merged in. (It sits flush at
+the start of the line, unlike a commit's trailers, which always render
+indented — so a trailer that happens to be *named* `merge` cannot pass
+itself off as merge structure.) And since the repository is plain git
+underneath, git itself can draw the topology:
 
 ```console
 $ git log --oneline --graph --all
@@ -346,12 +349,12 @@ The full story — both merges, both branches — is in `acetone log --all`:
 ```console
 $ acetone log --all
 beaae79967b545ac82fc27c2f812d4702b39e958 merge bump-identity
-    merge: bce960e3498f2360d5e808b31288eb0ae7f245e0 c67b3adef6b307a471a52fe4d45be43e6b75f21d
+merge: bce960e3498f2360d5e808b31288eb0ae7f245e0 c67b3adef6b307a471a52fe4d45be43e6b75f21d
 c67b3adef6b307a471a52fe4d45be43e6b75f21d identity 2.5.0: scale out onto db2
 bce960e3498f2360d5e808b31288eb0ae7f245e0 retire db2
 f0f5b30d664e6dfabbaf61f9c8efa315e9681de6 identity patch release 2.4.2
 d23309799d0583dc54b709db2a507a2736426acb merge decommission-app1
-    merge: 3e59a55c23a9c2d8be568974106ee1d412026ffb 19f7e936e8edb5ae247f04cdc026a3af9eefea7e
+merge: 3e59a55c23a9c2d8be568974106ee1d412026ffb 19f7e936e8edb5ae247f04cdc026a3af9eefea7e
 3e59a55c23a9c2d8be568974106ee1d412026ffb postgres upgraded to 16.4
 19f7e936e8edb5ae247f04cdc026a3af9eefea7e decommission app1: move identity and billing to app3
 4e04e05af4c92472342ade7ba874e9a2994d44cb asset registry: initial inventory

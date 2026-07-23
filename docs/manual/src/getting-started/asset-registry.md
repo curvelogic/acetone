@@ -317,7 +317,7 @@ commits, with both parent hashes on merge commits:
 ```console
 $ acetone log --all
 f0f0ccbf51a7a02ab0dcb5b7face69acd0e7bece merge decommission-app1
-    merge: 815427f405191decace4f423ef78a67e997fd6e8 12d48bc3bfc7059cfdcef41d40449cc341fc06b9
+merge: 815427f405191decace4f423ef78a67e997fd6e8 12d48bc3bfc7059cfdcef41d40449cc341fc06b9
 815427f405191decace4f423ef78a67e997fd6e8 postgres upgraded to 16.4
 12d48bc3bfc7059cfdcef41d40449cc341fc06b9 decommission app1: move identity and billing to app3
 190d782b20d1ff3be951eff63306389bfd46898c asset registry: initial inventory
