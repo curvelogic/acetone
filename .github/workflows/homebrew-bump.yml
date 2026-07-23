@@ -54,6 +54,11 @@ jobs:
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
         run: |
+          case "$TAG" in
+            *[!A-Za-z0-9.v-]*)
+              echo "release tag contains characters outside [A-Za-z0-9.v-]; refusing" >&2
+              exit 1 ;;
+          esac
           if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$'; then
             echo "unexpected release tag format: '$TAG' (expected e.g. v0.3.0)" >&2
             exit 1
@@ -102,14 +107,15 @@ jobs:
           git clone --depth 1 "https://github.com/${tap}.git" tap
           cp acetone.rb tap/Formula/acetone.rb
           cd tap || exit 1
-          if git diff --quiet; then
+          git add Formula/acetone.rb
+          if git diff --quiet --cached; then
             echo "Formula already up to date for ${TAG}; nothing to do."
             exit 0
           fi
           git checkout -b "$branch"
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -am "acetone ${VERSION}"
+              commit -m "acetone ${VERSION}"
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${tap}.git" "HEAD:refs/heads/${branch}"
           if [ -n "$(gh pr list --repo "$tap" --head "$branch" --state open --json number --jq '.[].number')" ]; then
             echo "Open PR for ${branch} already exists; branch updated."
