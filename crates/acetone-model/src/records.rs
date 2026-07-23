@@ -171,7 +171,11 @@ impl NodeRecord {
                 remaining: reader.remaining(),
             }));
         }
-        let mut secondary_labels: Vec<String> = Vec::with_capacity(count as usize);
+        // Bounded speculative reservation (acetone-8gp): trust the declared
+        // count only up to MAX_PREALLOC_ITEMS; beyond that the vector grows
+        // as labels actually decode.
+        let mut secondary_labels: Vec<String> =
+            Vec::with_capacity((count as usize).min(crate::cbor::MAX_PREALLOC_ITEMS));
         for _ in 0..count {
             let label = reader.read_text()?;
             if let Some(prev) = secondary_labels.last()

@@ -1519,6 +1519,17 @@ fn read_ref_lenient(store: &GitStore, name: &str) -> Result<Option<Hash>, GraphE
     }
 }
 
+/// Render chunk parameters for the [`GraphError::ChunkParamsMismatch`]
+/// message.
+fn render_chunk_params(params: ChunkParams) -> String {
+    format!(
+        "(min_bytes {}, mask_bits {}, max_bytes {})",
+        params.min_bytes(),
+        params.mask_bits(),
+        params.max_bytes()
+    )
+}
+
 pub(crate) fn read_manifest_chunk(store: &GitStore, hash: &Hash) -> Result<Manifest, GraphError> {
     let bytes = store.get(hash)?.ok_or_else(|| StoreError::InvalidHash {
         reason: format!("workspace manifest chunk {hash} is missing"),
@@ -1855,6 +1866,21 @@ impl<'r> Transaction<'r> {
         // detached commit fails cleanly (`NoCurrentBranch`) without partially
         // mutating the workspace (acetone-cm9 review).
         let branch = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
+        // Defence in depth (acetone-093, Gate D freeze audit): chunking
+        // parameters are fixed at init (spec §3.2) and propagate through
+        // every manifest, so this commit's params must equal its parent's.
+        // Checked before applying staged writes, so a mismatched
+        // transaction fails cleanly without mutating the workspace. The
+        // first commit on an unborn branch has no parent to agree with.
+        if let Some(parent) = repo.store.read_ref(&branch)? {
+            let parent_params = repo.manifest_at_commit(&parent)?.chunk_params;
+            if parent_params != self.manifest.chunk_params {
+                return Err(GraphError::ChunkParamsMismatch {
+                    expected: render_chunk_params(parent_params),
+                    actual: render_chunk_params(self.manifest.chunk_params),
+                });
+            }
+        }
         // A merge in progress (MERGE_HEAD set) completes here: the commit gets
         // `theirs` as a second parent (spec §6). It may only complete once
         // every conflict is resolved. Apply staged writes first, so a write
@@ -2465,5 +2491,56 @@ impl<'s> Snapshot<'s> {
             out.push(SchemaEntry::decode(&key, &value)?);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acetone_model::Value;
+
+    fn node(key: &str) -> NodeKey {
+        NodeKey::new("Host", vec![Value::String(key.to_owned())]).expect("valid key")
+    }
+
+    /// Commit-time chunk-parameter guard (acetone-093, Gate D freeze
+    /// audit): a commit whose workspace manifest carries chunk parameters
+    /// different from its parent commit's is rejected with the typed
+    /// error, before anything advances. The tampering is only possible
+    /// from inside the crate (the manifest field is private) — exactly
+    /// why the guard is defence in depth, not a reachable user error.
+    #[test]
+    fn commit_rejects_chunk_params_that_differ_from_the_parent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo =
+            Repository::init(&dir.path().join("graph.git"), InitOptions::default()).expect("init");
+
+        // First commit: no parent, so no agreement to check.
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web1"), &NodeRecord::new([], Default::default()))
+            .expect("put");
+        tx.commit("base", &[], None).expect("first commit");
+
+        // Second commit with tampered parameters must be rejected.
+        let mut tx = repo.begin_write().expect("begin");
+        tx.manifest.chunk_params = ChunkParams::new(512, 10, 8192).expect("valid params");
+        tx.put_node(&node("web2"), &NodeRecord::new([], Default::default()))
+            .expect("put");
+        let err = tx
+            .commit("tampered", &[], None)
+            .expect_err("mismatched chunk params must not commit");
+        assert!(
+            matches!(err, GraphError::ChunkParamsMismatch { .. }),
+            "expected ChunkParamsMismatch, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("min_bytes 512"), "{msg}");
+        assert!(msg.contains("spec §3.2"), "{msg}");
+
+        // The branch did not advance and an untampered commit still works.
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web2"), &NodeRecord::new([], Default::default()))
+            .expect("put");
+        tx.commit("clean", &[], None).expect("untampered commit");
     }
 }

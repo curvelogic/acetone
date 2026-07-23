@@ -289,7 +289,11 @@ pub(crate) fn read_value(reader: &mut Reader, depth: usize) -> Result<Value, Val
                     remaining: reader.remaining(),
                 });
             }
-            let mut items = Vec::with_capacity(count as usize);
+            // Bounded speculative reservation (acetone-8gp): trust the
+            // declared count only up to MAX_PREALLOC_ITEMS; beyond that the
+            // vector grows as elements actually decode.
+            let mut items =
+                Vec::with_capacity((count as usize).min(crate::cbor::MAX_PREALLOC_ITEMS));
             for _ in 0..count {
                 items.push(read_value(reader, depth + 1)?);
             }
@@ -518,6 +522,47 @@ mod tests {
             ])),
             "83010203"
         );
+    }
+
+    /// Gate D freeze-audit nit (acetone-093): pin the canonical text- and
+    /// byte-string head form at every length-regime boundary (23/24,
+    /// 255/256, 65535/65536 bytes) and its strict round trip.
+    #[test]
+    fn string_head_length_boundaries_round_trip_with_pinned_heads() {
+        let cases: &[(usize, &[u8], &[u8])] = &[
+            // (length, expected text head, expected bytes head)
+            (23, &[0x77], &[0x57]),
+            (24, &[0x78, 24], &[0x58, 24]),
+            (255, &[0x78, 255], &[0x58, 255]),
+            (256, &[0x79, 0x01, 0x00], &[0x59, 0x01, 0x00]),
+            (65_535, &[0x79, 0xff, 0xff], &[0x59, 0xff, 0xff]),
+            (
+                65_536,
+                &[0x7a, 0x00, 0x01, 0x00, 0x00],
+                &[0x5a, 0x00, 0x01, 0x00, 0x00],
+            ),
+        ];
+        for (len, text_head, bytes_head) in cases {
+            let s = Value::String("a".repeat(*len));
+            let encoded = encode_value(&s).expect("encode");
+            assert!(
+                encoded.starts_with(text_head),
+                "text head for length {len}: got {:0>2x?}",
+                &encoded[..text_head.len().min(encoded.len())]
+            );
+            assert_eq!(encoded.len(), text_head.len() + len, "text length {len}");
+            assert_eq!(decode_value(&encoded).expect("decode"), s);
+
+            let b = Value::Bytes(vec![0xaa; *len]);
+            let encoded = encode_value(&b).expect("encode");
+            assert!(
+                encoded.starts_with(bytes_head),
+                "bytes head for length {len}: got {:0>2x?}",
+                &encoded[..bytes_head.len().min(encoded.len())]
+            );
+            assert_eq!(encoded.len(), bytes_head.len() + len, "bytes length {len}");
+            assert_eq!(decode_value(&encoded).expect("decode"), b);
+        }
     }
 
     // --- NaN canonicalisation ---------------------------------------------

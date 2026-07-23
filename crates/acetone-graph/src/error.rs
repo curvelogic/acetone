@@ -148,6 +148,21 @@ pub enum GraphError {
         /// The rendered missing endpoint (label and key).
         endpoint: String,
     },
+    /// A commit's chunking parameters differ from its parent commit's.
+    /// Parameters are fixed at repository init (spec §3.2) and propagate
+    /// through every manifest unchanged, so a divergence can only be a bug
+    /// or tampering; committing it would silently re-chunk history.
+    /// Defence in depth from the Gate D freeze audit (acetone-093).
+    #[error(
+        "cannot commit: workspace chunk parameters {actual} differ from the parent commit's \
+         {expected} — chunking is fixed at repository init (spec §3.2)"
+    )]
+    ChunkParamsMismatch {
+        /// The parent commit's parameters, rendered.
+        expected: String,
+        /// The workspace manifest's parameters, rendered.
+        actual: String,
+    },
     /// Two versions share no common ancestor, so there is no base for a
     /// three-way merge (unrelated histories).
     #[error("cannot merge {theirs} into {ours}: no common ancestor (unrelated histories)")]

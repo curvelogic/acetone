@@ -512,7 +512,11 @@ impl SchemaEntry {
                 let count = reader.read_head(MAJOR_ARRAY)?;
                 let count =
                     usize::try_from(count).map_err(|_| SchemaError::EmptyName("index property"))?;
-                let mut properties = Vec::with_capacity(count.min(reader.remaining()));
+                let mut properties = Vec::with_capacity(
+                    count
+                        .min(reader.remaining())
+                        .min(crate::cbor::MAX_PREALLOC_ITEMS),
+                );
                 for _ in 0..count {
                     properties.push(reader.read_text()?);
                 }
@@ -588,7 +592,11 @@ fn read_name_array(reader: &mut Reader, sorted: bool) -> Result<Vec<String>, Sch
             remaining: reader.remaining(),
         }));
     }
-    let mut names: Vec<String> = Vec::with_capacity(count as usize);
+    // Bounded speculative reservation (acetone-8gp): trust the declared
+    // count only up to MAX_PREALLOC_ITEMS; beyond that the vector grows
+    // as names actually decode.
+    let mut names: Vec<String> =
+        Vec::with_capacity((count as usize).min(crate::cbor::MAX_PREALLOC_ITEMS));
     for _ in 0..count {
         let name = reader.read_text()?;
         if sorted
