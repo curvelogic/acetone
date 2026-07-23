@@ -4,12 +4,13 @@ This is the chapter you reach for when something is broken. It is organised
 by **symptom**: find the section whose symptom matches what you are seeing,
 and each walks the same path — symptom, diagnosis, recovery, prevention.
 
-Every procedure here was driven for real while writing: we took a scratch
-copy of the [asset registry](../getting-started/asset-registry.md), actually
-broke it the way each section describes — killed locks, flipped bytes in
-objects, deleted chunks, damaged refs — and ran the recovery. The transcripts
-are quoted verbatim from those sessions, with one cosmetic change: the
-repository lived in a temporary directory, shown throughout as
+Every procedure here was driven for real while writing: we built scratch
+copies of the [asset registry](../getting-started/asset-registry.md),
+actually broke them the way each section describes — killed locks, flipped
+bytes in objects, deleted chunks, damaged refs — and ran the recovery. The
+transcripts are quoted verbatim from those sessions (each section is
+self-contained; commit hashes differ between sessions), with one cosmetic
+change: the repositories lived in temporary directories, shown throughout as
 `/srv/registry`. Where a scenario could not be honestly reproduced it is
 clearly labelled as such.
 
@@ -22,7 +23,7 @@ A quick index:
 | `fsck` says a chunk is absent from the store | [Missing object](#a-missing-object) |
 | `fsck` reports a ref/commit error or advisory | [Damaged refs](#damaged-refs) |
 | `status` suddenly says `(no commits yet)` | [HEAD names a missing branch](#head-names-a-branch-that-does-not-exist) |
-| Every `checkout` refuses; you did not change anything | [Interrupted checkout](#an-interrupted-checkout) |
+| Dirty with changes you never made, after a crash | [Interrupted checkout](#an-interrupted-checkout) |
 | You committed (or wrote) something you regret | [Undoing changes](#undoing-changes-the-happy-side-of-the-runbook) |
 | `gc` refuses to run | [gc refuses while worktrees exist](#gc-refuses-while-linked-worktrees-exist) |
 | Preparing for all of the above | [Backup and restore](#backup-and-restore) |
@@ -313,58 +314,57 @@ Nothing is lost: `main` and all its history are intact; HEAD just points at
 a branch name with no commits. The workspace (still holding your real data)
 now differs from that unborn branch's nothing, hence `dirty`. This state has
 a trap: **a `commit` here would create the misspelled branch** with your
-whole graph as a parentless first commit — and `checkout main` refuses,
-because the workspace reads as dirty:
+whole graph as a parentless first commit. Diagnose with git if in doubt —
+`git symbolic-ref HEAD` prints where HEAD really points (`refs/heads/mian`).
+
+**Recovery.** Check out the branch you meant. The dirty guard measures
+*content*, not the dirty flag — and the workspace content here *is* `main`'s
+committed state, so nothing can be discarded and checkout proceeds:
 
 ```console
 $ acetone checkout main
-error: checking out branch "main": workspace has uncommitted changes; commit them first
-```
-
-**Diagnosis and recovery.** Ask git where HEAD points, and point it back:
-
-```console
-$ git symbolic-ref HEAD
-refs/heads/mian
-$ git symbolic-ref HEAD refs/heads/main
+switched to branch "main"
 $ acetone status
 On branch main
-HEAD: 63226109e4a2646b7586d827d32e41004feed57f
+HEAD: 88ad6ed4a96ee852a46dc6a25c1fc903d106414f
 workspace: clean
 nodes: 12, edges: 15, schema entries: 7
 ```
 
+(If the workspace had also held real uncommitted changes, checkout would
+refuse as usual; the escape is then `git symbolic-ref HEAD refs/heads/main`
+— pointing HEAD back by hand, which is exactly what the typo mispointed.)
+
 ## An interrupted checkout
 
-**Symptom.** Every `checkout` refuses with "uncommitted changes" that you
-do not remember making:
+**Symptom.** A `checkout` was interrupted (crash, kill, power loss).
+`status` reports the *old* branch, dirty, with "uncommitted changes" you do
+not remember making — and checking out any *other* branch refuses:
 
 ```console
-$ acetone checkout main
-error: checking out branch "main": workspace has uncommitted changes; commit them first
+$ acetone status
+On branch audit
+HEAD: 18ce05c10ca544fa65718ef15ada5d115fa538a6
+workspace: dirty
+nodes: 12, edges: 15, schema entries: 7
 $ acetone checkout audit
 error: checking out branch "audit": workspace has uncommitted changes; commit them first
 ```
 
 **What happened.** `checkout` makes two ref updates: first it resets the
-workspace to the target branch's committed state, then it moves HEAD. A
-crash between the two leaves the workspace holding the *target* branch's
-content while HEAD still names the *old* branch — which reads as "dirty on
-the old branch", and wedges every checkout. (We constructed this state
-deliberately — a full checkout, then winding HEAD back — which is exactly
-the state a kill between the two updates leaves.)
+workspace to the target branch's committed state, then it moves HEAD. An
+interruption between the two leaves the workspace holding the *target*
+branch's content while HEAD still names the *old* branch — which reads as
+"dirty on the old branch". (We constructed this state deliberately — a full
+`checkout main` from `audit`, then winding HEAD back — which is exactly the
+state a kill between the two updates leaves.)
 
 **Diagnosis.** The fingerprint is that the "uncommitted changes" are
-precisely the other branch's committed state. Here HEAD claims `audit`
+precisely the checkout target's committed state. Here HEAD claims `audit`
 (whose commit set `edge1.audited`), but the workspace shows `main`'s
 content:
 
 ```console
-$ acetone status
-On branch audit
-HEAD: ccad0ba3c59d567a42b3d406b29ffce0a2e1002a
-workspace: dirty
-nodes: 12, edges: 15, schema entries: 7
 $ acetone query 'MATCH (h:Host {name: "edge1"}) RETURN h.audited'
 ┌───────────┐
 │ h.audited │
@@ -377,19 +377,25 @@ $ acetone query 'MATCH (h:Host {name: "edge1"}) RETURN h.audited'
 If instead the workspace holds real uncommitted work you recognise, you are
 not in this scenario — you are just dirty; commit and carry on.
 
-**Recovery.** Complete what the interrupted checkout started: move HEAD to
-the branch whose content the workspace already holds:
+**Recovery.** Run the same checkout again. Because the workspace already
+holds exactly the target's committed content, nothing can be discarded — the
+dirty guard measures content, not the flag — so the re-run simply completes
+the interrupted move of HEAD:
 
 ```console
-$ git symbolic-ref HEAD refs/heads/main
+$ acetone checkout main
+switched to branch "main"
 $ acetone status
 On branch main
-HEAD: 63226109e4a2646b7586d827d32e41004feed57f
+HEAD: 88ad6ed4a96ee852a46dc6a25c1fc903d106414f
 workspace: clean
 nodes: 12, edges: 15, schema entries: 7
 $ acetone fsck
 fsck: clean
 ```
+
+Checking out any branch whose content differs still refuses, as the symptom
+showed — the guard narrows only when it can prove nothing is lost.
 
 Note the ordering is itself a safety property: from the interrupted state, a
 `commit` would have recorded the target's committed content onto the old
