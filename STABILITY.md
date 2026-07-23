@@ -35,7 +35,9 @@ nothing in this surface.
   re-exports for stability; reach into the modules only when you accept churn.
 - **The CLI.** `acetone`'s command surface and output formats (including
   `--json`) are a **separate** product surface (spec §7) and are not covered by
-  this document.
+  this document. The `--json` shape is explicitly **unstable pre-1.0**: it may
+  change at any minor release, with the change noted in the CHANGELOG. Pin
+  your acetone version if you script against exact field names or nesting.
 - **The on-disk format.** That is frozen separately at `format_version 1`
   (Gate D, ADR-0024) and guarded by the prolly/model golden pins.
 

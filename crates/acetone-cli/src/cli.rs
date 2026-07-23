@@ -73,8 +73,8 @@ pub enum Command {
     },
     /// Show the current branch, head commit and workspace state.
     Status {
-        /// Emit machine-readable JSON. The JSON shape is unstable and may
-        /// change before 0.2.
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
         #[arg(long)]
         json: bool,
     },
@@ -97,8 +97,8 @@ pub enum Command {
     },
     /// Show commit history, newest first.
     Log {
-        /// Emit machine-readable JSON. The JSON shape is unstable and may
-        /// change before 0.2.
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
         #[arg(long)]
         json: bool,
     },
@@ -107,8 +107,8 @@ pub enum Command {
         /// Name of a new branch to create at the current head commit.
         /// Omit to list existing branches.
         name: Option<String>,
-        /// Emit machine-readable JSON. The JSON shape is unstable and may
-        /// change before 0.2.
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
         #[arg(long)]
         json: bool,
     },
@@ -127,8 +127,8 @@ pub enum Command {
         from: String,
         /// The target version.
         to: String,
-        /// Emit machine-readable JSON. The JSON shape is unstable and may
-        /// change before 0.2.
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
         #[arg(long)]
         json: bool,
     },
@@ -233,8 +233,8 @@ pub enum Command {
         /// instead of the current workspace state.
         #[arg(long)]
         at: Option<String>,
-        /// Emit machine-readable JSON. The JSON shape is unstable and may
-        /// change before 0.2.
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
         #[arg(long)]
         json: bool,
     },
@@ -386,8 +386,8 @@ pub enum Command {
         /// Key value (same parsing rule as `put-node`).
         key: String,
         /// Emit machine-readable JSON (the node object, or `null` on a miss
-        /// with a non-zero exit). The JSON shape is unstable and may change
-        /// before 0.2.
+        /// with a non-zero exit). The JSON shape is unstable pre-1.0 and may
+        /// change at any minor release.
         #[arg(long)]
         json: bool,
     },
@@ -409,8 +409,8 @@ pub enum Command {
         /// Restrict to one primary label.
         #[arg(short = 'l', long)]
         label: Option<String>,
-        /// Emit machine-readable JSON. The JSON shape is unstable and may
-        /// change before 0.2.
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
         #[arg(long)]
         json: bool,
     },

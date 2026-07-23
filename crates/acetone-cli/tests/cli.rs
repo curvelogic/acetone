@@ -2311,8 +2311,8 @@ fn schema_command_shows_and_time_travels() {
 //
 // Every case parses stdout with serde_json to prove it is valid JSON, then
 // asserts on the parsed value — never on brittle formatting. The JSON *shape*
-// is explicitly unstable at 0.1.1 (may change before 0.2); these tests pin
-// current behaviour, not a frozen contract.
+// is explicitly unstable pre-1.0 (may change at any minor release,
+// acetone-lk1); these tests pin current behaviour, not a frozen contract.
 
 use serde_json::Value as Json;
 
