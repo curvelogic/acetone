@@ -5019,6 +5019,10 @@ pub acetone_cypher::persist::PersistError::Identity(alloc::string::String)
 pub acetone_cypher::persist::PersistError::Key(acetone_model::graph_keys::GraphKeyError)
 pub acetone_cypher::persist::PersistError::KeyImmutable
 pub acetone_cypher::persist::PersistError::KeyImmutable::label: alloc::string::String
+pub acetone_cypher::persist::PersistError::KeyValueType
+pub acetone_cypher::persist::PersistError::KeyValueType::label: alloc::string::String
+pub acetone_cypher::persist::PersistError::KeyValueType::property: alloc::string::String
+pub acetone_cypher::persist::PersistError::KeyValueType::type_name: &'static str
 pub acetone_cypher::persist::PersistError::MissingRequired
 pub acetone_cypher::persist::PersistError::MissingRequired::key: alloc::string::String
 pub acetone_cypher::persist::PersistError::MissingRequired::label: alloc::string::String
