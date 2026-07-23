@@ -270,6 +270,18 @@ fn render_json(result: &QueryResult) {
 
 // --- Value rendering ---------------------------------------------------------
 
+/// Maximum nesting the renderers will recurse into (acetone-5xp, defence in
+/// depth). Stored values are bounded at 128 by the model's encode/decode caps
+/// and re-bounded by acetone-cypher's conversion guard on the read seam, but
+/// a runtime-built value (e.g. a reduce that wraps a list each step) can
+/// nest arbitrarily deep — deeper content is elided as `…` rather than
+/// recursed into, so display can never smash the stack. Display-only: the
+/// value itself is untouched.
+const MAX_RENDER_DEPTH: usize = 256;
+
+/// The marker rendered in place of content nested past [`MAX_RENDER_DEPTH`].
+const DEPTH_ELISION: &str = "\u{2026}";
+
 /// One table/CSV cell: columns the executor flagged as identifier-shaped
 /// (`labels(n)`, `keys(n)`, `type(r)`, procedure identifier yields —
 /// acetone-0ds) take the stricter identifier escaping; everything else takes
@@ -293,17 +305,24 @@ fn render_cell(value: &Value, result: &QueryResult, column: usize) -> String {
 /// [`sanitise_identifier`] (zero-width/invisible characters included);
 /// every other shape falls back to [`render_value`].
 fn render_identifier_value(value: &Value) -> String {
+    render_identifier_value_at(value, 0)
+}
+
+fn render_identifier_value_at(value: &Value, depth: usize) -> String {
+    if depth >= MAX_RENDER_DEPTH {
+        return DEPTH_ELISION.to_string();
+    }
     match value {
         Value::String(s) => sanitise_identifier(s),
         Value::List(items) => {
             let inner = items
                 .iter()
-                .map(render_identifier_value)
+                .map(|item| render_identifier_value_at(item, depth + 1))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{inner}]")
         }
-        other => render_value(other),
+        other => render_value_at(other, depth),
     }
 }
 
@@ -314,6 +333,13 @@ fn render_identifier_value(value: &Value) -> String {
 /// must never reach the terminal raw (the bar set by PR #25 for log/fsck
 /// output). JSON output escapes separately in `json_string`.
 fn render_value(value: &Value) -> String {
+    render_value_at(value, 0)
+}
+
+fn render_value_at(value: &Value, depth: usize) -> String {
+    if depth >= MAX_RENDER_DEPTH {
+        return DEPTH_ELISION.to_string();
+    }
     match value {
         // A distinct marker so a genuine NULL is not confused with a string
         // whose contents are "null" (which renders as itself). Trade-off: a
@@ -328,7 +354,7 @@ fn render_value(value: &Value) -> String {
         Value::List(items) => {
             let inner = items
                 .iter()
-                .map(render_value)
+                .map(|item| render_value_at(item, depth + 1))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{inner}]")
@@ -336,12 +362,18 @@ fn render_value(value: &Value) -> String {
         Value::Map(entries) => {
             let inner = entries
                 .iter()
-                .map(|(k, v)| format!("{}: {}", sanitise_identifier(k), render_value(v)))
+                .map(|(k, v)| {
+                    format!(
+                        "{}: {}",
+                        sanitise_identifier(k),
+                        render_value_at(v, depth + 1)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{{{inner}}}")
         }
-        Value::Node(node) => render_node(node),
+        Value::Node(node) => render_node_at(node, depth),
         Value::Relationship(rel) => render_rel(rel),
         Value::Path(path) => format!("<path of {} rels>", path.rels.len()),
         // A read carrier renders exactly as its string form would (ADR-0038):
@@ -350,7 +382,7 @@ fn render_value(value: &Value) -> String {
     }
 }
 
-fn render_node(node: &NodeValue) -> String {
+fn render_node_at(node: &NodeValue, depth: usize) -> String {
     // Labels and property keys are identifier-shaped: escaped to the
     // stricter bar (zero-width included), unlike the property values.
     let labels: String = node
@@ -364,7 +396,13 @@ fn render_node(node: &NodeValue) -> String {
         let props = node
             .properties
             .iter()
-            .map(|(k, v)| format!("{}: {}", sanitise_identifier(k), render_value(v)))
+            .map(|(k, v)| {
+                format!(
+                    "{}: {}",
+                    sanitise_identifier(k),
+                    render_value_at(v, depth + 1)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         format!("({labels} {{{props}}})")
@@ -375,8 +413,17 @@ fn render_rel(rel: &RelValue) -> String {
     format!("[:{}]", sanitise_identifier(&rel.rel_type))
 }
 
-/// JSON rendering (a minimal, dependency-free serialiser).
+/// JSON rendering (a minimal, dependency-free serialiser). Nesting past
+/// [`MAX_RENDER_DEPTH`] is elided as the JSON string `"…"`, like the
+/// table/CSV renderer.
 fn json_value(value: &Value) -> String {
+    json_value_at(value, 0)
+}
+
+fn json_value_at(value: &Value, depth: usize) -> String {
+    if depth >= MAX_RENDER_DEPTH {
+        return json_string(DEPTH_ELISION);
+    }
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
@@ -391,13 +438,17 @@ fn json_value(value: &Value) -> String {
         }
         Value::String(s) => json_string(s),
         Value::List(items) => {
-            let inner = items.iter().map(json_value).collect::<Vec<_>>().join(", ");
+            let inner = items
+                .iter()
+                .map(|item| json_value_at(item, depth + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("[{inner}]")
         }
         Value::Map(entries) => {
             let inner = entries
                 .iter()
-                .map(|(k, v)| format!("{}: {}", json_string(k), json_value(v)))
+                .map(|(k, v)| format!("{}: {}", json_string(k), json_value_at(v, depth + 1)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{{{inner}}}")
@@ -412,7 +463,7 @@ fn json_value(value: &Value) -> String {
             let props = node
                 .properties
                 .iter()
-                .map(|(k, v)| format!("{}: {}", json_string(k), json_value(v)))
+                .map(|(k, v)| format!("{}: {}", json_string(k), json_value_at(v, depth + 1)))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{{\"labels\": [{labels}], \"properties\": {{{props}}}}}")
@@ -781,7 +832,42 @@ fn handle_meta(
 
 #[cfg(test)]
 mod tests {
-    use super::json_string;
+    use super::{DEPTH_ELISION, Value, json_string, json_value, render_value};
+
+    #[test]
+    fn renderers_bound_recursion_over_deep_nesting() {
+        // acetone-5xp: a runtime value can nest arbitrarily deep (a reduce
+        // wrapping a list each step) and stored values are only bounded by
+        // the model's caps upstream — the renderers must elide past
+        // MAX_RENDER_DEPTH rather than recurse without bound.
+        let mut value = Value::Int(1);
+        for _ in 0..50_000 {
+            value = Value::List(vec![value]);
+        }
+        let text = render_value(&value);
+        assert!(text.contains(DEPTH_ELISION));
+        let json = json_value(&value);
+        assert!(json.contains(DEPTH_ELISION));
+        // Tear the fixture down iteratively so its drop glue cannot recurse
+        // off the stack either.
+        let mut stack = vec![value];
+        while let Some(value) = stack.pop() {
+            if let Value::List(items) = value {
+                stack.extend(items);
+            }
+        }
+    }
+
+    #[test]
+    fn shallow_values_render_unchanged() {
+        // The guard must not disturb ordinary rendering.
+        let value = Value::List(vec![
+            Value::Int(1),
+            Value::List(vec![Value::String("a".into())]),
+        ]);
+        assert_eq!(render_value(&value), "[1, [a]]");
+        assert_eq!(json_value(&value), "[1, [\"a\"]]");
+    }
 
     #[test]
     fn json_string_escapes_controls_and_bidi() {

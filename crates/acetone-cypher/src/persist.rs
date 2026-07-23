@@ -458,8 +458,22 @@ fn deferred_type_name(value: &ModelValue) -> Option<&'static str> {
 }
 
 /// Convert a runtime value to a storable model value. Maps, nodes,
-/// relationships and paths are not storable property values.
+/// relationships and paths are not storable property values, and neither is
+/// anything nested past [`crate::exec::adapter::MAX_VALUE_DEPTH`]
+/// (acetone-5xp): a runtime value can nest arbitrarily deep (e.g. a reduce
+/// that wraps a list each step), so the walk carries a depth counter and
+/// surfaces a clean error instead of recursing without bound. The model's
+/// encoder remains the semantic authority for storable depth (it rejects
+/// anything past its own, lower cap of 128); this guard only bounds the
+/// recursion getting there.
 fn convert_value(value: &Value) -> Result<ModelValue, PersistError> {
+    convert_value_at(value, 0)
+}
+
+fn convert_value_at(value: &Value, depth: usize) -> Result<ModelValue, PersistError> {
+    if depth >= crate::exec::adapter::MAX_VALUE_DEPTH {
+        return Err(PersistError::Value("list nested past the depth limit"));
+    }
     Ok(match value {
         Value::Null => ModelValue::Null,
         Value::Bool(b) => ModelValue::Bool(*b),
@@ -473,7 +487,7 @@ fn convert_value(value: &Value) -> Result<ModelValue, PersistError> {
         Value::List(items) => ModelValue::List(
             items
                 .iter()
-                .map(convert_value)
+                .map(|item| convert_value_at(item, depth + 1))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Value::Map(_) => return Err(PersistError::Value("map")),
@@ -756,6 +770,34 @@ mod tests {
                 matches!(result, Err(PersistError::KeyValueType { .. })),
                 "expected KeyValueType for {:?}, got {:?}", v, result
             );
+        }
+    }
+
+    #[test]
+    fn an_over_deep_runtime_list_fails_persist_with_a_clean_error() {
+        // acetone-5xp: a runtime value can nest arbitrarily deep (a reduce
+        // wrapping a list each step), so the write-path conversion carries a
+        // depth counter and surfaces a typed error instead of recursing the
+        // stack away. A modestly nested list still persists untouched.
+        let shallow = Value::List(vec![Value::List(vec![Value::Int(1)])]);
+        assert!(convert_value(&shallow).is_ok());
+
+        let mut deep = Value::Int(1);
+        for _ in 0..50_000 {
+            deep = Value::List(vec![deep]);
+        }
+        let err = convert_value(&deep).expect_err("an over-deep value must not persist");
+        assert!(
+            err.to_string().contains("depth limit"),
+            "unexpected error: {err}"
+        );
+        // Tear the fixture down iteratively so its drop glue cannot recurse
+        // off the stack either.
+        let mut stack = vec![deep];
+        while let Some(value) = stack.pop() {
+            if let Value::List(items) = value {
+                stack.extend(items);
+            }
         }
     }
 }

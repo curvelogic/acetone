@@ -301,13 +301,43 @@ fn convert_map(properties: &BTreeMap<String, ModelValue>) -> BTreeMap<String, Va
 /// loss for both nodes and edges (this supersedes the ADR-0029 node-only
 /// heuristic).
 pub(crate) fn convert_value(value: &ModelValue) -> Value {
+    convert_value_at(value, 0)
+}
+
+/// Maximum nesting depth the stored-value walks will recurse into
+/// (acetone-5xp, defence in depth). Stored values are bounded at
+/// [`acetone_model::values::MAX_DEPTH`] (128) by both the CBOR encoder and
+/// decoder, so no decodable value can reach this cap — the guard exists so
+/// that a hostile or corrupt value that somehow bypassed those caps meets a
+/// defined, non-panicking bound here instead of unbounded recursion (a stack
+/// smash) on the read path.
+pub(crate) const MAX_VALUE_DEPTH: usize = 256;
+const _: () = assert!(
+    MAX_VALUE_DEPTH > acetone_model::values::MAX_DEPTH,
+    "the defence-in-depth cap must sit above the model's own encode/decode cap, \
+     or legitimate stored values would be degraded"
+);
+
+fn convert_value_at(value: &ModelValue, depth: usize) -> Value {
+    if depth >= MAX_VALUE_DEPTH {
+        // Unreachable for any value that passed the model's encode/decode
+        // depth caps (see MAX_VALUE_DEPTH). This walk cannot error — it feeds
+        // the infallible, 0.2-frozen `GraphSource` surface — so beyond-cap
+        // nesting degrades to null rather than recursing on.
+        return Value::Null;
+    }
     match value {
         ModelValue::Null => Value::Null,
         ModelValue::Bool(b) => Value::Bool(*b),
         ModelValue::Int(n) => Value::Int(*n),
         ModelValue::Float(x) => Value::Float(*x),
         ModelValue::String(s) => Value::String(s.clone()),
-        ModelValue::List(items) => Value::List(items.iter().map(convert_value).collect()),
+        ModelValue::List(items) => Value::List(
+            items
+                .iter()
+                .map(|item| convert_value_at(item, depth + 1))
+                .collect(),
+        ),
         // Deferred domain types (`Bytes` and the four temporals): carried
         // verbatim so the round-trip is lossless. Exhaustive by design — a new
         // `ModelValue` variant must make a deliberate carry-or-model choice.
@@ -490,8 +520,19 @@ fn encode_model_value(value: &ModelValue) -> Option<Vec<u8>> {
 }
 
 /// Convert a runtime [`Value`] to a stored [`ModelValue`], or `None` for a
-/// kind that cannot be an index value (map/node/relationship/path).
+/// kind that cannot be an index value (map/node/relationship/path) — or one
+/// nested past [`MAX_VALUE_DEPTH`] (acetone-5xp): a runtime value can nest
+/// arbitrarily deep (e.g. a reduce that wraps a list each step), and `None`
+/// here safely means "not index-eligible", so the seek falls back to a scan
+/// instead of this walk recursing without bound.
 pub(crate) fn model_value_of(value: &Value) -> Option<ModelValue> {
+    model_value_of_at(value, 0)
+}
+
+fn model_value_of_at(value: &Value, depth: usize) -> Option<ModelValue> {
+    if depth >= MAX_VALUE_DEPTH {
+        return None;
+    }
     Some(match value {
         Value::Null => ModelValue::Null,
         Value::Bool(b) => ModelValue::Bool(*b),
@@ -508,7 +549,7 @@ pub(crate) fn model_value_of(value: &Value) -> Option<ModelValue> {
         Value::List(items) => ModelValue::List(
             items
                 .iter()
-                .map(model_value_of)
+                .map(|item| model_value_of_at(item, depth + 1))
                 .collect::<Option<Vec<_>>>()?,
         ),
         Value::Map(_) | Value::Node(_) | Value::Relationship(_) | Value::Path(_) => return None,
@@ -878,5 +919,84 @@ mod tests {
         assert_eq!(snapshot.nodes_by_labels(&["N".to_string()]).len(), 2);
         assert_eq!(snapshot.nodes_by_labels(&["Missing".to_string()]).len(), 0);
         assert!(snapshot.node(&a).is_some());
+    }
+
+    /// Tear a nested list value down iteratively, so dropping the test's
+    /// deliberately over-deep fixtures cannot itself recurse the drop glue
+    /// off the stack.
+    fn dismantle_model_value(value: ModelValue) {
+        let mut stack = vec![value];
+        while let Some(value) = stack.pop() {
+            if let ModelValue::List(items) = value {
+                stack.extend(items);
+            }
+        }
+    }
+
+    #[test]
+    fn a_hostile_over_deep_stored_list_converts_bounded_not_overflowing() {
+        // acetone-5xp: no decodable stored value can nest past the model's
+        // encode/decode cap (128), so build one directly in memory to model a
+        // hostile value that bypassed those caps. Conversion must terminate
+        // with bounded recursion — content past MAX_VALUE_DEPTH degrades to
+        // null — rather than smash the stack.
+        let mut value = ModelValue::Int(7);
+        for _ in 0..50_000 {
+            value = ModelValue::List(vec![value]);
+        }
+        let converted = convert_value(&value);
+        dismantle_model_value(value);
+
+        // Walk down iteratively: exactly MAX_VALUE_DEPTH list levels
+        // (depths 0..MAX_VALUE_DEPTH-1), then the guard's null.
+        let mut levels = 0usize;
+        let mut at = &converted;
+        while let ExecValue::List(items) = at {
+            assert_eq!(items.len(), 1);
+            at = &items[0];
+            levels += 1;
+        }
+        assert!(matches!(at, ExecValue::Null));
+        assert_eq!(levels, MAX_VALUE_DEPTH);
+    }
+
+    #[test]
+    fn a_model_cap_deep_stored_list_converts_losslessly() {
+        // The defence-in-depth cap must never degrade a legitimate value: the
+        // deepest list the model itself can encode/decode round-trips through
+        // conversion intact, leaf included.
+        let mut value = ModelValue::Int(7);
+        for _ in 0..acetone_model::values::MAX_DEPTH {
+            value = ModelValue::List(vec![value]);
+        }
+        let converted = convert_value(&value);
+        let mut levels = 0usize;
+        let mut at = &converted;
+        while let ExecValue::List(items) = at {
+            assert_eq!(items.len(), 1);
+            at = &items[0];
+            levels += 1;
+        }
+        assert!(matches!(at, ExecValue::Int(7)));
+        assert_eq!(levels, acetone_model::values::MAX_DEPTH);
+    }
+
+    #[test]
+    fn an_over_deep_runtime_value_is_not_index_eligible() {
+        // model_value_of carries the same guard: an over-deep runtime seek
+        // value converts to None (not index-eligible) instead of recursing —
+        // semantically right, since no stored value can be that deep either.
+        let mut value = ExecValue::Int(1);
+        for _ in 0..50_000 {
+            value = ExecValue::List(vec![value]);
+        }
+        assert!(model_value_of(&value).is_none());
+        // Iterative teardown, as above.
+        let mut stack = vec![value];
+        while let Some(value) = stack.pop() {
+            if let ExecValue::List(items) = value {
+                stack.extend(items);
+            }
+        }
     }
 }

@@ -301,6 +301,20 @@ pub fn call(
         },
         _ if name.eq_ignore_ascii_case("replace") => match (arg(0), arg(1), arg(2)) {
             (Value::String(s), Value::String(from), Value::String(to)) => {
+                // replace() can amplify its input (`replace(s, 'a', long)`),
+                // so charge the result's byte length against the collection
+                // cap *before* building it — the same accounting `s + s` and
+                // split() pay (acetone-v3k). The count is exact: `matches` is
+                // the non-overlapping occurrence count `str::replace`
+                // substitutes, and for the empty pattern that is every char
+                // boundary including both ends (char_count + 1), matching
+                // Rust's boundary-insertion semantics. The counting scan is
+                // O(input) over an already-governed resident string.
+                let matches = s.matches(from.as_str()).count() as u64;
+                let out_len = (s.len() as u64)
+                    .saturating_sub(matches.saturating_mul(from.len() as u64))
+                    .saturating_add(matches.saturating_mul(to.len() as u64));
+                governor.collection(out_len)?;
                 Ok(Value::String(s.replace(&from, &to)))
             }
             _ => Err(type_error("replace() needs three strings".into())),

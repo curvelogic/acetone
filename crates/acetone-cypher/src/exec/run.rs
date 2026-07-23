@@ -12,7 +12,7 @@
 //! within var-length expansions).
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::{AtRef, Direction};
 use crate::bind::bound::*;
@@ -1479,22 +1479,42 @@ fn project(
     let mut merged: Vec<Row> = Vec::new();
 
     if projection.aggregating {
-        // Group by the non-aggregating items' values.
-        let mut groups: BTreeMap<Vec<OrdValue>, Vec<Row>> = BTreeMap::new();
+        // Group by the non-aggregating items' values, hash-keyed on the same
+        // canonical `distinct_key` DISTINCT dedups with, so grouping is O(n)
+        // rather than an O(n log n) `BTreeMap` walk whose `global_cmp`
+        // comparisons the odometer never saw (acetone-bzr, the grouping
+        // sibling of the acetone-8ln DISTINCT fix). Each value's key is
+        // self-delimiting, so concatenating the tuple's keys is
+        // collision-free. Groups are held (and later emitted) in first-seen
+        // order — deterministic, since the input row order is — and each
+        // *new* group is charged against the collection cap as it is
+        // created, the same accounting a DISTINCT aggregate's value set
+        // pays; the emitted row per group is charged separately below.
+        let mut group_index: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut groups: Vec<Vec<Row>> = Vec::new();
         for row in rows {
             let mut key = Vec::new();
             for &index in &projection.grouping_items {
                 let value = eval(&projection.items[index].expr, &row, ctx)?;
-                key.push(OrdValue(value));
+                key.extend(value.distinct_key());
             }
-            groups.entry(key).or_default().push(row);
+            match group_index.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    groups[*entry.get()].push(row);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    ctx.governor.collection_push(groups.len())?;
+                    entry.insert(groups.len());
+                    groups.push(vec![row]);
+                }
+            }
         }
         // Aggregating over zero rows with no grouping keys still yields
         // one output row (count(*) = 0 and friends).
         if groups.is_empty() && projection.grouping_items.is_empty() {
-            groups.insert(Vec::new(), Vec::new());
+            groups.push(Vec::new());
         }
-        for (_, group) in groups {
+        for group in groups {
             let representative = group.first().cloned().unwrap_or_default();
             let mut out = representative.clone();
             for item in &projection.items {
