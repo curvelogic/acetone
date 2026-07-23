@@ -51,7 +51,8 @@ will replace this chapter's listing once the publication decision changes.
 
 The following program initialises a repository, declares a label's natural
 key, writes through Cypher, commits, and reads the data back. It compiles and
-runs against acetone 0.3.0 exactly as shown:
+runs against acetone 0.3.0 exactly as shown (the commit hash embeds a
+timestamp, so yours will differ; the query row reproduces exactly):
 
 ```rust
 use std::collections::BTreeMap;
