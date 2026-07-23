@@ -273,3 +273,105 @@ fn dirty_workspace_import_is_refused() {
         stderr(&out)
     );
 }
+
+/// acetone-9gw: an import violating a declared `--require` constraint must
+/// fail atomically — non-zero exit, nothing committed, workspace clean —
+/// through both the CSV and JSON extractors, exactly as the Cypher write
+/// path rejects the same node.
+#[test]
+fn constraint_violating_import_fails_atomically_for_csv_and_json() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let out = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Service",
+            "--key",
+            "name",
+            "--require",
+            "tier",
+            "--unique",
+            "ip",
+        ],
+    );
+    assert!(out.status.success(), "declare: {}", stderr(&out));
+    let out = acetone(&repo, &["commit", "-m", "schema"]);
+    assert!(out.status.success(), "commit: {}", stderr(&out));
+    let log_before = stdout(&acetone(&repo, &["log"]));
+
+    // CSV: the `tier` column is absent entirely.
+    let csv = dir.path().join("services.csv");
+    fs::write(&csv, "name,ip\napi,10.0.0.1\n").expect("write csv");
+    let out = acetone(
+        &repo,
+        &[
+            "import",
+            "--format",
+            "csv",
+            csv.to_str().unwrap(),
+            "--label",
+            "Service",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "csv import must fail: {}",
+        stdout(&out)
+    );
+    let err = stderr(&out);
+    assert!(err.contains("\"api\""), "names the node: {err}");
+    assert!(err.contains("\"tier\""), "names the property: {err}");
+    assert!(err.contains("required"), "{err}");
+
+    // JSON: same violation through the JSON extractor.
+    let json = dir.path().join("services.json");
+    fs::write(&json, r#"[{"name": "api", "ip": "10.0.0.1"}]"#).expect("write json");
+    let out = acetone(
+        &repo,
+        &[
+            "import",
+            "--format",
+            "json",
+            json.to_str().unwrap(),
+            "--label",
+            "Service",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "json import must fail: {}",
+        stdout(&out)
+    );
+    assert!(stderr(&out).contains("\"tier\""), "{}", stderr(&out));
+
+    // Atomic: no commit landed, the workspace is clean, the node is absent.
+    assert_eq!(stdout(&acetone(&repo, &["log"])), log_before);
+    let status = acetone(&repo, &["status"]);
+    assert!(
+        stdout(&status).contains("clean"),
+        "workspace: {}",
+        stdout(&status)
+    );
+    let list = acetone(&repo, &["list-nodes", "--label", "Service"]);
+    assert!(!stdout(&list).contains("api"), "{}", stdout(&list));
+
+    // And fsck stays clean of errors.
+    assert!(acetone(&repo, &["fsck"]).status.success());
+
+    // A corrected source imports.
+    fs::write(&csv, "name,tier,ip\napi,gold,10.0.0.1\n").expect("write csv");
+    let out = acetone(
+        &repo,
+        &[
+            "import",
+            "--format",
+            "csv",
+            csv.to_str().unwrap(),
+            "--label",
+            "Service",
+        ],
+    );
+    assert!(out.status.success(), "fixed import: {}", stderr(&out));
+}

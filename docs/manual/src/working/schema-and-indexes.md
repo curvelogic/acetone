@@ -192,33 +192,39 @@ is declarative, not additive: the label's constraints become exactly what the
 latest declaration says. To add a constraint, restate the existing ones
 alongside it; a declaration that omits them drops them.
 
-**3. Retrofitted constraints are checked lazily, not swept.** Declaring a
-constraint over existing data is accepted without validating that data —
-constraints are enforced when nodes are *written*. The surprise arrives
-later: any write touching a non-conforming node fails, even a write to an
-unrelated property. Watch what happens when we require a `slack` property of
-teams that do not have one:
+**3. Retrofitted constraints are validated against the existing data.** A
+constraint declared over data that already violates it is refused outright,
+with every violating node named — it does not become a landmine that
+detonates on the next unrelated write. Watch what happens when we require a
+`slack` property of teams that do not have one:
 
 ```console
 $ acetone declare-label Team --key name --require slack
-declared label "Team" key ["name"]
-$ acetone query 'MATCH (t:Team {name: "platform"}) SET t.oncall = "#platform-pager"'
-error: node "Team" ["platform"] is missing required property "slack"
+error: cannot declare label "Team": existing data violates the declared constraints — 3 constraint violations:
+  node "Team" ["payments"] is missing required property "slack"
+  node "Team" ["platform"] is missing required property "slack"
+  node "Team" ["web"] is missing required property "slack"
 ```
 
-The declaration succeeded; the innocent `oncall` update then failed on the
-missing `slack`. Nothing else will report these lurking violations —
-`acetone fsck` checks structure, not constraints — so the operational advice
-is: **backfill first, declare after** (or declare and immediately backfill,
-since a write that supplies the missing property satisfies the check). Here
-we simply drop the experiment, which also demonstrates rule 2 — restating
-the label without `--require slack` removes it:
+The schema is unchanged — the refusal staged nothing — so ordinary writes
+carry on as before. The error is the to-do list: **backfill first, declare
+after**. Supply the property, and the same declaration is accepted:
+
+```console
+$ acetone query 'MATCH (t:Team) SET t.slack = t.oncall'
+3 properties set
+$ acetone declare-label Team --key name --require slack
+declared label "Team" key ["name"]
+```
+
+(`--unique` retrofits are validated the same way: a duplicated value among
+existing nodes is refused with the colliding nodes named.) Here we drop the
+experiment, which also demonstrates rule 2 — restating the label without
+`--require slack` removes the constraint:
 
 ```console
 $ acetone declare-label Team --key name
 declared label "Team" key ["name"]
-$ acetone query 'MATCH (t:Team {name: "platform"}) SET t.oncall = "#platform-pager"'
-1 property set
 ```
 
 ## Indexes

@@ -26,13 +26,17 @@ followed, so nothing ref-shaped escapes the sweep — it verifies:
   mid-merge in the [history chapter](history-branch-merge.md), where it
   named the exact edge the commit error would not);
 - **derived-data consistency** — edge-map symmetry (`edges_rev` mirrors
-  `edges_fwd`) and index agreement with the nodes map.
+  `edges_fwd`) and index agreement with the nodes map;
+- **schema constraints** — nodes breaching a declared `--require` or
+  `--unique` constraint are named, per version.
 
 Findings come in two severities. **Errors** mean integrity is broken and the
-exit status is non-zero. **Advisories** cover the derived-data checks —
-divergence there is repairable in place by
-[`acetone reindex`](schema-and-indexes.md) rather than a corruption of
-record. A healthy repository is one word:
+exit status is non-zero. **Advisories** cover the derived-data and
+constraint checks — index divergence is repairable in place by
+[`acetone reindex`](schema-and-indexes.md), and a constraint breach (possible
+in repositories written before writes, imports and declarations all enforced
+constraints) is a data problem to fix with ordinary writes, not a corruption
+of record. A healthy repository is one word:
 
 ```console
 $ acetone fsck
@@ -51,10 +55,6 @@ fsck: clean
 
 (`query --at` peels annotated tags the same way — but, as you will see
 below, `migrate` does not yet.)
-
-Note what fsck does *not* check: schema **constraints**. A constraint
-declared over non-conforming existing data (the retrofit gotcha in the
-[schema chapter](schema-and-indexes.md)) will not be reported here.
 
 Run fsck whenever you would run `git fsck`: after an interrupted operation,
 after moving or copying a repository, before relying on a backup, or simply

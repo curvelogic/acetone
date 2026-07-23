@@ -625,11 +625,31 @@ pub(crate) fn declare_label(
         unique.to_vec(),
     )
     .with_context(|| format!("declaring schema for label {label:?}"))?;
+    let repo = open(repo_path)?;
+    // Backfill check (acetone-9gw): a `--require`/`--unique` set declared
+    // over existing data the data already violates is refused with the
+    // violating nodes named — accepting it silently would leave violations
+    // that fail unrelated writes later and that neither commit nor fsck
+    // reported at declare time.
+    {
+        let snapshot = repo.workspace_snapshot()?;
+        let violations = acetone_core::graph::constraints::check_label(&snapshot, label, &def)?;
+        if !violations.is_empty() {
+            // The rendering escapes every repository-controlled string via
+            // the model display helpers (like render_conflict); the only
+            // control characters are its own line breaks.
+            bail!(
+                "cannot declare label {}: existing data violates the declared \
+                 constraints — {}",
+                format_label(label),
+                acetone_core::graph::constraints::ConstraintViolations(violations)
+            );
+        }
+    }
     let entry = SchemaEntry::Label {
         name: label.to_owned(),
         def,
     };
-    let repo = open(repo_path)?;
     let mut txn = repo.begin_write()?;
     txn.put_schema(&entry)?;
     txn.save().context("saving workspace")?;

@@ -60,6 +60,25 @@ fn declare_host(repo: &Repository) {
     tx.commit("declare Host", &[], None).expect("commit schema");
 }
 
+/// Declare a `Service { name (key), require tier, unique ip }` label and
+/// commit it — a label carrying both constraint kinds (acetone-9gw).
+fn declare_service(repo: &Repository) {
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "Service".into(),
+        def: LabelDef::new(
+            vec!["name".into()],
+            BTreeMap::new(),
+            ["tier".to_owned()],
+            ["ip".to_owned()],
+        )
+        .expect("label"),
+    })
+    .expect("schema");
+    tx.commit("declare Service", &[], None)
+        .expect("commit schema");
+}
+
 fn provenance() -> Provenance {
     Provenance {
         source: "hosts.csv".into(),
@@ -465,4 +484,307 @@ fn importing_an_edge_to_a_missing_node_is_rejected_and_leaves_no_commit() {
             .is_empty(),
         "no edge should have been persisted"
     );
+}
+
+// --- declared-constraint enforcement (acetone-9gw) --------------------------
+
+/// A record violating a `--require` constraint must fail the whole import
+/// atomically: no commit, clean workspace, nothing persisted — matching what
+/// the Cypher write path would have rejected.
+#[test]
+fn require_violating_import_fails_atomically() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    let head = repo.head_commit().expect("head");
+
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![
+            // Valid row first: atomicity means it must not land either.
+            node_record(
+                "Service",
+                &[
+                    ("name", Value::String("ok".into())),
+                    ("tier", Value::String("gold".into())),
+                ],
+            ),
+            // No `tier` — violates the existence constraint.
+            node_record("Service", &[("name", Value::String("bad".into()))]),
+        ],
+    };
+    match import(&repo, &mut mock, opts(None)) {
+        Err(GraphError::Import(ImportError::Constraints(v))) => {
+            let msg = v.to_string();
+            assert!(msg.contains("\"Service\""), "names the label: {msg}");
+            assert!(msg.contains("\"bad\""), "names the violating key: {msg}");
+            assert!(msg.contains("\"tier\""), "names the property: {msg}");
+        }
+        other => panic!("expected Constraints error, got {other:?}"),
+    }
+    // Nothing committed, workspace clean, neither node persisted.
+    assert_eq!(repo.head_commit().expect("head"), head);
+    assert!(!repo.is_dirty().expect("dirty"));
+    let snap = repo.workspace_snapshot().expect("snap");
+    let ok = NodeKey::new("Service", vec![Value::String("ok".into())]).expect("k");
+    assert!(
+        snap.get_node(&ok).expect("get").is_none(),
+        "atomic: valid row must not land"
+    );
+}
+
+/// Import must enforce UNIQUE against committed data — this proves the bead's
+/// "likely applies to UNIQUE (untested)" suspicion either way.
+#[test]
+fn unique_violating_import_against_base_fails_atomically() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    // Base data: a committed service holding ip 10.0.0.1.
+    let mut first = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Service",
+            &[
+                ("name", Value::String("a".into())),
+                ("tier", Value::String("gold".into())),
+                ("ip", Value::String("10.0.0.1".into())),
+            ],
+        )],
+    };
+    import(&repo, &mut first, opts(None)).expect("seed import");
+    let head = repo.head_commit().expect("head");
+
+    // A different node claiming the same unique ip must be rejected.
+    let mut second = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Service",
+            &[
+                ("name", Value::String("b".into())),
+                ("tier", Value::String("gold".into())),
+                ("ip", Value::String("10.0.0.1".into())),
+            ],
+        )],
+    };
+    match import(&repo, &mut second, opts(None)) {
+        Err(GraphError::Import(ImportError::Constraints(v))) => {
+            let msg = v.to_string();
+            assert!(msg.contains("UNIQUE"), "{msg}");
+            assert!(msg.contains("\"ip\""), "{msg}");
+            assert!(
+                msg.contains("\"a\"") && msg.contains("\"b\""),
+                "names both nodes: {msg}"
+            );
+        }
+        other => panic!("expected Constraints error, got {other:?}"),
+    }
+    assert_eq!(repo.head_commit().expect("head"), head);
+    assert!(!repo.is_dirty().expect("dirty"));
+}
+
+/// Two rows inside one import colliding on a UNIQUE property must also fail —
+/// the write path's known same-statement gap must not be replicated here.
+#[test]
+fn unique_collision_between_two_imported_rows_fails() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    let head = repo.head_commit().expect("head");
+
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![
+            node_record(
+                "Service",
+                &[
+                    ("name", Value::String("a".into())),
+                    ("tier", Value::String("gold".into())),
+                    ("ip", Value::String("10.0.0.9".into())),
+                ],
+            ),
+            node_record(
+                "Service",
+                &[
+                    ("name", Value::String("b".into())),
+                    ("tier", Value::String("gold".into())),
+                    ("ip", Value::String("10.0.0.9".into())),
+                ],
+            ),
+        ],
+    };
+    match import(&repo, &mut mock, opts(None)) {
+        Err(GraphError::Import(ImportError::Constraints(_))) => {}
+        other => panic!("expected Constraints error, got {other:?}"),
+    }
+    assert_eq!(repo.head_commit().expect("head"), head);
+    assert!(!repo.is_dirty().expect("dirty"));
+}
+
+/// Valid data against a constrained label still imports; re-importing the
+/// same key with the same unique value is not a self-collision.
+#[test]
+fn valid_import_against_constrained_label_commits() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+
+    let records = vec![
+        node_record(
+            "Service",
+            &[
+                ("name", Value::String("a".into())),
+                ("tier", Value::String("gold".into())),
+                ("ip", Value::String("10.0.0.1".into())),
+            ],
+        ),
+        node_record(
+            "Service",
+            &[
+                ("name", Value::String("b".into())),
+                ("tier", Value::String("bronze".into())),
+                ("ip", Value::String("10.0.0.2".into())),
+            ],
+        ),
+    ];
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: records.clone(),
+    };
+    let outcome = import(&repo, &mut mock, opts(None)).expect("valid import");
+    assert!(matches!(outcome, ImportOutcome::Committed { nodes: 2, .. }));
+
+    // An authoritative re-import of the same rows must not see its own base
+    // records as UNIQUE collisions (same key, same value = same node).
+    let mut again = Mock {
+        name: "csv".into(),
+        records,
+    };
+    let outcome = import(&repo, &mut again, opts(None)).expect("reimport");
+    assert_eq!(outcome, ImportOutcome::NoChange);
+}
+
+/// Within one import the last record for a key wins (put_node replace
+/// semantics), so constraints are judged against the surviving record.
+#[test]
+fn last_record_for_a_key_wins_before_constraint_checks() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![
+            // First row for `a` is missing tier…
+            node_record("Service", &[("name", Value::String("a".into()))]),
+            // …but the last row for the same key satisfies the constraint.
+            node_record(
+                "Service",
+                &[
+                    ("name", Value::String("a".into())),
+                    ("tier", Value::String("gold".into())),
+                ],
+            ),
+        ],
+    };
+    let outcome = import(&repo, &mut mock, opts(None)).expect("import");
+    assert!(matches!(outcome, ImportOutcome::Committed { .. }));
+}
+
+/// A violating `--branch` import must restore the caller's branch and leave
+/// nothing committed anywhere.
+#[test]
+fn violating_branch_import_restores_original_branch() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    let head = repo.head_commit().expect("head");
+
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Service",
+            &[("name", Value::String("bad".into()))],
+        )],
+    };
+    match import(&repo, &mut mock, opts(Some("ingest"))) {
+        Err(GraphError::Import(ImportError::Constraints(_))) => {}
+        other => panic!("expected Constraints error, got {other:?}"),
+    }
+    assert_eq!(
+        repo.current_branch().expect("branch"),
+        Some("refs/heads/main".into())
+    );
+    assert_eq!(repo.head_commit().expect("head"), head);
+    assert!(!repo.is_dirty().expect("dirty"));
+}
+
+/// Violation reporting is deterministic (sorted by node key) and bounded:
+/// many violations render as the first 20 plus a remainder count.
+#[test]
+fn violation_report_is_sorted_and_bounded() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+
+    // 25 violating rows, deliberately supplied in reverse key order.
+    let records: Vec<ImportRecord> = (0..25)
+        .rev()
+        .map(|i| node_record("Service", &[("name", Value::String(format!("svc-{i:02}")))]))
+        .collect();
+    let mut mock = Mock {
+        name: "csv".into(),
+        records,
+    };
+    match import(&repo, &mut mock, opts(None)) {
+        Err(GraphError::Import(ImportError::Constraints(v))) => {
+            let msg = v.to_string();
+            // Bounded: first 20 shown, remainder counted.
+            assert!(msg.contains("25"), "total count: {msg}");
+            assert!(msg.contains("5 more"), "remainder: {msg}");
+            assert!(msg.contains("svc-00"), "{msg}");
+            assert!(msg.contains("svc-19"), "{msg}");
+            assert!(!msg.contains("svc-20"), "bounded at 20: {msg}");
+            // Sorted ascending by key despite reverse input order.
+            let p0 = msg.find("svc-00").expect("svc-00");
+            let p19 = msg.find("svc-19").expect("svc-19");
+            assert!(p0 < p19, "sorted: {msg}");
+        }
+        other => panic!("expected Constraints error, got {other:?}"),
+    }
+}
+
+/// A pre-existing violation in base data that the import does not touch must
+/// not fail the import (fsck's advisory owns pre-fix damage, not import).
+#[test]
+fn untouched_pre_existing_violation_does_not_fail_import() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    // Plant a pre-fix-style violation via the raw transaction API (what the
+    // pre-fix import used to do): a Service with no tier, committed.
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        let bad = NodeKey::new("Service", vec![Value::String("legacy".into())]).expect("k");
+        tx.put_node(
+            &bad,
+            &acetone_model::records::NodeRecord::new([], BTreeMap::new()),
+        )
+        .expect("node");
+        tx.commit("legacy damage", &[], None).expect("commit");
+    }
+
+    // An import of unrelated, valid rows still succeeds.
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Service",
+            &[
+                ("name", Value::String("new".into())),
+                ("tier", Value::String("gold".into())),
+            ],
+        )],
+    };
+    let outcome = import(&repo, &mut mock, opts(None)).expect("import");
+    assert!(matches!(outcome, ImportOutcome::Committed { .. }));
 }

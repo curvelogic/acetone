@@ -27,6 +27,7 @@
 
 pub mod cell_merge;
 pub mod conflicts;
+pub mod constraints;
 pub mod diff;
 pub mod error;
 pub mod fsck;
