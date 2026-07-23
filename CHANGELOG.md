@@ -16,6 +16,49 @@ fine.)
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-23
+
+A **co-tenancy** release: an acetone graph can now live inside an ordinary git
+code repository — its own refs alongside the code's history in one object
+store — with the destructive operations provably staying in the graph's lane.
+
+No on-disk format change: the format stays at `format_version 1`, and 0.1/0.2
+repositories are read and written unchanged.
+
+### Added
+
+- **Co-tenant mode** (ADR-0049/0050): `acetone init --co-tenant <graph>`
+  initialises a graph inside an existing code repository. Graph branches live
+  under `refs/heads/acetone/<graph>/*`, graph tags under
+  `refs/tags/acetone/<graph>/*`, and the graph's current-branch pointer at a
+  local-only symref — the user's code branches and git `HEAD` are never
+  touched. Co-tenant repositories are detected on open via an on-disk marker;
+  standalone repositories behave exactly as before, byte for byte.
+- **Format evolution machinery** (ADR-0048/0052): manifest decoding now
+  dispatches on the stored `format_version` to retained per-version decoders
+  (read-old-write-new). A future format bump will leave old commits readable
+  in place — no history rewrite, no force-push — which is what makes a format
+  change safe for a graph sharing a repository with code. The rewrite-based
+  `migrate` remains available as a deliberate opt-in for standalone
+  repositories.
+
+### Changed
+
+- **`gc` is graph-scoped** (ADR-0051, reading B): consolidation packs only the
+  objects reachable from the graph's refs, with an explicit guard so nothing
+  reachable from a non-graph ref (including `refs/remotes/*` in clones) is
+  ever repacked or pruned — the user's code storage is left exactly as git had
+  it. Property tests prove a code-only object survives `gc` untouched and code
+  refs survive `migrate`.
+- **Consolidation packs are `.keep`-marked** (ADR-0053), so a foreign
+  `git gc`/`git repack` — including git's automatic `gc.auto` — leaves
+  acetone's content-aware deltas intact. Proven against the real
+  `git repack -a -d`.
+- `merge()` on a detached HEAD now reports `NoCurrentBranch` before
+  `DirtyWorkspace`, matching the actual precondition failure. Co-tenant init
+  refuses to layer a graph onto a repository that already holds a legacy
+  (pre-workspace) standalone acetone graph, rather than misbehaving later.
+
 ## [0.2.0] - 2026-07-20
 
 ### Changed
@@ -147,7 +190,8 @@ diffs become change reports, and any git remote is backup and transport.
 The authoritative design record — data model, storage, encodings, query
 language, diff/merge, and the phased roadmap — lives in `docs/`.
 
-[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/curvelogic/acetone/releases/tag/v0.3.0
 [0.2.0]: https://github.com/curvelogic/acetone/releases/tag/v0.2.0
 [0.1.1]: https://github.com/curvelogic/acetone/releases/tag/v0.1.1
 [0.1.0]: https://github.com/curvelogic/acetone/releases/tag/v0.1.0
