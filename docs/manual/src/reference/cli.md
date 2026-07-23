@@ -43,8 +43,10 @@ graph data never reaches the terminal raw.
 `query` and `schema` take `--at <ref>` — a branch or tag short name, full ref
 name or commit hash — to read a past version without checking it out:
 whole-query time travel. Refspecs resolve in git's order (exact `refs/…` path,
-then tags, then branches, then a commit hash), and annotated tags are peeled
-to their target commit. With no `--at`, the current workspace state is used.
+then tags, then branches, then a commit hash — with one divergence: a ref
+whose *name* is itself 40 hex characters resolves as a ref, where git would
+ignore it and use the object), and annotated tags are peeled to their target
+commit. With no `--at`, the current workspace state is used.
 
 ### `--format`
 
