@@ -201,7 +201,7 @@
         <span class="chip good"><span class="dot"></span>6 ADRs · 0048–0053</span>
       </div>
     </div>
-    <div class="foot">epic acetone-g5g · 2026-07-22 · main @ befbdca</div>
+    <div class="foot">epic acetone-g5g · 2026-07-22 · main @ d7f2da2</div>
     <div class="num">01 / 13</div>
   </section>
 
@@ -264,7 +264,7 @@
 <div class="l"><span class="g">refs/heads/main</span><span class="ok">                     ✓ your checkout, never moved</span></div>
         </div>
       </div>
-      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">Co-tenant <code>init</code> is wired at the library layer; the <code>acetone init --co-tenant</code> CLI flag is a tracked follow-up (<code>acetone-xg6</code>).</p>
+      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">Driven here by the shipped <code>acetone init --co-tenant &lt;graph&gt;</code> — the CLI flag delivered in-phase (<code>xg6</code>), so co-tenancy is usable end-to-end from the tool.</p>
     </div>
     <div class="num">04 / 13</div>
   </section>
@@ -390,11 +390,11 @@
             <tr><td><code>0050</code></td><td><b>Co-tenant layout + named head pointer</b>: the layout, not the code path, decides where refs live.</td><td>Ratified</td></tr>
             <tr><td><code>0051</code></td><td><b>Co-tenant <code>gc</code> is graph-scoped (B)</b>: packs only the graph's objects, leaves code storage untouched.</td><td>Ruled (B) · delivered</td></tr>
             <tr><td><code>0052</code></td><td><b>Dispatch machinery + synthetic-v2 proof</b>; defer a real <code>format_version 2</code>.</td><td>Ratified (B)</td></tr>
-            <tr><td><code>0053</code></td><td><b><code>.keep</code>-marked packs</b>: survive a foreign <code>git gc</code> so acetone's deltas aren't undone.</td><td>Accepted · ratify</td></tr>
+            <tr><td><code>0053</code></td><td><b><code>.keep</code>-marked packs</b>: survive a foreign <code>git gc</code> so acetone's deltas aren't undone.</td><td>Ratified</td></tr>
           </tbody>
         </table>
       </div>
-      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">Only ADR-0053 still awaits your ratification — the rest are settled and recorded in each ADR's status line.</p>
+      <p style="margin-top:16px; font-size:13.5px; color:var(--faint)">All six ADRs are settled and recorded in each ADR's status line.</p>
     </div>
     <div class="num">10 / 13</div>
   </section>
@@ -444,22 +444,21 @@
     <div class="slide-inner">
       <p class="eyebrow">Yours to close</p>
       <h2>Ratify, rule, and close the gate.</h2>
-      <p class="lede">All three 0.3 exit criteria are met and merged — criterion 2 under the reading (B) you ruled, delivered with full assurance. <code>main</code> is green at <code>befbdca</code>. Almost everything is settled; two small things remain yours.</p>
+      <p class="lede">All three 0.3 exit criteria are met and merged — criterion 2 under the reading (B) you ruled, delivered with full assurance — and co-tenancy is usable end-to-end through the <code>acetone</code> CLI (<code>init --co-tenant …</code> through <code>gc</code>). All six ADRs are ratified/ruled. <code>main</code> is green. One thing remains yours.</p>
       <div class="grid cols-2" style="margin-top:20px">
         <div class="card">
           <div class="tag">WHAT REMAINS FOR YOU</div>
           <ul class="clean" style="margin-top:10px">
-            <li><b>Ratify</b> ADR-0053 (<code>.keep</code> durability) — the one ADR still pending; 0048/0049/0050/0052 ratified, 0051 ruled (B).</li>
             <li><b>Close</b> the exit-criteria gate (epic <code>acetone-g5g</code>) — agents never close it.</li>
           </ul>
+          <p style="margin-top:10px; font-size:13px; color:var(--faint)">Process note in the report: the CLI flag (<code>xg6</code>) was pulled into the phase at the boundary — a feature isn't delivered until it's reachable through the shipped tool.</p>
         </div>
         <div class="card">
           <div class="tag">CARRIES PAST THE BOUNDARY (P3)</div>
           <div class="risk" style="margin-top:8px">
             <div class="r"><span class="id">ejj</span><span class="t">migrate hardening: annotated-tag objects + atomic multi-ref swing</span></div>
-            <div class="r"><span class="id">xg6</span><span class="t">CLI <code>acetone init --co-tenant</code> flag</span></div>
-            <div class="r"><span class="id">eo7</span><span class="t">co-tenant init hardening: legacy-workspace guard + edge tests</span></div>
             <div class="r"><span class="id">c2a</span><span class="t">gc security hardening: 3 LOW notes from the re-touch</span></div>
+            <div class="r"><span class="id">dfh</span><span class="t">gc has_linked_worktrees TOCTOU (pre-existing)</span></div>
           </div>
         </div>
       </div>
