@@ -223,6 +223,36 @@ fn init_refusal_on_a_non_empty_directory_prints_the_cause_once() {
 }
 
 #[test]
+#[cfg(unix)]
+fn lock_file_io_error_prints_its_cause_exactly_once() {
+    // GraphError::LockIo keeps its I/O cause out of its own Display (it is
+    // exposed through source() instead — the variant sits on acetone-core's
+    // frozen surface); the rendering paths must therefore append the chain,
+    // or the cause is silently lost. An unwritable git dir makes the writer
+    // lock's create fail with EACCES.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = repo_with_schema(dir.path());
+
+    std::fs::set_permissions(&repo, std::fs::Permissions::from_mode(0o555))
+        .expect("make repo dir unwritable");
+    let out = acetone(&repo, &["query", "CREATE (:Company {name: 'Acme'})"]);
+    std::fs::set_permissions(&repo, std::fs::Permissions::from_mode(0o755))
+        .expect("restore permissions");
+    assert!(!out.status.success());
+    let text = stderr(&out);
+    assert!(
+        text.contains("lock file I/O at"),
+        "the lock I/O failure is reported: {text}"
+    );
+    assert_eq!(
+        occurrences(&text, "ermission denied"),
+        1,
+        "the I/O cause must appear exactly once: {text}"
+    );
+}
+
+#[test]
 fn stale_ref_lock_error_prints_the_cause_once() {
     // A leftover acetone-refs.lock (the store-layer ref lock) makes ref
     // updates fail after the retry window; the underlying gitoxide message

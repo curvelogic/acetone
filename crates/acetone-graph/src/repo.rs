@@ -1143,7 +1143,7 @@ impl Repository {
         match std::fs::read_dir(&dir) {
             Ok(mut entries) => Ok(entries.next().is_some()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(cause) => Err(GraphError::LockIo { path: dir, cause }),
+            Err(source) => Err(GraphError::LockIo { path: dir, source }),
         }
     }
 
