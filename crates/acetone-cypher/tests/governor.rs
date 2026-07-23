@@ -62,6 +62,25 @@ fn unbounded_var_length_on_a_dense_graph_is_bounded() {
 }
 
 #[test]
+fn the_phase_2_review_repro_is_bounded_under_the_shipped_defaults() {
+    // The acetone-18z acceptance case, exactly as the Phase 2 security review
+    // measured it: `MATCH (a)-[*]->(b)` on the complete 9-node/72-edge digraph
+    // did not finish in 20 seconds ungoverned. Under the *shipped default*
+    // limits (not an injected small cap) it must return a clean typed
+    // ResourceExceeded promptly — the expansion-step cap is the dimension
+    // that trips.
+    let graph = complete_graph(9);
+    let err = run_query_with_limits(
+        "MATCH (a:N)-[*]->(b:N) RETURN count(*) AS c",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect_err("the K9 unbounded walk must be governed under the defaults");
+    assert_eq!(resource_limit(err), ResourceLimit::ExpansionSteps);
+}
+
+#[test]
 fn range_over_a_huge_span_is_bounded() {
     // range(0, 1e10) was OOM-killed at ~80GB before the governor — MAJOR-2.
     // The default collection cap (10M) rejects it up front, before allocation.
@@ -105,6 +124,88 @@ fn a_list_returning_function_is_charged_against_the_collection_cap() {
         &limits,
     )
     .expect("a split within the cap must succeed");
+}
+
+#[test]
+fn an_amplifying_replace_is_charged_before_allocation() {
+    // replace(s, from, to) can amplify its input (acetone-v3k): each 'a'
+    // becomes six bytes here, 4 -> 24, past a cap of 20. The result length is
+    // charged against the collection cap *before* the string is built, the
+    // same accounting `s + s` and split() pay.
+    let graph = MemoryGraph::new();
+    let limits = QueryLimits {
+        max_collection_len: 20,
+        ..QueryLimits::unbounded()
+    };
+    let err = run_query_with_limits(
+        "RETURN replace('aaaa', 'a', 'bbbbbb') AS r",
+        &graph,
+        &params(),
+        &limits,
+    )
+    .expect_err("an amplifying replace must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+
+    // A replace within the cap still succeeds, unchanged (no over-charging).
+    let result = run_query_with_limits(
+        "RETURN replace('aa', 'a', 'bbb') AS r",
+        &graph,
+        &params(),
+        &limits,
+    )
+    .expect("a replace within the cap must succeed");
+    assert!(matches!(&result.rows[0][0], Value::String(s) if s == "bbbbbb"));
+}
+
+#[test]
+fn an_empty_pattern_replace_charges_its_boundary_insertions() {
+    // Rust's str::replace with an empty pattern inserts `to` at every char
+    // boundary including both ends: replace('ab', '', 'XY') = 'XYaXYbXY',
+    // 8 bytes. The pre-charge must use that same length — reject at a cap of
+    // 7, accept at 8.
+    let graph = MemoryGraph::new();
+    let reject = QueryLimits {
+        max_collection_len: 7,
+        ..QueryLimits::unbounded()
+    };
+    let err = run_query_with_limits(
+        "RETURN replace('ab', '', 'XY') AS r",
+        &graph,
+        &params(),
+        &reject,
+    )
+    .expect_err("an empty-pattern replace past the cap must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+
+    let accept = QueryLimits {
+        max_collection_len: 8,
+        ..QueryLimits::unbounded()
+    };
+    let result = run_query_with_limits(
+        "RETURN replace('ab', '', 'XY') AS r",
+        &graph,
+        &params(),
+        &accept,
+    )
+    .expect("an empty-pattern replace at the cap must succeed");
+    assert!(matches!(&result.rows[0][0], Value::String(s) if s == "XYaXYbXY"));
+}
+
+#[test]
+fn a_doubling_replace_is_bounded_under_the_defaults() {
+    // The amplification pathology iterated: each fold step doubles the string
+    // via replace, so 40 steps would build 2^40 bytes. The per-call result
+    // charge must trip the default collection cap long before memory does —
+    // the replace analogue of the doubling `s + s` reduce.
+    let graph = MemoryGraph::new();
+    let err = run_query_with_limits(
+        "RETURN size(reduce(s = 'x', y IN range(1, 40) | replace(s, 'x', 'xx'))) AS n",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect_err("a doubling replace must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
 }
 
 #[test]
@@ -199,20 +300,68 @@ fn a_distinct_aggregate_charges_the_collection_cap() {
     // governor NOTHING (Phase 7 security review HIGH, acetone-8ln). It now
     // charges one unit per distinct value, so an oversized DISTINCT set trips
     // the collection cap instead of grinding uncharged. Under unbounded rows
-    // and work, only the DISTINCT charge can trip here.
+    // and work, only the DISTINCT charge can trip here: the domain is built
+    // from two small ranges (each far under the cap, unlike a single
+    // range(0, 5000) whose own up-front charge would trip the cap first and
+    // leave the DISTINCT charge untested).
     let graph = MemoryGraph::new();
     let limits = QueryLimits {
         max_collection_len: 1000,
         ..QueryLimits::unbounded()
     };
     let err = run_query_with_limits(
-        "UNWIND range(0, 5000) AS x RETURN count(DISTINCT x) AS c",
+        "UNWIND range(0, 70) AS x UNWIND range(0, 70) AS y \
+         RETURN count(DISTINCT x * 100 + y) AS c",
         &graph,
         &params(),
         &limits,
     )
     .expect_err("a DISTINCT aggregate over a huge domain must be governed");
     assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+}
+
+#[test]
+fn a_huge_grouping_set_charges_the_collection_cap() {
+    // Aggregation grouping used a BTreeMap over the global sort order, doing
+    // O(n log n) global_cmp work the odometer never saw (acetone-bzr). It now
+    // hash-groups on the same canonical key DISTINCT uses and charges each
+    // new group against the collection cap as it is created. Rows and work
+    // are unbounded here and each source range is far under the cap, so only
+    // the per-group charge can trip.
+    let graph = MemoryGraph::new();
+    let limits = QueryLimits {
+        max_collection_len: 1000,
+        ..QueryLimits::unbounded()
+    };
+    let err = run_query_with_limits(
+        "UNWIND range(0, 99) AS x UNWIND range(0, 99) AS y \
+         RETURN x * 100 + y AS g, count(*) AS c",
+        &graph,
+        &params(),
+        &limits,
+    )
+    .expect_err("a huge grouping set must be governed");
+    assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
+}
+
+#[test]
+fn grouped_aggregation_folds_groups_correctly() {
+    // Correctness through the hash-keyed grouping rewrite (acetone-bzr):
+    // duplicates fold into one group, an integer and its float image group
+    // together (Int(1) ≡ Float(1.0), as for DISTINCT), and a realistic
+    // grouped aggregation passes untouched under the shipped defaults.
+    let graph = MemoryGraph::new();
+    let result = run_query_with_limits(
+        "UNWIND [1, 2, 1.0, 3, 2, 1] AS x RETURN x AS v, count(*) AS c ORDER BY v",
+        &graph,
+        &params(),
+        &QueryLimits::default(),
+    )
+    .expect("grouped aggregation must pass under defaults");
+    assert_eq!(result.rows.len(), 3);
+    assert!(matches!(result.rows[0][1], Value::Int(3))); // 1, 1.0, 1
+    assert!(matches!(result.rows[1][1], Value::Int(2))); // 2, 2
+    assert!(matches!(result.rows[2][1], Value::Int(1))); // 3
 }
 
 #[test]
