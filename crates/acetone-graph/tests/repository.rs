@@ -404,9 +404,16 @@ fn commit_requires_a_branch_and_rejects_merge_state() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
     let tx = repo.begin_write().expect("begin");
-    // Commit with no staged changes on an unborn branch is legal (an
-    // empty root commit), so exercise the error paths separately below.
-    let root = tx.commit("empty root", &[], None).expect("commit");
+    // Commit with no staged changes on an unborn branch is refused by
+    // default (acetone-k78) — an empty root commit is the explicit opt-in.
+    match tx.commit("empty root", &[], None) {
+        Err(GraphError::NothingToCommit) => {}
+        other => panic!("expected NothingToCommit, got {other:?}"),
+    }
+    let tx = repo.begin_write().expect("begin");
+    let root = tx
+        .commit_allow_empty("empty root", &[], None)
+        .expect("commit");
     assert_eq!(repo.head_commit().expect("head"), Some(root));
 }
 

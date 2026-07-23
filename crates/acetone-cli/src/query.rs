@@ -668,7 +668,7 @@ fn handle_meta(
             if rest.is_empty() {
                 anyhow::bail!("usage: :commit <message>");
             }
-            crate::commands::commit(repo_path, rest, &[])?;
+            crate::commands::commit(repo_path, rest, &[], false)?;
         }
         "schema" => {
             let (_pos, flags) = parse_meta_args(rest);

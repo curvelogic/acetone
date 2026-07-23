@@ -366,6 +366,35 @@ impl GitStore {
         }
     }
 
+    /// The manifest blob's id inside commit `id`'s tree, resolved **read-only**
+    /// — unlike re-`put`ting the manifest bytes (the historical route to this
+    /// value), this writes nothing, so read paths (`open`, snapshots, diff,
+    /// dirtiness) can resolve a commit's manifest on a read-only filesystem
+    /// (acetone-ayq). Content addressing makes the two routes return the same
+    /// hash. Unlike the old route this does not fetch the manifest blob, so
+    /// its presence is not verified here — a corrupt repository whose tree
+    /// names a missing blob surfaces the error at first decode instead.
+    ///
+    /// `None` when no object `id` exists; a non-commit object errors with
+    /// [`StoreError::WrongObjectKind`], as [`CommitStore::read_commit`] does.
+    pub fn commit_manifest_id(&self, id: &Hash) -> Result<Option<Hash>, StoreError> {
+        let Some(header) = self.find_header(id)? else {
+            return Ok(None);
+        };
+        let data = self.read_object_checked(id, &header, gix::object::Kind::Commit, "commit")?;
+        let commit = gix::objs::CommitRef::from_bytes(&data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt("commit object", e.to_string()))?;
+        let tree_hash = Hash::from_oid(commit.tree());
+        let tree_header = self
+            .find_header(&tree_hash)?
+            .ok_or_else(|| StoreError::corrupt("commit tree", "tree object is missing"))?;
+        let tree_data =
+            self.read_object_checked(&tree_hash, &tree_header, gix::object::Kind::Tree, "tree")?;
+        let tree = gix::objs::TreeRef::from_bytes(&tree_data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt("commit tree", e.to_string()))?;
+        self.root_manifest_hash(&tree, "commit tree").map(Some)
+    }
+
     /// Build a workspace tree `{.acetone/: {chunks/: <anchor tree>, manifest:
     /// <blob>}}` — the commit-tree shape minus the root README — and return
     /// its object id (ADR-0023). The `.acetone/chunks/` anchor tree makes

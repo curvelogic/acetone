@@ -81,8 +81,8 @@ pub enum Command {
     /// Turn the workspace's staged changes into a commit.
     ///
     /// Refuses when the workspace has no changes since HEAD — including,
-    /// on a brand new repository, an empty root commit. There is no
-    /// `--allow-empty` yet.
+    /// on a brand new repository, an empty root commit — unless
+    /// `--allow-empty` deliberately records one.
     Commit {
         /// Commit message.
         #[arg(short = 'm', long)]
@@ -90,6 +90,10 @@ pub enum Command {
         /// A `KEY=VALUE` commit trailer; may be repeated.
         #[arg(long = "trailer")]
         trailer: Vec<String>,
+        /// Record a commit even when the workspace has no changes since
+        /// HEAD (a marker commit), like `git commit --allow-empty`.
+        #[arg(long)]
+        allow_empty: bool,
     },
     /// Show commit history, newest first.
     Log {

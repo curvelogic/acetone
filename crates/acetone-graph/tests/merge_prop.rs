@@ -2,6 +2,11 @@
 //! three-way merge is a pure function of `(base, ours, theirs)`, so it is
 //! deterministic and — for a clean merge — symmetric: swapping `ours` and
 //! `theirs` yields byte-identical merged roots (acetone-14c.2).
+//!
+//! The harness commits *arbitrary generated* versions, which may be empty or
+//! identical to their parent, so every commit here opts in to empty commits
+//! (`commit_allow_empty` — plain `commit` refuses no-change commits,
+//! acetone-k78).
 
 use acetone_graph::merge::{ManifestMerge, MergeConflict, merge_manifests};
 use acetone_graph::repo::{InitOptions, Repository};
@@ -41,7 +46,7 @@ fn apply_and_commit(repo: &Repository, edits: &Edits, message: &str) -> Manifest
             None => tx.delete_node(&node(*id)).expect("delete"),
         }
     }
-    let commit = tx.commit(message, &[], None).expect("commit");
+    let commit = tx.commit_allow_empty(message, &[], None).expect("commit");
     repo.snapshot(&commit.to_hex())
         .expect("snapshot")
         .manifest()
@@ -58,7 +63,7 @@ fn three_way(base: &[(u8, i64)], ours: &Edits, theirs: &Edits) -> ManifestMerge 
     for (id, v) in base {
         tx.put_node(&node(*id), &record(*v)).expect("put");
     }
-    let base_commit = tx.commit("base", &[], None).expect("commit");
+    let base_commit = tx.commit_allow_empty("base", &[], None).expect("commit");
     let base_manifest = repo
         .snapshot(&base_commit.to_hex())
         .expect("s")
@@ -89,7 +94,7 @@ fn manifest_of(nodes: &[(u8, i64)]) -> Manifest {
     for (id, v) in nodes {
         tx.put_node(&node(*id), &record(*v)).expect("put");
     }
-    let commit = tx.commit("oracle", &[], None).expect("commit");
+    let commit = tx.commit_allow_empty("oracle", &[], None).expect("commit");
     repo.snapshot(&commit.to_hex())
         .expect("s")
         .manifest()
@@ -154,7 +159,7 @@ fn edge_merge_rebuilds_the_reverse_map_to_match_a_direct_build() {
     }
     tx.put_edge(&edge(1, 2), &EdgeRecord::default())
         .expect("edge");
-    let base_commit = tx.commit("base", &[], None).expect("commit");
+    let base_commit = tx.commit_allow_empty("base", &[], None).expect("commit");
     let base_m = repo
         .snapshot(&base_commit.to_hex())
         .expect("s")
@@ -165,7 +170,7 @@ fn edge_merge_rebuilds_the_reverse_map_to_match_a_direct_build() {
     let mut tx = repo.begin_write().expect("begin");
     tx.put_edge(&edge(1, 3), &EdgeRecord::default())
         .expect("edge");
-    let ours_commit = tx.commit("ours", &[], None).expect("commit");
+    let ours_commit = tx.commit_allow_empty("ours", &[], None).expect("commit");
     let ours_m = repo
         .snapshot(&ours_commit.to_hex())
         .expect("s")
@@ -180,7 +185,7 @@ fn edge_merge_rebuilds_the_reverse_map_to_match_a_direct_build() {
     let mut tx = repo.begin_write().expect("begin");
     tx.put_edge(&edge(2, 4), &EdgeRecord::default())
         .expect("edge");
-    let theirs_commit = tx.commit("theirs", &[], None).expect("commit");
+    let theirs_commit = tx.commit_allow_empty("theirs", &[], None).expect("commit");
     let theirs_m = repo
         .snapshot(&theirs_commit.to_hex())
         .expect("s")
@@ -204,7 +209,7 @@ fn edge_merge_rebuilds_the_reverse_map_to_match_a_direct_build() {
         tx.put_edge(&edge(s, d), &EdgeRecord::default())
             .expect("edge");
     }
-    let ocommit = tx.commit("oracle", &[], None).expect("commit");
+    let ocommit = tx.commit_allow_empty("oracle", &[], None).expect("commit");
     let oracle = orepo
         .snapshot(&ocommit.to_hex())
         .expect("s")
@@ -231,7 +236,7 @@ proptest! {
         for (id, v) in &base {
             tx.put_node(&node(*id), &record(*v)).expect("put");
         }
-        let base_commit = tx.commit("base", &[], None).expect("commit base");
+        let base_commit = tx.commit_allow_empty("base", &[], None).expect("commit base");
         let base_manifest = repo
             .snapshot(&base_commit.to_hex())
             .expect("snapshot")

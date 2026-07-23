@@ -233,7 +233,14 @@ fn call_acetone_diff_in_a_schemaless_repository_renders_record_properties_only()
     // re-expose — `node.id` is null — but the node itself is still rendered
     // with its record properties.
     let (_d, repo) = repo();
-    let base = commit(&repo, "empty base");
+    // A deliberately empty base version (acetone-k78: plain commit refuses
+    // no-change commits, so opt in).
+    let base = repo
+        .begin_write()
+        .expect("begin")
+        .commit_allow_empty("empty base", &[], None)
+        .expect("commit")
+        .to_hex();
     {
         let mut txn = repo.begin_write().expect("begin");
         txn.put_node(

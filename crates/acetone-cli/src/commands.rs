@@ -31,7 +31,11 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             path,
         } => init(repo_path, &object_format, co_tenant.as_deref(), path),
         Command::Status { json } => status(repo_path, json),
-        Command::Commit { message, trailer } => commit(repo_path, &message, &trailer),
+        Command::Commit {
+            message,
+            trailer,
+            allow_empty,
+        } => commit(repo_path, &message, &trailer, allow_empty),
         Command::Log { json } => log(repo_path, json),
         Command::Branch { name, json } => branch(repo_path, name.as_deref(), json),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
@@ -229,10 +233,12 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     } else {
         (None, false)
     };
+    // Streaming counts (security review LOW-2): no record decode, no Vec
+    // materialisation — status stays cheap on a large graph.
     let snapshot = repo.workspace_snapshot()?;
-    let nodes = snapshot.nodes()?.len();
-    let edges = snapshot.edges()?.len();
-    let schema_entries = snapshot.schema_entries()?.len();
+    let nodes = snapshot.node_count()?;
+    let edges = snapshot.edge_count()?;
+    let schema_entries = snapshot.schema_entry_count()?;
 
     if json {
         let merge = merge_remaining
@@ -284,11 +290,15 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Result<()> {
+pub(crate) fn commit(
+    repo_path: &Path,
+    message: &str,
+    trailers: &[String],
+    allow_empty: bool,
+) -> Result<()> {
     let repo = open(repo_path)?;
     // Completing a merge always commits (it records the two-parent history)
-    // even when the resolved result happens to match HEAD, so the no-change
-    // guard is skipped while a merge is in progress. It still refuses if
+    // even when the resolved result happens to match HEAD. It still refuses if
     // conflicts remain unresolved (the library errors, but this is friendlier).
     if repo.merge_head()?.is_some() {
         // Only unresolved *cell* conflicts are counted for this friendly early
@@ -311,20 +321,21 @@ pub(crate) fn commit(repo_path: &Path, message: &str, trailers: &[String]) -> Re
                  resolve with `acetone resolve --all-ours|--all-theirs`"
             );
         }
-    } else if !repo.is_dirty()? {
-        // Thin-client guard: a bare `commit` on an already-committed
-        // workspace (or a brand-new repository's empty root) is refused
-        // rather than minting a pointless commit.
-        bail!("nothing to commit (workspace matches HEAD)");
     }
     let trailers: Vec<(String, String)> = trailers
         .iter()
         .map(|raw| parse_kv(raw, "--trailer").map(|(k, v)| (k.to_owned(), v.to_owned())))
         .collect::<Result<_>>()?;
     let txn = repo.begin_write()?;
-    let id = txn
-        .commit(message, &trailers, None)
-        .context("committing workspace")?;
+    // The no-change guard lives in the library (acetone-k78): a bare `commit`
+    // on an already-committed workspace (or a brand-new repository's empty
+    // root) surfaces GraphError::NothingToCommit unless --allow-empty.
+    let result = if allow_empty {
+        txn.commit_allow_empty(message, &trailers, None)
+    } else {
+        txn.commit(message, &trailers, None)
+    };
+    let id = result.context("committing workspace")?;
     outln!("committed {}", id.to_hex());
     Ok(())
 }

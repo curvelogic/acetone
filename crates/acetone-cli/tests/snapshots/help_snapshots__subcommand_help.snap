@@ -1,5 +1,6 @@
 ---
 source: crates/acetone-cli/tests/help_snapshots.rs
+assertion_line: 91
 expression: combined
 ---
 ========== acetone init --help ==========
@@ -29,7 +30,7 @@ Options:
 ========== acetone commit --help ==========
 Turn the workspace's staged changes into a commit.
 
-Refuses when the workspace has no changes since HEAD — including, on a brand new repository, an empty root commit. There is no `--allow-empty` yet.
+Refuses when the workspace has no changes since HEAD — including, on a brand new repository, an empty root commit — unless `--allow-empty` deliberately records one.
 
 Usage: acetone commit [OPTIONS] --message <MESSAGE>
 
@@ -44,6 +45,9 @@ Options:
 
       --trailer <TRAILER>
           A `KEY=VALUE` commit trailer; may be repeated
+
+      --allow-empty
+          Record a commit even when the workspace has no changes since HEAD (a marker commit), like `git commit --allow-empty`
 
   -h, --help
           Print help (see a summary with '-h')
