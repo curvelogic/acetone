@@ -1,0 +1,6 @@
+[
+  { "name": "postgres",   "tier": "data", "version": "16.3",    "port": 5432 },
+  { "name": "identity",   "tier": "core", "version": "2.4.1",   "port": 7000 },
+  { "name": "billing",    "tier": "core", "version": "7.0.2",   "port": 8080 },
+  { "name": "storefront", "tier": "edge", "version": "2026.28", "port": 443 }
+]
