@@ -19,7 +19,11 @@ license = "MIT OR Apache-2.0"
 # write path (blobs, trees, commits, refs). Dual MIT/Apache-2.0, actively
 # maintained (Byron/gitoxide). git2 fallback only if a gix write path is
 # missing — none needed so far; see PR body.
-gix = "0.85"
+# Feature-minimised to mirror the root workspace (acetone-sdg): object/ref
+# plumbing only — no network transports, no attributes/filters, no `command`
+# support — so this lockfile no longer resolves MPL-2.0 uluru via gix-pack's
+# default extras.
+gix = { version = "0.85", default-features = false, features = ["sha1"] }
 # thiserror: standard error-derive used across acetone library crates.
 thiserror = "2"
 # flate2 with the zlib-rs backend: zlib streams for hand-written pack
