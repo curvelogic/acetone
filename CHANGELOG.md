@@ -16,8 +16,23 @@ fine.)
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-24
+
+A **quality, security, and documentation** release. No new headline capability
+and no on-disk format change (`format_version 1`; 0.1–0.3.0 repositories are
+read and written unchanged) — this release hardens the workbench against
+hostile input, closes constraint-enforcement and terminal-spoofing gaps found
+by dogfooding, ships a complete operator's manual, and automates the release
+path. openCypher TCK conformance rises to **1602 / 3897 (41.1%)** from 1595.
+
 ### Added
 
+- **The acetone operator's manual** — an mdBook (`docs/manual/`, published to
+  GitHub Pages) covering installation, a worked asset-registry example, a
+  Cypher query cookbook, importing, history/branch/merge, schema and indexes,
+  maintenance and migration, a recovery runbook, and a library/CLI reference.
+  Every command and output in it is driven against the real CLI, and a CI job
+  (`docs/manual/verify.sh`) plus link-checking keep the examples honest.
 - **Query parameters on the CLI**: `acetone query --param KEY=VALUE`
   (repeatable) binds `$KEY`; VALUE is parsed as a Cypher literal — number,
   quoted string, `true`/`false`, `null`, or a list/map of literals — so
@@ -25,7 +40,14 @@ fine.)
   rather than silently binding a string. The shell gains `:param`/
   `:param-clear`, `--param` composes with `--at`, and the library gains
   `Session::query_at_with` and `acetone_cypher::parse_literal`.
-
+- **`acetone log --all`** walks every branch tip, not just the first-parent
+  chain, so a merged-in branch's commits are visible; merge commits show their
+  parents on a structural line that repository-controlled message content
+  cannot forge. Default `log` output is unchanged.
+- **`acetone branch NAME [REFSPEC]`** creates a branch at an arbitrary start
+  point (commit, branch or tag), and **`acetone branch --delete NAME`** removes
+  one (refusing the checked-out branch), so branch recovery no longer needs raw
+  `git update-ref`.
 - **`acetone commit --allow-empty`** (and library
   `Transaction::commit_allow_empty`): deliberately record a commit with no
   content change — a marker commit — now that plain `commit` refuses one
@@ -33,9 +55,23 @@ fine.)
 - **Streaming counts**: `Snapshot::node_count`/`edge_count`/
   `schema_entry_count` count without materialising records; `acetone status`
   uses them, so status stays cheap on large graphs.
+- **Release automation**: publishing a release now triggers a workflow that
+  opens the Homebrew-tap formula-bump PR automatically, and each release
+  archive carries a signed SLSA build-provenance attestation
+  (`gh attestation verify …`). The release flow is also encoded as a tracked
+  beads formula (`.beads/formulas/release.formula.toml`, ADR-0057).
 
 ### Changed
 
+- **Constraints are enforced on every write surface.** `import`, `put-node`,
+  and `declare-label` (retrofitting `--require`/`--unique` over existing data)
+  now run the same existence and UNIQUE checks as a Cypher write, failing
+  atomically and naming the offending nodes, and `fsck` reports pre-existing
+  breaches as advisories. Previously `import` and `put-node` could commit a
+  node a Cypher `CREATE` would reject.
+- **`AT`/`--at` resolve short tag names and peel annotated tags** with
+  git-parity precedence (exact ref path → tag → branch → commit hash), so time
+  travel to a tag works the way `log`/`fsck` already did.
 - **Graph-level merge violations surface through the whole resolution flow**
   (ADR-0058): while a merge is in progress and every cell conflict is
   resolved, `Repository::conflicts()` re-derives graph violations (dangling
@@ -59,6 +95,51 @@ fine.)
   fresh `git worktree add` worktree reads its checked-out commit directly
   and gains its workspace ref on first write, so read-only commands work on
   read-only filesystems and never contend with a writer.
+- **`migrate` rewrites annotated tags** onto the rewritten history and swings
+  every ref (branches, tags, workspace) in a single journalled, crash-safe
+  transaction that a re-run completes; signed tags are refused rather than
+  silently invalidated.
+- **Clearer errors and cleaner output**: an undeclared-label error now suggests
+  `declare-label`; write-only queries no longer print a spurious `(no columns)`
+  line; map projections, out-of-range integer literals, and blame key-arity
+  mismatches get actionable messages; and a duplicated error cause on lock/init
+  failures is fixed.
+
+### Fixed
+
+- **Denial-of-service via deeply nested runtime values**: a query building a
+  200 000-deep value with `reduce` (then `DISTINCT`/`ORDER BY`/grouping) aborted
+  the process with a stack overflow. Runtime value construction is now bounded
+  (`ResourceLimit::ValueDepth`), and query parameters are bounded at ingestion.
+- **Executor resource accounting**: variable-length expansion, aggregation
+  grouping, and `replace()` string amplification are now charged against the
+  work/collection budget, and CBOR array/map preallocation is capped — closing
+  memory-amplification and expansion-blow-up vectors.
+- **`gc` hardening**: a crafted pack-sidecar stem could delete files outside
+  the object directory (path traversal, now validated); a co-tenant graph could
+  claim another graph's refs (now an explicit ownership allow-list); a graph
+  name from a hand-crafted marker is revalidated on open; and a TOCTOU against a
+  concurrent `git worktree add` is closed by re-checking under the writer lock.
+- **fsck** now peels annotated tags and follows symbolic refs (rather than
+  aborting), and dedups shared chunk sets across history so deep repositories
+  are not re-walked per commit.
+- **Cypher lexer** accepts the `i64::MIN` literal and its hex/octal forms; the
+  `SET x = <entity>` and `MERGE … ON CREATE`/`ON MATCH` gaps the TCK pins are
+  closed (+4 scenarios: 1598→1602).
+
+### Security
+
+- **Terminal spoofing**: zero-width and invisible Unicode characters in
+  identifier-shaped output (labels, keys, relationship types, branch names,
+  including identifiers projected into query result cells) are now escaped,
+  completing the bidirectional-override defence shipped in 0.1.1; property
+  values keep legitimate emoji sequences.
+- **Persistence guard**: values that do not round-trip through query semantics
+  (bytes and temporals) are rejected as node-key properties, so node identity
+  can never diverge from comparison semantics.
+- A milestone security review over the whole release diff accompanies this
+  release; see `docs/reports/phase-0.3.1.md`.
+
 
 ## [0.3.0] - 2026-07-23
 
