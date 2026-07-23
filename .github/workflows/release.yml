@@ -11,9 +11,8 @@ name: Release
 # Run this from the Actions tab (workflow_dispatch) when a candidate is wanted;
 # review the draft's binaries; publish when happy. The release body is the
 # curated `## [<version>]` section of CHANGELOG.md (not an auto commit list), so
-# that section must exist before cutting a release. The Homebrew formula bump is
-# done by hand for the first release (see docs/RELEASING.md); automating it is a
-# tracked follow-up (acetone-wpx).
+# that section must exist before cutting a release. Publishing the draft
+# triggers the Homebrew formula bump automatically (homebrew-bump.yml).
 #
 # Publishing the library crates to crates.io is a separate, deliberate manual
 # step (see docs/RELEASING.md) — it reserves names irreversibly.
@@ -135,6 +134,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # create/attach the draft release
+      id-token: write # mint the OIDC token for Sigstore signing (attestation)
+      attestations: write # persist the build-provenance attestation
     steps:
       # Checkout FIRST — it cleans the workspace, so it must precede the
       # artifact download (which writes into dist/). We need the tree for
@@ -147,6 +148,16 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Attest build provenance
+        # Signed SLSA build provenance for every release archive, so published
+        # binaries are verifiably built by this workflow:
+        #   gh attestation verify <archive> --repo curvelogic/acetone
+        # Attesting here (after the digest-verified artifact download) covers
+        # all four targets in one place, in the same job that stages the draft.
+        # v4 is a thin wrapper that SHA-pins actions/attest (node24).
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: dist/acetone-*.tar.gz
       - name: Extract release notes from CHANGELOG
         # The release body is the curated CHANGELOG section for this version —
         # not GitHub's auto commit/PR list. Extract the lines under the

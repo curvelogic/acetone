@@ -35,7 +35,17 @@ The flow:
 3. **Review the draft** and its binaries in the Releases UI.
 4. **Publish** when happy. GitHub creates the `v<version>` tag at the target
    commit. That publish is your approval — nothing is tagged before it.
-5. **Homebrew** follows publication (see below).
+5. **Homebrew follows automatically**: publishing triggers the
+   **Homebrew bump** workflow, which opens a formula PR on the tap (see below).
+   Review and merge that PR.
+
+Each release archive also carries a signed **build-provenance attestation**
+(SLSA, via `actions/attest-build-provenance` in the Release workflow), so
+published binaries are verifiably built by CI:
+
+```
+gh attestation verify acetone-v<version>-<target>.tar.gz --repo curvelogic/acetone
+```
 
 Build a binary locally with `cargo build --release --bin acetone`.
 
@@ -47,12 +57,19 @@ at the published release archives (the `eucalypt.rb` formula in that tap is the
 style to match). The archives contain the `acetone` binary at their root, so the
 formula's install is a plain `bin.install "acetone"`.
 
-For the first release this is done by hand: after publishing, take each
-archive's `sha256` (the `.sha256` asset, or `shasum -a 256`) and open a PR to the
-tap. Automating it as a `release: published` workflow that opens the tap PR is a
-follow-up (`acetone-wpx`); it needs a cross-repo token secret
-(`HOMEBREW_TAP_TOKEN`) since the default `GITHUB_TOKEN` cannot write to another
-repository.
+The bump is automated: publishing a release triggers
+`.github/workflows/homebrew-bump.yml`, which regenerates `Formula/acetone.rb`
+from the release's four `.sha256` assets (via
+`scripts/generate-homebrew-formula.sh`, runnable locally against downloaded
+assets) and opens a PR on the tap for review. It can also be run manually from
+the Actions tab with a tag input (e.g. to retry a failed bump).
+
+Cross-repo write needs a dedicated secret, since the default `GITHUB_TOKEN`
+cannot write to another repository: **`HOMEBREW_TAP_TOKEN`**, a repository
+secret on `curvelogic/acetone` holding a fine-grained PAT restricted to
+`curvelogic/homebrew-tap` with **Contents: read and write** and
+**Pull requests: read and write**. Until it exists the workflow's final step
+fails with instructions (everything before it runs read-only).
 
 ## The library crates (held)
 
