@@ -3089,6 +3089,7 @@ pub enum acetone_cypher::exec::eval::ResourceLimit
 pub acetone_cypher::exec::eval::ResourceLimit::CollectionLen
 pub acetone_cypher::exec::eval::ResourceLimit::ExpansionSteps
 pub acetone_cypher::exec::eval::ResourceLimit::ResultRows
+pub acetone_cypher::exec::eval::ResourceLimit::ValueDepth
 pub acetone_cypher::exec::eval::ResourceLimit::WallClock
 pub acetone_cypher::exec::eval::ResourceLimit::WorkUnits
 impl core::clone::Clone for acetone_cypher::exec::eval::ResourceLimit
@@ -4191,6 +4192,7 @@ pub enum acetone_cypher::exec::ResourceLimit
 pub acetone_cypher::exec::ResourceLimit::CollectionLen
 pub acetone_cypher::exec::ResourceLimit::ExpansionSteps
 pub acetone_cypher::exec::ResourceLimit::ResultRows
+pub acetone_cypher::exec::ResourceLimit::ValueDepth
 pub acetone_cypher::exec::ResourceLimit::WallClock
 pub acetone_cypher::exec::ResourceLimit::WorkUnits
 impl core::clone::Clone for acetone_cypher::exec::eval::ResourceLimit

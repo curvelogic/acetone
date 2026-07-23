@@ -10,7 +10,7 @@ use crate::ast::QuantifierKind;
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::bind::bound::{BoundExpr, BoundPathPattern, VarId};
 use crate::exec::source::GraphSource;
-use crate::exec::value::{Ternary, Value};
+use crate::exec::value::{MAX_VALUE_DEPTH, Ternary, Value};
 use crate::span::Span;
 
 use thiserror::Error;
@@ -54,6 +54,11 @@ pub enum ResourceLimit {
     CollectionLen,
     /// The optional wall-clock backstop.
     WallClock,
+    /// The container nesting depth of a single constructed value
+    /// (`MAX_VALUE_DEPTH` in `exec::value` — a fixed structural cap that
+    /// keeps recursive value walks stack-safe, not a
+    /// [`crate::exec::governor::QueryLimits`] field).
+    ValueDepth,
 }
 
 impl std::fmt::Display for ResourceLimit {
@@ -64,6 +69,7 @@ impl std::fmt::Display for ResourceLimit {
             ResourceLimit::ExpansionSteps => "expansion-step",
             ResourceLimit::CollectionLen => "collection-size",
             ResourceLimit::WallClock => "wall-clock",
+            ResourceLimit::ValueDepth => "value-nesting-depth",
         };
         f.write_str(name)
     }
@@ -263,10 +269,15 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 None => Ok(Value::Null),
             }
         }
-        BoundExpr::ListLiteral { items, span: _ } => {
+        BoundExpr::ListLiteral { items, span } => {
             let mut values = Vec::with_capacity(items.len());
             for item in items {
-                values.push(eval(item, row, ctx)?);
+                let value = eval(item, row, ctx)?;
+                // The construction-time depth cap (acetone-19x): a list
+                // literal inside a reduce is exactly how a shallow AST builds
+                // an arbitrarily deep value.
+                ensure_nestable(&value, *span)?;
+                values.push(value);
             }
             Ok(Value::List(values))
         }
@@ -301,10 +312,13 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
                 // collection cap so a comprehension over a large source list is
                 // bounded without over-charging quadratically.
                 ctx.governor.collection_push(out.len())?;
-                out.push(match map {
+                let value = match map {
                     Some(map) => eval(map, &inner, ctx)?,
                     None => item,
-                });
+                };
+                // Construction-time depth cap (acetone-19x).
+                ensure_nestable(&value, *span)?;
+                out.push(value);
             }
             Ok(Value::List(out))
         }
@@ -359,10 +373,13 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             }
             Ok(acc)
         }
-        BoundExpr::MapLiteral { entries, span: _ } => {
+        BoundExpr::MapLiteral { entries, span } => {
             let mut map = BTreeMap::new();
             for (key, value) in entries {
-                map.insert(key.clone(), eval(value, row, ctx)?);
+                let value = eval(value, row, ctx)?;
+                // Construction-time depth cap (acetone-19x).
+                ensure_nestable(&value, *span)?;
+                map.insert(key.clone(), value);
             }
             Ok(Value::Map(map))
         }
@@ -397,6 +414,26 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             Ok(Value::Bool(pattern_exists(pattern, row, ctx)?))
         }
     }
+}
+
+/// Refuse to nest `value` under one more container level once its own
+/// container nesting has reached [`MAX_VALUE_DEPTH`] (acetone-19x). Called at
+/// every construction seam that can deepen a runtime value — list/map
+/// literals, comprehension elements, the list-push arms of `+`, and
+/// `collect()` — so no constructible value ever exceeds the cap, and the
+/// recursive walks over values (`distinct_key`, `global_cmp`, `eq3`,
+/// `format`, clone, drop glue, persist) are bounded on a default stack.
+/// Seams that cannot deepen a value need no check: list concatenation and
+/// slicing reuse already-capped children, and the flat builders
+/// (`range`/`split`/`keys`/`labels`) produce scalars.
+pub(crate) fn ensure_nestable(value: &Value, span: Span) -> Result<(), ExecError> {
+    if value.nesting_exceeds(MAX_VALUE_DEPTH - 1) {
+        return Err(ExecError::ResourceExceeded {
+            limit: ResourceLimit::ValueDepth,
+            span,
+        });
+    }
+    Ok(())
 }
 
 /// openCypher truth: booleans as themselves, null as unknown, anything
@@ -563,17 +600,23 @@ fn add(
             Ok(String(r + &b))
         }
         (List(mut a), List(b)) => {
+            // Concatenation cannot deepen: the result's children are the
+            // operands' already-capped children, so no depth check is needed.
             concat(governor, a.len() + b.len())?;
             a.extend(b);
             Ok(List(a))
         }
         (List(mut a), b) => {
             concat(governor, a.len() + 1)?;
+            // The pushed element gains a container level (acetone-19x); the
+            // receiving list's own children keep their depth.
+            ensure_nestable(&b, span)?;
             a.push(b);
             Ok(List(a))
         }
         (a, List(mut b)) => {
             concat(governor, b.len() + 1)?;
+            ensure_nestable(&a, span)?;
             b.insert(0, a);
             Ok(List(b))
         }
