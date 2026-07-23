@@ -741,6 +741,11 @@ fn apply_set_map(
         let ctx = EvalCtx::new(&*graph, parameters, governor);
         match eval(value, row, &ctx)? {
             Value::Map(map) => map,
+            // openCypher: a node or relationship source copies its
+            // property map, exactly as if a map literal had been written
+            // (TCK Merge6/Merge7 `SET r = a`; bead acetone-q9m).
+            Value::Node(node) => node.properties,
+            Value::Relationship(rel) => rel.properties,
             // openCypher: `SET x = null` clears all properties; `SET x +=
             // null` is a no-op.
             Value::Null if merge => return Ok(()),

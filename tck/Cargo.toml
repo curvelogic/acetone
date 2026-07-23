@@ -20,3 +20,7 @@ gherkin = "0.14"
 # a CI artefact. MIT/Apache-2.0, rust-lang-adjacent maintenance.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+# tempfile (dev): synthetic feature directories for harness unit tests.
+tempfile.workspace = true

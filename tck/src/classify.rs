@@ -265,6 +265,7 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
 /// plumbing), and verify the result against the expected table.
 fn execute_and_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectation) -> Verdict {
     let executable = plan.setup_queries.is_empty()
+        && plan.controls.is_empty()
         && plan.named_graph.is_none()
         && !plan.has_parameters
         && !plan.needs_procedures;
@@ -357,14 +358,49 @@ fn write_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectation) -> 
     };
     // A write scenario asserts its side effects even when it returns no
     // rows, so check them first (against the graph delta).
+    graph.apply(&changes);
     if let Some(expected) = &plan.side_effects {
-        graph.apply(&changes);
         let actual = GraphMetrics::of(&graph).delta_from(&before);
         if let Some(reason) = compare_side_effects(expected, &actual) {
             return Verdict::Failed { reason };
         }
     }
-    verify_rows(expectation, &result)
+    let main = verify_rows(expectation, &result);
+    if main != Verdict::Passed {
+        return main;
+    }
+    // Control queries verify the graph the write left behind: each runs
+    // read-only against the post-write state, with its own expectation.
+    for check in &plan.controls {
+        if matches!(
+            check.expectation,
+            Expectation::Error { .. } | Expectation::None
+        ) {
+            // No control table the harness models — not verifiable.
+            return Verdict::Unsupported(UnsupportedReason::Executor);
+        }
+        let (control_result, _) = match run_write_once(&check.query, &graph, &params) {
+            Ok(pair) => pair,
+            Err(WriteRunError::Exec(ExecError::Unsupported { .. })) | Err(WriteRunError::Front) => {
+                return Verdict::Unsupported(UnsupportedReason::Executor);
+            }
+            Err(WriteRunError::Exec(e)) => {
+                return Verdict::Failed {
+                    reason: format!("control query failed to execute: {e}"),
+                };
+            }
+        };
+        match verify_rows(&check.expectation, &control_result) {
+            Verdict::Passed => {}
+            Verdict::Failed { reason } => {
+                return Verdict::Failed {
+                    reason: format!("control query: {reason}"),
+                };
+            }
+            unsupported => return unsupported,
+        }
+    }
+    Verdict::Passed
 }
 
 /// A snapshot of the graph properties openCypher side effects are counted
@@ -578,6 +614,7 @@ mod tests {
             needs_procedures: false,
             query: Some(query.into()),
             expectation,
+            controls: Vec::new(),
             side_effects: None,
         }
     }
