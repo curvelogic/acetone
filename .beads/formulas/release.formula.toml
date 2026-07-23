@@ -49,7 +49,7 @@ Pointer: docs/RELEASING.md, steps 1 and 1b.
 
 On a branch (never on main):
 1. Bump [workspace.package] version to {{version}} in the root Cargo.toml AND
-   the six acetone-* path-dependency pins in [workspace.dependencies].
+   every acetone-* path-dependency pin in [workspace.dependencies] (six as of 0.3.x).
 2. Move the accumulated [Unreleased] entries in CHANGELOG.md under a new
    '## [{{version}}] - <date>' heading. This section becomes the release body
    verbatim (body_path), so keep it curated and human-readable.
@@ -88,7 +88,7 @@ Pointer: docs/RELEASING.md, steps 2 and 3.
 
 1. Dispatch the Release workflow (Actions tab, workflow_dispatch) from main.
 2. When it completes, verify the draft release v{{version}} carries exactly
-   8 assets: 4 targets x (.tar.gz + .tar.gz.sha256).
+   one .tar.gz + .tar.gz.sha256 per built target (8 assets for the 4-target matrix as of 0.3.x).
 3. Download one archive, verify its checksum against the matching .sha256
    asset, unpack, and smoke-test the binary — 'acetone --version' must report
    {{version}}.

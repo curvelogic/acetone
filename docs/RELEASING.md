@@ -14,9 +14,11 @@ what the tag-protection ruleset (only you may create `v*`) requires.
 The flow:
 
 1. **Bump the version** in the root `Cargo.toml` (`[workspace.package] version`)
-   and the `acetone-*` path-dependency pins in `[workspace.dependencies]`, on
-   `main`. `acetone --version` and the binaries then report it. (Already `0.1.0`
-   for the first release.)
+   and the `acetone-*` path-dependency pins in `[workspace.dependencies]` — on
+   a branch, landed by PR with review per CLAUDE.md's branch discipline (never
+   directly on `main`; the Release workflow builds whatever `main` points at,
+   so dispatch it only after this PR has merged). `acetone --version` and the
+   binaries then report it.
 1b. **Write the changelog section.** Move the accumulated `## [Unreleased]`
    entries in `CHANGELOG.md` under a new `## [<version>] - <date>` heading (Keep
    a Changelog format). **This section is the release body** — the workflow
