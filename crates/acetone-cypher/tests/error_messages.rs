@@ -82,6 +82,11 @@ const DIAGNOSTICS: &[(&str, &str)] = &[
     ("parse/double-return", "MATCH (n) RETURN n RETURN n"),
     ("parse/where-without-predicate", "MATCH (n) WHERE RETURN n"),
     ("parse/incomplete-return-expr", "MATCH (n) RETURN"),
+    (
+        "parse/integer-out-of-range",
+        "RETURN 9223372036854775808 AS literal",
+    ),
+    ("parse/at-bare-refspec", "MATCH (n) AT 3db804f9 RETURN n"),
     // --- binder ---
     ("bind/undefined-variable", "MATCH (n) RETURN m"),
     (

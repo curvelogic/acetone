@@ -42,6 +42,14 @@ error:  line 1, column 17: 'RETURN' is a reserved word and cannot be used as a v
 input:  MATCH (n) RETURN
 error:  line 1, column 17: expected an expression, found end of input
 
+### parse/integer-out-of-range
+input:  RETURN 9223372036854775808 AS literal
+error:  line 1, column 8: integer literal 9223372036854775808 is out of range (integers span -9223372036854775808 to 9223372036854775807)
+
+### parse/at-bare-refspec
+input:  MATCH (n) AT 3db804f9 RETURN n
+error:  line 1, column 14: a refspec after AT must be a string literal or a parameter — try AT '3db804f9' (or AT $ref)
+
 ### bind/undefined-variable
 input:  MATCH (n) RETURN m
 error:  line 1, column 18: undefined variable 'm'

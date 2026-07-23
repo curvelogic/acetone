@@ -4892,6 +4892,7 @@ pub acetone_cypher::lex::TokenKind::Ident
 pub acetone_cypher::lex::TokenKind::Ident::backquoted: bool
 pub acetone_cypher::lex::TokenKind::Ident::name: alloc::string::String
 pub acetone_cypher::lex::TokenKind::Integer(i64)
+pub acetone_cypher::lex::TokenKind::IntegerTooLarge(u64)
 pub acetone_cypher::lex::TokenKind::LArrow
 pub acetone_cypher::lex::TokenKind::LBrace
 pub acetone_cypher::lex::TokenKind::LBracket
