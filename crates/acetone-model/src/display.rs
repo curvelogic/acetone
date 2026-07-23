@@ -9,7 +9,7 @@
 //! (`[String("web-01")]`) to a user.
 
 use crate::Value;
-use crate::graph_keys::NodeKey;
+use crate::graph_keys::{EdgeKey, NodeKey};
 
 /// Render a value for human-readable output.
 ///
@@ -65,6 +65,23 @@ pub fn format_node_key(key: &NodeKey) -> String {
 /// sites that carry the two apart rather than a whole [`NodeKey`]).
 pub fn format_node_identity(label: &str, key: &[Value]) -> String {
     format!("{} {}", format_label(label), format_key_tuple(key))
+}
+
+/// Render a full edge identity as `src -RTYPE-> dst`, each part escaped, with
+/// the discriminator appended when set (so two parallel edges render
+/// distinctly). The one canonical edge renderer, mirroring
+/// [`format_node_key`]; the CLI, the query layer and error messages share it.
+pub fn format_edge_key(key: &EdgeKey) -> String {
+    let base = format!(
+        "{} -{}-> {}",
+        format_node_key(key.src()),
+        format_label(key.rtype()),
+        format_node_key(key.dst()),
+    );
+    match key.disc() {
+        Value::Null => base,
+        disc => format!("{base} [{}]", format_value(disc)),
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +142,23 @@ mod tests {
     fn node_key_renders_via_identity() {
         let nk = NodeKey::new("Host", vec![Value::String("web-01".into())]).unwrap();
         assert_eq!(format_node_key(&nk), "\"Host\" [\"web-01\"]");
+    }
+
+    #[test]
+    fn edge_key_renders_endpoints_type_and_discriminator() {
+        use crate::graph_keys::EdgeKey;
+        let src = NodeKey::new("Host", vec![Value::String("web-01".into())]).unwrap();
+        let dst = NodeKey::new("Rack", vec![Value::Int(3)]).unwrap();
+        let plain = EdgeKey::new(src.clone(), "IN", dst.clone(), Value::Null).unwrap();
+        assert_eq!(
+            format_edge_key(&plain),
+            "\"Host\" [\"web-01\"] -\"IN\"-> \"Rack\" [3]"
+        );
+        let disc = EdgeKey::new(src, "IN", dst, Value::Int(2)).unwrap();
+        assert_eq!(
+            format_edge_key(&disc),
+            "\"Host\" [\"web-01\"] -\"IN\"-> \"Rack\" [3] [2]"
+        );
     }
 
     #[test]

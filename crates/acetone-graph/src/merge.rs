@@ -56,12 +56,12 @@ pub enum MergeOutcome {
     /// commit was written and the branch advanced to it. Carries the merge
     /// commit's address.
     Merged(Hash),
-    /// The merge conflicted; no commit was written. For **cell** conflicts the
-    /// workspace enters merge-in-progress (the conflicts are persisted and
-    /// MERGE_HEAD is set; resolve and complete with `resolve`/`commit`,
-    /// acetone-14c.4a). For **graph-level** violations, which have no
-    /// resolution verb yet, the repository is left unchanged and the
-    /// violations are only reported (acetone-14c.4c). Carries the conflicts in
+    /// The merge conflicted; no commit was written. Both conflict kinds enter
+    /// merge-in-progress (ADR-0041): the conflicts are persisted and
+    /// MERGE_HEAD is set. **Cell** conflicts resolve by picking a side
+    /// (`resolve --all-ours|--all-theirs`) or writing the key; **graph-level**
+    /// violations resolve by repairing the graph with ordinary writes, gated
+    /// by completion re-validation at `commit`. Carries the conflicts in
     /// category-then-key order.
     Conflicts(Vec<MergeConflict>),
 }
@@ -114,6 +114,16 @@ pub enum Endpoint {
     Dst,
 }
 
+impl Endpoint {
+    /// The human-readable role name ("source" / "destination").
+    pub fn role_name(self) -> &'static str {
+        match self {
+            Endpoint::Src => "source",
+            Endpoint::Dst => "destination",
+        }
+    }
+}
+
 /// A graph-level violation introduced by an otherwise map-clean merge —
 /// broken referential integrity or a breached schema constraint (spec §7,
 /// acetone-14c.3). Surfaced as a conflict (data), never an error.
@@ -150,6 +160,84 @@ pub enum GraphViolation {
         /// The colliding nodes' keys (encoded), in key order.
         nodes: Vec<Vec<u8>>,
     },
+}
+
+/// Render an encoded node key for a violation message, falling back to hex
+/// when it does not decode (a corrupt or hostile map must not panic the
+/// display path). Decoded keys render escaped via [`acetone_model::display`],
+/// so attacker-writable labels cannot inject terminal control sequences.
+fn display_node_key(key: &[u8]) -> String {
+    match NodeKey::decode(key) {
+        Ok(k) => acetone_model::display::format_node_key(&k),
+        Err(_) => hex_bytes(key),
+    }
+}
+
+/// Render an encoded forward edge key, falling back to hex (see
+/// [`display_node_key`]).
+fn display_edge_key(key: &[u8]) -> String {
+    match EdgeKey::decode_fwd(key) {
+        Ok(k) => acetone_model::display::format_edge_key(&k),
+        Err(_) => hex_bytes(key),
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+impl std::fmt::Display for GraphViolation {
+    /// One human-readable line naming the violation — shared by the CLI's
+    /// merge report and [`crate::error::GraphError::MergeViolations`], so the
+    /// completion refusal names exactly what the merge report named
+    /// (acetone-jm8). Labels, properties and keys are escaped via
+    /// [`acetone_model::display`] (attacker-writable data never reaches a
+    /// terminal raw).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use acetone_model::display::format_label;
+        match self {
+            GraphViolation::DanglingEdge {
+                edge,
+                endpoint,
+                role,
+            } => {
+                // The endpoint may be absent because a side deleted it, or
+                // because an added edge references a node that is not present —
+                // "absent" covers both.
+                write!(
+                    f,
+                    "dangling relationship {}: {} node {} is absent",
+                    display_edge_key(edge),
+                    role.role_name(),
+                    display_node_key(endpoint)
+                )
+            }
+            GraphViolation::MissingRequired { node, property } => {
+                write!(
+                    f,
+                    "node {} is missing required property {}",
+                    display_node_key(node),
+                    format_label(property)
+                )
+            }
+            GraphViolation::UniqueViolation {
+                label,
+                property,
+                nodes,
+                ..
+            } => {
+                let keys: Vec<String> = nodes.iter().map(|n| display_node_key(n)).collect();
+                write!(
+                    f,
+                    "UNIQUE {}.{} shared by {} nodes: {}",
+                    format_label(label),
+                    format_label(property),
+                    nodes.len(),
+                    keys.join(", ")
+                )
+            }
+        }
+    }
 }
 
 /// One conflict surfaced by a merge: a cell-level clash (same key edited
@@ -458,6 +546,9 @@ fn rebuild_reverse<S: ChunkStore>(
 /// against the merge base before the two-parent commit lands: a resolution can
 /// itself introduce a breach (a dangling edge, a resolve-to-delete of a
 /// required property, a UNIQUE collision), which must be caught, not committed.
+/// And called by `Repository::conflicts` (ADR-0056, acetone-jm8) once no cell
+/// conflicts remain, so those same breaches are visible as structured conflict
+/// data *before* completion refuses them.
 pub(crate) fn validate_merged<S: ChunkStore>(
     store: &S,
     base: &Manifest,

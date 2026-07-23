@@ -10,7 +10,11 @@
 //! stable order; the value is empty. `kind` distinguishes a cell conflict
 //! (the same map key edited incompatibly on both sides — resolvable by
 //! picking a side) from a graph-level violation (dangling edge / constraint,
-//! resolved by ordinary writes; acetone-14c.4c).
+//! resolved by ordinary writes; acetone-14c.4c). Graph-violation entries are
+//! **advisory markers only** (ADR-0056): their details are never decoded —
+//! reporting re-derives the violations live from the workspace graph, so a
+//! repair (or a violation introduced *after* persistence, by a resolution) is
+//! always reflected. The encoding is unchanged from ADR-0020/0041.
 
 use acetone_prolly::{BatchOp, ChunkParams, Root, apply_batch, empty, scan};
 use acetone_store::ChunkStore;
@@ -42,12 +46,13 @@ fn map_from_tag(tag: u8) -> Option<ConflictMap> {
     }
 }
 
-/// A conflict read back from the persisted map.
+/// One outstanding conflict of a merge in progress, as reported by
+/// `Repository::conflicts` (spec §6/§7: conflicts are data).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PersistedConflict {
+pub enum WorkspaceConflict {
     /// A cell conflict: the key in `map` was edited incompatibly on both
-    /// sides. Resolvable by picking a side (its value is re-derived from the
-    /// ours/theirs manifests).
+    /// sides. Read back from the persisted map; resolvable by picking a side
+    /// (its values are re-derived from the ours/theirs manifests).
     Cell {
         /// Which working map the key belongs to.
         map: ConflictMap,
@@ -58,10 +63,26 @@ pub enum PersistedConflict {
         /// is disputed by delete-vs-modify).
         property: Option<String>,
     },
-    /// A graph-level violation (dangling edge / constraint). Not persisted or
-    /// resolvable yet — a violating merge leaves the repository unchanged
-    /// (acetone-mws); this variant exists for completeness.
-    Graph,
+    /// A graph-level violation (dangling edge / constraint breach). Not read
+    /// back from the persisted map — the map only carries advisory markers —
+    /// but **re-derived live** from the workspace graph against the merge
+    /// base (ADR-0056), so it appears whether the merge itself composed the
+    /// violation or a later cell resolution did, and disappears as soon as a
+    /// repair write fixes it. Resolved by ordinary writes, gated by
+    /// completion re-validation (ADR-0041).
+    Graph(GraphViolation),
+}
+
+/// The entries of a persisted `conflicts` map root: the cell conflicts (as
+/// [`WorkspaceConflict::Cell`], in map order) and a count of the advisory
+/// graph-violation markers. The markers' violation details are deliberately
+/// not decoded — reporting re-derives them live (ADR-0056); the persisted
+/// entries only record that the merge flagged the workspace.
+pub(crate) struct PersistedEntries {
+    /// The cell conflicts, in map order — always `WorkspaceConflict::Cell`.
+    pub cells: Vec<WorkspaceConflict>,
+    /// How many graph-violation marker entries the map holds.
+    pub graph_markers: usize,
 }
 
 /// Append a length-prefixed field, so a run of them cannot alias. Keys and
@@ -154,8 +175,10 @@ fn read_field<'a>(bytes: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
     Some(field)
 }
 
-/// Decode a persisted-map entry key back to a [`PersistedConflict`].
-fn decode_entry(key: &[u8]) -> Result<PersistedConflict, GraphError> {
+/// Decode a persisted-map entry key: a cell conflict decodes fully; a
+/// graph-violation entry is an advisory marker (`None` — its violation is
+/// re-derived live, not decoded; see [`PersistedEntries`]).
+fn decode_entry(key: &[u8]) -> Result<Option<WorkspaceConflict>, GraphError> {
     let invalid = || GraphError::CorruptConflicts {
         reason: "conflicts-map entry key is malformed",
     };
@@ -174,13 +197,13 @@ fn decode_entry(key: &[u8]) -> Result<PersistedConflict, GraphError> {
                 }
                 _ => return Err(invalid()),
             };
-            Ok(PersistedConflict::Cell {
+            Ok(Some(WorkspaceConflict::Cell {
                 map,
                 key: map_key,
                 property,
-            })
+            }))
         }
-        Some(KIND_GRAPH) => Ok(PersistedConflict::Graph),
+        Some(KIND_GRAPH) => Ok(None),
         _ => Err(invalid()),
     }
 }
@@ -234,18 +257,25 @@ pub fn clear_written<S: ChunkStore>(
     }
 }
 
-/// Read the conflicts back from a `conflicts` map root, in the map's key
-/// order (deterministic).
-pub fn read_conflicts<S: ChunkStore>(
+/// Read a `conflicts` map root back: the cell conflicts in the map's key
+/// order (deterministic) plus the count of graph-violation markers.
+pub(crate) fn read_entries<S: ChunkStore>(
     store: &S,
     root: &Root,
-) -> Result<Vec<PersistedConflict>, GraphError> {
-    let mut out = Vec::new();
+) -> Result<PersistedEntries, GraphError> {
+    let mut cells = Vec::new();
+    let mut graph_markers = 0;
     for item in scan(store, root, ..)? {
         let (key, _) = item?;
-        out.push(decode_entry(&key)?);
+        match decode_entry(&key)? {
+            Some(cell) => cells.push(cell),
+            None => graph_markers += 1,
+        }
     }
-    Ok(out)
+    Ok(PersistedEntries {
+        cells,
+        graph_markers,
+    })
 }
 
 #[cfg(test)]
@@ -347,19 +377,19 @@ mod tests {
 
         assert_eq!(
             decode_entry(&entry_key(&owner)).unwrap(),
-            PersistedConflict::Cell {
+            Some(WorkspaceConflict::Cell {
                 map: ConflictMap::Nodes,
                 key: key.clone(),
                 property: Some("owner".into()),
-            }
+            })
         );
         assert_eq!(
             decode_entry(&entry_key(&whole)).unwrap(),
-            PersistedConflict::Cell {
+            Some(WorkspaceConflict::Cell {
                 map: ConflictMap::Nodes,
                 key,
                 property: None,
-            }
+            })
         );
     }
 
@@ -387,11 +417,11 @@ mod tests {
         assert_ne!(entry_key(&a), entry_key(&b));
         assert_eq!(
             decode_entry(&entry_key(&a)).unwrap(),
-            PersistedConflict::Cell {
+            Some(WorkspaceConflict::Cell {
                 map: ConflictMap::Nodes,
                 key: vec![1],
                 property: Some("ab".into()),
-            }
+            })
         );
     }
 }

@@ -218,6 +218,16 @@ pub enum GraphError {
     /// An operation needs a merge in progress but none is (or vice versa).
     #[error("{0}")]
     MergeState(&'static str),
+    /// Completing a merge was refused because the resolved graph still
+    /// carries graph-level violations (ADR-0041 completion re-validation;
+    /// acetone-jm8). Each violation is named in the message — a resolution
+    /// can itself compose a dangling edge, drop a required property, or
+    /// create a UNIQUE collision, and the operator must be told *which*
+    /// (rather than an anonymous refusal that only `fsck` can explain).
+    /// Violations are conflict data (Invariant #4): the same records are
+    /// reported by `Repository::conflicts` / `CALL acetone.conflicts()`.
+    #[error("{}", render_merge_violations(.0))]
+    MergeViolations(Vec<crate::merge::GraphViolation>),
     /// A history rewrite (`acetone migrate`) hit an internal inconsistency
     /// (a cycle in the commit graph, or a reachable commit that vanished).
     #[error("migrate: {0}")]
@@ -296,4 +306,68 @@ pub enum GraphError {
         /// The graph names found.
         names: Vec<String>,
     },
+}
+
+/// How many violations a [`GraphError::MergeViolations`] message names before
+/// summarising the rest — the full set is available as data via
+/// `Repository::conflicts`, so the message stays bounded however large the
+/// merge.
+const MAX_NAMED_VIOLATIONS: usize = 8;
+
+/// Render the completion-refusal message: a bounded list naming each
+/// violation (each line rendered by `GraphViolation`'s `Display`, which
+/// escapes attacker-writable labels and keys).
+fn render_merge_violations(violations: &[crate::merge::GraphViolation]) -> String {
+    let named: Vec<String> = violations
+        .iter()
+        .take(MAX_NAMED_VIOLATIONS)
+        .map(|v| v.to_string())
+        .collect();
+    let more = violations.len().saturating_sub(MAX_NAMED_VIOLATIONS);
+    let suffix = if more > 0 {
+        format!("; … and {more} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "cannot commit: the merge leaves {} graph-level violation(s) — repair the graph \
+         (delete the dangling relationship, restore the endpoint, or fix the constraint \
+         breach), then commit: {}{suffix}",
+        violations.len(),
+        named.join("; "),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merge::{Endpoint, GraphViolation};
+
+    fn dangling(n: u8) -> GraphViolation {
+        GraphViolation::DanglingEdge {
+            edge: vec![n],
+            endpoint: vec![n],
+            role: Endpoint::Dst,
+        }
+    }
+
+    /// The refusal names each violation, and stays bounded past the cap.
+    #[test]
+    fn merge_violations_message_is_named_and_bounded() {
+        let err = GraphError::MergeViolations(vec![GraphViolation::MissingRequired {
+            node: vec![1],
+            property: "email".into(),
+        }]);
+        let message = err.to_string();
+        assert!(message.contains("1 graph-level violation(s)"), "{message}");
+        assert!(message.contains("\"email\""), "{message}");
+
+        let err = GraphError::MergeViolations((0..20).map(dangling).collect());
+        let message = err.to_string();
+        assert!(message.contains("20 graph-level violation(s)"), "{message}");
+        assert!(message.contains("… and 12 more"), "{message}");
+        // Exactly the cap's worth of violation lines are named ("is absent"
+        // appears once per named DanglingEdge, not in the guidance text).
+        assert_eq!(message.matches("is absent").count(), MAX_NAMED_VIOLATIONS);
+    }
 }

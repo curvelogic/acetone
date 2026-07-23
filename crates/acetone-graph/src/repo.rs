@@ -627,12 +627,13 @@ impl Repository {
     /// head is an ancestor of `theirs` (the branch simply advances, no merge
     /// commit); **Merged** when a genuine three-way merge over the merge base
     /// resolves cleanly (a two-parent merge commit `[ours, theirs]` is
-    /// written and the branch advanced); **Conflicts** when it does not. On
-    /// **cell** conflicts the workspace enters merge-in-progress — the
-    /// conflicts are persisted and `MERGE_HEAD` names `theirs`, to be settled
-    /// with `resolve` then `commit` (acetone-14c.4a). On **graph-level**
-    /// violations, which have no resolution verb yet, the repository is left
-    /// unchanged and the violations are only reported (acetone-14c.4c).
+    /// written and the branch advanced); **Conflicts** when it does not. Both
+    /// conflict kinds enter merge-in-progress (ADR-0041): the conflicts are
+    /// persisted and `MERGE_HEAD` names `theirs`. **Cell** conflicts are
+    /// settled with `resolve` then `commit` (acetone-14c.4a); **graph-level**
+    /// violations are repaired by ordinary writes, re-derived live by
+    /// [`Repository::conflicts`] (ADR-0056) and gated by completion
+    /// re-validation at `commit`.
     ///
     /// The merge is a pure function of the three commit manifests (Invariant
     /// #4): `merge_manifests` depends only on their contents, and `edges_rev`
@@ -895,19 +896,52 @@ impl Repository {
         Ok(self.store.read_ref(WORKTREE_MERGE_HEAD_REF)?)
     }
 
-    /// The conflicts of a merge in progress, in map order, or an empty vec
-    /// when none remain (spec §6). Errors if no merge is in progress.
-    pub fn conflicts(&self) -> Result<Vec<crate::conflicts::PersistedConflict>, GraphError> {
-        if self.merge_head()?.is_none() {
+    /// The conflicts of a merge in progress, or an empty vec when none remain
+    /// (spec §6). Errors if no merge is in progress.
+    ///
+    /// **Cell** conflicts are read from the persisted `conflicts` map, in map
+    /// order. While any remain, the workspace graph is partial (conflicted
+    /// keys absent), so graph validation would be meaningless (ADR-0016) and
+    /// only the cell conflicts are reported. Once every cell conflict is
+    /// resolved, **graph-level** violations are re-derived live (ADR-0056):
+    /// the same pure `validate_merged` that gates merge and completion runs
+    /// over the current workspace against the merge base, so a violation the
+    /// merge composed — or one a resolution introduced (acetone-jm8) — is
+    /// reported as structured [`crate::merge::GraphViolation`] data, and a
+    /// repair write makes it disappear. Deterministic: cell conflicts in map
+    /// order, then violations in category-then-key order (Invariant #4).
+    pub fn conflicts(&self) -> Result<Vec<crate::conflicts::WorkspaceConflict>, GraphError> {
+        let Some(theirs) = self.merge_head()? else {
             return Err(GraphError::MergeState("no merge in progress"));
-        }
+        };
         let manifest = self.workspace_manifest()?;
-        match manifest.conflicts {
-            None => Ok(Vec::new()),
-            Some(root) => {
-                crate::conflicts::read_conflicts(&self.store, &root.to_root(manifest.chunk_params)?)
+        if let Some(root) = manifest.conflicts {
+            let entries =
+                crate::conflicts::read_entries(&self.store, &root.to_root(manifest.chunk_params)?)?;
+            if !entries.cells.is_empty() {
+                return Ok(entries.cells);
             }
         }
+        // No cell conflicts remain: the graph is complete, so re-validate it
+        // against the merge base (exactly what completion will do) and report
+        // any violation as a conflict. A completing merge always has a branch
+        // tip and a base (the branch is frozen at `ours` for the whole merge);
+        // their absence means a corrupt or injected MERGE_HEAD.
+        let tip = self.head_commit()?.ok_or(GraphError::MergeState(
+            "merge in progress but the branch is unborn",
+        ))?;
+        let base = self
+            .merge_base(&tip, &theirs)?
+            .ok_or_else(|| GraphError::NoMergeBase {
+                ours: tip.to_hex(),
+                theirs: theirs.to_hex(),
+            })?;
+        let base_manifest = self.manifest_at_commit(&base)?;
+        let violations = crate::merge::validate_merged(&self.store, &base_manifest, &manifest)?;
+        Ok(violations
+            .into_iter()
+            .map(crate::conflicts::WorkspaceConflict::Graph)
+            .collect())
     }
 
     /// Resolve every cell conflict of a merge in progress by taking each
@@ -916,7 +950,11 @@ impl Repository {
     /// `acetone resolve --all-ours|--all-theirs`). Returns the number
     /// resolved. `acetone commit` then completes the merge. Graph-level
     /// violations cannot be picked a side; resolve those by editing the graph
-    /// (acetone-14c.4c).
+    /// (acetone-14c.4c). The resolution itself may leave the graph invalid
+    /// (e.g. taking the side that deleted a node while the merge kept an edge
+    /// to it, acetone-jm8): check [`Repository::conflicts`] afterwards, which
+    /// re-derives any graph violation live (ADR-0056); completion will refuse
+    /// while one remains.
     pub fn resolve_all(&self, side: ResolveSide) -> Result<usize, GraphError> {
         let theirs = self
             .merge_head()?
@@ -2028,17 +2066,16 @@ impl<'r> Transaction<'r> {
             // remaining cell entry means unresolved work. Graph-violation entries
             // are never cleared by a write — they are resolved by repairing the
             // graph, and cleared here once the resolved graph re-validates.
-            let remaining = match self.manifest.conflicts {
-                Some(root) => crate::conflicts::read_conflicts(
+            let unresolved_cells = match self.manifest.conflicts {
+                Some(root) => !crate::conflicts::read_entries(
                     &repo.store,
                     &root.to_root(self.manifest.chunk_params)?,
-                )?,
-                None => Vec::new(),
+                )?
+                .cells
+                .is_empty(),
+                None => false,
             };
-            if remaining
-                .iter()
-                .any(|c| matches!(c, crate::conflicts::PersistedConflict::Cell { .. }))
-            {
+            if unresolved_cells {
                 return Err(GraphError::MergeState(
                     "cannot commit: unresolved merge conflicts remain — resolve them first",
                 ));
@@ -2064,10 +2101,12 @@ impl<'r> Transaction<'r> {
             let violations =
                 crate::merge::validate_merged(&repo.store, &base_manifest, &self.manifest)?;
             if !violations.is_empty() {
-                return Err(GraphError::MergeState(
-                    "cannot commit: the merge leaves graph-level violations \
-                     (dangling edge or constraint breach) — repair the graph, then commit",
-                ));
+                // Name each violation (bounded) rather than refusing
+                // anonymously — the operator must learn *which* edge dangles
+                // or *which* constraint broke from the refusal itself, not
+                // from fsck (acetone-jm8). The same records are available as
+                // data via `Repository::conflicts`.
+                return Err(GraphError::MergeViolations(violations));
             }
             // Clean: drop any advisory graph-violation entries so the completed
             // manifest carries no conflicts map.
@@ -2142,11 +2181,8 @@ impl<'r> Transaction<'r> {
             .conflicts
             .ok_or(GraphError::MergeState("no conflicts to resolve"))?
             .to_root(params)?;
-        let conflicts = crate::conflicts::read_conflicts(&self.repo.store, &conflicts_root)?;
-        if conflicts
-            .iter()
-            .any(|c| !matches!(c, crate::conflicts::PersistedConflict::Cell { .. }))
-        {
+        let entries = crate::conflicts::read_entries(&self.repo.store, &conflicts_root)?;
+        if entries.graph_markers > 0 {
             return Err(GraphError::MergeState(
                 "graph-level violations must be resolved by editing the graph, not by picking a side",
             ));
@@ -2159,8 +2195,8 @@ impl<'r> Transaction<'r> {
         // resolves by overwriting only those properties on the merged record,
         // preserving the properties that auto-merged.
         let mut by_key: BTreeMap<(ConflictMap, Vec<u8>), Vec<Option<String>>> = BTreeMap::new();
-        for conflict in &conflicts {
-            let crate::conflicts::PersistedConflict::Cell { map, key, property } = conflict else {
+        for conflict in &entries.cells {
+            let crate::conflicts::WorkspaceConflict::Cell { map, key, property } = conflict else {
                 continue;
             };
             by_key

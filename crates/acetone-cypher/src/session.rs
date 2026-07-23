@@ -469,8 +469,8 @@ impl ProcedureProvider for RepoProcedures<'_> {
                     .collect())
             }
             "acetone.conflicts" => {
-                use acetone_graph::conflicts::PersistedConflict;
-                use acetone_graph::merge::ConflictMap;
+                use acetone_graph::conflicts::WorkspaceConflict;
+                use acetone_graph::merge::{ConflictMap, Endpoint, GraphViolation};
                 // No merge in progress: no conflicts.
                 let Some(theirs) = self.repo.merge_head().map_err(|e| e.to_string())? else {
                     return Ok(Vec::new());
@@ -530,11 +530,109 @@ impl ProcedureProvider for RepoProcedures<'_> {
                         .unwrap_or(Value::Null))
                 };
 
+                // Graph-level violations name entities of the *workspace*
+                // graph (re-derived live over the resolved merge, ADR-0056 /
+                // acetone-jm8), so their `node` column renders from the
+                // workspace snapshot, not from either side of the merge.
+                let has_graph = conflicts
+                    .iter()
+                    .any(|c| matches!(c, WorkspaceConflict::Graph(_)));
+                let workspace = if has_graph {
+                    let snap = self.repo.workspace_snapshot().map_err(|e| e.to_string())?;
+                    let schema = snap.schema_entries().map_err(|e| e.to_string())?;
+                    let key_names = key_names_from_schema(&schema);
+                    Some((snap, key_names))
+                } else {
+                    None
+                };
+                // The workspace record for a violating node, as a `_Conflict`
+                // virtual node (null when the node is absent).
+                let workspace_node = |key: &NodeKey| -> Result<Value, String> {
+                    let Some((snap, key_names)) = &workspace else {
+                        return Ok(Value::Null);
+                    };
+                    Ok(match snap.get_node(key).map_err(|e| e.to_string())? {
+                        Some(r) => Value::Node(virtual_diff_node(key, &r, key_names, "_Conflict")),
+                        None => Value::Null,
+                    })
+                };
+
                 let mut rows = Vec::new();
                 for conflict in conflicts {
-                    let PersistedConflict::Cell { map, key, property } = conflict else {
-                        // Graph violations are not persisted (acetone-14c.4a).
-                        continue;
+                    let (map, key, property) = match conflict {
+                        WorkspaceConflict::Cell { map, key, property } => (map, key, property),
+                        WorkspaceConflict::Graph(violation) => {
+                            // One row per violation — for a UNIQUE collision,
+                            // one per colliding node. `kind` names the
+                            // violation class; `property` carries the "what,
+                            // specifically": the missing/UNIQUE property, or
+                            // which endpoint of a dangling relationship is
+                            // absent (src/dst).
+                            match violation {
+                                GraphViolation::DanglingEdge { edge, role, .. } => {
+                                    let edge_key =
+                                        EdgeKey::decode_fwd(&edge).map_err(|e| e.to_string())?;
+                                    rows.push(vec![
+                                        Value::String("dangling-edge".into()),
+                                        Value::String(edge_key.rtype().to_string()),
+                                        Value::String(format_edge_key(&edge_key)),
+                                        Value::String(
+                                            match role {
+                                                Endpoint::Src => "src",
+                                                Endpoint::Dst => "dst",
+                                            }
+                                            .into(),
+                                        ),
+                                        Value::Null,
+                                        Value::Null,
+                                        Value::Null,
+                                        Value::Null,
+                                    ]);
+                                }
+                                GraphViolation::MissingRequired { node, property } => {
+                                    let node_key =
+                                        NodeKey::decode(&node).map_err(|e| e.to_string())?;
+                                    let node_col = workspace_node(&node_key)?;
+                                    rows.push(vec![
+                                        Value::String("missing-required".into()),
+                                        Value::String(node_key.label().to_string()),
+                                        Value::String(acetone_model::display::format_node_key(
+                                            &node_key,
+                                        )),
+                                        Value::String(property),
+                                        Value::Null,
+                                        Value::Null,
+                                        Value::Null,
+                                        node_col,
+                                    ]);
+                                }
+                                GraphViolation::UniqueViolation {
+                                    label,
+                                    property,
+                                    nodes,
+                                    ..
+                                } => {
+                                    for node in nodes {
+                                        let node_key =
+                                            NodeKey::decode(&node).map_err(|e| e.to_string())?;
+                                        let node_col = workspace_node(&node_key)?;
+                                        rows.push(vec![
+                                            Value::String("unique".into()),
+                                            Value::String(label.clone()),
+                                            Value::String(acetone_model::display::format_node_key(
+                                                &node_key,
+                                            )),
+                                            Value::String(property.clone()),
+                                            Value::Null,
+                                            Value::Null,
+                                            Value::Null,
+                                            node_col,
+                                        ]);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                     };
                     // The conflicted property of a cell-wise merge (ADR-0035),
                     // null for a whole-record conflict.
@@ -575,6 +673,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                 None => (Value::Null, Value::Null, Value::Null),
                             };
                             vec![
+                                Value::String("cell".into()),
                                 Value::String(node_key.label().to_string()),
                                 Value::String(acetone_model::display::format_node_key(&node_key)),
                                 property_col,
@@ -589,6 +688,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                             // Edge per-property three-way values need a snapshot
                             // edge-record accessor (follow-up); null for now.
                             vec![
+                                Value::String("cell".into()),
                                 Value::String(edge_key.rtype().to_string()),
                                 Value::String(format_edge_key(&edge_key)),
                                 property_col,
@@ -599,6 +699,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                             ]
                         }
                         ConflictMap::Schema => vec![
+                            Value::String("cell".into()),
                             Value::String("schema".to_string()),
                             Value::String(key.iter().map(|b| format!("{b:02x}")).collect()),
                             property_col,
@@ -649,17 +750,8 @@ fn change_kind(kind: acetone_graph::diff::ChangeKind) -> &'static str {
 }
 
 /// `src -RTYPE-> dst`, escaped, with a discriminator shown when set (so two
-/// parallel edges render distinctly). Mirrors the model's key rendering.
+/// parallel edges render distinctly). The canonical renderer lives in the
+/// model (`acetone_model::display::format_edge_key`).
 fn format_edge_key(key: &EdgeKey) -> String {
-    use acetone_model::display::{format_label, format_node_key, format_value};
-    let base = format!(
-        "{} -{}-> {}",
-        format_node_key(key.src()),
-        format_label(key.rtype()),
-        format_node_key(key.dst()),
-    );
-    match key.disc() {
-        acetone_model::Value::Null => base,
-        disc => format!("{base} [{}]", format_value(disc)),
-    }
+    acetone_model::display::format_edge_key(key)
 }

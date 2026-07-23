@@ -132,10 +132,17 @@ fn commit_refuses_while_a_graph_violation_remains() {
     let repo = init(dir.path());
     dangling_merge_in_progress(&repo);
 
-    // No repair: completing the merge must be refused by the re-validation.
+    // No repair: completing the merge must be refused by the re-validation,
+    // and the refusal names the dangling edge (acetone-jm8), not an
+    // anonymous "graph-level violations" string.
     let txn = repo.begin_write().expect("begin");
     let err = txn.commit("finish", &[], None).expect_err("must refuse");
-    assert!(matches!(err, GraphError::MergeState(_)), "got {err:?}");
+    assert!(matches!(err, GraphError::MergeViolations(_)), "got {err:?}");
+    let message = err.to_string();
+    assert!(
+        message.contains("dangling relationship") && message.contains("\"N\" [2]"),
+        "refusal must name the violation: {message}"
+    );
 }
 
 #[test]
@@ -239,8 +246,13 @@ fn completion_re_validation_catches_a_merge_that_drops_a_required_property() {
         .commit("merge other", &[], None)
         .expect_err("must refuse");
     assert!(
-        matches!(err, GraphError::MergeState(_)),
+        matches!(err, GraphError::MergeViolations(_)),
         "completion must reject the missing-required-property graph, got {err:?}"
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("missing required property") && message.contains("\"email\""),
+        "refusal must name the missing property (acetone-jm8): {message}"
     );
 }
 
