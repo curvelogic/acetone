@@ -530,6 +530,37 @@ mod tests {
         assert!(!fwd.starts_with(&other_type));
     }
 
+    /// Gate D freeze-audit nit (acetone-093): relationship types sharing a
+    /// prefix ("DEPENDS_ON" vs "DEPENDS_ON_MORE") must keep byte order ==
+    /// logical order, and a type-scoped scan prefix must never capture an
+    /// extension of the type — the chunked string framing closes the type
+    /// element exactly.
+    #[test]
+    fn shared_prefix_rel_types_order_and_group_correctly() {
+        let src = nk("Host", "web1");
+        let dst = nk("Service", "db");
+        let short =
+            EdgeKey::new(src.clone(), "DEPENDS_ON", dst.clone(), Value::Null).expect("valid");
+        let long =
+            EdgeKey::new(src.clone(), "DEPENDS_ON_MORE", dst.clone(), Value::Null).expect("valid");
+        let short_fwd = short.encode_fwd().expect("encode");
+        let long_fwd = long.encode_fwd().expect("encode");
+        assert!(
+            short_fwd < long_fwd,
+            "byte order must equal rel-type string order (prefix first)"
+        );
+        assert!(
+            short.encode_rev().expect("encode") < long.encode_rev().expect("encode"),
+            "reverse keys must order identically"
+        );
+        let prefix = edge_endpoint_type_prefix(&src, "DEPENDS_ON").expect("prefix");
+        assert!(short_fwd.starts_with(&prefix));
+        assert!(
+            !long_fwd.starts_with(&prefix),
+            "a DEPENDS_ON scan must not capture DEPENDS_ON_MORE edges"
+        );
+    }
+
     #[test]
     fn default_discriminator_sorts_first_within_group() {
         let src = nk("Host", "web1");

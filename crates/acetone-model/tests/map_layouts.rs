@@ -7,6 +7,7 @@ use acetone_model::graph_keys::{
     EdgeKey, IndexEntry, NodeKey, edge_endpoint_prefix, edge_endpoint_type_prefix,
     index_value_prefix, node_label_prefix, prefix_successor,
 };
+use acetone_model::keys::key_cmp;
 use acetone_model::manifest::{FORMAT_VERSION, Manifest, ManifestDecodeError, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_model::schema::{
@@ -62,6 +63,24 @@ fn edge_key() -> impl Strategy<Value = EdgeKey> {
     (node_key(), name(), node_key(), discriminator()).prop_map(|(src, rtype, dst, disc)| {
         EdgeKey::new(src, rtype, dst, disc).expect("strategy yields valid keys")
     })
+}
+
+/// Pairs of relationship-type names biased towards sharing a prefix: both
+/// extend a common non-empty base (often by nothing, giving equal types
+/// and exact prefix-extension pairs like DEPENDS_ON / DEPENDS_ON_MORE).
+fn rel_type_pair() -> impl Strategy<Value = (String, String)> {
+    (name(), "[A-Za-z0-9_]{0,10}", "[A-Za-z0-9_]{0,10}")
+        .prop_map(|(base, ext_a, ext_b)| (format!("{base}{ext_a}"), format!("{base}{ext_b}")))
+}
+
+/// The logical tuple an edge key encodes: `[endpoint, type, endpoint, disc]`.
+fn edge_tuple(first: &NodeKey, rtype: &str, second: &NodeKey) -> Vec<Value> {
+    vec![
+        first.to_value(),
+        Value::String(rtype.to_owned()),
+        second.to_value(),
+        Value::Null,
+    ]
 }
 
 /// Property values: anything the value encoding accepts except NaN
@@ -264,6 +283,56 @@ proptest! {
         prop_assert!(fwd.starts_with(&by_src));
         prop_assert!(fwd.starts_with(&by_src_type));
         prop_assert!(by_src_type.starts_with(&by_src));
+    }
+
+    /// Shared-prefix relationship types (Gate D freeze-audit nit,
+    /// acetone-093): for a pair of rel-type names biased towards sharing a
+    /// prefix (e.g. DEPENDS_ON vs DEPENDS_ON_MORE), edge-key byte order in
+    /// both map layouts equals the logical order of the underlying key
+    /// tuples, and a type-scoped scan prefix captures exactly its own type
+    /// — never a proper extension of it.
+    #[test]
+    fn shared_prefix_rel_type_byte_order_is_logical_order(
+        src in node_key(),
+        dst in node_key(),
+        (type_a, type_b) in rel_type_pair(),
+    ) {
+        let a = EdgeKey::new(src.clone(), type_a.clone(), dst.clone(), Value::Null)
+            .expect("valid");
+        let b = EdgeKey::new(src.clone(), type_b.clone(), dst.clone(), Value::Null)
+            .expect("valid");
+
+        let logical_fwd = key_cmp(
+            &edge_tuple(&src, &type_a, &dst),
+            &edge_tuple(&src, &type_b, &dst),
+        );
+        prop_assert_eq!(
+            a.encode_fwd().expect("encodable").cmp(&b.encode_fwd().expect("encodable")),
+            logical_fwd,
+            "forward byte order must equal logical order for {:?} vs {:?}",
+            type_a, type_b
+        );
+        let logical_rev = key_cmp(
+            &edge_tuple(&dst, &type_a, &src),
+            &edge_tuple(&dst, &type_b, &src),
+        );
+        prop_assert_eq!(
+            a.encode_rev().expect("encodable").cmp(&b.encode_rev().expect("encodable")),
+            logical_rev,
+            "reverse byte order must equal logical order for {:?} vs {:?}",
+            type_a, type_b
+        );
+
+        // Type-scoped scan prefixes are exact: a's prefix matches a's key
+        // always, and b's key exactly when the types are equal.
+        let prefix_a = edge_endpoint_type_prefix(&src, &type_a).expect("encodable");
+        prop_assert!(a.encode_fwd().expect("encodable").starts_with(&prefix_a));
+        prop_assert_eq!(
+            b.encode_fwd().expect("encodable").starts_with(&prefix_a),
+            type_a == type_b,
+            "a {:?}-scoped scan must capture {:?} exactly when equal",
+            type_a, type_b
+        );
     }
 
     /// Index entries: round trip; the equality-probe prefix matches.

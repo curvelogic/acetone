@@ -26,6 +26,16 @@ pub(crate) const MAJOR_MAP: u8 = 5;
 pub(crate) const MAJOR_TAG: u8 = 6;
 pub(crate) const MAJOR_SIMPLE: u8 = 7;
 
+/// Cap on speculative `Vec` preallocation from attacker-controlled item
+/// counts (security LOW-1, acetone-8gp). A declared count is already
+/// bounded by the remaining input (every item costs at least one byte),
+/// but reserving `count * size_of::<Item>()` up front amplifies hostile
+/// input ~24–32×: a ~60 MiB chunk could transiently reserve gigabytes.
+/// Decoders therefore reserve at most this many items and let the vector
+/// grow incrementally (amortised doubling), which changes nothing about
+/// what decodes — capacity is not observable in output.
+pub(crate) const MAX_PREALLOC_ITEMS: usize = 1024;
+
 pub(crate) const SIMPLE_FALSE: u8 = 0xf4;
 pub(crate) const SIMPLE_TRUE: u8 = 0xf5;
 pub(crate) const SIMPLE_NULL: u8 = 0xf6;
@@ -294,6 +304,53 @@ mod tests {
         assert_eq!(canonical_str_cmp("z", "aa"), Ordering::Less);
         assert_eq!(canonical_str_cmp("aa", "ab"), Ordering::Less);
         assert_eq!(canonical_str_cmp("aa", "aa"), Ordering::Equal);
+    }
+
+    /// Gate D freeze-audit nit (acetone-093): pin the shortest-form head
+    /// width at every length-regime boundary, both sides of each edge.
+    #[test]
+    fn head_widths_at_every_length_regime_boundary() {
+        let cases: &[(u64, usize)] = &[
+            (0, 1),                       // immediate
+            (23, 1),                      // last immediate
+            (24, 2),                      // first 1-byte argument
+            (255, 2),                     // last 1-byte argument
+            (256, 3),                     // first 2-byte argument
+            (65_535, 3),                  // last 2-byte argument
+            (65_536, 5),                  // first 4-byte argument
+            (u64::from(u32::MAX), 5),     // last 4-byte argument
+            (u64::from(u32::MAX) + 1, 9), // first 8-byte argument
+            (u64::MAX, 9),                // top of the range
+        ];
+        for &(value, width) in cases {
+            let mut out = Vec::new();
+            write_head(&mut out, MAJOR_UNSIGNED, value);
+            assert_eq!(out.len(), width, "head width for {value}");
+            let mut reader = Reader::new(&out);
+            let back = reader.read_head(MAJOR_UNSIGNED).expect("canonical head");
+            assert_eq!(back, value, "head round trip for {value}");
+            assert_eq!(reader.remaining(), 0, "head fully consumed for {value}");
+        }
+    }
+
+    /// The value at each boundary encoded one argument width up must be
+    /// rejected as overlong — the boundary is exact, not fuzzy.
+    #[test]
+    fn boundary_values_one_width_up_are_overlong() {
+        let overlong: &[&[u8]] = &[
+            &[0x18, 23],                                 // 23 as 1-byte arg
+            &[0x19, 0x00, 0xff],                         // 255 as 2-byte arg
+            &[0x1a, 0x00, 0x00, 0xff, 0xff],             // 65535 as 4-byte arg
+            &[0x1b, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff], // u32::MAX as 8-byte arg
+        ];
+        for bytes in overlong {
+            let mut reader = Reader::new(bytes);
+            assert_eq!(
+                reader.read_head(MAJOR_UNSIGNED),
+                Err(ValueDecodeError::NonCanonical("overlong head")),
+                "must reject overlong encoding {bytes:0>2x?}"
+            );
+        }
     }
 
     #[test]

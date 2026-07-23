@@ -94,6 +94,19 @@ pub enum PersistError {
     UniqueViolation { label: String, property: String },
     #[error("cannot persist a {0} as a stored property value")]
     Value(&'static str),
+    #[error(
+        "the key property {property:?} of {label:?} has a {type_name} value, which cannot form \
+         a node key: key properties must be boolean, integer, float or string (bytes and \
+         temporal values are not identity-round-trippable through queries)"
+    )]
+    KeyValueType {
+        /// The primary label whose key the value was destined for.
+        label: String,
+        /// The offending key property name.
+        property: String,
+        /// The rejected value's type, rendered for the message.
+        type_name: &'static str,
+    },
     #[error(transparent)]
     Key(#[from] GraphKeyError),
     #[error(transparent)]
@@ -287,7 +300,24 @@ fn node_key_and_record(
         let value = node.properties.get(name).ok_or_else(|| {
             PersistError::Identity(format!("node {primary:?} is missing key property {name:?}"))
         })?;
-        key_values.push(convert_value(value)?);
+        let converted = convert_value(value)?;
+        // Defensive guard (acetone-7vw): the deferred types (Bytes and the
+        // temporals) must not form node identity. They have no native runtime
+        // representation — they travel as `Value::Stored` carriers whose
+        // query semantics are string renderings (ADR-0038) — so an identity
+        // comparison on such a key (e.g. a MERGE match-or-create) would
+        // compare renderings while the persisted key stays typed: a mismatch
+        // mints a duplicate node and orphans its edges. Unreachable from
+        // today's Cypher/CLI surface, which cannot produce these values in
+        // key position; rejected cleanly rather than trusted.
+        if let Some(type_name) = deferred_type_name(&converted) {
+            return Err(PersistError::KeyValueType {
+                label: primary.clone(),
+                property: name.clone(),
+                type_name,
+            });
+        }
+        key_values.push(converted);
     }
     let node_key = NodeKey::new(primary.clone(), key_values)?;
 
@@ -405,6 +435,26 @@ fn convert_map(
         out.insert(name.clone(), convert_value(value)?);
     }
     Ok(out)
+}
+
+/// The rendered type name of a deferred (non-identity-round-trippable)
+/// model value — Bytes and the four temporals — or `None` for the types
+/// that may form node keys. Lists and nulls are not key material either,
+/// but [`NodeKey::new`] already rejects those with its own typed errors.
+fn deferred_type_name(value: &ModelValue) -> Option<&'static str> {
+    match value {
+        ModelValue::Bytes(_) => Some("bytes"),
+        ModelValue::Date(_) => Some("date"),
+        ModelValue::Time(_) => Some("time"),
+        ModelValue::DateTime(_) => Some("datetime"),
+        ModelValue::Duration(_) => Some("duration"),
+        ModelValue::Null
+        | ModelValue::Bool(_)
+        | ModelValue::Int(_)
+        | ModelValue::Float(_)
+        | ModelValue::String(_)
+        | ModelValue::List(_) => None,
+    }
 }
 
 /// Convert a runtime value to a storable model value. Maps, nodes,
@@ -573,5 +623,139 @@ mod tests {
             record.properties().get("name"),
             Some(&ModelValue::String("x".into()))
         );
+    }
+
+    #[test]
+    fn deferred_typed_key_values_are_rejected_with_a_typed_error() {
+        // acetone-7vw: Bytes and temporal values must not form node identity —
+        // their query semantics are string renderings (ADR-0038 carriers), so
+        // identity comparison and persisted identity would disagree.
+        let cases: Vec<(ModelValue, &str)> = vec![
+            (ModelValue::Bytes(vec![0xAB, 0xCD]), "bytes"),
+            (ModelValue::Date(Date { days: 20_000 }), "date"),
+            (ModelValue::Time(Time { nanos: 1 }), "time"),
+            (
+                ModelValue::DateTime(DateTime {
+                    epoch_nanos: 1_600_000_000_000_000_000,
+                    offset_minutes: 60,
+                }),
+                "datetime",
+            ),
+            (
+                ModelValue::Duration(Duration {
+                    months: 1,
+                    days: 2,
+                    nanos: 3,
+                }),
+                "duration",
+            ),
+        ];
+        for (value, expected_type) in cases {
+            let node = runtime(&[("id", crate::exec::adapter::convert_value(&value))]);
+            let err = node_key_and_record(&node, &catalogue())
+                .expect_err("a deferred-typed key value must be rejected");
+            match &err {
+                PersistError::KeyValueType {
+                    label,
+                    property,
+                    type_name,
+                } => {
+                    assert_eq!(label, "L");
+                    assert_eq!(property, "id");
+                    assert_eq!(*type_name, expected_type);
+                }
+                other => panic!("expected KeyValueType for {expected_type}, got {other:?}"),
+            }
+            assert!(
+                err.to_string().contains(expected_type),
+                "message must name the type: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn deferred_types_stay_storable_as_non_key_properties() {
+        // The guard is key-position only: the ADR-0038 carrier round-trip for
+        // ordinary properties is untouched.
+        let when = ModelValue::DateTime(DateTime {
+            epoch_nanos: 1,
+            offset_minutes: 0,
+        });
+        let node = runtime(&[
+            ("id", Value::Int(1)),
+            ("when", crate::exec::adapter::convert_value(&when)),
+        ]);
+        let (_key, record) = node_key_and_record(&node, &catalogue()).expect("persist");
+        assert_eq!(record.properties().get("when"), Some(&when));
+    }
+
+    // --- key-type guard properties (acetone-7vw) ---------------------------
+
+    use acetone_model::{Date, Duration, Time};
+    use proptest::prelude::*;
+
+    /// Key values every shipped surface can produce: the identity-
+    /// round-trippable scalars (spec §2 key material).
+    fn round_trippable_key_value() -> impl Strategy<Value = ModelValue> {
+        prop_oneof![
+            any::<bool>().prop_map(ModelValue::Bool),
+            any::<i64>().prop_map(ModelValue::Int),
+            any::<f64>().prop_map(|x| ModelValue::Float(if x.is_nan() { 0.5 } else { x })),
+            ".{1,12}".prop_map(ModelValue::String),
+        ]
+    }
+
+    /// The deferred types: valid stored values, but not key material.
+    fn deferred_key_value() -> impl Strategy<Value = ModelValue> {
+        prop_oneof![
+            proptest::collection::vec(any::<u8>(), 0..8).prop_map(ModelValue::Bytes),
+            any::<i64>().prop_map(|d| ModelValue::Date(Date { days: d })),
+            (0..86_400_000_000_000u64).prop_map(|n| ModelValue::Time(Time { nanos: n })),
+            (any::<i64>(), -1080i16..=1080).prop_map(|(n, o)| {
+                ModelValue::DateTime(DateTime {
+                    epoch_nanos: n,
+                    offset_minutes: o,
+                })
+            }),
+            (any::<i64>(), any::<i64>(), any::<i64>()).prop_map(|(m, d, n)| {
+                ModelValue::Duration(Duration {
+                    months: m,
+                    days: d,
+                    nanos: n,
+                })
+            }),
+        ]
+    }
+
+    proptest! {
+        /// Every round-trippable key value persists, and the derived key is
+        /// exactly the declared value — identity survives the runtime trip.
+        #[test]
+        fn round_trippable_key_values_persist_with_identity_intact(
+            v in round_trippable_key_value()
+        ) {
+            let node = runtime(&[("id", crate::exec::adapter::convert_value(&v))]);
+            let (key, _record) = node_key_and_record(&node, &catalogue())
+                .map_err(|e| TestCaseError::fail(format!("must persist: {e}")))?;
+            let expected = NodeKey::new("L", vec![v.clone()])
+                .map_err(|e| TestCaseError::fail(format!("valid key: {e}")))?;
+            prop_assert_eq!(&key, &expected);
+            // And the storage encoding round-trips the same identity.
+            let bytes = key.encode()
+                .map_err(|e| TestCaseError::fail(format!("encodable: {e}")))?;
+            prop_assert_eq!(NodeKey::decode(&bytes).expect("decodable"), expected);
+        }
+
+        /// Every deferred-typed key value is rejected with the typed error —
+        /// never persisted, never a panic, never a silently retyped key.
+        #[test]
+        fn deferred_typed_key_values_always_error_cleanly(v in deferred_key_value()) {
+            let node = runtime(&[("id", crate::exec::adapter::convert_value(&v))]);
+            let result = node_key_and_record(&node, &catalogue());
+            prop_assert!(
+                matches!(result, Err(PersistError::KeyValueType { .. })),
+                "expected KeyValueType for {:?}, got {:?}", v, result
+            );
+        }
     }
 }
