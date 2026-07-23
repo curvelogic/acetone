@@ -226,8 +226,9 @@ pub enum Command {
     /// Prints the repository's declared schema, grouped into labels (with their
     /// ordered key tuple and existence/unique constraints), relationship types,
     /// and property indexes. Read-only. `--at <ref>` inspects any version — a
-    /// branch short name, full ref name or commit hash — without checking it
-    /// out; with no `--at`, the current workspace's schema is shown.
+    /// branch or tag short name, full ref name or commit hash — without
+    /// checking it out; with no `--at`, the current workspace's schema is
+    /// shown.
     Schema {
         /// Read the schema at a specific ref (branch, tag or commit hash)
         /// instead of the current workspace state.

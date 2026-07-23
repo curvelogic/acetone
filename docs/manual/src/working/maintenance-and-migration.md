@@ -49,9 +49,8 @@ $ acetone fsck
 fsck: clean
 ```
 
-(Keep the [history chapter's](history-branch-merge.md) caveat in mind,
-though: fsck peels annotated tags, but `query --at` does not yet — and, as
-you will see below, neither does `migrate`.)
+(`query --at` peels annotated tags the same way — but, as you will see
+below, `migrate` does not yet.)
 
 Note what fsck does *not* check: schema **constraints**. A constraint
 declared over non-conforming existing data (the retrofit gotcha in the

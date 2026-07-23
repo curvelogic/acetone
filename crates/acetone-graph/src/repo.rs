@@ -1058,26 +1058,45 @@ impl Repository {
         }
     }
 
-    /// Resolve a refspec — branch short name, full ref name, or hex
+    /// Resolve a refspec — full ref name, tag or branch short name, or hex
     /// commit hash — to a commit address.
+    ///
+    /// Candidates are tried in git's own order (gitrevisions, "first match
+    /// wins"): an exact `refs/…` path first, then the tag expansion
+    /// (`refs/tags/<name>` in this graph's namespace), then the branch
+    /// expansion (`refs/heads/<name>`) — so a short name that is both a tag
+    /// and a branch resolves to the **tag**, exactly as `git rev-parse`
+    /// would — and finally a full-hex commit hash. Whatever a candidate
+    /// names is peeled through any annotated-tag indirection
+    /// ([`GitStore::peel_tag`]) to the commit underneath, so annotated tags
+    /// address their target commit just as lightweight tags do.
     ///
     /// A refspec that fails one interpretation (not a valid ref name, a
     /// hex address naming a non-commit object) simply falls through to
     /// the next and ultimately to [`GraphError::UnresolvedRefspec`];
-    /// genuine store damage still surfaces as its own error.
+    /// genuine store damage — including a corrupt or over-deep annotated-tag
+    /// chain behind a ref that *did* match — still surfaces as its own
+    /// error, never as a fall-through to a lower-precedence candidate.
     pub fn resolve_commit(&self, refspec: &str) -> Result<Hash, GraphError> {
-        let as_branch = self.namespace.branch_ref(refspec);
-        if let Some(hash) = read_ref_lenient(&self.store, &as_branch)? {
-            return Ok(hash);
-        }
         if refspec.starts_with("refs/")
             && let Some(hash) = read_ref_lenient(&self.store, refspec)?
         {
-            return Ok(hash);
+            return Ok(self.store.peel_tag(&hash)?);
+        }
+        let as_tag = self.namespace.tag_ref(refspec);
+        if let Some(hash) = read_ref_lenient(&self.store, &as_tag)? {
+            return Ok(self.store.peel_tag(&hash)?);
+        }
+        let as_branch = self.namespace.branch_ref(refspec);
+        if let Some(hash) = read_ref_lenient(&self.store, &as_branch)? {
+            return Ok(self.store.peel_tag(&hash)?);
         }
         if let Ok(hash) = Hash::from_hex(refspec) {
-            match self.store.read_commit(&hash) {
-                Ok(Some(_)) => return Ok(hash),
+            // A hex address of an annotated tag object peels to its target
+            // commit (git parity); identity for anything else.
+            let peeled = self.store.peel_tag(&hash)?;
+            match self.store.read_commit(&peeled) {
+                Ok(Some(_)) => return Ok(peeled),
                 // A hex address naming nothing, or a non-commit object,
                 // is an unresolvable refspec, not a store failure.
                 Ok(None) | Err(StoreError::WrongObjectKind { .. }) => {}

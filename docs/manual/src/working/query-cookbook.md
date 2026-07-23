@@ -837,7 +837,7 @@ instead:
 
 ```console
 $ acetone query --at main~1 'MATCH (s:Service {name: "postgres"}) RETURN s.version'
-error: cannot resolve "main~1" to a branch, ref or commit
+error: cannot resolve "main~1" to a tag, branch, ref or commit
 ```
 
 **Diff as rows.** `CALL acetone.diff(from, to)` yields the graph-level

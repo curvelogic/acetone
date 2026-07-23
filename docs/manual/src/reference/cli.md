@@ -40,9 +40,11 @@ graph data never reaches the terminal raw.
 
 ### `--at`
 
-`query` and `schema` take `--at <ref>` — a branch short name, full ref name or
-commit hash — to read a past version without checking it out: whole-query time
-travel. With no `--at`, the current workspace state is used.
+`query` and `schema` take `--at <ref>` — a branch or tag short name, full ref
+name or commit hash — to read a past version without checking it out:
+whole-query time travel. Refspecs resolve in git's order (exact `refs/…` path,
+then tags, then branches, then a commit hash), and annotated tags are peeled
+to their target commit. With no `--at`, the current workspace state is used.
 
 ### `--format`
 
