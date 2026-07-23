@@ -72,10 +72,11 @@ Read the spec before implementing anything; when code and spec diverge, either f
 
 ## Architecture Overview
 
-Cargo workspace of six crates with strictly downward dependencies:
+Cargo workspace of seven crates with strictly downward dependencies:
 
 ```
 acetone-cli     — thin CLI client
+acetone-core    — the library façade: the single dependency for library consumers; curated surface frozen at 0.2 (STABILITY.md, ADR-0046)
 acetone-cypher  — parser front end, binder, planner, iterator-model executor, TCK harness
 acetone-graph   — graph mutations, constraints, validation, merge orchestration
 acetone-model   — node/edge keys, records, order-preserving encodings, schema, manifest
