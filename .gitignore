@@ -8,3 +8,6 @@
 # Rust
 /target
 spikes/*/target/
+
+# mdBook build output (built in CI; see .github/workflows/docs.yml)
+docs/manual/book/
