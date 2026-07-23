@@ -293,6 +293,47 @@ impl<'a> RewriteCommit<'a> {
     }
 }
 
+/// An annotated-tag object read from the store
+/// ([`GitStore::read_tag`](crate::GitStore::read_tag)): the tag's own
+/// metadata plus the object it points at. The target may itself be a tag
+/// object (git permits nested tags); callers walk the chain with repeated
+/// reads, or peel it in one step with
+/// [`GitStore::peel_tag`](crate::GitStore::peel_tag).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagObject {
+    /// The object this tag points at (a commit, or another tag object for a
+    /// nested tag).
+    pub target: Hash,
+    /// The tag's own name as recorded in the object (e.g. `v1.0`) — which
+    /// git does not require to match the name of any ref pointing at it.
+    pub name: String,
+    /// The tagger identity and timestamp, when the tag records one.
+    pub tagger: Option<Identity>,
+    /// The tag message (without any trailing signature block). Lossily
+    /// decoded to UTF-8, like commit messages.
+    pub message: String,
+    /// Whether the tag carries a cryptographic signature — any format git
+    /// produces: OpenPGP, SSH (`gpg.format=ssh`) or X.509/S-MIME
+    /// (`gpg.format=x509`). A signed tag cannot be rewritten without
+    /// invalidating the signature, so
+    /// [`GitStore::rewrite_tag`](crate::GitStore::rewrite_tag) refuses it.
+    pub signed: bool,
+}
+
+/// One compare-and-swap step of a batched ref update
+/// ([`GitStore::write_refs_atomic`](crate::GitStore::write_refs_atomic)):
+/// move `name` from `expected` to `new`, with `None` meaning the ref must
+/// not yet exist (a create).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefSwing {
+    /// Full ref name under `refs/`.
+    pub name: String,
+    /// The value the ref must currently hold (`None`: must not exist).
+    pub expected: Option<Hash>,
+    /// The value to move the ref to.
+    pub new: Hash,
+}
+
 /// Version snapshots: real git commits whose tree carries the manifest
 /// (spec §3.5).
 ///

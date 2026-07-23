@@ -45,7 +45,9 @@ pub use import::{
     SourceExtractor, run as import,
 };
 pub use lock::WriteLock;
-pub use migrate::{FormatTransform, MigrateReport, Rechunk, rewrite_history};
+pub use migrate::{
+    FormatTransform, MigrateJournal, MigrateReport, Rechunk, pending_migration, rewrite_history,
+};
 pub use refns::GraphRefNamespace;
 pub use repo::{
     DEFAULT_BRANCH, DEFAULT_WORKSPACE, InitOptions, LogEntry, Repository, Snapshot, Transaction,

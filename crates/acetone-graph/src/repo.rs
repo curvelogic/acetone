@@ -335,8 +335,12 @@ impl Repository {
     }
 
     /// The effective workspace-ref target: the per-worktree ref, or — for a
-    /// repository created before ADR-0014 — the legacy shared ref.
-    fn workspace_ref_target(&self) -> Result<Option<Hash>, GraphError> {
+    /// repository created before ADR-0014 — the legacy shared ref. `None`
+    /// means the workspace is **virtual** (acetone-ayq): it reads as the
+    /// checked-out commit's manifest and no ref is materialised. `migrate`
+    /// uses this to know whether the workspace needs a journalled ref swing
+    /// at all.
+    pub(crate) fn workspace_ref_target(&self) -> Result<Option<Hash>, GraphError> {
         if let Some(hash) = self.workspace_ref_value()? {
             return Ok(Some(hash));
         }

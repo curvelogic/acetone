@@ -34,7 +34,9 @@ use bytes::Bytes;
 
 use crate::error::StoreError;
 use crate::hash::Hash;
-use crate::store::{ChunkStore, Commit, CommitStore, NewCommit, RefStore, RewriteCommit};
+use crate::store::{
+    ChunkStore, Commit, CommitStore, NewCommit, RefStore, RefSwing, RewriteCommit, TagObject,
+};
 
 /// Upper bound on the annotated-tag indirection [`GitStore::peel_tag`] will
 /// follow. Content addressing makes a true tag cycle impossible (a tag
@@ -495,6 +497,154 @@ impl GitStore {
         ))
     }
 
+    /// Read the annotated-tag object at `id`, or `None` when no object with
+    /// that address exists **or** the object is not a tag (a commit, tree or
+    /// blob) — so callers can probe "is this a tag?" and fall through to
+    /// ordinary handling of whatever it actually is. Errors only when a tag
+    /// object exists but does not decode (or exceeds the size cap), or its
+    /// tagger signature is unparsable. The complement of [`Self::peel_tag`]:
+    /// this returns one link of the chain with its metadata, `peel_tag`
+    /// returns the chain's end without any.
+    ///
+    /// `signed` covers every signature format git produces, not just what
+    /// gix parses out: PGP (`gpg.format=openpgp`, gix's `pgp_signature`
+    /// field), **SSH** (`gpg.format=ssh`) and **X.509/S-MIME**
+    /// (`gpg.format=x509`) — the latter two leave their signature blocks
+    /// inside the message, where [`message_has_signature_block`] detects
+    /// them.
+    pub fn read_tag(&self, id: &Hash) -> Result<Option<TagObject>, StoreError> {
+        let Some(header) = self.find_header(id)? else {
+            return Ok(None);
+        };
+        if header.kind() != gix::object::Kind::Tag {
+            return Ok(None);
+        }
+        let data = self.read_object_checked(id, &header, gix::object::Kind::Tag, "tag")?;
+        let tag = gix::objs::TagRef::from_bytes(&data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt("tag object", e.to_string()))?;
+        let tagger = tag
+            .tagger()
+            .map_err(|e| StoreError::corrupt("tag tagger", e.to_string()))?
+            .map(|sig| identity_from_ref(sig, "tag tagger"))
+            .transpose()?;
+        let message = String::from_utf8_lossy(tag.message).into_owned();
+        let signed = tag.pgp_signature.is_some() || message_has_signature_block(&message);
+        Ok(Some(TagObject {
+            target: Hash::from_oid(tag.target()),
+            name: String::from_utf8_lossy(tag.name).into_owned(),
+            tagger,
+            message,
+            signed,
+        }))
+    }
+
+    /// Rewrite one annotated tag for a history migration (`acetone
+    /// migrate`): write a **new** tag object that preserves `tag`'s name,
+    /// tagger (identity **and** timestamp) and message verbatim but points
+    /// at `new_target` — the already-rewritten commit (or, for a nested
+    /// tag, the already-rewritten inner tag). The target's kind is read
+    /// from the store, so `new_target` must already exist. A signed tag is
+    /// refused ([`StoreError::SignedTag`]): the rewritten bytes could never
+    /// carry the original signature, and dropping it silently is forbidden.
+    /// The check mirrors [`Self::read_tag`]'s detection — the `signed` flag
+    /// *and* an independent scan of the message for SSH/X.509 signature
+    /// blocks — so even a hand-built [`TagObject`] cannot smuggle a signed
+    /// message past the door.
+    pub fn rewrite_tag(&self, tag: &TagObject, new_target: &Hash) -> Result<Hash, StoreError> {
+        if tag.signed || message_has_signature_block(&tag.message) {
+            return Err(StoreError::SignedTag {
+                name: tag.name.clone(),
+            });
+        }
+        let target_header = self.find_header(new_target)?.ok_or_else(|| {
+            StoreError::corrupt(
+                "rewritten tag target",
+                "target object is absent from the store",
+            )
+        })?;
+        let tagger = tag.tagger.as_ref().map(git_identity).transpose()?;
+        let tag_object = gix::objs::Tag {
+            target: new_target.oid(),
+            target_kind: target_header.kind(),
+            name: tag.name.as_str().into(),
+            tagger,
+            message: tag.message.as_str().into(),
+            pgp_signature: None,
+        };
+        let tag_id = self
+            .repo
+            .write_object(&tag_object)
+            .map_err(|e| StoreError::backend("writing rewritten tag", e))?
+            .detach();
+        Ok(Hash::from_oid(tag_id))
+    }
+
+    /// Apply a batch of compare-and-swap ref updates as **one** ref
+    /// transaction. Every swing's precondition is checked (under the same
+    /// store-level writer lock as [`RefStore::write_ref`], and gix then
+    /// prepares every per-ref lock) before any ref moves, so a failed
+    /// precondition — or any prepare failure — moves **nothing**: against
+    /// concurrent writers the batch is all-or-nothing. What this cannot
+    /// promise is crash-atomicity of the final commit step: git's file
+    /// backend applies the prepared edits one ref-file at a time, so a
+    /// process death in that window can leave a strict subset applied.
+    /// Callers needing crash recovery must journal the batch first — see
+    /// `acetone migrate`'s journalled swing.
+    ///
+    /// An empty batch is a no-op.
+    pub fn write_refs_atomic(&self, swings: &[RefSwing]) -> Result<(), StoreError> {
+        use gix::refs::Target;
+        use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+
+        if swings.is_empty() {
+            return Ok(());
+        }
+        // Validate every name before taking any lock.
+        let names: Vec<gix::refs::FullName> = swings
+            .iter()
+            .map(|s| validated_ref_name(&s.name))
+            .collect::<Result<_, _>>()?;
+        // Serialise with the other acetone ref writers (see `write_ref` for
+        // why gix's own preconditions are not enough on their own).
+        let _writer_guard = gix::lock::Marker::acquire_to_hold_resource(
+            self.repo.common_dir().join("acetone-refs"),
+            gix::lock::acquire::Fail::AfterDurationWithBackoff(std::time::Duration::from_secs(5)),
+            None,
+        )
+        .map_err(|e| StoreError::backend("locking refs for batched update", e))?;
+        let mut edits = Vec::with_capacity(swings.len());
+        for (swing, full_name) in swings.iter().zip(names) {
+            // Enforce the create-CAS contract here, like `write_ref`: gix's
+            // `MustNotExist` treats a value-equal edit as a no-op success.
+            if swing.expected.is_none() && self.read_ref(&swing.name)?.is_some() {
+                return Err(StoreError::CasFailed {
+                    name: swing.name.clone(),
+                });
+            }
+            let precondition = match &swing.expected {
+                None => PreviousValue::MustNotExist,
+                Some(hash) => PreviousValue::MustExistAndMatch(Target::Object(hash.oid())),
+            };
+            edits.push(RefEdit {
+                change: Change::Update {
+                    log: LogChange {
+                        mode: RefLog::AndReference,
+                        force_create_reflog: false,
+                        message: "acetone: write_refs_atomic".into(),
+                    },
+                    expected: precondition,
+                    new: Target::Object(swing.new.oid()),
+                },
+                name: full_name,
+                deref: false,
+            });
+        }
+        self.repo
+            .edit_references(edits)
+            .map_err(map_batch_ref_edit_error)?;
+        Ok(())
+    }
+
     /// All **symbolic** refs whose full name starts with `prefix` (itself
     /// under `refs/`), as `(full name, immediate target name)` pairs in name
     /// order — the complement of [`RefStore::list_refs`], which lists only
@@ -830,6 +980,13 @@ impl GitStore {
     /// given — so the rewritten history keeps its dates and authorship. The
     /// tree is still built from the manifest, summary and anchors, and every
     /// anchor is verified present, so the result is `git fsck`-connected.
+    ///
+    /// **Extra headers are not carried forward**: in particular a `gpgsig`
+    /// commit signature — which no rewrite could keep valid, since it signs
+    /// bytes the rewrite changes — is dropped, so a signed commit is
+    /// rewritten as a well-formed *unsigned* commit. A documented limitation
+    /// of the opt-in rewrite path (see the `acetone-graph` migrate module
+    /// docs).
     pub fn rewrite_commit(&self, spec: &RewriteCommit<'_>) -> Result<Hash, StoreError> {
         let author = git_identity(spec.author)?;
         let committer = git_identity(spec.committer)?;
@@ -923,6 +1080,23 @@ impl ChunkStore for GitStore {
     }
 }
 
+/// Whether a tag message carries a signature block that gix does **not**
+/// parse out of the message. gix 0.62 recognises only OpenPGP blocks (its
+/// `pgp_signature` field); tags signed with `gpg.format=ssh` end their
+/// message with `-----BEGIN SSH SIGNATURE-----…`, and `gpg.format=x509`
+/// (S/MIME via gpgsm) ones with `-----BEGIN SIGNED MESSAGE-----…`, both left
+/// inside `message`. Any line that *is* such an armour header counts —
+/// over-matching merely refuses a rewrite (safe: the operator deletes or
+/// replaces the tag), while under-matching would silently invalidate a
+/// signature (forbidden).
+fn message_has_signature_block(message: &str) -> bool {
+    message.lines().any(|line| {
+        let line = line.trim_end();
+        (line.starts_with("-----BEGIN ") && line.ends_with("SIGNATURE-----"))
+            || line == "-----BEGIN SIGNED MESSAGE-----"
+    })
+}
+
 /// Validate a ref name against git ref-format rules, additionally requiring
 /// the `refs/` namespace. This is the only door through which a ref name —
 /// always an untrusted string — enters the store; no filesystem path is
@@ -954,6 +1128,23 @@ fn map_ref_edit_error(name: &str, error: gix::reference::edit::Error) -> StoreEr
             name: name.to_owned(),
         },
         _ => StoreError::backend("updating ref", error),
+    }
+}
+
+/// Map a gix ref-edit failure from a **batched** transaction, attributing a
+/// lost compare-and-swap to the ref gix names in the failure.
+fn map_batch_ref_edit_error(error: gix::reference::edit::Error) -> StoreError {
+    use gix::refs::file::transaction::prepare::Error as Prepare;
+    match &error {
+        gix::reference::edit::Error::FileTransactionPrepare(
+            Prepare::MustNotExist { full_name, .. }
+            | Prepare::MustExist { full_name, .. }
+            | Prepare::ReferenceOutOfDate { full_name, .. }
+            | Prepare::DeleteReferenceMustExist { full_name },
+        ) => StoreError::CasFailed {
+            name: full_name.to_string(),
+        },
+        _ => StoreError::backend("updating refs", error),
     }
 }
 
@@ -1412,7 +1603,33 @@ fn identity_from_ref(
 
 #[cfg(test)]
 mod tests {
-    use super::{assemble_message, validate_trailer, validated_ref_name};
+    use super::{
+        assemble_message, message_has_signature_block, validate_trailer, validated_ref_name,
+    };
+
+    #[test]
+    fn signature_blocks_of_every_git_format_are_detected() {
+        // PGP normally lands in gix's pgp_signature field, but the message
+        // scan must also catch it (defence in depth for hand-built values).
+        assert!(message_has_signature_block(
+            "msg\n-----BEGIN PGP SIGNATURE-----\n\nAAAA\n-----END PGP SIGNATURE-----\n"
+        ));
+        // gpg.format=ssh: gix leaves the block inside the message.
+        assert!(message_has_signature_block(
+            "msg\n-----BEGIN SSH SIGNATURE-----\nU1NIU0lH\n-----END SSH SIGNATURE-----\n"
+        ));
+        // gpg.format=x509 (gpgsm / S-MIME).
+        assert!(message_has_signature_block(
+            "msg\n-----BEGIN SIGNED MESSAGE-----\nMIIB\n-----END SIGNED MESSAGE-----\n"
+        ));
+        // Armour headers count only at line starts…
+        assert!(!message_has_signature_block(
+            "quoting `-----BEGIN SSH SIGNATURE-----` inline is fine"
+        ));
+        // …and plain messages never match.
+        assert!(!message_has_signature_block("release one\n"));
+        assert!(!message_has_signature_block(""));
+    }
 
     fn pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs

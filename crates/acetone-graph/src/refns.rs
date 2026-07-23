@@ -49,6 +49,11 @@ pub struct GraphRefNamespace {
     /// Exact matches, so the marker of a prefix-confusable graph name
     /// (`g` vs `g2`) can never be claimed.
     private_refs: Vec<String>,
+    /// Where an in-flight `acetone migrate` journals its planned ref swings
+    /// (acetone-ejj). Local-only transient state — present exactly while a
+    /// migration's ref swing is in flight, so its existence is the "migration
+    /// interrupted" marker.
+    migrate_journal_ref: String,
 }
 
 impl GraphRefNamespace {
@@ -65,6 +70,7 @@ impl GraphRefNamespace {
             owns_whole_repo: true,
             private_prefixes: Vec::new(),
             private_refs: Vec::new(),
+            migrate_journal_ref: "refs/acetone/migrate-journal".to_owned(),
         }
     }
 
@@ -105,6 +111,9 @@ impl GraphRefNamespace {
             // The graph's own marker only — matched exactly, never by prefix,
             // so `g` cannot claim `g2`'s marker.
             private_refs: vec![format!("{GRAPHS_REF_PREFIX}{graph}")],
+            // Inside the graph's private prefix, so ownership classification
+            // (gc) covers it without a separate rule.
+            migrate_journal_ref: format!("refs/acetone/{graph}/migrate-journal"),
         }
     }
 
@@ -151,6 +160,17 @@ impl GraphRefNamespace {
     /// `HEAD` (ADR-0050).
     pub fn head_ref(&self) -> &str {
         &self.head_ref
+    }
+
+    /// The ref where an in-flight `acetone migrate` journals its planned ref
+    /// swings before performing them (acetone-ejj): a blob listing every
+    /// `(ref, old, new)` swing. Present exactly while a swing is in flight —
+    /// so a repository carrying this ref is a migration interrupted mid-swing,
+    /// detectable and recoverable (`pending_migration`). Standalone:
+    /// `refs/acetone/migrate-journal`; co-tenant: inside the graph's private
+    /// `refs/acetone/<graph>/` namespace. Local-only; never pushed.
+    pub fn migrate_journal_ref(&self) -> &str {
+        &self.migrate_journal_ref
     }
 
     /// Whether the ref `full` (a full name, e.g. `refs/heads/main`) belongs to
@@ -312,6 +332,21 @@ mod tests {
         ] {
             assert!(!ns.owns_ref(r), "co-tenant graph g must not own {r}");
         }
+    }
+
+    #[test]
+    fn migrate_journal_ref_is_private_and_owned() {
+        let ns = GraphRefNamespace::standalone();
+        assert_eq!(ns.migrate_journal_ref(), "refs/acetone/migrate-journal");
+        assert!(ns.owns_ref(ns.migrate_journal_ref()));
+
+        let ns = GraphRefNamespace::co_tenant("g");
+        assert_eq!(ns.migrate_journal_ref(), "refs/acetone/g/migrate-journal");
+        // Inside the graph's private prefix, so gc's ownership classification
+        // covers it without a separate rule — and another graph's journal is
+        // foreign.
+        assert!(ns.owns_ref(ns.migrate_journal_ref()));
+        assert!(!ns.owns_ref("refs/acetone/g2/migrate-journal"));
     }
 
     #[test]
