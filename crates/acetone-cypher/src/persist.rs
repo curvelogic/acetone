@@ -640,7 +640,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn deferred_typed_key_values_are_rejected_with_a_typed_error() {
         // acetone-7vw: Bytes and temporal values must not form node identity —
         // their query semantics are string renderings (ADR-0038 carriers), so
