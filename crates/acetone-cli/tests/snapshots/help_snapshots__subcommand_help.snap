@@ -1,6 +1,5 @@
 ---
 source: crates/acetone-cli/tests/help_snapshots.rs
-assertion_line: 91
 expression: combined
 ---
 ========== acetone init --help ==========
@@ -207,7 +206,7 @@ Options:
 ========== acetone schema --help ==========
 Show the declared schema — labels and keys, relationship types and indexes.
 
-Prints the repository's declared schema, grouped into labels (with their ordered key tuple and existence/unique constraints), relationship types, and property indexes. Read-only. `--at <ref>` inspects any version — a branch short name, full ref name or commit hash — without checking it out; with no `--at`, the current workspace's schema is shown.
+Prints the repository's declared schema, grouped into labels (with their ordered key tuple and existence/unique constraints), relationship types, and property indexes. Read-only. `--at <ref>` inspects any version — a branch or tag short name, full ref name or commit hash — without checking it out; with no `--at`, the current workspace's schema is shown.
 
 Usage: acetone schema [OPTIONS]
 
