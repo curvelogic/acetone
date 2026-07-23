@@ -86,7 +86,7 @@ fn csv_import_records_trailers_and_detects_noop() {
     );
     assert!(out.status.success(), "reimport: {}", stderr(&out));
     assert!(
-        stdout(&out).contains("source unchanged"),
+        stdout(&out).contains("import produced no graph changes"),
         "got: {}",
         stdout(&out)
     );

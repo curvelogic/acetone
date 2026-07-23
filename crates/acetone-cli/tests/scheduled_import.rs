@@ -46,7 +46,7 @@ fn import_snapshot(repo: &Path, dir: &Path, name: &str, body: &str) -> Option<St
     );
     assert!(out.status.success(), "import {name}: {}", stderr(&out));
     let text = stdout(&out);
-    if text.contains("source unchanged") {
+    if text.contains("import produced no graph changes") {
         return None;
     }
     // "imported N node(s) ...; commit <hex>"

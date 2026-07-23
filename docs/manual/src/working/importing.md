@@ -146,7 +146,7 @@ Run the same import again:
 
 ```console
 $ acetone import --format csv ../hosts.csv --label Host
-source unchanged; nothing imported
+import produced no graph changes; nothing to commit
 ```
 
 No commit was written — `log` and `status` are exactly as before. The check
@@ -345,7 +345,7 @@ isolation, and leaves your current branch checked out and untouched:
 
 ```console
 $ acetone import --format csv ../hosts.csv --label Host --branch ingest
-source unchanged; nothing imported
+import produced no graph changes; nothing to commit
 $ acetone branch
   ingest
 * main
@@ -500,7 +500,7 @@ back, and import recognises there is nothing to do:
 $ acetone export --format json --label Service -o ../service-export.json
 exported 4 Service node(s)
 $ acetone import --format json ../service-export.json --label Service
-source unchanged; nothing imported
+import produced no graph changes; nothing to commit
 ```
 
 **CSV does not**, because CSV has no types: the services' integer ports
