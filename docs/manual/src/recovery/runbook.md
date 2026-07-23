@@ -64,9 +64,9 @@ acetone commit ([damaged refs](#damaged-refs)), a chunk that is absent
 ([corrupt object](#a-corrupt-object)), a map whose stored tree is not the
 canonical tree for its contents, and an edge referencing an absent endpoint.
 The advisory kinds — edge-map asymmetry, index inconsistency and
-"nothing to verify" refs — are consistency drifts, not damage; the first two
-are repaired by `acetone reindex` and should not arise from acetone's own
-write path. (We did not manage to produce the derived-map advisories against
+"nothing to verify" refs — are consistency drifts, not damage; index
+inconsistency is repaired by `acetone reindex` (edge-map asymmetry has no
+CLI repair), and neither should arise from acetone's own write path. (We did not manage to produce the derived-map advisories against
 a healthy binary — which is the point: they exist to catch foreign writers
 and older repositories.)
 
@@ -586,6 +586,11 @@ $ git clone --mirror /srv/registry /srv/registry-backup.git
 Cloning into bare repository '/srv/registry-backup.git'...
 done.
 ```
+
+On the same filesystem `git clone` hardlinks loose objects, so a same-disk
+mirror shares bytes with the original — bit rot corrupts both copies at
+once. Use `--no-hardlinks`, or better, keep backups on separate storage
+(the `git push --mirror` remote form is independent by construction).
 
 **Refreshing it** (run on a schedule):
 
