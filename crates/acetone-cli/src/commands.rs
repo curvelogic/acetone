@@ -4,9 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use acetone_core::graph::merge::{
-    ConflictMap, Endpoint, GraphViolation, MergeConflict, MergeOutcome,
-};
+use acetone_core::graph::merge::{ConflictMap, MergeConflict, MergeOutcome};
 use acetone_core::graph::{InitOptions, Repository};
 use acetone_core::model::Value;
 use acetone_core::model::graph_keys::{EdgeKey, NodeKey};
@@ -225,12 +223,16 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     let dirty = repo.is_dirty()?;
     // While a merge is in progress, report how many conflicts remain and
     // whether any is a graph-level violation (which resolves by editing the
-    // graph, not by picking a side).
+    // graph, not by picking a side). Graph violations are re-derived live
+    // (ADR-0058), so a violation left by a resolution shows up here too.
     let (merge_remaining, merge_has_graph) = if repo.merge_head()?.is_some() {
         let conflicts = repo.conflicts()?;
-        let has_graph = conflicts
-            .iter()
-            .any(|c| matches!(c, acetone_core::graph::conflicts::PersistedConflict::Graph));
+        let has_graph = conflicts.iter().any(|c| {
+            matches!(
+                c,
+                acetone_core::graph::conflicts::WorkspaceConflict::Graph(_)
+            )
+        });
         (Some(conflicts.len()), has_graph)
     } else {
         (None, false)
@@ -314,7 +316,7 @@ pub(crate) fn commit(
             .filter(|c| {
                 matches!(
                     c,
-                    acetone_core::graph::conflicts::PersistedConflict::Cell { .. }
+                    acetone_core::graph::conflicts::WorkspaceConflict::Cell { .. }
                 )
             })
             .count();
@@ -519,7 +521,34 @@ fn resolve(repo_path: &Path, all_ours: bool, all_theirs: bool) -> Result<()> {
     };
     let repo = open(repo_path)?;
     let count = repo.resolve_all(side).context("resolving conflicts")?;
-    outln!("resolved {count} conflict(s) — run `acetone commit` to complete the merge");
+    // The resolved graph may still carry (or newly compose) graph-level
+    // violations — e.g. picking the side that deleted a node while the merge
+    // kept an edge to it (acetone-jm8). They are re-derived live (ADR-0058):
+    // tell the operator now, not at the commit refusal.
+    let violations: Vec<String> = repo
+        .conflicts()?
+        .iter()
+        .filter_map(|c| match c {
+            acetone_core::graph::conflicts::WorkspaceConflict::Graph(v) => Some(v.to_string()),
+            acetone_core::graph::conflicts::WorkspaceConflict::Cell { .. } => None,
+        })
+        .collect();
+    if violations.is_empty() {
+        outln!("resolved {count} conflict(s) — run `acetone commit` to complete the merge");
+    } else {
+        outln!(
+            "resolved {count} conflict(s), but the resolved graph has {} graph-level violation(s):",
+            violations.len()
+        );
+        for v in &violations {
+            outln!("  {v}");
+        }
+        outln!(
+            "repair the graph (delete the dangling relationship, restore the endpoint, \
+             or fix the constraint breach), then `acetone commit` to complete — or \
+             `acetone merge --abort` to back out"
+        );
+    }
     Ok(())
 }
 
@@ -560,48 +589,10 @@ fn render_conflict(c: &MergeConflict) -> String {
                 ConflictMap::Schema => format!("schema {}{at}", hex_key(&cell.key)),
             }
         }
-        MergeConflict::Graph(GraphViolation::DanglingEdge {
-            edge,
-            endpoint,
-            role,
-        }) => {
-            let end = match role {
-                Endpoint::Src => "source",
-                Endpoint::Dst => "destination",
-            };
-            // The endpoint may be absent because a side deleted it, or because
-            // an added edge references a node that is not present — "absent"
-            // covers both.
-            format!(
-                "dangling relationship {}: {end} node {} is absent",
-                render_edge_key(edge),
-                render_node_key(endpoint)
-            )
-        }
-        MergeConflict::Graph(GraphViolation::MissingRequired { node, property }) => {
-            format!(
-                "node {} is missing required property {property:?}",
-                render_node_key(node)
-            )
-        }
-        MergeConflict::Graph(GraphViolation::UniqueViolation {
-            label,
-            property,
-            nodes,
-            ..
-        }) => {
-            let keys: Vec<String> = nodes.iter().map(|n| render_node_key(n)).collect();
-            // `label` and `property` come from the (attacker-controllable)
-            // schema; route them through format_label so a hostile clone
-            // cannot inject terminal escapes here (the PR #25 bar).
-            format!(
-                "UNIQUE {}.{} shared by {} nodes: {}",
-                format_label(label),
-                format_label(property),
-                nodes.len(),
-                keys.join(", ")
-            )
-        }
+        // A graph violation renders via its canonical `Display` (shared with
+        // `GraphError::MergeViolations`, acetone-jm8), which escapes
+        // attacker-writable labels and keys (the PR #25 bar).
+        MergeConflict::Graph(violation) => violation.to_string(),
     }
 }
 

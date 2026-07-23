@@ -1914,6 +1914,123 @@ fn conflicts_node_falls_back_to_theirs_when_ours_deleted() {
 }
 
 #[test]
+fn resolution_left_violations_surface_through_resolve_conflicts_and_commit() {
+    // acetone-jm8 (the PR #178 gap): a merge carrying a property cell conflict
+    // AND a latent dangling edge (theirs DETACH DELETEs the endpoint, ours
+    // adds the edge) reports only the cell conflict at merge time — ADR-0016's
+    // single-class outcome. Once `resolve --all-theirs` clears the cell
+    // conflict, the dangling edge must stop being silent: it surfaces in
+    // resolve's output, in `status`, via CALL acetone.conflicts() (the `kind`
+    // column, ADR-0058), and the commit refusal names the edge.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "v=base"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["put-node", "N", "2"]).status.success());
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "other"]).status.success());
+    // ours: add the edge 1->2 and set v (one side of the cell conflict).
+    assert!(
+        acetone(&repo, &["put-edge", "N", "1", "R", "N", "2"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "v=ours"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+    // theirs: DETACH DELETE node 2 and set v (the other side).
+    assert!(acetone(&repo, &["checkout", "other"]).status.success());
+    assert!(
+        acetone(&repo, &["query", "MATCH (n:N {id: 2}) DETACH DELETE n"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "v=theirs"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+
+    // Merge: the cell conflict alone is reported (ADR-0016 — cell conflicts
+    // short-circuit before the merged graph exists to validate).
+    let merge = acetone(&repo, &["merge", "other", "-m", "merge other"]);
+    assert!(!merge.status.success());
+    let text = stdout(&merge);
+    assert!(text.contains("conflict"), "{text}");
+    assert!(
+        !text.contains("dangling"),
+        "merge time reports cell conflicts only (ADR-0016): {text}"
+    );
+
+    // Resolving to theirs clears the cell conflict but leaves the dangling
+    // edge — resolve must say so instead of "run `acetone commit`".
+    let resolve = acetone(&repo, &["resolve", "--all-theirs"]);
+    assert!(resolve.status.success(), "{}", stderr(&resolve));
+    let text = stdout(&resolve);
+    assert!(
+        text.contains("graph-level violation") && text.contains("dangling relationship"),
+        "resolve must surface the violation it left: {text}"
+    );
+
+    // The violation is structured conflict data: acetone.conflicts yields it
+    // with kind/label/property naming the class, relationship and absent end.
+    let rows = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD kind, label, key, property \
+             RETURN kind, label, key, property",
+            "--format",
+            "csv",
+        ],
+    );
+    assert!(rows.status.success(), "{}", stderr(&rows));
+    let text = stdout(&rows);
+    assert!(
+        text.contains("dangling-edge") && text.contains("dst"),
+        "acetone.conflicts must yield the violation row: {text}"
+    );
+
+    // status flags the merge as blocked on a graph-level violation.
+    let status = acetone(&repo, &["status"]);
+    assert!(
+        stdout(&status).contains("graph-level violation"),
+        "{}",
+        stdout(&status)
+    );
+
+    // Completion refuses, naming the dangling relationship and its absent
+    // endpoint — not an anonymous refusal only fsck can explain.
+    let commit = acetone(&repo, &["commit", "-m", "finish"]);
+    assert!(!commit.status.success());
+    let text = stderr(&commit);
+    assert!(
+        text.contains("dangling relationship") && text.contains("\"N\" [2]"),
+        "the refusal must name the violation: {text}"
+    );
+
+    // Repair (restore the endpoint) and complete; the graph is fsck-clean.
+    assert!(acetone(&repo, &["put-node", "N", "2"]).status.success());
+    let done = acetone(&repo, &["commit", "-m", "merge other"]);
+    assert!(done.status.success(), "{}", stderr(&done));
+    assert!(acetone(&repo, &["fsck"]).status.success());
+}
+
+#[test]
 fn merge_conflict_resolved_by_ordinary_write() {
     // acetone-14c.4c: a conflict can be resolved by writing a custom merged
     // value (not just picking a side), then commit completes the merge.

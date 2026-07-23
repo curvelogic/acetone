@@ -585,17 +585,31 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         name: "acetone.conflicts",
         min_args: 0,
         max_args: 0,
+        // `kind` classifies the conflict (acetone-jm8): `cell` for a cell-level
+        // clash, or a graph-level violation class — `dangling-edge`,
+        // `missing-required`, `unique` — re-derived live over the workspace
+        // graph once every cell conflict is resolved (ADR-0058), so a
+        // violation the merge composed or a resolution introduced is visible
+        // before `commit` refuses it. A UNIQUE collision yields one row per
+        // colliding node.
         // `property` names the single conflicted property of a cell-wise merge
-        // (ADR-0035), or is null for a whole-record conflict (a node/edge whose
-        // existence is disputed, or a schema key). `base`/`ours`/`theirs` are
-        // that property's value on each side of the merge (acetone-s7d), so the
-        // three-way is visible in one call; null for a whole-record conflict, a
-        // relationship (edge three-way values are a follow-up), or a schema key.
-        // `node` is the `_Conflict` virtual subgraph (acetone-14c.4b): the
-        // conflicting node as a value labelled `_Conflict`, so `YIELD node WHERE
-        // '_Conflict' IN labels(node)` queries the merge's conflicts as a graph.
-        // Null for a relationship or schema conflict.
-        yields: &["label", "key", "property", "base", "ours", "theirs", "node"],
+        // (ADR-0035, null for a whole-record conflict), the missing required
+        // or UNIQUE property of a violation, or which endpoint of a dangling
+        // relationship is absent (`src`/`dst`). `base`/`ours`/`theirs` are a
+        // cell conflict's property value on each side of the merge
+        // (acetone-s7d), so the three-way is visible in one call; null for a
+        // whole-record conflict, a relationship (edge three-way values are a
+        // follow-up), a schema key, or a graph violation. `node` is the
+        // `_Conflict` virtual subgraph (acetone-14c.4b): the conflicting node
+        // as a value labelled `_Conflict`, so `YIELD node WHERE '_Conflict' IN
+        // labels(node)` queries the merge's conflicts as a graph. Null for a
+        // relationship or schema conflict; for a graph violation it is the
+        // violating node's *workspace* record.
+        yields: &[
+            "kind", "label", "key", "property", "base", "ours", "theirs", "node",
+        ],
+        // `kind` is a fixed vocabulary (cell / dangling-edge / missing-required
+        // / unique), not repository text, so it is not an identifier yield.
         identifier_yields: &["label", "property"],
     },
 ];

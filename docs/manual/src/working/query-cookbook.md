@@ -877,17 +877,19 @@ $ acetone query 'CALL acetone.blame("Service", "postgres")'
 ```
 
 **Conflicts.** During a merge that stopped on conflicts, `CALL
-acetone.conflicts()` lists each conflicted key with its base/ours/theirs
-values. With no merge in progress it is simply empty — the
-[history chapter](history-branch-merge.md) drives a real conflict through
-this procedure:
+acetone.conflicts()` lists each conflict: the `kind` column classifies it
+(`cell` for a same-key clash with its base/ours/theirs values;
+`dangling-edge`, `missing-required` or `unique` for a graph-level
+violation). With no merge in progress it is simply empty — the
+[history chapter](history-branch-merge.md) drives real conflicts of both
+classes through this procedure:
 
 ```console
 $ acetone query 'CALL acetone.conflicts()'
-┌───────┬─────┬──────────┬──────┬──────┬────────┬──────┐
-│ label │ key │ property │ base │ ours │ theirs │ node │
-├───────┼─────┼──────────┼──────┼──────┼────────┼──────┤
-└───────┴─────┴──────────┴──────┴──────┴────────┴──────┘
+┌──────┬───────┬─────┬──────────┬──────┬──────┬────────┬──────┐
+│ kind │ label │ key │ property │ base │ ours │ theirs │ node │
+├──────┼───────┼─────┼──────────┼──────┼──────┼────────┼──────┤
+└──────┴───────┴─────┴──────────┴──────┴──────┴────────┴──────┘
 0 rows
 ```
 

@@ -28,6 +28,19 @@ fine.)
 
 ### Changed
 
+- **Graph-level merge violations surface through the whole resolution flow**
+  (ADR-0058): while a merge is in progress and every cell conflict is
+  resolved, `Repository::conflicts()` re-derives graph violations (dangling
+  edge, missing required property, UNIQUE collision) live over the resolved
+  workspace, so a violation the merge composed — or one a resolution
+  introduced — is visible before commit refuses it: `acetone resolve` warns
+  about violations it leaves, `status` counts them, and the merge-completion
+  refusal now **names each violation** (`GraphError::MergeViolations`)
+  instead of refusing anonymously. `CALL acetone.conflicts()` gains a leading
+  `kind` column (`cell` | `dangling-edge` | `missing-required` | `unique`)
+  and yields one row per violation. Library note: `PersistedConflict` is
+  renamed `WorkspaceConflict`, whose `Graph` variant now carries the
+  violation record.
 - **Repository lifecycle hardening** (ADR-0056): `Transaction::commit` now
   refuses a commit that would record no change
   (`GraphError::NothingToCommit`) — merge completions are exempt, and the
