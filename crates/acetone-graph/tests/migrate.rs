@@ -509,6 +509,49 @@ fn migrate_refuses_a_signed_tag_without_moving_anything() {
     assert!(pending_migration(&repo).expect("pending").is_none());
 }
 
+#[test]
+fn migrate_leaves_a_virtual_workspace_virtual() {
+    // A worktree acetone has never written in has NO materialised workspace
+    // ref (acetone-ayq, PR #168): the workspace is virtual, reading the
+    // checked-out commit's manifest. Migrate must neither trip over the
+    // absent ref nor needlessly materialise it — after the branch swing the
+    // virtual workspace follows the rewritten head by construction.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    put_range(&repo, 0, 200, "first");
+    put_range(&repo, 200, 400, "second");
+    let old_entries = nodes_entries(&repo);
+    let old_main = target(&repo, "refs/heads/main").expect("main");
+
+    // Reproduce the fresh-worktree state: no per-worktree workspace ref (a
+    // fresh repo has no legacy ref either), workspace virtual and clean.
+    repo.store()
+        .delete_ref(WORKTREE_WORKSPACE_REF)
+        .expect("drop the materialised workspace ref");
+    assert!(target(&repo, WORKTREE_WORKSPACE_REF).is_none());
+    assert!(!repo.is_dirty().expect("virtual workspace reads clean"));
+
+    let new_params = ChunkParams::new(512, 10, 8192).expect("params");
+    let report = rewrite_history(&repo, &Rechunk::new(new_params)).expect("migrate");
+    assert_eq!(report.commits_rewritten, 2);
+
+    // The branch swung; the workspace stayed virtual and reads the rewritten
+    // head: new parameters, same data, still clean.
+    assert_ne!(target(&repo, "refs/heads/main").expect("main"), old_main);
+    assert!(
+        target(&repo, WORKTREE_WORKSPACE_REF).is_none(),
+        "migrate must not materialise a virtual workspace"
+    );
+    assert_eq!(
+        repo.workspace_manifest().expect("manifest").chunk_params,
+        new_params
+    );
+    assert_eq!(nodes_entries(&repo), old_entries, "data preserved");
+    assert!(!repo.is_dirty().expect("is_dirty"));
+    assert!(pending_migration(&repo).expect("pending").is_none());
+    assert_fsck_clean(&dir.path().join("graph.git"));
+}
+
 /// The refs of a small multi-ref repository, for the crash-simulation tests.
 struct RefState {
     main: Hash,

@@ -312,8 +312,10 @@ pub struct TagObject {
     /// The tag message (without any trailing signature block). Lossily
     /// decoded to UTF-8, like commit messages.
     pub message: String,
-    /// Whether the tag carries a cryptographic (PGP) signature. A signed
-    /// tag cannot be rewritten without invalidating the signature, so
+    /// Whether the tag carries a cryptographic signature — any format git
+    /// produces: OpenPGP, SSH (`gpg.format=ssh`) or X.509/S-MIME
+    /// (`gpg.format=x509`). A signed tag cannot be rewritten without
+    /// invalidating the signature, so
     /// [`GitStore::rewrite_tag`](crate::GitStore::rewrite_tag) refuses it.
     pub signed: bool,
 }

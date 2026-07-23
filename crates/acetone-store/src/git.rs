@@ -505,6 +505,13 @@ impl GitStore {
     /// tagger signature is unparsable. The complement of [`Self::peel_tag`]:
     /// this returns one link of the chain with its metadata, `peel_tag`
     /// returns the chain's end without any.
+    ///
+    /// `signed` covers every signature format git produces, not just what
+    /// gix parses out: PGP (`gpg.format=openpgp`, gix's `pgp_signature`
+    /// field), **SSH** (`gpg.format=ssh`) and **X.509/S-MIME**
+    /// (`gpg.format=x509`) — the latter two leave their signature blocks
+    /// inside the message, where [`message_has_signature_block`] detects
+    /// them.
     pub fn read_tag(&self, id: &Hash) -> Result<Option<TagObject>, StoreError> {
         let Some(header) = self.find_header(id)? else {
             return Ok(None);
@@ -520,12 +527,14 @@ impl GitStore {
             .map_err(|e| StoreError::corrupt("tag tagger", e.to_string()))?
             .map(|sig| identity_from_ref(sig, "tag tagger"))
             .transpose()?;
+        let message = String::from_utf8_lossy(tag.message).into_owned();
+        let signed = tag.pgp_signature.is_some() || message_has_signature_block(&message);
         Ok(Some(TagObject {
             target: Hash::from_oid(tag.target()),
             name: String::from_utf8_lossy(tag.name).into_owned(),
             tagger,
-            message: String::from_utf8_lossy(tag.message).into_owned(),
-            signed: tag.pgp_signature.is_some(),
+            message,
+            signed,
         }))
     }
 
@@ -537,8 +546,12 @@ impl GitStore {
     /// from the store, so `new_target` must already exist. A signed tag is
     /// refused ([`StoreError::SignedTag`]): the rewritten bytes could never
     /// carry the original signature, and dropping it silently is forbidden.
+    /// The check mirrors [`Self::read_tag`]'s detection — the `signed` flag
+    /// *and* an independent scan of the message for SSH/X.509 signature
+    /// blocks — so even a hand-built [`TagObject`] cannot smuggle a signed
+    /// message past the door.
     pub fn rewrite_tag(&self, tag: &TagObject, new_target: &Hash) -> Result<Hash, StoreError> {
-        if tag.signed {
+        if tag.signed || message_has_signature_block(&tag.message) {
             return Err(StoreError::SignedTag {
                 name: tag.name.clone(),
             });
@@ -967,6 +980,13 @@ impl GitStore {
     /// given — so the rewritten history keeps its dates and authorship. The
     /// tree is still built from the manifest, summary and anchors, and every
     /// anchor is verified present, so the result is `git fsck`-connected.
+    ///
+    /// **Extra headers are not carried forward**: in particular a `gpgsig`
+    /// commit signature — which no rewrite could keep valid, since it signs
+    /// bytes the rewrite changes — is dropped, so a signed commit is
+    /// rewritten as a well-formed *unsigned* commit. A documented limitation
+    /// of the opt-in rewrite path (see the `acetone-graph` migrate module
+    /// docs).
     pub fn rewrite_commit(&self, spec: &RewriteCommit<'_>) -> Result<Hash, StoreError> {
         let author = git_identity(spec.author)?;
         let committer = git_identity(spec.committer)?;
@@ -1058,6 +1078,23 @@ impl ChunkStore for GitStore {
     fn max_chunk_size(&self) -> u64 {
         self.max_chunk_size
     }
+}
+
+/// Whether a tag message carries a signature block that gix does **not**
+/// parse out of the message. gix 0.62 recognises only OpenPGP blocks (its
+/// `pgp_signature` field); tags signed with `gpg.format=ssh` end their
+/// message with `-----BEGIN SSH SIGNATURE-----…`, and `gpg.format=x509`
+/// (S/MIME via gpgsm) ones with `-----BEGIN SIGNED MESSAGE-----…`, both left
+/// inside `message`. Any line that *is* such an armour header counts —
+/// over-matching merely refuses a rewrite (safe: the operator deletes or
+/// replaces the tag), while under-matching would silently invalidate a
+/// signature (forbidden).
+fn message_has_signature_block(message: &str) -> bool {
+    message.lines().any(|line| {
+        let line = line.trim_end();
+        (line.starts_with("-----BEGIN ") && line.ends_with("SIGNATURE-----"))
+            || line == "-----BEGIN SIGNED MESSAGE-----"
+    })
 }
 
 /// Validate a ref name against git ref-format rules, additionally requiring
@@ -1566,7 +1603,33 @@ fn identity_from_ref(
 
 #[cfg(test)]
 mod tests {
-    use super::{assemble_message, validate_trailer, validated_ref_name};
+    use super::{
+        assemble_message, message_has_signature_block, validate_trailer, validated_ref_name,
+    };
+
+    #[test]
+    fn signature_blocks_of_every_git_format_are_detected() {
+        // PGP normally lands in gix's pgp_signature field, but the message
+        // scan must also catch it (defence in depth for hand-built values).
+        assert!(message_has_signature_block(
+            "msg\n-----BEGIN PGP SIGNATURE-----\n\nAAAA\n-----END PGP SIGNATURE-----\n"
+        ));
+        // gpg.format=ssh: gix leaves the block inside the message.
+        assert!(message_has_signature_block(
+            "msg\n-----BEGIN SSH SIGNATURE-----\nU1NIU0lH\n-----END SSH SIGNATURE-----\n"
+        ));
+        // gpg.format=x509 (gpgsm / S-MIME).
+        assert!(message_has_signature_block(
+            "msg\n-----BEGIN SIGNED MESSAGE-----\nMIIB\n-----END SIGNED MESSAGE-----\n"
+        ));
+        // Armour headers count only at line starts…
+        assert!(!message_has_signature_block(
+            "quoting `-----BEGIN SSH SIGNATURE-----` inline is fine"
+        ));
+        // …and plain messages never match.
+        assert!(!message_has_signature_block("release one\n"));
+        assert!(!message_has_signature_block(""));
+    }
 
     fn pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs

@@ -134,6 +134,82 @@ fn rewrite_tag_refuses_a_signed_tag() {
     }
 }
 
+/// Build a tag object whose message ends with `block`, via real git, and
+/// read it back.
+fn tag_with_block(
+    store: &GitStore,
+    repo: &std::path::Path,
+    target: &Hash,
+    name: &str,
+    block: &str,
+) -> acetone_store::TagObject {
+    let content = format!(
+        "object {}\ntype commit\ntag {name}\n\
+         tagger T <t@example.invalid> 1700000000 +0000\n\nmsg\n{block}",
+        target.to_hex()
+    );
+    let id = git_stdin(
+        repo,
+        &["hash-object", "-t", "tag", "-w", "--stdin"],
+        content.as_bytes(),
+    );
+    store
+        .read_tag(&Hash::from_hex(id.trim()).expect("hash"))
+        .expect("read_tag")
+        .expect("tag object")
+}
+
+#[test]
+fn ssh_and_x509_signed_tags_are_detected_and_refused() {
+    // gix 0.62's TagRef parses only OpenPGP blocks into `pgp_signature`;
+    // `gpg.format=ssh` and `gpg.format=x509` signatures stay inside the
+    // message. They must still read as signed — and refuse a rewrite —
+    // or migrate would fold a now-invalid signature into the rewritten
+    // tag's message.
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    let c1 = commit(&store, "first");
+    let c2 = commit(&store, "second");
+
+    let ssh = tag_with_block(
+        &store,
+        &repo,
+        &c1,
+        "ssh-sealed",
+        "-----BEGIN SSH SIGNATURE-----\nU1NIU0lH\n-----END SSH SIGNATURE-----\n",
+    );
+    assert!(ssh.signed, "an SSH signature block must be detected");
+    match store.rewrite_tag(&ssh, &c2) {
+        Err(StoreError::SignedTag { name }) => assert_eq!(name, "ssh-sealed"),
+        other => panic!("expected SignedTag for SSH, got {other:?}"),
+    }
+
+    let x509 = tag_with_block(
+        &store,
+        &repo,
+        &c1,
+        "smime-sealed",
+        "-----BEGIN SIGNED MESSAGE-----\nMIIB\n-----END SIGNED MESSAGE-----\n",
+    );
+    assert!(
+        x509.signed,
+        "an X.509/S-MIME signature block must be detected"
+    );
+    match store.rewrite_tag(&x509, &c2) {
+        Err(StoreError::SignedTag { name }) => assert_eq!(name, "smime-sealed"),
+        other => panic!("expected SignedTag for X.509, got {other:?}"),
+    }
+
+    // Defence in depth: even a hand-built TagObject claiming `signed:
+    // false` cannot smuggle a signature block through `rewrite_tag`.
+    let mut smuggled = ssh.clone();
+    smuggled.signed = false;
+    match store.rewrite_tag(&smuggled, &c2) {
+        Err(StoreError::SignedTag { name }) => assert_eq!(name, "ssh-sealed"),
+        other => panic!("expected SignedTag for a smuggled block, got {other:?}"),
+    }
+}
+
 #[test]
 fn rewrite_tag_requires_the_new_target_to_exist() {
     let (dir, store) = new_store();

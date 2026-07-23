@@ -33,6 +33,16 @@
 //! forbidden. A ref target that peels to anything that is not a commit is
 //! still [`GraphError::NotACommit`].
 //!
+//! **Signed commits — documented limitation.** A `gpgsig` header on a
+//! commit signs bytes that a rewrite necessarily changes, so no rewritten
+//! commit can keep its signature valid. Unlike a tag — whose stale
+//! signature would be *folded into the rewritten content* as corrupt data,
+//! hence the refusal above — [`GitStore::rewrite_commit`] simply does not
+//! carry extra headers forward: a signed commit is rewritten as a
+//! well-formed **unsigned** commit. This loss is inherent to opting into a
+//! history rewrite (migrate is the explicit opt-in path, ADR-0048; the
+//! default read-old-write-new path never touches existing commits).
+//!
 //! **Crash safety — the journalled atomic swing.** The rewrite proceeds in
 //! phases so that a process death at *any* point leaves the repository fully
 //! old, fully new, or *detectably* in-between — never silently mixed:
@@ -323,7 +333,13 @@ pub fn rewrite_history(
 ) -> Result<MigrateReport, GraphError> {
     // Complete any interrupted migration first: the crashed state legitimately
     // reads as dirty (refs swung, workspace lagging), so recovery must run
-    // before the guards.
+    // before the guards. Recovery-then-rerun leans on transform idempotence:
+    // after the journalled swing completes, THIS invocation's transform runs
+    // over the already-migrated history, which is a no-op for an idempotent
+    // transform like `Rechunk` (same params ⇒ same hashes). A future
+    // non-idempotent transform (one whose double application differs from a
+    // single one) must not be re-applied blindly here — it would need to
+    // detect already-current commits or record the transform in the journal.
     recover_pending(repo)?;
 
     // The rewrite resets the workspace, so refuse to run over uncommitted or
@@ -419,8 +435,16 @@ pub fn rewrite_history(
 
     // The default workspace follows the rewritten head in the same swing, so
     // the repository moves in one step (the workspace was clean, i.e. equal
-    // to the old head).
-    if let Some(old_head) = repo.head_commit()? {
+    // to the old head). A *virtual* workspace — no per-worktree or legacy
+    // ref materialised, e.g. a fresh `git worktree add` (acetone-ayq) — needs
+    // no swing and stays virtual: it reads the checked-out commit's manifest,
+    // so it follows the branch swing automatically. When only the legacy
+    // shared ref exists, the swing materialises the per-worktree ref at the
+    // rewritten head (the same shadowing upgrade every workspace write
+    // performs, ADR-0014).
+    if let Some(old_head) = repo.head_commit()?
+        && repo.workspace_ref_target()?.is_some()
+    {
         let new_head = *mapping.get(&old_head).ok_or_else(|| {
             GraphError::Migrate(format!("head commit {old_head} was not rewritten"))
         })?;
