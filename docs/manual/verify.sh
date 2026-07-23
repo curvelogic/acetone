@@ -169,6 +169,16 @@ printf 'service,host\nbilling,ghost9\n' > ../runs_on-ghost.csv
 expect_error "$ACETONE" import --format csv ../runs_on-ghost.csv --edge RUNS_ON \
     --from Service=service --to Host=host
 assert_contains "$ERR_OUT" 'dangling RUNS_ON relationship' "dangling edge is refused"
+
+# ... and a row violating a declared constraint fails the whole import
+# (acetone-9gw: the chapter documents enforcement, not a gap).
+printf '[{"name": "search", "version": "0.9.1", "port": 9200}]\n' > ../services-notier.json
+expect_error "$ACETONE" import --format json ../services-notier.json --label Service
+assert_contains "$ERR_OUT" 'import violates declared constraints' \
+    "constraint-violating import is refused"
+assert_contains "$ERR_OUT" 'missing required property "tier"' \
+    "the violation names the missing property"
+
 assert_contains "$("$ACETONE" status)" 'nodes: 14, edges: 17' \
     "failed imports left the graph untouched"
 
