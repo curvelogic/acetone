@@ -1,4 +1,4 @@
-# ADR-0055: Repository lifecycle hardening — recoverable checkout, read-only open, no-change commit guard
+# ADR-0056: Repository lifecycle hardening — recoverable checkout, read-only open, no-change commit guard
 
 *Status: accepted — taken mid-phase per the working protocol, for retrospective review at the next boundary · Date: 2026-07-23 · Beads: acetone-tqd, acetone-ayq, acetone-k78*
 

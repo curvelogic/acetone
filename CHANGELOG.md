@@ -21,14 +21,14 @@ fine.)
 - **`acetone commit --allow-empty`** (and library
   `Transaction::commit_allow_empty`): deliberately record a commit with no
   content change — a marker commit — now that plain `commit` refuses one
-  (ADR-0055).
+  (ADR-0056).
 - **Streaming counts**: `Snapshot::node_count`/`edge_count`/
   `schema_entry_count` count without materialising records; `acetone status`
   uses them, so status stays cheap on large graphs.
 
 ### Changed
 
-- **Repository lifecycle hardening** (ADR-0055): `Transaction::commit` now
+- **Repository lifecycle hardening** (ADR-0056): `Transaction::commit` now
   refuses a commit that would record no change
   (`GraphError::NothingToCommit`) — merge completions are exempt, and the
   guard now lives in the library rather than as a CLI-side check; an
