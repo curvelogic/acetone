@@ -44,7 +44,7 @@ Exit criteria: a scheduled-import simulation — N successive snapshots of a mut
 
 ## Phase 6 — Hardening towards 0.1 (size M)
 
-Format freeze review of spec §3.4 encodings and manifest (with `format_version` machinery and a working `migrate`), TCK pass-rate push, error-message quality, docs (user guide, format spec, conformance statement), packaging (single static binary; `acetone-core` published as a library crate), and a dogfood deployment: the real asset-registry use case run in anger on a private GitHub remote.
+Format freeze review of spec §3.4 encodings and manifest (with `format_version` machinery and a working `migrate`), TCK pass-rate push, error-message quality, docs (user guide, format spec, conformance statement), packaging (single static binary; `acetone-core` packaged as a library crate), and a dogfood deployment: the real asset-registry use case run in anger on a private GitHub remote.
 
 Exit criteria: 0.1 tagged; a fortnight of dogfooding without data-integrity incidents; the three documents in this pack revised to match reality.
 
