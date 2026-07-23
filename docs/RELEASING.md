@@ -54,13 +54,15 @@ follow-up (`acetone-wpx`); it needs a cross-repo token secret
 (`HOMEBREW_TAP_TOKEN`) since the default `GITHUB_TOKEN` cannot write to another
 repository.
 
-## The library crates (deferred)
+## The library crates (held)
 
-**crates.io publication is not part of 0.1** (Greg, 2026-07-10). The crates stay
-clean and buildable but internal — no external API is frozen, which is precisely
-why the Phase-7 seam fixes (rel identity, value domain, the library query API)
-remain free to change. `acetone-core` is the intended library surface but it
-stabilises at **0.2**, gated on the query-engine resource governor (spec §7).
+**crates.io publication is on hold as standing policy** (Greg, 2026-07-21;
+ADR-0047 point 5): the crates are not published until Greg judges the project
+mature enough, or an external need forces it. Publication was originally
+deferred past 0.1 (Greg, 2026-07-10) to keep the Phase-7 seam fixes free to
+change; the `acetone-core` API has since **frozen at the 0.2 gate** (ADR-0046,
+see `STABILITY.md`), so the hold — not API stability — is now what keeps the
+crates internal.
 
 If and when the library is published, do it **bottom-up** in dependency order so
 each crate's dependencies are already on the index:
