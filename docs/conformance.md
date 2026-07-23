@@ -6,15 +6,16 @@ statement records the pass rate, how it is measured, and the known gaps.
 
 > Measured against TCK commit `677cbaf`. The live number is produced by the CI
 > job "openCypher TCK conformance report" (`cargo run --release -p acetone-tck
-> --bin tck_runner`); this document is refreshed at each release.
+> --bin tck_runner`); this document is refreshed at each release. Last
+> refreshed 2026-07-23 (for 0.3.0) by running the runner on `main`.
 
 ## Pass rate
 
-**1596 / 3897 scenarios pass (41.0%).**
+**1598 / 3897 scenarios pass (41.0%).**
 
 | Area | Scenarios | Passing | Rate |
 |------|-----------|---------|------|
-| expressions | 2616 | 1095 | 41.9% |
+| expressions | 2616 | 1097 | 41.9% |
 | clauses | 1251 | 501 | 40.0% |
 | useCases | 30 | 0 | 0.0% |
 
@@ -22,14 +23,14 @@ The remaining scenarios break down as:
 
 | Outcome | Count | Meaning |
 |---------|-------|---------|
-| **passed** | 1596 | executed and produced the TCK-expected result |
+| **passed** | 1598 | executed and produced the TCK-expected result |
 | unsupported (deferred syntax) | 1137 | a language feature acetone deliberately does not parse yet |
 | unsupported (executor) | 802 | parsed and planned, but the executor lacks the operator |
 | unsupported (compile classification) | 306 | a compile-time error the TCK expects that acetone classifies differently |
-| **failed** | 56 | acetone rejects a query the TCK requires to be valid, or returns a wrong result |
+| **failed** | 54 | acetone rejects a query the TCK requires to be valid, or returns a wrong result |
 
 "Unsupported" outcomes are **honest declines**, not wrong answers: acetone
-reports a typed "not supported" rather than mis-executing. The 56 **failures**
+reports a typed "not supported" rather than mis-executing. The 54 **failures**
 are the real conformance bugs and the improvement backlog.
 
 ## What is solid
@@ -47,12 +48,12 @@ Each is tracked; the pass rate climbs as these land.
 
 | Gap | TCK impact | Bead |
 |-----|-----------|------|
-| Pattern comprehension `[ (a)-[r]->(b) WHERE p \| expr ]` | ~16 failures | `acetone-cxh` |
-| Label predicate in expression position (`WHERE n:Label`) | ~4 failures | `acetone-6gy` |
-| `MERGE`-relationship `ON CREATE` columns / `SET = <entity>` | ~4 failures | `acetone-q9m` |
-| Standalone / mid-query `CALL … YIELD` shapes | ~1 failure | `acetone-i8z` |
-| `i64::MIN` integer literal (`-9223372036854775808`, hex/octal) | 3 failures | `acetone-4lh` |
-| Assorted parser stragglers (self-loops, some projection forms) | ~28 failures | triaged in the report JSON |
+| Label predicate in expression position (`WHERE n:Label`, incl. self-loops) | 17 failures | `acetone-6gy` |
+| Pattern comprehension `[ (a)-[r]->(b) WHERE p \| expr ]` | 16 failures | `acetone-cxh` |
+| `CALL … YIELD a AS b` aliasing and `YIELD *` | 12 failures | `acetone-i8z` |
+| Bidirectional relationship pattern (`(a)<-[r]->(b)`) | 4 failures | triaged in the report JSON |
+| `MERGE`-relationship `ON CREATE` columns / `SET = <entity>` | 4 failures | `acetone-q9m` |
+| Default result-row limit trips one huge summation scenario | 1 failure | triaged in the report JSON |
 
 Larger **deferred-syntax** families (the 1137 above) — e.g. `CALL {}`
 subqueries, `FOREACH`, `LOAD CSV`, quantified path patterns, `UNION` variants —

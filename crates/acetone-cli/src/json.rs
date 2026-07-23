@@ -1,9 +1,11 @@
 //! Shared machine-readable (`--json`) output for the read commands.
 //!
 //! **Stability:** the JSON *shape* emitted here is deliberately NOT a
-//! compatibility commitment at 0.1.1 and may change before 0.2 (a future
-//! acetone-core facade may own it). Do not build long-lived integrations
-//! against these exact field names or nesting.
+//! stability commitment pre-1.0 and may change at any minor release, with the
+//! change noted in the CHANGELOG (acetone-lk1: the CLI is its own product
+//! surface, spec §7, and is not covered by the ADR-0046 library freeze —
+//! see `STABILITY.md`). Pin your acetone version if you script against exact
+//! field names or nesting.
 //!
 //! All emission goes through `serde_json`, so string escaping is correct: it
 //! handles quotes, backslashes and the C0 controls (`< 0x20`). But

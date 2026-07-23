@@ -74,9 +74,11 @@ acetone get-node Host web1 --json
 acetone schema --json | jq '.labels[].name'
 ```
 
-> **Stability:** the JSON *shape* emitted by `--json` is **not** a
-> compatibility commitment at 0.1.1 and may change before 0.2. Do not pin
-> long-lived integrations to these exact field names or nesting yet.
+> **Stability:** the JSON *shape* emitted by `--json` is **not** a stability
+> commitment pre-1.0: it may change at any minor release, with the change
+> noted in the CHANGELOG. (The CLI is its own product surface and is not
+> covered by the frozen `acetone-core` library API — see `STABILITY.md`.)
+> Pin your acetone version if you script against exact field names or nesting.
 
 ## Commit, branch, merge, time-travel
 
