@@ -41,10 +41,11 @@ Concretely:
   the phase report **with the reason it could not be resolved in-phase**, and is
   re-homed to an owning epic (the next phase, or a dedicated pass) — never left
   floating under the closed phase's epic.
-- **A feature is not delivered until it is reachable through the shipped
-  interface.** Exit criteria and bead decomposition must reflect that; the CLI/API
-  surface of a feature is in-scope for the phase that ships the feature, not a
-  follow-up (the `xg6` lesson).
+- **A user-facing feature is not delivered until it is reachable through the
+  shipped interface.** Exit criteria and bead decomposition must reflect that; the
+  CLI/API surface of a user-facing feature is in-scope for the phase that ships it,
+  not a follow-up (the `xg6` lesson). A purely internal capability is exempt — its
+  "interface" is the code that consumes it.
 
 At the boundary, closing a phase means its own follow-ups are *done or justified-
 cross* — not silently deferred.
