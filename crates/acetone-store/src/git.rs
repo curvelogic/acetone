@@ -371,7 +371,9 @@ impl GitStore {
     /// value), this writes nothing, so read paths (`open`, snapshots, diff,
     /// dirtiness) can resolve a commit's manifest on a read-only filesystem
     /// (acetone-ayq). Content addressing makes the two routes return the same
-    /// hash, and the blob provably exists: the commit tree anchors it.
+    /// hash. Unlike the old route this does not fetch the manifest blob, so
+    /// its presence is not verified here — a corrupt repository whose tree
+    /// names a missing blob surfaces the error at first decode instead.
     ///
     /// `None` when no object `id` exists; a non-commit object errors with
     /// [`StoreError::WrongObjectKind`], as [`CommitStore::read_commit`] does.

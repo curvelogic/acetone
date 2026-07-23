@@ -483,7 +483,9 @@ impl Repository {
     /// state "workspace = target's committed content, checked-out ref = old
     /// branch", which reads as dirty. Recovery is to **re-run the same
     /// checkout**: it finds the workspace already at the target's manifest
-    /// and idempotently completes step (2). (Committing from the interrupted
+    /// and idempotently completes step (2). (Precondition: the target branch
+    /// has not advanced in the crash window; if it has, the retry safely
+    /// degrades to an ordinary [`GraphError::DirtyWorkspace`] refusal.) (Committing from the interrupted
     /// state also stays safe — it records the target's committed content onto
     /// the *old* branch, an explicit commit with correct parentage.) Checking
     /// out any *other* branch from that state still refuses with
