@@ -102,7 +102,8 @@ fn apply_and_commit(repo: &Repository, edits: &Edits, message: &str) -> Manifest
             None => tx.delete_node(&node(*id)).expect("delete"),
         }
     }
-    let commit = tx.commit(message, &[], None).expect("commit");
+    // Arbitrary edit sets may be net-empty; opt in (acetone-k78).
+    let commit = tx.commit_allow_empty(message, &[], None).expect("commit");
     repo.snapshot(&commit.to_hex())
         .expect("snapshot")
         .manifest()
@@ -161,7 +162,8 @@ proptest! {
         for (id, (v, r)) in &base {
             tx.put_node(&node(*id), &record(*v, *r)).expect("put");
         }
-        let base_commit = tx.commit("base", &[], None).expect("commit");
+        // Arbitrary bases may be empty; opt in (acetone-k78).
+        let base_commit = tx.commit_allow_empty("base", &[], None).expect("commit");
         let base_manifest = repo
             .snapshot(&base_commit.to_hex())
             .expect("snapshot")
