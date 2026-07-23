@@ -3,12 +3,13 @@
 //! locking, commits with complete chunk anchoring (verified against a
 //! real `git gc --prune=now`), branches, checkout and log.
 
-use acetone_graph::repo::{DEFAULT_BRANCH, InitOptions, Repository};
+use acetone_graph::repo::{DEFAULT_BRANCH, InitOptions, Repository, WORKTREE_WORKSPACE_REF};
 use acetone_graph::{GraphError, WriteLock};
 use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_model::schema::{LabelDef, SchemaEntry};
+use acetone_store::RefStore;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -355,6 +356,80 @@ fn workspace_advance_is_compare_and_swap() {
     let nodes = repo.workspace_snapshot().expect("s").nodes().expect("n");
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].0, node("Host", "b"));
+}
+
+#[test]
+fn stale_refs_lock_blocks_a_manifest_changing_workspace_save() {
+    // acetone-3gy: a workspace save's ref advance goes through the same
+    // store-level `acetone-refs.lock` as every other acetone ref update
+    // (branch creation, commit). A stale lock — a writer killed while holding
+    // it — must therefore block a manifest-changing save with the backoff
+    // error, not let it through. (This test costs ~5s: the store's lock
+    // backoff before giving up.)
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    std::fs::write(repo.store().common_dir().join("acetone-refs.lock"), b"")
+        .expect("plant stale refs lock");
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[("cores", 8)]))
+        .expect("node");
+    match tx.save() {
+        Err(GraphError::Store(e)) => {
+            let message = e.to_string();
+            assert!(
+                message.contains("acetone-refs"),
+                "error must name the stale lock: {message}"
+            );
+        }
+        other => panic!("expected a Store backoff error, got {other:?}"),
+    }
+    // Nothing advanced: the workspace still shows the empty graph.
+    let nodes = repo.workspace_snapshot().expect("s").nodes().expect("n");
+    assert!(nodes.is_empty(), "refused save must not advance anything");
+}
+
+#[test]
+fn stale_refs_lock_does_not_block_a_save_that_changes_nothing() {
+    // acetone-3gy: the deliberate flip side of the test above. A save whose
+    // staged operations net to **no manifest change** (manifests are
+    // content-addressed, so re-applying an already-applied write reproduces
+    // the identical manifest hash) skips the workspace ref advance entirely —
+    // no ref update, so the writer lock is never consulted and a stale
+    // `acetone-refs.lock` does not block it. This is what a manual stale-lock
+    // test observes as a "successful write under the lock": nothing was
+    // written. If this test starts failing after a change to
+    // `persist_manifest`, the no-op fast path (and its documentation in
+    // `git.rs`/the runbook) needs revisiting together.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[("cores", 8)]))
+        .expect("node");
+    tx.save().expect("first save");
+    let before = repo
+        .store()
+        .read_ref(WORKTREE_WORKSPACE_REF)
+        .expect("read workspace ref")
+        .expect("workspace ref exists after a save");
+
+    std::fs::write(repo.store().common_dir().join("acetone-refs.lock"), b"")
+        .expect("plant stale refs lock");
+    let mut tx = repo.begin_write().expect("begin under stale refs lock");
+    tx.put_node(&node("Host", "web1"), &record(&[("cores", 8)]))
+        .expect("node");
+    tx.save()
+        .expect("a no-change save performs no ref update and needs no lock");
+
+    assert_eq!(
+        repo.store()
+            .read_ref(WORKTREE_WORKSPACE_REF)
+            .expect("read workspace ref")
+            .expect("workspace ref still exists"),
+        before,
+        "the save must have been a genuine no-op: the workspace ref did not move"
+    );
 }
 
 #[test]

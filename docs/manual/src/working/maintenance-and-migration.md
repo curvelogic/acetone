@@ -148,6 +148,15 @@ common/main git dir, shared by all worktrees — like the refs it guards.
 And while we are here: deleting a branch is a git operation,
 `git branch -d audit-fixes` — acetone's `branch` only lists and creates.)
 
+One subtlety if you test this yourself: the lock serialises ref
+**updates**, and an operation that changes nothing performs no ref update.
+Workspace writes are content-addressed, so re-running a write whose values
+are already present — say, a `SET` that assigns a property the value it
+already has — reproduces the identical workspace state, writes no ref, and
+succeeds instantly even under a stale lock. That is the no-op fast path,
+not a hole in the lock: any write that actually changes the graph fails
+with the backoff error above, exactly like `branch` and `commit`.
+
 ## Format versions and `acetone migrate`
 
 Every manifest records a `format_version` — the version of acetone's key and
