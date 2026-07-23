@@ -1,0 +1,11 @@
+[book]
+title = "The acetone operator's manual"
+description = "Operating acetone: an embedded, version-controlled labelled property graph database."
+authors = ["The acetone contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+site-url = "/acetone/"
+git-repository-url = "https://github.com/curvelogic/acetone"
+edit-url-template = "https://github.com/curvelogic/acetone/edit/main/docs/manual/{path}"
