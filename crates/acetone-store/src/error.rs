@@ -122,6 +122,20 @@ pub enum StoreError {
         reason: String,
     },
 
+    /// A history rewrite would invalidate a tag's cryptographic signature
+    /// ([`crate::GitStore::rewrite_tag`]): the signature covers the tag's
+    /// byte content, so a rewritten tag pointing at a rewritten target can
+    /// never carry the original signature faithfully. Refusing is the safe
+    /// default — silently dropping the signature is forbidden.
+    #[error(
+        "cannot rewrite signed tag {name:?}: the rewritten tag could not \
+         carry the original signature"
+    )]
+    SignedTag {
+        /// The tag's own recorded name.
+        name: String,
+    },
+
     /// An object was found but its contents do not decode as the structure
     /// acetone expects — a truncated commit, a commit tree without a
     /// manifest entry, and so on. Distinct from absence (`Ok(None)`).

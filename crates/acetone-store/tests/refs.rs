@@ -412,3 +412,121 @@ fn symbolic_ref_cycle_is_a_typed_error_not_a_hang() {
         other => panic!("expected Corrupt for a symref cycle, got {other:?}"),
     }
 }
+
+// --- Batched atomic ref swings (acetone-ejj) ------------------------------
+
+/// Store a small blob to use as a ref target.
+fn blob(store: &GitStore, data: &[u8]) -> acetone_store::Hash {
+    store.put(data).expect("put blob")
+}
+
+#[test]
+fn write_refs_atomic_swings_all_refs_together() {
+    use acetone_store::RefSwing;
+    let (_dir, store) = new_store();
+    let a = blob(&store, b"a");
+    let b = blob(&store, b"b");
+    store.write_ref("refs/heads/one", None, &a).expect("one");
+    store.write_ref("refs/heads/two", None, &a).expect("two");
+
+    store
+        .write_refs_atomic(&[
+            RefSwing {
+                name: "refs/heads/one".into(),
+                expected: Some(a),
+                new: b,
+            },
+            RefSwing {
+                name: "refs/heads/two".into(),
+                expected: Some(a),
+                new: b,
+            },
+            // A create in the same batch.
+            RefSwing {
+                name: "refs/heads/three".into(),
+                expected: None,
+                new: b,
+            },
+        ])
+        .expect("batched swing");
+
+    assert_eq!(store.read_ref("refs/heads/one").expect("read"), Some(b));
+    assert_eq!(store.read_ref("refs/heads/two").expect("read"), Some(b));
+    assert_eq!(store.read_ref("refs/heads/three").expect("read"), Some(b));
+
+    // An empty batch is a no-op.
+    store.write_refs_atomic(&[]).expect("empty batch");
+}
+
+#[test]
+fn write_refs_atomic_moves_nothing_when_a_precondition_fails() {
+    use acetone_store::RefSwing;
+    let (_dir, store) = new_store();
+    let a = blob(&store, b"a");
+    let b = blob(&store, b"b");
+    let c = blob(&store, b"c");
+    store.write_ref("refs/heads/one", None, &a).expect("one");
+    store.write_ref("refs/heads/two", None, &b).expect("two");
+
+    // `two`'s expectation is stale: the whole batch must fail and NEITHER
+    // ref may move — all-or-nothing.
+    match store.write_refs_atomic(&[
+        RefSwing {
+            name: "refs/heads/one".into(),
+            expected: Some(a),
+            new: c,
+        },
+        RefSwing {
+            name: "refs/heads/two".into(),
+            expected: Some(a), // actually holds b
+            new: c,
+        },
+    ]) {
+        Err(StoreError::CasFailed { name }) => assert_eq!(name, "refs/heads/two"),
+        other => panic!("expected CasFailed, got {other:?}"),
+    }
+    assert_eq!(store.read_ref("refs/heads/one").expect("read"), Some(a));
+    assert_eq!(store.read_ref("refs/heads/two").expect("read"), Some(b));
+}
+
+#[test]
+fn write_refs_atomic_create_fails_when_the_ref_exists_even_value_equal() {
+    use acetone_store::RefSwing;
+    let (_dir, store) = new_store();
+    let a = blob(&store, b"a");
+    store.write_ref("refs/heads/one", None, &a).expect("one");
+
+    // Creating `one` again — even at the value it already holds — must fail
+    // (the create-CAS contract), and the other create must not be applied.
+    match store.write_refs_atomic(&[
+        RefSwing {
+            name: "refs/heads/new".into(),
+            expected: None,
+            new: a,
+        },
+        RefSwing {
+            name: "refs/heads/one".into(),
+            expected: None,
+            new: a,
+        },
+    ]) {
+        Err(StoreError::CasFailed { name }) => assert_eq!(name, "refs/heads/one"),
+        other => panic!("expected CasFailed, got {other:?}"),
+    }
+    assert!(store.read_ref("refs/heads/new").expect("read").is_none());
+}
+
+#[test]
+fn write_refs_atomic_rejects_invalid_names_before_taking_locks() {
+    use acetone_store::RefSwing;
+    let (_dir, store) = new_store();
+    let a = blob(&store, b"a");
+    match store.write_refs_atomic(&[RefSwing {
+        name: "HEAD".into(), // not under refs/
+        expected: None,
+        new: a,
+    }]) {
+        Err(StoreError::InvalidRefName { .. }) => {}
+        other => panic!("expected InvalidRefName, got {other:?}"),
+    }
+}

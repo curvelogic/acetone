@@ -82,5 +82,6 @@ pub use git::{
 };
 pub use hash::Hash;
 pub use store::{
-    ChunkStore, Commit, CommitStore, Identity, NewCommit, RefStore, RewriteCommit, Signature,
+    ChunkStore, Commit, CommitStore, Identity, NewCommit, RefStore, RefSwing, RewriteCommit,
+    Signature, TagObject,
 };

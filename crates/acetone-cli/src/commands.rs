@@ -867,9 +867,10 @@ fn migrate(
         .context("invalid target chunk parameters")?;
     let report = rewrite_history(&repo, &transform).context("rewriting history")?;
     outln!(
-        "migrate: rewrote {} commit(s), updated {} ref(s)",
+        "migrate: rewrote {} commit(s), updated {} ref(s), rewrote {} annotated tag(s)",
         report.commits_rewritten,
-        report.refs_updated
+        report.refs_updated,
+        report.tags_rewritten
     );
     Ok(())
 }
