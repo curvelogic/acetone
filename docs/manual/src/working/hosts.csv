@@ -1,0 +1,8 @@
+name,region,os
+app1,eu-west,linux
+app2,eu-central,linux
+app3,eu-west,linux
+db1,eu-west,linux
+db2,eu-central,linux
+db3,eu-central,linux
+edge1,eu-west,freebsd
