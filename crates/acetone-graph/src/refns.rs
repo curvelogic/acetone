@@ -18,7 +18,7 @@
 //! constructs a different `GraphRefNamespace` at `open`. The ref-handling code
 //! does not branch on mode; only this value differs (ADR-0049).
 
-use crate::repo::{BRANCH_REF_PREFIX, TAG_REF_PREFIX};
+use crate::repo::{BRANCH_REF_PREFIX, GRAPHS_REF_PREFIX, TAG_REF_PREFIX, WORKTREE_ANCHOR_PREFIX};
 
 /// The physical ref layout of one graph: where its branches and tags live and
 /// which ref is its current-branch pointer.
@@ -33,10 +33,22 @@ pub struct GraphRefNamespace {
     head_ref: String,
     /// Whether this layout owns the *whole* repository — true for standalone
     /// (the repo is the graph, so every ref, including `refs/remotes/*` and the
-    /// like, is the graph's), false for co-tenant (only the graph's own
-    /// prefixes and `refs/acetone/*` are owned; the rest is the user's code).
-    /// Drives [`Self::owns_ref`]'s treatment of refs outside branches/tags/HEAD.
+    /// like, is the graph's), false for co-tenant (only the graph's own refs
+    /// are owned; the rest is the user's code). Drives [`Self::owns_ref`]'s
+    /// treatment of refs outside branches/tags/HEAD.
     owns_whole_repo: bool,
+    /// Ref *prefixes* (each ending in `/`) outside the branch/tag namespaces
+    /// that this graph owns — co-tenant only (empty for standalone, which owns
+    /// everything anyway): the graph's private `refs/acetone/<graph>/`
+    /// namespace and the shared worktree anchors. An enumerated allow-list, so
+    /// another graph's `refs/acetone/<other>/*` is foreign by construction
+    /// (acetone-c2a) rather than swept up by a `refs/acetone/` catch-all.
+    private_prefixes: Vec<String>,
+    /// Exact full ref names outside the branch/tag namespaces that this graph
+    /// owns — co-tenant only: its own marker `refs/acetone/graphs/<graph>`.
+    /// Exact matches, so the marker of a prefix-confusable graph name
+    /// (`g` vs `g2`) can never be claimed.
+    private_refs: Vec<String>,
 }
 
 impl GraphRefNamespace {
@@ -51,6 +63,8 @@ impl GraphRefNamespace {
             tag_prefix: TAG_REF_PREFIX.to_owned(),
             head_ref: "HEAD".to_owned(),
             owns_whole_repo: true,
+            private_prefixes: Vec::new(),
+            private_refs: Vec::new(),
         }
     }
 
@@ -65,17 +79,32 @@ impl GraphRefNamespace {
     /// **Precondition:** `graph` must be a single valid ref-path component — no
     /// empty string, `/`, `..`, or other characters git's ref-format rejects.
     /// This constructor does not validate it (it is infallible and builds ref
-    /// *paths*); the caller that chooses the graph name — mode selection at
-    /// `init`, `acetone-mgf` — validates it. Malformed names are still caught at
-    /// the store door (`validated_ref_name`) before any ref write, so they
-    /// cannot escape the ref namespace; the contract only keeps the failure
-    /// close to its cause.
+    /// *paths*); both callers that supply a graph name validate it first —
+    /// `init_co_tenant` for the name it is given, and `detect_namespace` for
+    /// the name recovered from a marker ref (acetone-c2a). Malformed names are
+    /// still caught at the store door (`validated_ref_name`) before any ref
+    /// write, so they cannot escape the ref namespace; the contract only keeps
+    /// the failure close to its cause.
     pub fn co_tenant(graph: &str) -> Self {
         GraphRefNamespace {
             branch_prefix: format!("refs/heads/acetone/{graph}/"),
             tag_prefix: format!("refs/tags/acetone/{graph}/"),
             head_ref: format!("refs/acetone/{graph}/HEAD"),
             owns_whole_repo: false,
+            private_prefixes: vec![
+                // The graph's own private namespace: its head pointer and any
+                // future per-graph state.
+                format!("refs/acetone/{graph}/"),
+                // Linked-worktree durability anchors (ADR-0044). Shared, not
+                // per-graph — but while co-tenancy is single-graph every
+                // anchor mirrors THIS graph's workspace tree, so they are its
+                // gc roots. Multi-graph co-tenancy must revisit this (the
+                // bead notes the overlap with acetone-gns).
+                WORKTREE_ANCHOR_PREFIX.to_owned(),
+            ],
+            // The graph's own marker only — matched exactly, never by prefix,
+            // so `g` cannot claim `g2`'s marker.
+            private_refs: vec![format!("{GRAPHS_REF_PREFIX}{graph}")],
         }
     }
 
@@ -136,11 +165,16 @@ impl GraphRefNamespace {
     /// `refs/stash`, `refs/replace/*` — are handled by layout: in **standalone**
     /// the repo *is* the graph, so they are the graph's (and consolidation is
     /// byte-identical to before graph-scoping existed — the guard is empty). In
-    /// **co-tenant** they are the user's code (a clone's remote-tracking refs,
-    /// the user's notes/stash), so they are foreign and guarded; only acetone's
-    /// own `refs/acetone/*` (head pointer, worktree anchors) is the graph's.
-    /// Getting this wrong for `refs/remotes/*` would draw a cloned repo's code
-    /// objects into acetone's pack — exactly what reading B forbids.
+    /// **co-tenant** ownership is an enumerated allow-list — the graph's own
+    /// `refs/acetone/<graph>/*` namespace, the worktree anchors and its own
+    /// marker — and everything else is foreign and guarded: the user's
+    /// remote-tracking refs, notes and stash, but also any *other* graph's
+    /// `refs/acetone/<other>/*` refs and marker (acetone-c2a), so a future
+    /// multi-graph repository can never have one graph gc another's objects.
+    /// Foreign is the safe default: a guarded ref's objects are preserved
+    /// untouched, so misclassifying towards "foreign" keeps data. Getting
+    /// `refs/remotes/*` wrong would draw a cloned repo's code objects into
+    /// acetone's pack — exactly what reading B forbids.
     pub fn owns_ref(&self, full: &str) -> bool {
         if full.starts_with("refs/heads/") {
             return full.starts_with(&self.branch_prefix);
@@ -152,9 +186,11 @@ impl GraphRefNamespace {
             return self.head_ref == "HEAD";
         }
         // Any other ref shape: standalone owns the whole repo; co-tenant owns
-        // only acetone's own private refs and guards the rest (the user's
-        // remotes, notes, stash, replace).
-        self.owns_whole_repo || full.starts_with("refs/acetone/")
+        // only the enumerated acetone refs that are demonstrably this graph's,
+        // and guards the rest.
+        self.owns_whole_repo
+            || self.private_prefixes.iter().any(|p| full.starts_with(p))
+            || self.private_refs.iter().any(|r| full == r)
     }
 }
 
@@ -218,11 +254,15 @@ mod tests {
     #[test]
     fn co_tenant_owns_only_its_own_refs() {
         let ns = GraphRefNamespace::co_tenant("g");
-        // The graph's own refs — packable.
+        // The graph's own refs — packable: its branches and tags, its private
+        // `refs/acetone/g/*` namespace (head pointer), its marker, and the
+        // shared worktree anchors (whose trees mirror this graph's workspace
+        // while co-tenancy is single-graph).
         for r in [
             "refs/heads/acetone/g/main",
             "refs/tags/acetone/g/v1",
             "refs/acetone/g/HEAD",
+            "refs/acetone/graphs/g",
             "refs/acetone/worktree-anchors/abc",
         ] {
             assert!(ns.owns_ref(r), "co-tenant should own {r}");
@@ -243,6 +283,34 @@ mod tests {
             "refs/replace/0123456789abcdef0123456789abcdef01234567",
         ] {
             assert!(!ns.owns_ref(r), "co-tenant must not own {r}");
+        }
+    }
+
+    #[test]
+    fn co_tenant_does_not_own_another_graphs_refs() {
+        // Multi-graph hardening (acetone-c2a): in a repository that hosted a
+        // second graph, that graph's private refs must be FOREIGN to this one —
+        // landing in gc's prune guard (kept untouched), never drawn into this
+        // graph's pack. Unreachable today (open rejects multiple markers), but
+        // the classification must already be right so multi-graph co-tenancy
+        // cannot silently inherit a cross-graph gc.
+        let ns = GraphRefNamespace::co_tenant("g");
+        for r in [
+            // Another graph's namespace, including the prefix-confusable "g2".
+            "refs/acetone/other/HEAD",
+            "refs/acetone/g2/HEAD",
+            "refs/acetone/g2/state",
+            // Another graph's marker ("g" must not prefix-match "g2"/"gx").
+            "refs/acetone/graphs/other",
+            "refs/acetone/graphs/g2",
+            // Another graph's branches and tags.
+            "refs/heads/acetone/g2/main",
+            "refs/tags/acetone/g2/v1",
+            // An unknown refs/acetone/* shape: foreign by default — when in
+            // doubt gc keeps data it does not positively own.
+            "refs/acetone/unknown-future-namespace/x",
+        ] {
+            assert!(!ns.owns_ref(r), "co-tenant graph g must not own {r}");
         }
     }
 

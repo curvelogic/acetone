@@ -525,13 +525,23 @@ impl GitStore {
         self.write_pack_stems(&stems)
     }
 
+    /// Read the tracked pack stems, keeping only well-formed ones.
+    ///
+    /// The sidecar is plain text in `.git`, so its lines are **untrusted
+    /// input** that gets joined into `objects/pack` paths and — via the
+    /// supersede pass — deleted. Every stem this store ever writes is
+    /// `pack-<trailer hex>` ([`is_valid_pack_stem`]), so anything else is
+    /// tampering or corruption (e.g. a `../` traversal aimed outside the pack
+    /// directory) and is ignored before it can shape a path. Ignoring is the
+    /// safe direction: a skipped stem can only mean a pack is *not* deleted,
+    /// and the bogus line disappears on the next sidecar rewrite.
     fn read_pack_stems(&self) -> Result<Vec<String>, StoreError> {
         let path = self.sidecar_path(PACKS_FILE);
         match std::fs::read_to_string(&path) {
             Ok(t) => Ok(t
                 .lines()
+                .filter(|s| is_valid_pack_stem(s))
                 .map(str::to_owned)
-                .filter(|s| !s.is_empty())
                 .collect()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(StoreError::backend("reading consolidation-pack list", e)),
@@ -798,6 +808,22 @@ fn idx_oids(bytes: &[u8], hash_kind: gix::hash::Kind) -> Result<Vec<ObjectId>, S
     Ok(oids)
 }
 
+/// Whether `stem` has the exact shape consolidation itself writes:
+/// `pack-<trailer>` where the trailer is the pack checksum in lowercase hex
+/// (40 chars for SHA-1, 64 for SHA-256). Sidecar lines are validated against
+/// this before they are ever joined into an `objects/pack` path, so a
+/// tampered stem (`../escape`, an absolute path, a stray separator) can never
+/// name — let alone delete — a file outside the pack directory (acetone-c2a).
+fn is_valid_pack_stem(stem: &str) -> bool {
+    let Some(hex) = stem.strip_prefix("pack-") else {
+        return false;
+    };
+    matches!(hex.len(), 40 | 64)
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 fn remove_if_present(path: &std::path::Path) -> Result<(), StoreError> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -1026,5 +1052,31 @@ mod tests {
     fn idx_oids_rejects_a_non_v2_index() {
         assert!(idx_oids(b"not an index", gix::hash::Kind::Sha1).is_err());
         assert!(idx_oids(&[], gix::hash::Kind::Sha1).is_err());
+    }
+
+    #[test]
+    fn pack_stem_validation_accepts_only_what_consolidation_writes() {
+        // The two shapes install_pack ever produces: pack-<lowercase hex
+        // trailer> at SHA-1 (40) or SHA-256 (64) length.
+        assert!(is_valid_pack_stem(&format!("pack-{}", "0af1".repeat(10))));
+        assert!(is_valid_pack_stem(&format!("pack-{}", "0af1".repeat(16))));
+        // Everything else is tampering or corruption and must be rejected
+        // BEFORE it is joined into an objects/pack path. Rejection is
+        // safe-by-default: a rejected stem can only mean nothing is deleted.
+        for bad in [
+            "",
+            "../escape",
+            "pack-../escape",
+            "/etc/passwd",
+            "pack-",                                  // no trailer
+            &format!("pack-{}", "0af1".repeat(8)),    // wrong length (32)
+            &format!("pack-{}", "0af1".repeat(12)),   // wrong length (48)
+            &format!("pack-{}", "0AF1".repeat(10)),   // uppercase hex
+            &format!("pack-{}", "0az1".repeat(10)),   // non-hex
+            &format!("pack-{}/x", "0af1".repeat(10)), // trailing separator
+            &format!(" pack-{}", "0af1".repeat(10)),  // leading space
+        ] {
+            assert!(!is_valid_pack_stem(bad), "must reject {bad:?}");
+        }
     }
 }

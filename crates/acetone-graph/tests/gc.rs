@@ -169,3 +169,132 @@ fn gc_refuses_when_linked_worktrees_exist() {
         other => panic!("expected refusal with linked worktrees, got {other:?}"),
     }
 }
+
+#[test]
+fn gc_rechecks_for_linked_worktrees_under_the_write_lock() {
+    // acetone-dfh: the linked-worktree check was lock-free, so a `git worktree
+    // add` racing between the check and the write-lock acquisition could slip
+    // past gc's refusal. The check must be repeated UNDER the lock: this test
+    // interleaves a worktree appearing exactly in that window (via the test
+    // seam) and requires gc to abort rather than sweep.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.commit("schema", &[], None).expect("commit");
+    }
+
+    let worktrees = repo.store().common_dir().join("worktrees").join("wt-racer");
+    match repo.gc_with_hooks(
+        // The race: git records a linked worktree after gc's pre-lock check
+        // passed, while gc is acquiring the lock.
+        || std::fs::create_dir_all(&worktrees).expect("mkdir worktrees"),
+        || {},
+    ) {
+        Err(acetone_graph::GraphError::GcWithLinkedWorktrees) => {}
+        other => panic!("expected the under-lock re-check to refuse, got {other:?}"),
+    }
+}
+
+#[test]
+fn gc_keeps_a_worktree_that_appears_in_the_residual_window() {
+    // acetone-dfh, the residual window: `git worktree add` respects no acetone
+    // lock, so a worktree can still appear AFTER the under-lock re-check while
+    // gc is sweeping. gc must be safe-by-default in that window — when in
+    // doubt it keeps data: the late worktree's durability anchor (ADR-0044)
+    // is not deleted (anchor deletion is gated on the worktree's directory
+    // being absent at deletion time), and consolidation's pruning never
+    // deletes the last copy of an object (loose copies are removed only once
+    // the object is in the durably installed pack; prior packs only once
+    // fully superseded). So the late worktree's saved-but-uncommitted work
+    // must read back intact after gc completes.
+    let dir = tempfile::tempdir().expect("tmp");
+    let main_git = dir.path().join("graph.git");
+    let repo = Repository::init(&main_git, InitOptions::default()).expect("init");
+    let base = {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        for i in 0..50 {
+            let key = NodeKey::new("N", vec![Value::Int(i)]).expect("k");
+            tx.put_node(
+                &key,
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+            )
+            .expect("n");
+        }
+        tx.commit("seed", &[], None).expect("commit")
+    };
+
+    let wt = dir.path().join("wt-late");
+    let stats = repo
+        .gc_with_hooks(
+            || {},
+            // The residual window: a real worktree add plus an acetone save
+            // (which writes the worktree's durability anchor), after the
+            // re-check passed, before the sweep.
+            || {
+                let status = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&main_git)
+                    .args(["worktree", "add", "--detach"])
+                    .arg(&wt)
+                    .arg(base.to_hex())
+                    .status()
+                    .expect("run git worktree add");
+                assert!(status.success(), "git worktree add failed");
+                let wt_repo = Repository::open(&wt).expect("open late worktree");
+                let mut tx = wt_repo.begin_write().expect("begin in worktree");
+                for i in 100..200 {
+                    let key = NodeKey::new("N", vec![Value::Int(i)]).expect("k");
+                    tx.put_node(
+                        &key,
+                        &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+                    )
+                    .expect("n");
+                }
+                // Save, not commit: this state is reachable only through the
+                // worktree's private refs and its common-dir anchor.
+                tx.save().expect("save in late worktree");
+            },
+        )
+        .expect("gc completes despite the late worktree");
+    assert!(stats.objects > 0, "gc consolidated the main graph");
+
+    // The late worktree's anchor survived the sweep: gc must not delete an
+    // anchor whose worktree exists.
+    let anchors_dir = main_git.join("refs/acetone/worktree-anchors");
+    let anchors: Vec<_> = std::fs::read_dir(&anchors_dir)
+        .expect("anchors dir")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(
+        anchors.len(),
+        1,
+        "the late worktree's durability anchor must survive gc, got {anchors:?}"
+    );
+
+    // And its saved-but-uncommitted chunks are intact: reopen cold and read
+    // the whole workspace back.
+    let wt_repo = Repository::open(&wt).expect("reopen late worktree");
+    let snapshot = wt_repo.workspace_snapshot().expect("workspace snapshot");
+    assert_eq!(
+        snapshot.nodes().expect("nodes").len(),
+        150,
+        "the late worktree's saved workspace must survive gc in full"
+    );
+    let report = acetone_graph::fsck(&wt_repo).expect("fsck");
+    assert!(
+        !report.has_errors(),
+        "fsck errors in the late worktree after gc: {:?}",
+        report.findings
+    );
+}

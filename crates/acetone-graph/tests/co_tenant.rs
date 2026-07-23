@@ -620,6 +620,49 @@ fn an_interrupted_co_tenant_init_never_lets_a_write_reach_code() {
 }
 
 #[test]
+fn open_revalidates_a_hand_crafted_graph_marker_name() {
+    // acetone-c2a finding 2: `open` derives the graph name from the marker ref
+    // and must re-validate it, not trust it. `refs/acetone/graphs/a/b` is a
+    // perfectly valid *git* ref, but its stripped graph name "a/b" would split
+    // the ref namespace (`refs/heads/acetone/a/b/*`) — a shape only a
+    // hand-crafted marker can produce, since `init_co_tenant` validates the
+    // name before writing the marker. Open must fail loudly with
+    // InvalidGraphName rather than construct an odd namespace, and must leave
+    // the code untouched. (Misclassification was already deletion-safe —
+    // pruning is gated on durable-pack membership — this closes the
+    // classification hole itself.)
+    let dir = tempfile::tempdir().expect("tmp");
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).expect("mkdir");
+    git(&project, &["-c", "init.defaultBranch=main", "init"]);
+    std::fs::write(project.join("f"), "x").expect("write");
+    git(&project, &["add", "f"]);
+    git(&project, &["commit", "-m", "code"]);
+    let code_commit = git(&project, &["rev-parse", "refs/heads/main"]);
+
+    // Hand-craft the marker the way an attacker (or a corrupted tool) with
+    // direct .git access would.
+    let empty_blob = git(&project, &["hash-object", "-w", "/dev/null"]);
+    git(
+        &project,
+        &["update-ref", "refs/acetone/graphs/a/b", &empty_blob],
+    );
+
+    match Repository::open(&project) {
+        Err(acetone_graph::GraphError::InvalidGraphName { name, .. }) => {
+            assert_eq!(name, "a/b", "the offending marker-derived name is named");
+        }
+        other => panic!("expected InvalidGraphName for a crafted marker, got {other:?}"),
+    }
+    // The code branch and HEAD are untouched by the refused open.
+    assert_eq!(
+        git(&project, &["rev-parse", "refs/heads/main"]),
+        code_commit
+    );
+    assert_eq!(git(&project, &["symbolic-ref", "HEAD"]), "refs/heads/main");
+}
+
+#[test]
 fn init_co_tenant_rejects_bad_graph_names_and_duplicates() {
     let dir = tempfile::tempdir().expect("tmp");
     let project = dir.path().join("project");

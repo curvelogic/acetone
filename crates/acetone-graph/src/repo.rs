@@ -944,27 +944,75 @@ impl Repository {
     /// every object's bytes and address exactly. Takes the single-writer lock
     /// so a concurrent write's fresh loose object cannot be pruned mid-run.
     pub fn gc(&self) -> Result<ConsolidateStats, GraphError> {
+        self.gc_with_hooks(|| {}, || {})
+    }
+
+    /// [`gc`](Self::gc)'s body, with two test seams for the worktree TOCTOU
+    /// (acetone-dfh): `after_lock` runs once the write lock is held, *before*
+    /// the under-lock linked-worktree re-check; `after_recheck` runs after the
+    /// re-check passed — the residual window before the sweep. Production
+    /// callers go through `gc`, which passes no-ops; the hooks let tests
+    /// interleave a `git worktree add` deterministically at each point.
+    #[doc(hidden)]
+    pub fn gc_with_hooks(
+        &self,
+        after_lock: impl FnOnce(),
+        after_recheck: impl FnOnce(),
+    ) -> Result<ConsolidateStats, GraphError> {
         // Consolidation's reachability walk (`references().all()`) does not see
         // *other* linked worktrees' private refs (`refs/worktree/*`, ADR-0014),
         // so pruning could destroy their uncommitted workspace or in-progress
         // merge. Refuse when any linked worktree exists until gc is made
         // worktree-aware (walk every worktree's private refs); the single-
-        // worktree case — the common one — is safe.
+        // worktree case — the common one — is safe. This pre-lock check is the
+        // cheap fast-fail for the common error path only; the authoritative
+        // check is the one below, under the lock.
         if self.has_linked_worktrees()? {
             return Err(GraphError::GcWithLinkedWorktrees);
         }
         let _lock = WriteLock::acquire(self.store.git_dir())?;
-        // gc runs only when NO linked worktree exists (checked above), so every
-        // `refs/acetone/worktree-anchors/*` is a leftover from a since-removed
-        // worktree — pinning chunks nothing live needs (ADR-0044). Delete them
-        // before consolidating so their now-unreferenced chunks are reclaimed.
+        after_lock();
+        // Re-check under the write lock (acetone-dfh): a `git worktree add`
+        // racing the pre-lock check would otherwise slip past the refusal and
+        // have its private state swept. The lock does not stop `git worktree
+        // add` itself (plain git respects no acetone lock) — it merely
+        // re-anchors the check as late as possible; the sweep below is
+        // additionally safe for a worktree that appears later still.
+        if self.has_linked_worktrees()? {
+            return Err(GraphError::GcWithLinkedWorktrees);
+        }
+        after_recheck();
+        // gc runs only when no linked worktree was seen (checked above), so
+        // `refs/acetone/worktree-anchors/*` are leftovers from since-removed
+        // worktrees — pinning chunks nothing live needs (ADR-0044). Delete
+        // them before consolidating so their now-unreferenced chunks are
+        // reclaimed. Each deletion is gated on the anchor's worktree directory
+        // being absent AT DELETION TIME: a worktree that appears in the window
+        // after the re-check keeps its durability anchor — when in doubt, gc
+        // keeps data. (A crafted anchor id could only make the existence check
+        // succeed, i.e. keep the anchor; deletion goes through the ref store,
+        // never a raw path.)
+        let worktrees_dir = self.store.common_dir().join("worktrees");
         for (anchor, _) in self.store.list_refs(WORKTREE_ANCHOR_PREFIX)? {
+            let id = anchor
+                .strip_prefix(WORKTREE_ANCHOR_PREFIX)
+                .unwrap_or(&anchor);
+            if worktrees_dir.join(id).exists() {
+                continue; // a worktree appeared mid-gc: its anchor is live
+            }
             self.store.delete_ref(&anchor)?;
         }
         // Reading B (ADR-0051): pack only objects reachable from refs this graph
         // owns; a co-tenant's code refs form a prune guard so their objects are
         // preserved and their storage left untouched. In the standalone layout
         // the namespace owns every ref, so this is the whole reachable set.
+        //
+        // A worktree appearing during consolidation itself loses nothing:
+        // pruning only ever removes a loose copy of an object already in the
+        // durably installed pack, and a prior pack only once every object it
+        // indexes is in the new pack — so no step here deletes the last copy
+        // of anything a late worktree references. Chunks it writes are new
+        // loose objects outside the packed set, untouched by pruning.
         let namespace = &self.namespace;
         Ok(self
             .store
@@ -1385,12 +1433,21 @@ fn provision_empty_workspace(
 /// (ADR-0050): no marker ⇒ standalone; exactly one ⇒ co-tenant for that graph.
 /// More than one is [`GraphError::MultipleGraphs`] (multi-graph selection is
 /// deferred). The marker is a *direct* ref, so `list_refs` enumerates it.
+///
+/// The marker-derived name is **re-validated** before it shapes a namespace
+/// (acetone-c2a): `init_co_tenant` validates the name it writes, but a marker
+/// is just a ref in `.git`, so a hand-crafted one (e.g.
+/// `refs/acetone/graphs/a/b`, a valid git ref whose stripped name would split
+/// the namespace) could otherwise smuggle in an arbitrary layout. A marker
+/// that fails validation is [`GraphError::InvalidGraphName`] — a loud refusal
+/// to open, never a silently odd namespace.
 fn detect_namespace(store: &GitStore) -> Result<GraphRefNamespace, GraphError> {
     let markers = store.list_refs(GRAPHS_REF_PREFIX)?;
     match markers.as_slice() {
         [] => Ok(GraphRefNamespace::standalone()),
         [(name, _)] => {
             let graph = name.strip_prefix(GRAPHS_REF_PREFIX).unwrap_or(name);
+            validate_graph_name(graph)?;
             Ok(GraphRefNamespace::co_tenant(graph))
         }
         _ => Err(GraphError::MultipleGraphs {
