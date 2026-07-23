@@ -2,11 +2,13 @@
 //! commits that changed a node's record, newest first, walking the
 //! first-parent chain from HEAD.
 
+use acetone_graph::error::GraphError;
 use acetone_graph::merge::MergeOutcome;
 use acetone_graph::repo::{InitOptions, Repository};
 use acetone_model::Value;
 use acetone_model::graph_keys::NodeKey;
 use acetone_model::records::NodeRecord;
+use acetone_model::schema::{LabelDef, SchemaEntry};
 use acetone_store::Hash;
 use proptest::prelude::*;
 use std::collections::BTreeMap;
@@ -104,6 +106,78 @@ fn a_merge_attributes_a_branch_change_to_the_merge_commit() {
     assert_eq!(blame.first(), Some(&merge_commit), "newest is the merge");
     assert_eq!(blame.last(), Some(&base), "oldest is the introduction");
     assert_eq!(blame.len(), 2);
+}
+
+/// Declare `name` with the given key tuple and commit the schema.
+fn declare(repo: &Repository, name: &str, key: &[&str]) {
+    let def = LabelDef::new(
+        key.iter().map(|k| (*k).to_owned()).collect(),
+        BTreeMap::new(),
+        [],
+        [],
+    )
+    .expect("valid label def");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: name.to_owned(),
+        def,
+    })
+    .expect("put schema");
+    tx.commit(&format!("declare {name}"), &[], None)
+        .expect("commit schema");
+}
+
+#[test]
+fn blame_rejects_wrong_key_arity_for_a_declared_label() {
+    // acetone-596: probing a declared label with the wrong number of key
+    // values must be a typed error, never a silent empty result.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    declare(&repo, "Pair", &["a", "b"]);
+    declare(&repo, "Single", &["id"]);
+
+    // A composite-key label probed with a single value (the CLI's
+    // single-column plumbing does exactly this).
+    let one = NodeKey::new("Pair", vec![Value::Int(1)]).expect("key");
+    match repo.blame(&one) {
+        Err(GraphError::KeyArityMismatch { expected, got, .. }) => {
+            assert_eq!((expected, got), (2, 1));
+        }
+        other => panic!("expected KeyArityMismatch, got {other:?}"),
+    }
+    // The message is actionable: it names the label, the declared columns
+    // and what to do about it.
+    let message = repo.blame(&one).expect_err("arity mismatch").to_string();
+    assert!(
+        message.contains("\"Pair\"")
+            && message.contains('2')
+            && message.contains("\"a\"")
+            && message.contains("one value per key column"),
+        "unhelpful message: {message}"
+    );
+
+    // A single-column label probed with two values: the same guard the
+    // other way round.
+    let two = NodeKey::new("Single", vec![Value::Int(1), Value::Int(2)]).expect("key");
+    match repo.blame(&two) {
+        Err(GraphError::KeyArityMismatch { expected, got, .. }) => {
+            assert_eq!((expected, got), (1, 2));
+        }
+        other => panic!("expected KeyArityMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn blame_with_the_declared_arity_still_works() {
+    // The guard must not break correct-arity blame on a declared label —
+    // and an *undeclared* label stays schema-free (every other test in this
+    // file blames the undeclared "N", covering that path).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    declare(&repo, "N", &["id"]);
+    let c1 = put(&repo, 1, 10, "add 1");
+    let c2 = put(&repo, 1, 11, "change 1");
+    assert_eq!(repo.blame(&node(1)).expect("blame"), vec![c2, c1]);
 }
 
 proptest! {

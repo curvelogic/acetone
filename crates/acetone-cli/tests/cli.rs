@@ -1532,6 +1532,40 @@ fn call_blame_attributes_node_changes_to_commits() {
 }
 
 #[test]
+fn call_blame_errors_on_composite_key_arity_mismatch() {
+    // acetone-596: the blame key argument is single-column plumbing; against
+    // a label with a composite key it must fail with an actionable error, not
+    // silently return an empty result.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(
+            &repo,
+            &["declare-label", "Reading", "--key", "sensor", "--key", "at"]
+        )
+        .status
+        .success()
+    );
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.blame('Reading', 1) YIELD commit RETURN commit",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "blame with the wrong key arity must fail loudly, not return empty"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("Reading") && err.contains('2') && err.contains("one value per key column"),
+        "error must name the label, the declared arity and the fix: {err}"
+    );
+}
+
+#[test]
 fn merge_conflict_resolve_and_complete() {
     // acetone-14c.4a: a conflicted merge enters merge-in-progress; resolve
     // picks a side; commit completes it as a two-parent merge.

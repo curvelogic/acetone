@@ -813,7 +813,45 @@ impl Repository {
     /// First-parent semantics: a change merged in through a two-parent merge
     /// commit is attributed to that merge commit (its record differs from its
     /// first parent's), the same convention `git blame --first-parent` uses.
+    ///
+    /// The key's arity is checked against the label's declared key tuple in
+    /// the workspace schema — a mismatch is a typed
+    /// [`GraphError::KeyArityMismatch`] (acetone-596). A label *not* declared
+    /// in the current schema is probed schema-free and returns an **empty
+    /// result** rather than erroring (raw-plumbing graphs, and labels dropped
+    /// from the schema whose history is still blameable).
     pub fn blame(&self, key: &NodeKey) -> Result<Vec<Hash>, GraphError> {
+        // Guard the key arity against the label's declared key tuple
+        // (acetone-596): probing a composite-key label with a single value
+        // (the CLI's single-column key plumbing) would otherwise silently
+        // find nothing — a wrong answer, not an empty history. An
+        // *undeclared* label stays schema-free: raw-plumbing graphs and
+        // labels dropped from the current schema still blame by probing.
+        let declared = self
+            .workspace_snapshot()?
+            .schema_entries()?
+            .into_iter()
+            .find_map(|entry| match entry {
+                SchemaEntry::Label { name, def } if name == key.label() => Some(def),
+                _ => None,
+            });
+        if let Some(def) = declared
+            && def.key().len() != key.key().len()
+        {
+            let columns = def
+                .key()
+                .iter()
+                .map(|name| acetone_model::display::format_label(name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(GraphError::KeyArityMismatch {
+                label: key.label().to_owned(),
+                columns: format!("[{columns}]"),
+                expected: def.key().len(),
+                got: key.key().len(),
+            });
+        }
+
         // First-parent chain from HEAD, newest first (as `log` walks it).
         let mut chain = Vec::new();
         let mut seen = BTreeSet::new();
