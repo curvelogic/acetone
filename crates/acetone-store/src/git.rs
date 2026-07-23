@@ -112,16 +112,34 @@ impl Default for GitStoreOptions {
 ///
 /// # Locking and crash recovery
 ///
-/// [`RefStore::write_ref`] serialises all acetone writers on a repository
-/// through a lock file, `<common_dir>/acetone-refs.lock`, held only for
-/// the duration of one ref update and removed when the guard drops. If a
-/// process is killed while holding it (SIGKILL, power loss), the stale
-/// file makes every subsequent `write_ref` back off for ~5 seconds and
-/// then fail with [`StoreError::Backend`] rather than hang or corrupt
-/// anything. Recovery is manual and safe once no acetone process is
-/// running against the repository: delete
-/// `<git-dir>/acetone-refs.lock` (for worktrees, in the common/main git
-/// dir). Reads are never blocked by this lock.
+/// Every acetone **ref update** on a repository — [`RefStore::write_ref`],
+/// [`RefStore::delete_ref`], [`GitStore::overwrite_ref`] and
+/// [`GitStore::write_refs_atomic`], which between them carry every branch,
+/// tag, workspace and anchor advance — is serialised through one lock
+/// file, `<common_dir>/acetone-refs.lock`, held only for the duration of
+/// one update and removed when the guard drops. If a process is killed
+/// while holding it (SIGKILL, power loss), the stale file makes every
+/// subsequent ref update back off for ~5 seconds and then fail with
+/// [`StoreError::Backend`] rather than hang or corrupt anything. Recovery
+/// is manual and safe once no acetone process is running against the
+/// repository: delete `<git-dir>/acetone-refs.lock` (for worktrees, in
+/// the common/main git dir).
+///
+/// The lock's scope is ref *updates*, not operations (acetone-3gy):
+///
+/// - Reads are never blocked, and neither are object writes
+///   ([`ChunkStore::put`] is content-addressed and idempotent).
+/// - A higher-level write that nets to **no change** performs no ref
+///   update at all — e.g. a graph transaction re-applying already-present
+///   values reproduces the identical content-addressed manifest, so the
+///   workspace ref is left alone. Such an operation succeeds even under a
+///   stale lock, because it writes nothing; this is the no-op fast path,
+///   not a lock bypass.
+/// - [`RefStore::set_head`] is the one ref write deliberately outside the
+///   lock: an unconditional symref swing with no compare-and-swap
+///   precondition, so it has no read-check-write window for the lock to
+///   protect — gix's own per-ref lock file already makes the swing itself
+///   atomic.
 pub struct GitStore {
     repo: gix::Repository,
     max_chunk_size: u64,
@@ -1297,6 +1315,16 @@ impl RefStore for GitStore {
         })
     }
 
+    /// Point the current-branch `pointer` at `target` symbolically (see the
+    /// trait doc for the contract).
+    ///
+    /// Deliberately **not** serialised through `acetone-refs.lock`
+    /// (acetone-3gy): the swing is unconditional (`PreviousValue::Any`), so
+    /// there is no read-check-write window for the store-level lock to
+    /// protect — the lock exists because gix evaluates compare-and-swap
+    /// preconditions against a read taken before its per-ref lock, and this
+    /// edit has no precondition. gix's own per-ref lock file keeps the swing
+    /// itself atomic against concurrent writers.
     fn set_head(&self, pointer: &str, target: &str) -> Result<(), StoreError> {
         use gix::refs::Target;
         use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};

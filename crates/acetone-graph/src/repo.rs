@@ -1743,6 +1743,15 @@ impl<'r> Transaction<'r> {
     /// Apply the staged mutations: new map roots, new manifest chunk,
     /// atomic workspace advance (compare-and-swap against the manifest
     /// this transaction loaded). Returns the new manifest.
+    ///
+    /// The workspace advance goes through the store's ref writer lock
+    /// (`acetone-refs.lock`) like every other acetone ref update — with one
+    /// deliberate exception: a save whose staged operations net to **no
+    /// manifest change** (manifests are content-addressed, so re-applying
+    /// already-present values reproduces the identical hash) performs no ref
+    /// update at all, and therefore succeeds even when a stale lock would
+    /// block a real advance (acetone-3gy). See [`Transaction::save`]'s
+    /// pinning tests in `tests/repository.rs`.
     pub fn save(mut self) -> Result<Manifest, GraphError> {
         self.save_in_place()?;
         Ok(self.manifest)
@@ -1917,6 +1926,12 @@ impl<'r> Transaction<'r> {
     /// Write a new manifest chunk and atomically advance the workspace ref to a
     /// fresh tree anchoring its chunk set (compare-and-swap against the tree
     /// this transaction loaded). Updates the transaction's base state.
+    ///
+    /// The advance is skipped when the manifest is unchanged and the ref
+    /// already exists as a tree: no ref update happens, so the store's
+    /// `acetone-refs.lock` is never consulted — the no-op fast path pinned by
+    /// `stale_refs_lock_does_not_block_a_save_that_changes_nothing`
+    /// (acetone-3gy).
     fn persist_manifest(&mut self, manifest: Manifest) -> Result<(), GraphError> {
         let store = &self.repo.store;
         let manifest_bytes = manifest.encode();
