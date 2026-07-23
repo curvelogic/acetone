@@ -32,7 +32,7 @@ use crate::exec::value::Value;
 use crate::exec::{
     GraphSnapshot, GraphSource, ProcedureProvider, QueryLimits, QueryResult, StoreBackedSource,
     VersionResolver, catalogue_from_schema, execute_versioned_with_limits,
-    execute_write_with_limits, virtual_diff_node,
+    execute_write_with_limits, key_names_from_schema, virtual_diff_node,
 };
 
 /// The result of a [`Session::run`], carrying which kind of query ran so a
@@ -395,17 +395,20 @@ impl ProcedureProvider for RepoProcedures<'_> {
                     .snapshot(&to)
                     .and_then(|s| s.schema_entries())
                     .map_err(|e| e.to_string())?;
+                // Key-name maps built once per side, not per node (acetone-v8g).
+                let from_key_names = key_names_from_schema(&from_schema);
+                let to_key_names = key_names_from_schema(&to_schema);
                 let mut rows = Vec::new();
                 for change in &diff.nodes {
-                    let (record, schema) = match change.kind {
-                        ChangeKind::Removed => (change.before.as_ref(), from_schema.as_slice()),
-                        _ => (change.after.as_ref(), to_schema.as_slice()),
+                    let (record, key_names) = match change.kind {
+                        ChangeKind::Removed => (change.before.as_ref(), &from_key_names),
+                        _ => (change.after.as_ref(), &to_key_names),
                     };
                     let node = match record {
                         Some(rec) => Value::Node(virtual_diff_node(
                             &change.key,
                             rec,
-                            schema,
+                            key_names,
                             change.kind.label(),
                         )),
                         None => Value::Null,
@@ -483,6 +486,10 @@ impl ProcedureProvider for RepoProcedures<'_> {
                     .map_err(|e| e.to_string())?;
                 let ours_schema = ours_snap.schema_entries().map_err(|e| e.to_string())?;
                 let theirs_schema = theirs_snap.schema_entries().map_err(|e| e.to_string())?;
+                // Key-name maps built once per side, not per conflict row
+                // (acetone-v8g).
+                let ours_key_names = key_names_from_schema(&ours_schema);
+                let theirs_key_names = key_names_from_schema(&theirs_schema);
                 // The three-way base of the merge (acetone-s7d): a per-property
                 // conflict's base/ours/theirs values are re-derived here from the
                 // merge base + the two tips, so a user sees all three sides in one
@@ -530,21 +537,21 @@ impl ProcedureProvider for RepoProcedures<'_> {
                     let row = match map {
                         ConflictMap::Nodes => {
                             let node_key = NodeKey::decode(&key).map_err(|e| e.to_string())?;
-                            let (record, schema) = match ours_snap
+                            let (record, key_names) = match ours_snap
                                 .get_node(&node_key)
                                 .map_err(|e| e.to_string())?
                             {
-                                Some(r) => (Some(r), &ours_schema),
+                                Some(r) => (Some(r), &ours_key_names),
                                 None => (
                                     theirs_snap.get_node(&node_key).map_err(|e| e.to_string())?,
-                                    &theirs_schema,
+                                    &theirs_key_names,
                                 ),
                             };
                             let node = match record {
                                 Some(r) => Value::Node(virtual_diff_node(
                                     &node_key,
                                     &r,
-                                    schema,
+                                    key_names,
                                     "_Conflict",
                                 )),
                                 None => Value::Null,

@@ -3007,7 +3007,8 @@ pub fn acetone_cypher::exec::adapter::GraphSnapshot::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::adapter::GraphSnapshot
 pub type acetone_cypher::exec::adapter::GraphSnapshot::Output = T
 pub fn acetone_cypher::exec::adapter::catalogue_from_schema(alloc::vec::Vec<acetone_model::schema::SchemaEntry>) -> acetone_cypher::bind::catalogue::Catalogue
-pub fn acetone_cypher::exec::adapter::virtual_diff_node(&acetone_model::graph_keys::NodeKey, &acetone_model::records::NodeRecord, &[acetone_model::schema::SchemaEntry], &str) -> acetone_cypher::exec::value::NodeValue
+pub fn acetone_cypher::exec::adapter::key_names_from_schema(&[acetone_model::schema::SchemaEntry]) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
+pub fn acetone_cypher::exec::adapter::virtual_diff_node(&acetone_model::graph_keys::NodeKey, &acetone_model::records::NodeRecord, &std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>, &str) -> acetone_cypher::exec::value::NodeValue
 pub mod acetone_cypher::exec::eval
 pub enum acetone_cypher::exec::eval::ExecError
 pub acetone_cypher::exec::eval::ExecError::DivisionByZero
@@ -4872,9 +4873,10 @@ pub fn acetone_cypher::exec::execute_with_governor(&acetone_cypher::bind::bound:
 pub fn acetone_cypher::exec::execute_with_limits(&acetone_cypher::bind::bound::BoundQuery, &dyn acetone_cypher::exec::source::GraphSource, &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>, &acetone_cypher::exec::governor::QueryLimits) -> core::result::Result<acetone_cypher::exec::run::QueryResult, acetone_cypher::exec::eval::ExecError>
 pub fn acetone_cypher::exec::execute_write(&acetone_cypher::bind::bound::BoundQuery, &dyn acetone_cypher::exec::source::VersionResolver, &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>) -> core::result::Result<(acetone_cypher::exec::run::QueryResult, acetone_cypher::exec::write::WriteChanges), acetone_cypher::exec::eval::ExecError>
 pub fn acetone_cypher::exec::execute_write_with_limits(&acetone_cypher::bind::bound::BoundQuery, &dyn acetone_cypher::exec::source::VersionResolver, &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>, &acetone_cypher::exec::governor::QueryLimits) -> core::result::Result<(acetone_cypher::exec::run::QueryResult, acetone_cypher::exec::write::WriteChanges), acetone_cypher::exec::eval::ExecError>
+pub fn acetone_cypher::exec::key_names_from_schema(&[acetone_model::schema::SchemaEntry]) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
 pub fn acetone_cypher::exec::run_query(&str, &dyn acetone_cypher::exec::source::GraphSource, &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>) -> core::result::Result<acetone_cypher::exec::run::QueryResult, acetone_cypher::exec::QueryError>
 pub fn acetone_cypher::exec::run_query_with_limits(&str, &dyn acetone_cypher::exec::source::GraphSource, &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>, &acetone_cypher::exec::governor::QueryLimits) -> core::result::Result<acetone_cypher::exec::run::QueryResult, acetone_cypher::exec::QueryError>
-pub fn acetone_cypher::exec::virtual_diff_node(&acetone_model::graph_keys::NodeKey, &acetone_model::records::NodeRecord, &[acetone_model::schema::SchemaEntry], &str) -> acetone_cypher::exec::value::NodeValue
+pub fn acetone_cypher::exec::virtual_diff_node(&acetone_model::graph_keys::NodeKey, &acetone_model::records::NodeRecord, &std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>, &str) -> acetone_cypher::exec::value::NodeValue
 pub mod acetone_cypher::lex
 pub enum acetone_cypher::lex::TokenKind
 pub acetone_cypher::lex::TokenKind::Arrow

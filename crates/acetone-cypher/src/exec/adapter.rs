@@ -192,25 +192,36 @@ fn node_entity_id(key: &NodeKey) -> EntityId {
     EntityId::from_bytes(render_key_bytes(&logical))
 }
 
-/// Build a runtime node value for the diff virtual graph (acetone-14c.1):
-/// the stored `(key, record)` rendered as a node — key properties re-exposed
-/// under their schema-declared names — with a virtual change label
-/// (`_Added`/`_Removed`/`_Modified`) prepended to its label set, so a query
-/// can select it with `node:_Added`. `schema` is the version the record
-/// belongs to (its `to` version for added/modified, `from` for removed).
-pub fn virtual_diff_node(
-    key: &NodeKey,
-    record: &NodeRecord,
-    schema: &[SchemaEntry],
-    change_label: &str,
-) -> NodeValue {
+/// The schema's key-property names, keyed by label — the map
+/// [`virtual_diff_node`] and [`node_value`] use to re-expose key values as
+/// queryable properties. Build it **once per side** and pass it to
+/// `virtual_diff_node` for every row: rebuilding it per node would cost
+/// O(rows × schema) over a diff (acetone-v8g).
+pub fn key_names_from_schema(schema: &[SchemaEntry]) -> HashMap<String, Vec<String>> {
     let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
     for entry in schema {
         if let SchemaEntry::Label { name, def } = entry {
             key_names.insert(name.clone(), def.key().to_vec());
         }
     }
-    let mut node = node_value(key, record, &key_names);
+    key_names
+}
+
+/// Build a runtime node value for the diff virtual graph (acetone-14c.1):
+/// the stored `(key, record)` rendered as a node — key properties re-exposed
+/// under their schema-declared names — with a virtual change label
+/// (`_Added`/`_Removed`/`_Modified`) prepended to its label set, so a query
+/// can select it with `node:_Added`. `key_names` is the
+/// [`key_names_from_schema`] map of the version the record belongs to (its
+/// `to` version for added/modified, `from` for removed); an empty map (a
+/// schemaless version) leaves key properties un-exposed but the node intact.
+pub fn virtual_diff_node(
+    key: &NodeKey,
+    record: &NodeRecord,
+    key_names: &HashMap<String, Vec<String>>,
+    change_label: &str,
+) -> NodeValue {
+    let mut node = node_value(key, record, key_names);
     let mut labels = Vec::with_capacity(node.labels.len() + 1);
     labels.push(change_label.to_string());
     labels.append(&mut node.labels);
@@ -664,6 +675,91 @@ mod tests {
         assert!(
             matches!(with_schema.all_nodes()[0].properties.get("hostname"),
                 Some(Value::String(s)) if s == "web-01")
+        );
+    }
+
+    #[test]
+    fn virtual_diff_node_renders_a_removed_node_from_the_from_schema() {
+        // acetone-v8g: the _Removed path renders the *before* record with the
+        // `from` side's key names — the change label is prepended and the key
+        // value is re-exposed under its declared property name.
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+
+        let key = node_key("Host", "web-01");
+        let record = NodeRecord::new(
+            ["Critical".to_string()],
+            BTreeMap::from([("os".to_string(), ModelValue::String("debian".into()))]),
+        );
+        let from_schema = vec![SchemaEntry::Label {
+            name: "Host".into(),
+            def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+        let key_names = key_names_from_schema(&from_schema);
+
+        let node = virtual_diff_node(&key, &record, &key_names, "_Removed");
+        assert_eq!(
+            node.labels,
+            vec![
+                "_Removed".to_string(),
+                "Host".to_string(),
+                "Critical".to_string()
+            ],
+            "change label first, then primary and secondary labels"
+        );
+        assert!(
+            matches!(node.properties.get("hostname"), Some(Value::String(s)) if s == "web-01"),
+            "the key value is re-exposed from the from-side schema"
+        );
+        assert!(
+            matches!(node.properties.get("os"), Some(Value::String(s)) if s == "debian"),
+            "record properties are preserved"
+        );
+    }
+
+    #[test]
+    fn virtual_diff_node_without_schema_keeps_the_node_but_not_key_properties() {
+        // acetone-v8g: a schemaless version has no key names, so key
+        // properties are not re-exposed — but the node is still rendered,
+        // with its labels and record properties intact.
+        let key = node_key("Thing", "seven");
+        let record = NodeRecord::new([], BTreeMap::from([("v".to_string(), ModelValue::Int(42))]));
+        let empty = key_names_from_schema(&[]);
+
+        let node = virtual_diff_node(&key, &record, &empty, "_Added");
+        assert_eq!(node.labels, vec!["_Added".to_string(), "Thing".to_string()]);
+        assert!(
+            matches!(node.properties.get("v"), Some(Value::Int(42))),
+            "record properties survive without a schema"
+        );
+        // No schema names the key property, so nothing is re-exposed: the
+        // only property is the record's.
+        assert_eq!(
+            node.properties.len(),
+            1,
+            "no key property can be re-exposed without a schema: {:?}",
+            node.properties
+        );
+    }
+
+    #[test]
+    fn key_names_from_schema_collects_only_label_entries() {
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_os".into(),
+                def: IndexDef::new("Host", vec!["os".into()]).unwrap(),
+            },
+        ];
+        let key_names = key_names_from_schema(&schema);
+        assert_eq!(key_names.len(), 1);
+        assert_eq!(
+            key_names.get("Host"),
+            Some(&vec!["hostname".to_string()]),
+            "the label's declared key tuple is mapped by label name"
         );
     }
 

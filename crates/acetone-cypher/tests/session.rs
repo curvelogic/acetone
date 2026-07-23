@@ -188,6 +188,140 @@ fn call_acetone_diff_runs_through_the_session_procedures() {
 }
 
 #[test]
+fn call_acetone_diff_renders_a_removed_node_from_the_from_schema() {
+    // acetone-v8g: a deletion's virtual node is rendered from the *before*
+    // record with the `from` version's schema — the `_Removed` change label
+    // is present and the key value is re-exposed under its declared name.
+    let (_d, repo) = repo();
+    seed(&repo);
+    let session = Session::new(&repo);
+    let base = commit(&repo, "base");
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.delete_node(&NodeKey::new("Host", vec![MV::Int(1)]).expect("key"))
+            .expect("delete");
+        txn.save().expect("save");
+    }
+    let head = commit(&repo, "head");
+
+    let result = session
+        .run(&format!(
+            "CALL acetone.diff('{base}', '{head}') YIELD kind, node \
+             WHERE kind = 'removed' \
+             RETURN node.id, node.name, '_Removed' IN labels(node)"
+        ))
+        .expect("call diff");
+    let rows = &result.result().rows;
+    assert_eq!(rows.len(), 1, "one removed node expected, got {rows:?}");
+    assert!(
+        matches!(&rows[0][0], RtValue::Int(1)),
+        "the key value comes from the from-side schema: {rows:?}"
+    );
+    assert!(
+        matches!(&rows[0][1], RtValue::String(s) if s == "web"),
+        "the before-record's properties are rendered: {rows:?}"
+    );
+    assert!(
+        matches!(&rows[0][2], RtValue::Bool(true)),
+        "the _Removed change label is queryable: {rows:?}"
+    );
+}
+
+#[test]
+fn call_acetone_diff_in_a_schemaless_repository_renders_record_properties_only() {
+    // acetone-v8g: without a declared schema there are no key names to
+    // re-expose — `node.id` is null — but the node itself is still rendered
+    // with its record properties.
+    let (_d, repo) = repo();
+    let base = commit(&repo, "empty base");
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_node(
+            &NodeKey::new("Thing", vec![MV::Int(7)]).expect("key"),
+            &NodeRecord::new([], BTreeMap::from([("v".to_owned(), MV::Int(42))])),
+        )
+        .expect("node");
+        txn.save().expect("save");
+    }
+    let head = commit(&repo, "add thing");
+
+    let result = Session::new(&repo)
+        .run(&format!(
+            "CALL acetone.diff('{base}', '{head}') YIELD kind, node \
+             WHERE kind = 'added' \
+             RETURN node.id, node.v, node IS NOT NULL"
+        ))
+        .expect("call diff");
+    let rows = &result.result().rows;
+    assert_eq!(rows.len(), 1, "one added node expected, got {rows:?}");
+    assert!(
+        matches!(&rows[0][0], RtValue::Null),
+        "no schema names the key property, so node.id is null: {rows:?}"
+    );
+    assert!(
+        matches!(&rows[0][1], RtValue::Int(42)),
+        "record properties are still rendered: {rows:?}"
+    );
+    assert!(
+        matches!(&rows[0][2], RtValue::Bool(true)),
+        "the node column itself is present: {rows:?}"
+    );
+}
+
+#[test]
+fn call_acetone_diff_yields_a_null_node_column_for_edge_changes() {
+    // acetone-v8g: virtual relationships for edge changes are a follow-up —
+    // an edge-change row must surface with a null `node` column, not a
+    // fabricated node and not a missing row.
+    use acetone_model::graph_keys::EdgeKey;
+    use acetone_model::records::EdgeRecord;
+
+    let (_d, repo) = repo();
+    seed(&repo);
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_node(
+            &NodeKey::new("Host", vec![MV::Int(2)]).expect("key"),
+            &NodeRecord::new([], BTreeMap::new()),
+        )
+        .expect("node");
+        txn.save().expect("save");
+    }
+    let base = commit(&repo, "base");
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        let edge = EdgeKey::new(
+            NodeKey::new("Host", vec![MV::Int(1)]).expect("key"),
+            "LINKS",
+            NodeKey::new("Host", vec![MV::Int(2)]).expect("key"),
+            MV::Null,
+        )
+        .expect("edge");
+        txn.put_edge(&edge, &EdgeRecord::default()).expect("edge");
+        txn.save().expect("save");
+    }
+    let head = commit(&repo, "add edge");
+
+    let result = Session::new(&repo)
+        .run(&format!(
+            "CALL acetone.diff('{base}', '{head}') YIELD kind, label, node \
+             WHERE label = 'LINKS' \
+             RETURN kind, node IS NULL"
+        ))
+        .expect("call diff");
+    let rows = &result.result().rows;
+    assert_eq!(rows.len(), 1, "one edge change expected, got {rows:?}");
+    assert!(
+        matches!(&rows[0][0], RtValue::String(s) if s == "added"),
+        "the edge change kind is reported: {rows:?}"
+    );
+    assert!(
+        matches!(&rows[0][1], RtValue::Bool(true)),
+        "an edge-change row's node column is null: {rows:?}"
+    );
+}
+
+#[test]
 fn query_error_renders_with_line_and_column() {
     let (_d, repo) = repo();
     seed(&repo);
