@@ -52,45 +52,15 @@ will replace this chapter's listing once the publication decision changes.
 The following program initialises a repository, declares a label's natural
 key, writes through Cypher, commits, and reads the data back. It compiles and
 runs against acetone 0.3.0 exactly as shown (the commit hash embeds a
-timestamp, so yours will differ; the query row reproduces exactly):
+timestamp, so yours will differ; the query row reproduces exactly). It is
+compiled, run and output-checked in CI as the cargo example
+[`manual_library_api`](https://github.com/curvelogic/acetone/blob/main/crates/acetone-core/examples/manual_library_api.rs)
+— the listing below *is* that file, included verbatim, so the manual cannot
+drift from code that works (`cargo run -p acetone-core --example
+manual_library_api` runs it from a checkout):
 
 ```rust
-use std::collections::BTreeMap;
-
-use acetone_core::{InitOptions, Repository, Session};
-// Deep access (unstable): schema DDL has no stable-surface entry point yet.
-use acetone_core::model::schema::{LabelDef, SchemaEntry};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // A fresh repository in a temporary directory (use `Repository::open`
-    // for an existing one).
-    let dir = std::env::temp_dir().join(format!("acetone-api-example-{}", std::process::id()));
-    let repo = Repository::init(&dir, InitOptions::default())?;
-
-    // Declare the Host label's natural key, in a write transaction.
-    let def = LabelDef::new(vec!["name".into()], BTreeMap::new(), [], [])?;
-    let mut txn = repo.begin_write()?;
-    txn.put_schema(&SchemaEntry::Label {
-        name: "Host".into(),
-        def,
-    })?;
-    txn.save()?;
-
-    // Write through Cypher: a write query advances the workspace atomically.
-    let session = Session::new(&repo);
-    session.run("CREATE (:Host {name: 'web1', cpus: 8})")?;
-
-    // Turn the workspace's changes into a commit.
-    let commit = repo.begin_write()?.commit("add web1", &[], None)?;
-    println!("committed {}", commit.to_hex());
-
-    // Read it back.
-    let outcome = session.run("MATCH (h:Host) RETURN h.name, h.cpus")?;
-    for row in &outcome.result().rows {
-        println!("{row:?}");
-    }
-    Ok(())
-}
+{{#include ../../../../crates/acetone-core/examples/manual_library_api.rs}}
 ```
 
 Output:
