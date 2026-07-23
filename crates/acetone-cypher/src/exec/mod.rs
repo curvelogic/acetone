@@ -975,4 +975,61 @@ mod tests {
             QueryError::Exec(ExecError::InvalidArgument { .. })
         ));
     }
+
+    // --- Identifier-column provenance (acetone-0ds) --------------------------
+    //
+    // Identifier-shaped repository text projected as plain String cells
+    // (labels(n), keys(n), type(r), procedure identifier yields) is flagged
+    // per result column, so a terminal renderer can apply the stricter
+    // identifier escaping while JSON output keeps the raw round-trip.
+
+    #[test]
+    fn identifier_functions_flag_their_result_columns() {
+        let result = run("MATCH (n) RETURN labels(n), n.name, keys(n)");
+        assert_eq!(result.identifier_columns, vec![true, false, true]);
+        let result = run("MATCH (a)-[r]->(b) RETURN type(r), r");
+        assert_eq!(result.identifier_columns, vec![true, false]);
+        // Ordinary projections carry no identifier flag.
+        let result = run("RETURN 1 AS one, 'x' AS s");
+        assert_eq!(result.identifier_columns, vec![false, false]);
+    }
+
+    #[test]
+    fn identifier_provenance_survives_with_and_unwind_aliases() {
+        let result = run("MATCH (n) WITH labels(n) AS l, n.name AS m RETURN l, m");
+        assert_eq!(result.identifier_columns, vec![true, false]);
+        let result = run("MATCH (n) UNWIND labels(n) AS l RETURN l");
+        assert_eq!(result.identifier_columns, vec![true]);
+        // A WITH re-scope drops provenance that is not carried through.
+        let result = run("MATCH (n) WITH n.name AS m RETURN m");
+        assert_eq!(result.identifier_columns, vec![false]);
+    }
+
+    #[test]
+    fn procedure_identifier_yields_flag_their_columns() {
+        let provider = FixedProcedures(vec![vec![
+            Value::String("N".into()),
+            Value::String("k1".into()),
+            Value::String("abc123".into()),
+        ]]);
+        // Through YIELD + RETURN of the bound variables.
+        let result = call_with(
+            "CALL acetone.blame('N', 1) YIELD label, key, commit RETURN label, key, commit",
+            &provider,
+        );
+        assert_eq!(result.identifier_columns, vec![true, false, false]);
+        // Trailing YIELD with no RETURN (implicit projection).
+        let result = call_with("CALL acetone.blame('N', 1) YIELD label, commit", &provider);
+        assert_eq!(result.identifier_columns, vec![true, false]);
+        // Standalone CALL with no YIELD: the declared columns.
+        let provider = FixedProcedures(vec![vec![
+            Value::String("added".into()),
+            Value::String("N".into()),
+            Value::String("k1".into()),
+            Value::Null,
+        ]]);
+        let result = call_with("CALL acetone.diff('a', 'b')", &provider);
+        assert_eq!(result.columns, vec!["kind", "label", "key", "node"]);
+        assert_eq!(result.identifier_columns, vec![false, true, false, false]);
+    }
 }

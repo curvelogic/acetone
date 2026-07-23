@@ -539,6 +539,14 @@ pub struct ProcedureDef {
     pub min_args: usize,
     pub max_args: usize,
     pub yields: &'static [&'static str],
+    /// The subset of `yields` whose values are identifier-shaped repository
+    /// text (label / relationship-type / property-key names) carried as plain
+    /// strings (acetone-0ds). The executor flags these columns in
+    /// `QueryResult::identifier_columns` so terminal renderers apply the
+    /// stricter identifier escaping. Rendered-key columns (`key`) are not
+    /// listed: they are built by the display layer's `{:?}`-escaping
+    /// renderers, or echo caller-supplied arguments.
+    pub identifier_yields: &'static [&'static str],
 }
 
 pub const PROCEDURES: &[ProcedureDef] = &[
@@ -547,6 +555,8 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         min_args: 0,
         max_args: 1,
         yields: &["commit", "subject"],
+        // `commit` is hex, `subject` is sentence-shaped (value policy).
+        identifier_yields: &[],
     },
     ProcedureDef {
         name: "acetone.diff",
@@ -558,12 +568,18 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         // null for a relationship change (virtual relationships are a
         // follow-up).
         yields: &["kind", "label", "key", "node"],
+        identifier_yields: &["label"],
     },
     ProcedureDef {
         name: "acetone.blame",
         min_args: 2,
         max_args: 2,
+        // A label declared in the workspace schema is arity-checked against
+        // the key argument (a mismatch is a typed error, acetone-596); an
+        // *undeclared* label is probed schema-free and simply yields no rows
+        // when nothing matches.
         yields: &["label", "key", "commit"],
+        identifier_yields: &["label"],
     },
     ProcedureDef {
         name: "acetone.conflicts",
@@ -580,6 +596,7 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         // '_Conflict' IN labels(node)` queries the merge's conflicts as a graph.
         // Null for a relationship or schema conflict.
         yields: &["label", "key", "property", "base", "ours", "theirs", "node"],
+        identifier_yields: &["label", "property"],
     },
 ];
 

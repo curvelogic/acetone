@@ -787,6 +787,13 @@ impl Repository {
     /// First-parent semantics: a change merged in through a two-parent merge
     /// commit is attributed to that merge commit (its record differs from its
     /// first parent's), the same convention `git blame --first-parent` uses.
+    ///
+    /// The key's arity is checked against the label's declared key tuple in
+    /// the workspace schema — a mismatch is a typed
+    /// [`GraphError::KeyArityMismatch`] (acetone-596). A label *not* declared
+    /// in the current schema is probed schema-free and returns an **empty
+    /// result** rather than erroring (raw-plumbing graphs, and labels dropped
+    /// from the schema whose history is still blameable).
     pub fn blame(&self, key: &NodeKey) -> Result<Vec<Hash>, GraphError> {
         // Guard the key arity against the label's declared key tuple
         // (acetone-596): probing a composite-key label with a single value

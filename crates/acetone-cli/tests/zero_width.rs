@@ -106,6 +106,127 @@ fn zero_width_in_a_label_is_escaped_on_query_output() {
     );
 }
 
+/// The commit hash from `acetone commit` output ("committed <hex>").
+fn commit_hex(output: &Output) -> String {
+    let text = String::from_utf8(output.stdout.clone()).expect("stdout is not UTF-8");
+    text.split_whitespace()
+        .last()
+        .expect("commit output has a hash")
+        .to_string()
+}
+
+#[test]
+fn projected_identifier_columns_escape_zero_width_in_table_and_csv_not_json() {
+    // PR #171 review finding 1: identifiers projected as plain String cells —
+    // `labels(n)`, `keys(n)`, `type(r)`, `CALL acetone.diff ... YIELD label` —
+    // must meet the same identifier bar as `RETURN n`, in table AND csv;
+    // `--format json` deliberately keeps the raw character (lossless
+    // round-trip for consumers).
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    Command::new(bin())
+        .args(["init", dir.to_str().unwrap()])
+        .output()
+        .expect("init");
+    let hostile_label = format!("Te{}am", '\u{200b}');
+    let hostile_prop = format!("na{}me=x", '\u{200b}');
+    let hostile_rtype = format!("LI{}NKS", '\u{200b}');
+    assert!(
+        acetone(dir, &["declare-label", &hostile_label, "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(
+            dir,
+            &["put-node", &hostile_label, "1", "--prop", &hostile_prop]
+        )
+        .status
+        .success()
+    );
+    let c1 = commit_hex(&acetone(dir, &["commit", "-m", "one"]));
+    assert!(
+        acetone(dir, &["put-node", &hostile_label, "2"])
+            .status
+            .success()
+    );
+    let c2 = commit_hex(&acetone(dir, &["commit", "-m", "two"]));
+    assert!(
+        acetone(
+            dir,
+            &[
+                "put-edge",
+                &hostile_label,
+                "1",
+                &hostile_rtype,
+                &hostile_label,
+                "2",
+            ],
+        )
+        .status
+        .success()
+    );
+
+    let escaped = |out: &str, probe: &str| {
+        assert!(
+            !out.contains('\u{200b}'),
+            "{probe} leaked a raw ZWSP:\n{out}"
+        );
+        assert!(
+            out.contains("\\u{200b}"),
+            "{probe} did not escape the ZWSP:\n{out}"
+        );
+    };
+
+    // labels(n): escaped in table and csv…
+    let labels_query = "MATCH (n) RETURN labels(n) AS l";
+    escaped(
+        &stdout(&acetone(dir, &["query", labels_query])),
+        "labels/table",
+    );
+    escaped(
+        &stdout(&acetone(dir, &["query", labels_query, "--format", "csv"])),
+        "labels/csv",
+    );
+    // …but raw (round-trippable) in JSON.
+    let json = stdout(&acetone(dir, &["query", labels_query, "--format", "json"]));
+    assert!(
+        json.contains('\u{200b}'),
+        "json must keep the raw character for round-trip:\n{json}"
+    );
+    assert!(
+        !json.contains("\\u{200b}"),
+        "json must not carry terminal escapes:\n{json}"
+    );
+
+    // keys(n).
+    let keys_query = "MATCH (n) RETURN keys(n) AS k";
+    escaped(&stdout(&acetone(dir, &["query", keys_query])), "keys/table");
+    escaped(
+        &stdout(&acetone(dir, &["query", keys_query, "--format", "csv"])),
+        "keys/csv",
+    );
+
+    // type(r).
+    let type_query = "MATCH (a)-[r]->(b) RETURN type(r) AS t";
+    escaped(&stdout(&acetone(dir, &["query", type_query])), "type/table");
+    escaped(
+        &stdout(&acetone(dir, &["query", type_query, "--format", "csv"])),
+        "type/csv",
+    );
+
+    // CALL acetone.diff YIELD label.
+    let diff_query = format!("CALL acetone.diff('{c1}', '{c2}') YIELD label RETURN label");
+    escaped(
+        &stdout(&acetone(dir, &["query", &diff_query])),
+        "diff/table",
+    );
+    escaped(
+        &stdout(&acetone(dir, &["query", &diff_query, "--format", "csv"])),
+        "diff/csv",
+    );
+}
+
 #[test]
 fn zero_width_in_a_branch_name_is_escaped_on_status_and_branch_list() {
     let tmp = tempfile::tempdir().unwrap();

@@ -29,6 +29,17 @@ use crate::exec::write::{MutableGraph, WriteChanges, WriteSummary};
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Value>>,
+    /// Per-column identifier provenance, aligned with `columns` (acetone-0ds):
+    /// `true` marks a column whose values are identifier-shaped repository
+    /// text — a direct `labels()`/`keys()`/`type()` projection, an alias
+    /// carrying one through `WITH`/`UNWIND`, or a procedure yield column
+    /// declared as an identifier (`ProcedureDef::identifier_yields`). A
+    /// terminal renderer applies the stricter identifier escaping
+    /// (zero-width/invisible characters) to these columns; JSON-style output
+    /// ignores the flag and keeps the raw round-trip. Best-effort provenance:
+    /// identifier-ness is not tracked through other expressions (e.g.
+    /// `head(labels(n))`) — a recorded residual.
+    pub identifier_columns: Vec<bool>,
     /// Side effects of any write clauses (all zero for a read query).
     pub stats: WriteSummary,
     /// Non-error diagnostics about the query that do not change its result —
@@ -170,6 +181,10 @@ fn run_versioned(
     let mut graph = MutableGraph::new(base);
     let mut rows = vec![Row::default()];
     let mut result = None;
+    // Variables currently carrying identifier-shaped repository text
+    // (acetone-0ds): procedure identifier yields, and `WITH`/`UNWIND` aliases
+    // of identifier expressions. Feeds `QueryResult::identifier_columns`.
+    let mut identifier_vars: HashSet<VarId> = HashSet::new();
 
     for clause in &query.clauses {
         match clause {
@@ -208,6 +223,11 @@ fn run_versioned(
                 )?;
             }
             BoundClause::Unwind { expr, alias, span } => {
+                if is_identifier_expr(expr, &identifier_vars) {
+                    // Unwinding e.g. `labels(n)` binds individual identifier
+                    // strings to the alias.
+                    identifier_vars.insert(*alias);
+                }
                 let ctx = EvalCtx::new(&graph, parameters, governor);
                 let mut out = Vec::new();
                 for row in rows {
@@ -233,10 +253,24 @@ fn run_versioned(
                 rows = out;
             }
             BoundClause::With(projection) => {
+                // Re-scope identifier provenance to the projected aliases
+                // (computed against the *old* scope before it is replaced).
+                let rescoped: HashSet<VarId> = projection
+                    .items
+                    .iter()
+                    .filter(|item| is_identifier_expr(&item.expr, &identifier_vars))
+                    .map(|item| item.var)
+                    .collect();
+                identifier_vars = rescoped;
                 let ctx = EvalCtx::new(&graph, parameters, governor);
                 rows = project(rows, projection, &ctx, true)?.1;
             }
             BoundClause::Return(projection) => {
+                let identifier_columns = projection
+                    .items
+                    .iter()
+                    .map(|item| is_identifier_expr(&item.expr, &identifier_vars))
+                    .collect();
                 let ctx = EvalCtx::new(&graph, parameters, governor);
                 let (columns, projected) = project(rows, projection, &ctx, false)?;
                 let output = projected
@@ -252,6 +286,7 @@ fn run_versioned(
                 result = Some(QueryResult {
                     columns,
                     rows: output,
+                    identifier_columns,
                     stats: WriteSummary::default(),
                     advisories: Vec::new(),
                 });
@@ -288,6 +323,14 @@ fn run_versioned(
                 where_clause,
                 span,
             } => {
+                // Yield variables bound from the procedure's declared
+                // identifier columns carry identifier-shaped text from here
+                // on (independent of how many rows the call produces).
+                for (name, var) in yields {
+                    if procedure.identifier_yields.contains(&name.as_str()) {
+                        identifier_vars.insert(*var);
+                    }
+                }
                 // For each incoming row, evaluate the arguments in its
                 // context, run the procedure, and emit one row per result
                 // tuple with the requested YIELD columns bound.
@@ -345,6 +388,11 @@ fn run_versioned(
                     result = Some(QueryResult {
                         columns: procedure.yields.iter().map(|c| c.to_string()).collect(),
                         rows: produced.into_iter().map(|(_, tuple)| tuple).collect(),
+                        identifier_columns: procedure
+                            .yields
+                            .iter()
+                            .map(|c| procedure.identifier_yields.contains(c))
+                            .collect(),
                         stats: WriteSummary::default(),
                         advisories: Vec::new(),
                     });
@@ -367,6 +415,11 @@ fn run_versioned(
                 .iter()
                 .map(|row| yields.iter().map(|(_, var)| row.get(*var)).collect())
                 .collect(),
+            // The Call clause registered identifier yield variables above.
+            identifier_columns: yields
+                .iter()
+                .map(|(_, var)| identifier_vars.contains(var))
+                .collect(),
             stats: WriteSummary::default(),
             advisories: Vec::new(),
         });
@@ -375,12 +428,29 @@ fn run_versioned(
     let mut result = result.unwrap_or(QueryResult {
         columns: Vec::new(),
         rows: Vec::new(),
+        identifier_columns: Vec::new(),
         stats: WriteSummary::default(),
         advisories: Vec::new(),
     });
     result.stats = stats;
     let changes = graph.changes();
     Ok((result, changes))
+}
+
+/// Whether a projection expression yields identifier-shaped repository text —
+/// label, property-key or relationship-type names — as plain strings
+/// (acetone-0ds): a direct `labels()`, `keys()` or `type()` call, or a
+/// variable already carrying such values (a `WITH`/`UNWIND` alias, or a
+/// procedure's identifier yield column). Best-effort provenance: it is not
+/// tracked through other expressions (`head(labels(n))`, list indexing,
+/// string functions) — a recorded residual; those cells fall back to the
+/// ordinary value escaping.
+fn is_identifier_expr(expr: &BoundExpr, identifier_vars: &HashSet<VarId>) -> bool {
+    match expr {
+        BoundExpr::Function { def, .. } => matches!(def.name, "labels" | "keys" | "type"),
+        BoundExpr::Variable { id, .. } => identifier_vars.contains(id),
+        _ => false,
+    }
 }
 
 // --- CREATE -----------------------------------------------------------------
