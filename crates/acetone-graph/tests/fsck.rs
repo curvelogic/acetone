@@ -540,8 +540,23 @@ fn absent_workspace_manifest_blob_is_a_manifest_finding() {
     );
 }
 
+/// Create an annotated tag `name` on `target` with the system git binary
+/// (tests may shell out to git; library code never does).
+fn git_tag_annotated(repo: &Repository, name: &str, target: &Hash) {
+    let git_dir = repo.store().common_dir().to_owned();
+    let status = std::process::Command::new("git")
+        .args(["-c", "user.name=fsck-test", "-c", "user.email=fsck@test"])
+        .arg("-C")
+        .arg(&git_dir)
+        .args(["tag", "-a", name, "-m", "annotated tag"])
+        .arg(target.to_hex())
+        .status()
+        .expect("run git tag");
+    assert!(status.success(), "git tag -a failed");
+}
+
 #[test]
-fn lightweight_tag_is_verified_annotated_tag_is_an_advisory() {
+fn lightweight_and_annotated_tags_are_both_verified() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
     commit_many_nodes(&repo, 40);
@@ -558,30 +573,199 @@ fn lightweight_tag_is_verified_annotated_tag_is_an_advisory() {
         report.findings
     );
 
-    // An annotated tag (ref -> tag object) is reported as Unverified, not a
-    // spurious Commit error.
-    let git_dir = repo.store().common_dir().to_owned();
-    let status = std::process::Command::new("git")
-        .args(["-c", "user.name=fsck-test", "-c", "user.email=fsck@test"])
-        .arg("-C")
-        .arg(&git_dir)
-        .args(["tag", "-a", "annotated", "-m", "annotated tag"])
-        .arg(head.to_hex())
-        .status()
-        .expect("run git tag");
-    assert!(status.success(), "git tag -a failed");
+    // An annotated tag (ref -> tag object -> commit) is peeled and its
+    // target's manifest verified (acetone-8t3): a healthy target is clean,
+    // with no Unverified advisory.
+    git_tag_annotated(&repo, "annotated", &head);
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.is_clean(),
+        "an annotated tag on a healthy commit must verify clean: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn annotated_tag_with_absent_target_commit_is_a_commit_error() {
+    // The peel path must surface a damaged target, attributed to the tag
+    // ref: an annotated tag whose target commit object has been lost is a
+    // Commit error naming that commit, not an advisory or silence.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    commit_many_nodes(&repo, 40);
+
+    // A commit reachable only through the annotated tag.
+    let manifest = repo.workspace_manifest().expect("manifest").encode();
+    let dangling = repo
+        .store()
+        .create_commit(&NewCommit::new(&manifest, "s", "tag target"))
+        .expect("create commit");
+    git_tag_annotated(&repo, "gone", &dangling);
+    fs::remove_file(loose_object_path(&repo, &dangling)).expect("remove commit object");
 
     let report = fsck::check(&repo).expect("fsck");
     assert!(
-        report
-            .advisories()
-            .any(|f| f.kind == FindingKind::Unverified),
-        "annotated tag must be an Unverified advisory, got {:?}",
+        report.findings.iter().any(|f| {
+            f.kind == FindingKind::Commit
+                && f.detail.contains("absent")
+                && matches!(&f.origin, acetone_graph::Origin::Commit { reference, commit }
+                    if reference == "refs/tags/gone" && *commit == dangling)
+        }),
+        "expected a Commit error for the tag's absent target, got {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn symbolic_ref_only_route_to_damage_is_walked() {
+    // acetone-5lo: a symbolic ref under refs/heads/* whose (resolved) commit
+    // is reachable through no direct ref must still be verified. The damage
+    // here — a garbage manifest — is only reachable via the symref chain
+    // refs/heads/alias -> refs/acetone/hidden/tip, so before the fix fsck
+    // reported nothing at all.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+
+    let commit = store
+        .create_commit(&NewCommit::new(
+            b"garbage bytes that are not a manifest",
+            "s",
+            "hidden damage",
+        ))
+        .expect("create commit");
+    // The direct ref lives outside every namespace fsck walks directly.
+    store
+        .write_ref("refs/acetone/hidden/tip", None, &commit)
+        .expect("hidden ref");
+    store
+        .set_head("refs/heads/alias", "refs/acetone/hidden/tip")
+        .expect("symbolic ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.findings.iter().any(|f| {
+            f.kind == FindingKind::Manifest
+                && matches!(&f.origin, acetone_graph::Origin::Commit { reference, .. }
+                    if reference == "refs/heads/alias")
+        }),
+        "the symref-only route to the damaged manifest must be walked, got {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn dangling_symbolic_ref_is_a_named_advisory() {
+    // A symbolic ref whose chain ends at an absent ref has nothing to
+    // verify; fsck names it (Unverified advisory) rather than staying
+    // silent, and it is not an error.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    repo.store()
+        .set_head("refs/heads/dangle", "refs/heads/nonexistent")
+        .expect("symbolic ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report.advisories().any(|f| {
+            f.kind == FindingKind::Unverified
+                && matches!(&f.origin, acetone_graph::Origin::Ref { reference }
+                    if reference == "refs/heads/dangle")
+        }),
+        "expected an Unverified advisory naming the dangling symref, got {:?}",
         report.findings
     );
     assert!(
         !report.has_errors(),
-        "an annotated tag is not an error: {:?}",
+        "a dangling symref is not damage: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn shared_edge_map_pair_across_versions_is_checked_once() {
+    // acetone-7fe: the edge-symmetry advisory is memoised by the
+    // (edges_fwd, edges_rev) root pair, so a history of commits sharing one
+    // (asymmetric) edge-map pair produces exactly ONE advisory — attributed
+    // to the first version that reaches it — instead of re-scanning (and
+    // re-reporting) every commit.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    // One forward-only edge (asymmetric), endpoints present in every
+    // version's nodes map so no dangling-edge error muddies the count.
+    let key = EdgeKey::new(node("Host", "a"), "LINK", node("Host", "b"), Value::Null).expect("key");
+    let fwd = apply_batch(
+        store,
+        &base.edges_fwd.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            key.encode_fwd().expect("encode"),
+            EdgeRecord::default().encode().expect("encode record"),
+        )],
+    )
+    .expect("apply_batch fwd");
+
+    let endpoint_ops = || {
+        vec![
+            BatchOp::Put(
+                node("Host", "a").encode().expect("encode"),
+                NodeRecord::new([], Default::default())
+                    .encode()
+                    .expect("record"),
+            ),
+            BatchOp::Put(
+                node("Host", "b").encode().expect("encode"),
+                NodeRecord::new([], Default::default())
+                    .encode()
+                    .expect("record"),
+            ),
+        ]
+    };
+
+    // Three commits whose manifests differ (distinct nodes maps) but share
+    // the same (edges_fwd, edges_rev) pair.
+    let mut parent: Option<Hash> = None;
+    for i in 0..3 {
+        let mut ops = endpoint_ops();
+        ops.push(BatchOp::Put(
+            node("Host", &format!("extra{i}")).encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        ));
+        let nodes = apply_batch(store, &base.nodes.to_root(params).expect("root"), ops)
+            .expect("apply_batch nodes");
+        let mut manifest = base.clone();
+        manifest.nodes = MapRoot::from_root(&nodes);
+        manifest.edges_fwd = MapRoot::from_root(&fwd);
+        let bytes = manifest.encode();
+        let mut new = NewCommit::new(&bytes, "s", "asymmetric history");
+        let parents: Vec<Hash> = parent.into_iter().collect();
+        new.parents = &parents;
+        parent = Some(store.create_commit(&new).expect("create commit"));
+    }
+    store
+        .write_ref("refs/heads/asymhist", None, &parent.expect("tip"))
+        .expect("branch ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let asymmetry: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::EdgeAsymmetry)
+        .collect();
+    assert_eq!(
+        asymmetry.len(),
+        1,
+        "the shared edge pair must be checked once across the three commits, got {:?}",
+        report.findings
+    );
+    assert!(
+        !report.has_errors(),
+        "asymmetry is advisory; nothing else may be wrong: {:?}",
         report.findings
     );
 }

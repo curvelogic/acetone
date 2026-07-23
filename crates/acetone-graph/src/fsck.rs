@@ -3,9 +3,12 @@
 //!
 //! [`check`] walks every version a repository can reach — each workspace
 //! manifest under `refs/acetone/workspaces/*`, and every commit reachable
-//! from `refs/heads/*` and `refs/tags/*` (a lightweight tag is walked like a
-//! branch; an annotated tag is reported as an advisory, its tag-object
-//! peeling deferred) — and confirms, for each:
+//! from `refs/heads/*` and `refs/tags/*` (a lightweight tag is walked like
+//! a branch; an annotated tag is peeled to its target commit, which is then
+//! verified like any other — acetone-8t3). Symbolic refs under every walked
+//! namespace are resolved and verified the same way; one that resolves to
+//! nothing (dangling or unborn) is named as an advisory rather than
+//! silently skipped (acetone-5lo). For each version it confirms:
 //!
 //! 1. **Manifest integrity**: the manifest bytes exist and decode under
 //!    the strict decoder; its map roots have valid heights.
@@ -93,10 +96,10 @@ pub enum FindingKind {
     /// (referential integrity, ADR-0028 / Invariant #3). The write path now
     /// rejects this, but an older or foreign-written repository may carry one.
     DanglingEdge,
-    /// Advisory: a reachable version was found but deliberately not verified
-    /// in this phase (e.g. an annotated tag, whose tag-object peeling is
-    /// deferred — see ADR-0012). The sin fsck must avoid is silence, so the
-    /// version is named rather than skipped.
+    /// Advisory: a reachable ref was found but there is nothing to verify
+    /// behind it (a symbolic ref whose chain ends at an absent or unborn
+    /// ref). The sin fsck must avoid is silence, so the ref is named rather
+    /// than skipped.
     Unverified,
 }
 
@@ -126,6 +129,12 @@ pub enum Origin {
         /// The commit's address.
         commit: Hash,
     },
+    /// A ref that resolved to no object at all (e.g. a dangling symbolic
+    /// ref), so there is no version to attribute the finding to.
+    Ref {
+        /// The full ref name.
+        reference: String,
+    },
 }
 
 impl fmt::Display for Origin {
@@ -133,6 +142,7 @@ impl fmt::Display for Origin {
         match self {
             Origin::Workspace { reference } => write!(f, "workspace {reference}"),
             Origin::Commit { reference, commit } => write!(f, "commit {commit} (via {reference})"),
+            Origin::Ref { reference } => write!(f, "ref {reference}"),
         }
     }
 }
@@ -248,10 +258,26 @@ impl FsckReport {
     }
 }
 
+/// The memo identity of one map root: `(chunk hash, height)`. The hash alone
+/// is not enough — see [`Verified::roots`].
+type RootKey = (Hash, u32);
+
+/// The [`RootKey`] of a manifest map root.
+fn root_key(root: &MapRoot) -> RootKey {
+    (root.hash, root.height)
+}
+
 /// Cross-version memoisation, so verifying deep history stays close to
-/// O(distinct chunks) rather than O(history × tree): a map root or whole
-/// manifest verified clean once is not re-walked when a later version
-/// reuses it.
+/// O(distinct chunks) rather than O(history × tree): a map root, whole
+/// manifest, or content-level check input set verified once is not
+/// re-walked when a later version reuses it (acetone-7fe).
+///
+/// The content-level memos (`edge_symmetry`, `referential`, `canonical`,
+/// `indexes`) record their input roots **before** the check runs, like
+/// `manifests`: a shared *faulty* input set is therefore attributed only to
+/// the first origin that reaches it — an under-attribution of the same
+/// fault across origins, never a missed fault — and the O(distinct inputs)
+/// bound holds even on damaged repositories.
 #[derive(Default)]
 struct Verified {
     /// Map roots confirmed to reach only intact chunks, keyed by
@@ -263,13 +289,32 @@ struct Verified {
     /// verified, and rejected, rather than skipped. (Chunk parameters are
     /// fixed per repository and do not affect the structural walk, so they
     /// are not part of the key.)
-    roots: BTreeSet<(Hash, u32)>,
+    roots: BTreeSet<RootKey>,
     /// Manifest blob hashes already fully checked. Sound to key on the blob
     /// hash alone: the manifest bytes fix every `(root hash, height)` pair
     /// it names. A shared *damaged* manifest is therefore attributed only to
     /// the first origin that reaches it — an under-attribution of the same
     /// fault across origins, never a missed fault.
     manifests: BTreeSet<Hash>,
+    /// `(edges_fwd, edges_rev)` root pairs whose symmetry advisory has
+    /// already run: the check's outcome is a pure function of the two maps'
+    /// contents, so an unchanged pair is not re-materialised for every
+    /// commit that shares it (the deep-history amplification of
+    /// acetone-7fe).
+    edge_symmetry: BTreeSet<(RootKey, RootKey)>,
+    /// `(nodes, edges_fwd)` root pairs whose referential-integrity check
+    /// has already run — it too materialises both maps in full.
+    referential: BTreeSet<(RootKey, RootKey)>,
+    /// Map roots whose canonical-tree (history-independence) rebuild has
+    /// already run, keyed by root **and chunk parameters**: the canonical
+    /// tree for the same contents differs under different parameters, and
+    /// parameters live in the manifest, so a hostile manifest pairing a
+    /// known root with different parameters must still be rebuilt.
+    canonical: BTreeSet<(RootKey, acetone_prolly::ChunkParams)>,
+    /// Index consistency inputs already checked: the check is a pure
+    /// function of the schema (index definitions), the nodes map, and the
+    /// named index map.
+    indexes: BTreeSet<(RootKey, RootKey, RootKey, String)>,
 }
 
 /// Verify a repository's chunk reachability and manifest integrity.
@@ -320,8 +365,33 @@ fn check_workspaces(
     report: &mut FsckReport,
 ) -> Result<(), GraphError> {
     let mut refs: Vec<(String, Hash)> = store.list_refs(WORKSPACE_REF_PREFIX)?;
-    if let Some(hash) = store.read_ref(WORKTREE_WORKSPACE_REF)? {
-        refs.push((WORKTREE_WORKSPACE_REF.to_owned(), hash));
+    // Symbolic workspace refs are invisible to list_refs (acetone-5lo):
+    // resolve each and verify what it names; a dangling one is named as an
+    // advisory rather than silently skipped.
+    for (reference, target) in store.list_symbolic_refs(WORKSPACE_REF_PREFIX)? {
+        push_resolved_symref(
+            store,
+            reference,
+            &target,
+            FindingKind::Manifest,
+            &mut refs,
+            report,
+        );
+    }
+    match store.read_ref(WORKTREE_WORKSPACE_REF) {
+        Ok(Some(hash)) => refs.push((WORKTREE_WORKSPACE_REF.to_owned(), hash)),
+        Ok(None) => {}
+        // A foreign tool can make even the per-worktree workspace ref
+        // symbolic; before acetone-5lo this aborted the whole fsck run.
+        Err(StoreError::SymbolicRef { .. }) => push_resolved_symref(
+            store,
+            WORKTREE_WORKSPACE_REF.to_owned(),
+            "(symbolic)",
+            FindingKind::Manifest,
+            &mut refs,
+            report,
+        ),
+        Err(err) => return Err(err.into()),
     }
     for (reference, ref_hash) in refs {
         let origin = Origin::Workspace { reference };
@@ -361,13 +431,55 @@ fn check_workspaces(
     Ok(())
 }
 
-/// Verify every commit reachable from the refs under `prefix`, following all
-/// parents and deduplicating commits so shared history is checked once.
+/// Resolve one symbolic ref and either queue it for verification alongside
+/// the direct refs, or report it: a dangling chain is a named
+/// [`FindingKind::Unverified`] advisory (the sin fsck must avoid is
+/// silence), and a resolution failure (a cycle, or hostile nesting) is an
+/// error finding of `failure_kind` — the walk's own kind, `Manifest` for
+/// workspaces and `Commit` for branch/tag tips.
+fn push_resolved_symref(
+    store: &GitStore,
+    reference: String,
+    target: &str,
+    failure_kind: FindingKind,
+    refs: &mut Vec<(String, Hash)>,
+    report: &mut FsckReport,
+) {
+    match store.resolve_symref(&reference) {
+        Ok(Some(hash)) => refs.push((reference, hash)),
+        Ok(None) => {
+            let origin = Origin::Ref { reference };
+            report.push(
+                FindingKind::Unverified,
+                &origin,
+                None,
+                format!(
+                    "symbolic ref (-> {target}) resolves to no object (dangling or \
+                     unborn), so there is nothing to verify"
+                ),
+            );
+        }
+        Err(err) => {
+            let origin = Origin::Ref { reference };
+            report.push(
+                failure_kind,
+                &origin,
+                None,
+                format!("symbolic ref could not be resolved: {err}"),
+            );
+        }
+    }
+}
+
+/// Verify every commit reachable from the refs under `prefix` — direct refs
+/// and resolved symbolic refs alike (acetone-5lo) — following all parents
+/// and deduplicating commits so shared history is checked once.
 ///
 /// When `is_tag` is set, a ref pointing at a git tag *object* rather than a
-/// commit (an annotated tag) is reported as an [`FindingKind::Unverified`]
-/// advisory instead of an error: peeling tag objects is deferred
-/// (acetone-8t3), but the version is named, not silently skipped.
+/// commit (an annotated tag) is peeled to its target, which is then
+/// verified like any other reachable commit (acetone-8t3); a tag that
+/// cannot be peeled is an error finding, and a peeled target that is not a
+/// commit is reported exactly like a lightweight tag on a non-commit.
 fn check_commit_tips(
     store: &GitStore,
     prefix: &str,
@@ -375,8 +487,19 @@ fn check_commit_tips(
     verified: &mut Verified,
     report: &mut FsckReport,
 ) -> Result<(), GraphError> {
+    let mut tips: Vec<(String, Hash)> = store.list_refs(prefix)?;
+    for (reference, target) in store.list_symbolic_refs(prefix)? {
+        push_resolved_symref(
+            store,
+            reference,
+            &target,
+            FindingKind::Commit,
+            &mut tips,
+            report,
+        );
+    }
     let mut seen = BTreeSet::new();
-    for (reference, tip) in store.list_refs(prefix)? {
+    for (reference, tip) in tips {
         let mut stack = vec![(tip, true)];
         while let Some((id, is_tip)) = stack.pop() {
             if !seen.insert(id) {
@@ -404,21 +527,25 @@ fn check_commit_tips(
                     None,
                     format!("commit {id} is referenced by history but absent from the store"),
                 ),
-                // An annotated tag's tip is a tag object, not a commit; that
-                // is a coverage boundary, not damage (advisory). Anything
-                // else that is not a readable commit is an error.
+                // An annotated tag's tip is a tag object, not a commit: peel
+                // it and verify its target (acetone-8t3). The peeled id joins
+                // the same walk, so an absent or non-commit target is
+                // reported through the ordinary branches above/below, and a
+                // target already seen via another ref is not re-walked.
                 Err(StoreError::WrongObjectKind { actual, .. })
                     if is_tag && is_tip && actual == "tag" =>
                 {
-                    report.push(
-                        FindingKind::Unverified,
-                        &origin,
-                        None,
-                        format!(
-                            "{reference} is an annotated tag; peeling tag objects to their \
-                             commit is deferred (acetone-8t3), so it was not verified"
+                    match store.peel_tag(&id) {
+                        Ok(target) => stack.push((target, false)),
+                        Err(err) => report.push(
+                            FindingKind::Commit,
+                            &origin,
+                            None,
+                            format!(
+                                "{reference} is an annotated tag that could not be peeled: {err}"
+                            ),
                         ),
-                    )
+                    }
                 }
                 Err(err) => report.push(
                     FindingKind::Commit,
@@ -523,16 +650,30 @@ fn check_manifest(
     // Only run the edge-symmetry advisory when both edge maps are
     // structurally sound — otherwise verify_map has already reported the
     // real (error-severity) corruption, and a "could not check symmetry"
-    // advisory would just be noise.
-    if fwd_ok && rev_ok {
+    // advisory would just be noise. Memoised by the (edges_fwd, edges_rev)
+    // root pair (acetone-7fe): the outcome is a pure function of the two
+    // maps' contents, so a pair shared across versions is materialised and
+    // compared once, attributed to the first origin that reaches it.
+    if fwd_ok
+        && rev_ok
+        && verified
+            .edge_symmetry
+            .insert((root_key(&manifest.edges_fwd), root_key(&manifest.edges_rev)))
+    {
         check_edge_symmetry(store, origin, &manifest, report);
     }
 
     // Referential integrity (ADR-0028, Invariant #3): every forward edge must
     // have both its endpoint nodes present in `nodes`. Gated on both maps being
     // structurally sound so a corruption verify_map already reported is not
-    // double-counted.
-    if nodes_ok && fwd_ok {
+    // double-counted. Memoised by the (nodes, edges_fwd) root pair — it too
+    // materialises both maps in full (acetone-7fe).
+    if nodes_ok
+        && fwd_ok
+        && verified
+            .referential
+            .insert((root_key(&manifest.nodes), root_key(&manifest.edges_fwd)))
+    {
         check_referential_integrity(store, origin, &manifest, report);
     }
 
@@ -557,18 +698,40 @@ fn check_manifest(
             }
         }
         for name in &sound_indexes {
-            check_index_consistency(store, origin, &manifest, name, report);
+            // Memoised by (schema, nodes, index map, name): the check is a
+            // pure function of those inputs (acetone-7fe).
+            let Some(index_root) = manifest.indexes.get(name) else {
+                continue;
+            };
+            if verified.indexes.insert((
+                root_key(&manifest.schema),
+                root_key(&manifest.nodes),
+                root_key(index_root),
+                name.clone(),
+            )) {
+                check_index_consistency(store, origin, &manifest, name, report);
+            }
         }
     }
 
     // History-independence spot-checks (spec §7, Invariant #1): the primary
     // content maps must be the canonical prolly tree for their contents.
     // Gated on structural soundness — a corrupt tree is reported above.
+    // Memoised by (root, chunk params), since the canonical tree for the
+    // same contents differs under different parameters (acetone-7fe).
     let params = manifest.chunk_params;
-    if nodes_ok {
+    if nodes_ok
+        && verified
+            .canonical
+            .insert((root_key(&manifest.nodes), params))
+    {
         check_canonical(store, params, &manifest.nodes, MapId::Nodes, origin, report);
     }
-    if fwd_ok {
+    if fwd_ok
+        && verified
+            .canonical
+            .insert((root_key(&manifest.edges_fwd), params))
+    {
         check_canonical(
             store,
             params,

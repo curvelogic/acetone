@@ -115,8 +115,11 @@ pub trait RefStore {
 
     /// All direct refs whose full name starts with `prefix` (itself under
     /// `refs/`), as `(full name, target)` pairs in name order. Symbolic
-    /// refs under the prefix are skipped. The reachability walk of `fsck`
-    /// and branch listing are built on this.
+    /// refs under the prefix are skipped — deliberately, so branch listing
+    /// never shows the same branch twice through an alias; callers that must
+    /// see *every* ref (the reachability walk of `fsck`) additionally
+    /// enumerate symbolic refs via `GitStore::list_symbolic_refs` and
+    /// resolve them with `GitStore::resolve_symref` (acetone-5lo).
     fn list_refs(&self, prefix: &str) -> Result<Vec<(String, Hash)>, StoreError>;
 }
 

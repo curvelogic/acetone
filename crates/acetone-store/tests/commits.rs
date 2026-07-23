@@ -5,8 +5,8 @@
 mod common;
 
 use acetone_store::{
-    ChunkStore, CommitStore, GitStore, Hash, Identity, NewCommit, RewriteCommit, Signature,
-    StoreError,
+    ChunkStore, CommitStore, GitStore, Hash, Identity, NewCommit, RefStore, RewriteCommit,
+    Signature, StoreError,
 };
 use common::{git, git_stdin, new_capped_store, new_store, repo_path};
 
@@ -552,4 +552,47 @@ fn oversized_manifest_in_hostile_commit_is_rejected_on_read() {
         capped.read_commit(&id),
         Err(StoreError::ObjectTooLarge { .. })
     ));
+}
+
+#[test]
+fn peel_tag_follows_annotated_tags_to_the_commit() {
+    // acetone-8t3: the tag-object read path. An annotated tag peels to its
+    // target commit; a nested tag (tag of a tag) peels all the way; a
+    // non-tag object peels to itself (git `^{}` identity semantics); an
+    // absent id also peels to itself — the caller reads the result and gets
+    // ordinary absence handling.
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    let commit = store
+        .create_commit(&NewCommit::new(b"manifest", "s", "tagged"))
+        .expect("create commit");
+
+    git(
+        &repo,
+        &["tag", "-a", "inner", "-m", "annotated", &commit.to_hex()],
+    );
+    let inner = store
+        .read_ref("refs/tags/inner")
+        .expect("read tag ref")
+        .expect("tag ref present");
+    assert_ne!(inner, commit, "an annotated tag ref names a tag object");
+    assert_eq!(store.peel_tag(&inner).expect("peel"), commit);
+
+    // Nesting: tag the tag object itself; peeling still reaches the commit.
+    git(
+        &repo,
+        &["tag", "-a", "outer", "-m", "nested", &inner.to_hex()],
+    );
+    let outer = store
+        .read_ref("refs/tags/outer")
+        .expect("read tag ref")
+        .expect("tag ref present");
+    assert_eq!(store.peel_tag(&outer).expect("peel nested"), commit);
+
+    // Identity on a non-tag object.
+    assert_eq!(store.peel_tag(&commit).expect("peel commit"), commit);
+
+    // Identity on an absent id.
+    let absent = Hash::from_hex("0123456789abcdef0123456789abcdef01234567").expect("hash");
+    assert_eq!(store.peel_tag(&absent).expect("peel absent"), absent);
 }
