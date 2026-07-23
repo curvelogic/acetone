@@ -43,6 +43,11 @@ pub enum ImportError {
     /// naming the current branch).
     #[error("import: {0}")]
     Config(String),
+    /// The imported data violates declared schema constraints (existence or
+    /// UNIQUE, spec §2). The whole import is rejected before anything is
+    /// staged, so the workspace is untouched (acetone-9gw).
+    #[error("import violates declared constraints — {0}")]
+    Constraints(crate::constraints::ConstraintViolations),
 }
 
 /// One canonical record produced by an extractor. Nodes and edges carry *all*
@@ -229,8 +234,9 @@ fn switch_to_branch(repo: &Repository, branch: &str) -> Result<(), GraphError> {
     repo.checkout_branch(branch)
 }
 
-/// Stage every record, save, then commit unless the graph is unchanged. The
-/// `trailers` are the already-validated provenance trailers from [`run`].
+/// Map every record to canonical form, validate declared constraints, then
+/// stage, save and commit unless the graph is unchanged. The `trailers` are
+/// the already-validated provenance trailers from [`run`].
 fn import_into_workspace(
     repo: &Repository,
     records: Vec<ImportRecord>,
@@ -239,9 +245,10 @@ fn import_into_workspace(
 ) -> Result<ImportOutcome, GraphError> {
     let (labels, rtypes) = schema_maps(repo)?;
 
-    let mut txn = repo.begin_write()?;
-    let mut nodes = 0usize;
-    let mut edges = 0usize;
+    // Phase 1: map every record to its canonical form — nothing staged yet,
+    // so any failure leaves the workspace untouched.
+    let mut node_puts: Vec<(NodeKey, NodeRecord)> = Vec::new();
+    let mut edge_puts: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
     for record in records {
         match record {
             ImportRecord::Node { label, properties } => {
@@ -250,9 +257,7 @@ fn import_into_workspace(
                         "no schema for label {label:?}; declare it before importing"
                     ))
                 })?;
-                let (key, node) = node_key_and_record(&label, def, properties)?;
-                txn.put_node(&key, &node)?;
-                nodes += 1;
+                node_puts.push(node_key_and_record(&label, def, properties)?);
             }
             ImportRecord::Edge {
                 rtype,
@@ -268,10 +273,49 @@ fn import_into_workspace(
                     None => properties,
                 };
                 let edge = EdgeKey::new(src_key, rtype, dst_key, discriminator)?;
-                txn.put_edge(&edge, &EdgeRecord::new(props))?;
-                edges += 1;
+                edge_puts.push((edge, EdgeRecord::new(props)));
             }
         }
+    }
+    let nodes = node_puts.len();
+    let edges = edge_puts.len();
+
+    // Phase 2: enforce declared constraints (existence, UNIQUE — spec §2)
+    // over the would-be final state, exactly as the Cypher write path would
+    // have (acetone-9gw). The final state is the current workspace overlaid
+    // with the imported records, last record per key winning (mirroring
+    // `put_node`'s replace semantics). Only violations involving an imported
+    // key fail the import: a pre-existing breach the import does not touch
+    // is fsck's business, not this source's.
+    {
+        let snapshot = repo.workspace_snapshot()?;
+        let mut final_nodes = crate::constraints::NodeSet::new();
+        for (key, record) in snapshot.nodes()? {
+            final_nodes.insert(key.encode()?, (key, record));
+        }
+        let mut imported: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+        for (key, record) in &node_puts {
+            let encoded = key.encode()?;
+            imported.insert(encoded.clone());
+            final_nodes.insert(encoded, (key.clone(), record.clone()));
+        }
+        let violations = crate::constraints::check_nodes(&labels, &final_nodes, Some(&imported))?;
+        if !violations.is_empty() {
+            return Err(
+                ImportError::Constraints(crate::constraints::ConstraintViolations(violations))
+                    .into(),
+            );
+        }
+    }
+
+    // Phase 3: stage and save. Referential integrity (dangling edges) is
+    // enforced by the transaction itself on save.
+    let mut txn = repo.begin_write()?;
+    for (key, record) in &node_puts {
+        txn.put_node(key, record)?;
+    }
+    for (key, record) in &edge_puts {
+        txn.put_edge(key, record)?;
     }
     txn.save()?;
 

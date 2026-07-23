@@ -293,42 +293,35 @@ property back to its committed value, after which `status` reports the
 workspace clean again, because dirtiness is judged on content, not on
 having issued commands.)
 
+**A row violating a declared constraint.** The registry's schema declares
+`--require tier` on `Service`, and import enforces it exactly as Cypher
+`CREATE` does. A catalogue row with no `tier` fails the **whole import** —
+nothing is committed, the workspace stays clean:
+
+```console
+$ acetone import --format json ../services-notier.json --label Service
+error: importing: import violates declared constraints — 1 constraint violation:
+  node "Service" ["search"] is missing required property "tier"
+```
+
+`--unique` constraints are enforced the same way, both against data already
+in the graph and between rows of the same file. Every violation is listed
+(the first twenty, plus a count of the rest), so one failed run names
+everything to fix in the source. Fix the source and re-run — import is
+all-or-nothing, so there is never a half-landed file to clean up.
+
+One honest caveat: a repository written **before** acetone enforced
+constraints on import (v0.3.0 and earlier) may already hold violating
+records. Import does not punish the messenger — a new import fails only for
+violations its own rows are involved in — and `acetone fsck` names any
+pre-existing breaches as advisories, so they surface without turning the
+repository radioactive.
+
 There is **no `--dry-run` flag**. The honest equivalent is `--branch`: import
 onto a scratch branch, inspect it with `diff` and `query --at`, and merge it
 only if you like what you see — that workflow is the next section. (A branch
 you decide against is deleted with plain `git branch -D <name>`; branch
 management is one of the areas where git and acetone interoperate freely.)
-
-### Caution: constraints are not enforced on import
-
-The registry's schema declares `--require tier` on `Service`, and Cypher
-`CREATE` enforces it. **Import currently does not.** A catalogue row with no
-`tier` sails through:
-
-```console
-$ acetone import --format json ../services-notier.json --label Service
-imported 1 node(s) and 0 edge(s) onto the current branch; commit 6351a80776ac640c226872a73757e88390610862
-$ acetone query 'MATCH (s:Service) WHERE s.tier IS NULL RETURN s.name'
-┌────────┐
-│ s.name │
-├────────┤
-│ search │
-└────────┘
-1 row
-```
-
-`acetone fsck` reports the repository clean — it verifies storage integrity,
-not schema constraints — so nothing will flag this for you later. This is a
-known gap in v0.3: until import validates constraints, sweep for holes after
-importing into a constrained label (a `WHERE x IS NULL` query per required
-property, as above) and repair with `SET`, or remove the offending rows:
-
-```console
-$ acetone query 'MATCH (s:Service {name: "search"}) DELETE s'
-1 node deleted
-$ acetone commit -m "remove search: bad import, no tier"
-committed 49ca70f8ea5cc2bab2d5c532b70daeb2db9ac7da
-```
 
 ## Import as curation: the mirror branch
 

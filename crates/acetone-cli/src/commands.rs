@@ -616,11 +616,31 @@ pub(crate) fn declare_label(
         unique.to_vec(),
     )
     .with_context(|| format!("declaring schema for label {label:?}"))?;
+    let repo = open(repo_path)?;
+    // Backfill check (acetone-9gw): a `--require`/`--unique` set declared
+    // over existing data the data already violates is refused with the
+    // violating nodes named — accepting it silently would leave violations
+    // that fail unrelated writes later and that neither commit nor fsck
+    // reported at declare time.
+    {
+        let snapshot = repo.workspace_snapshot()?;
+        let violations = acetone_core::graph::constraints::check_label(&snapshot, label, &def)?;
+        if !violations.is_empty() {
+            // The rendering escapes every repository-controlled string via
+            // the model display helpers (like render_conflict); the only
+            // control characters are its own line breaks.
+            bail!(
+                "cannot declare label {}: existing data violates the declared \
+                 constraints — {}",
+                format_label(label),
+                acetone_core::graph::constraints::ConstraintViolations(violations)
+            );
+        }
+    }
     let entry = SchemaEntry::Label {
         name: label.to_owned(),
         def,
     };
-    let repo = open(repo_path)?;
     let mut txn = repo.begin_write()?;
     txn.put_schema(&entry)?;
     txn.save().context("saving workspace")?;
@@ -911,6 +931,22 @@ fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Resul
         properties.insert(name.to_owned(), parse_value(value));
     }
     let record = NodeRecord::new(std::iter::empty::<String>(), properties);
+    // Constraint guard (acetone-9gw, PR #184 review): plumbing must not
+    // bypass what Cypher CREATE and import enforce. Judged against the
+    // post-put state with a one-key focus, so an upsert of the same node is
+    // never a self-collision. Undeclared labels stay raw, as before.
+    {
+        let snapshot = repo.workspace_snapshot()?;
+        let violations =
+            acetone_core::graph::constraints::check_upsert(&snapshot, &node_key, &record)?;
+        if !violations.is_empty() {
+            bail!(
+                "cannot put node {}: {}",
+                format_node_key(&node_key),
+                acetone_core::graph::constraints::ConstraintViolations(violations)
+            );
+        }
+    }
     let mut txn = repo.begin_write()?;
     txn.put_node(&node_key, &record)?;
     txn.save().context("saving workspace")?;

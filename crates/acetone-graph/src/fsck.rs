@@ -101,6 +101,12 @@ pub enum FindingKind {
     /// ref). The sin fsck must avoid is silence, so the ref is named rather
     /// than skipped.
     Unverified,
+    /// Advisory: a node breaches a declared schema constraint (existence or
+    /// UNIQUE, spec §2). The write and import paths now enforce these
+    /// (acetone-9gw), but a repository written before enforcement — or by a
+    /// foreign tool — may carry breaches; fsck names them without failing,
+    /// because the data is structurally intact.
+    ConstraintViolation,
 }
 
 impl FindingKind {
@@ -108,7 +114,8 @@ impl FindingKind {
         match self {
             FindingKind::EdgeAsymmetry
             | FindingKind::IndexInconsistency
-            | FindingKind::Unverified => Severity::Advisory,
+            | FindingKind::Unverified
+            | FindingKind::ConstraintViolation => Severity::Advisory,
             _ => Severity::Error,
         }
     }
@@ -315,6 +322,10 @@ struct Verified {
     /// function of the schema (index definitions), the nodes map, and the
     /// named index map.
     indexes: BTreeSet<(RootKey, RootKey, RootKey, String)>,
+    /// `(schema, nodes)` root pairs whose declared-constraint advisory has
+    /// already run — a pure function of those two maps' contents
+    /// (acetone-9gw).
+    constraints: BTreeSet<(RootKey, RootKey)>,
 }
 
 /// Verify a repository's chunk reachability and manifest integrity.
@@ -594,7 +605,7 @@ fn check_manifest(
         verified,
         report,
     );
-    verify_map(
+    let schema_ok = verify_map(
         store,
         origin,
         MapId::Schema,
@@ -712,6 +723,21 @@ fn check_manifest(
                 check_index_consistency(store, origin, &manifest, name, report);
             }
         }
+    }
+
+    // Declared-constraint advisory (spec §2, acetone-9gw): existence and
+    // UNIQUE breaches are named, not silently passed — but only as
+    // advisories, since a pre-enforcement repository may legitimately carry
+    // them and the data is structurally intact. Gated on both inputs being
+    // sound and memoised by the (schema, nodes) root pair: the outcome is a
+    // pure function of those two maps' contents.
+    if schema_ok
+        && nodes_ok
+        && verified
+            .constraints
+            .insert((root_key(&manifest.schema), root_key(&manifest.nodes)))
+    {
+        check_constraint_violations(store, origin, &manifest, report);
     }
 
     // History-independence spot-checks (spec §7, Invariant #1): the primary
@@ -860,6 +886,72 @@ fn check_index_consistency(
                 "index {name:?} disagrees with nodes: {missing} missing, \
                  {extra} stale entr{}; run `acetone reindex`",
                 if missing + extra == 1 { "y" } else { "ies" }
+            ),
+        );
+    }
+}
+
+/// Advisory check that every node satisfies its label's declared existence
+/// and UNIQUE constraints (spec §2), using the same checker the import and
+/// declare-label paths enforce with (acetone-9gw). Reporting is bounded: the
+/// first [`crate::constraints::REPORT_LIMIT`] violations are named
+/// individually, the remainder summarised in one finding, so a badly
+/// violating repository cannot flood the report. Returns silently on a
+/// decode failure — the structural checks have already reported real damage,
+/// and schema/record decode issues surface through their own findings.
+fn check_constraint_violations(
+    store: &GitStore,
+    origin: &Origin,
+    manifest: &Manifest,
+    report: &mut FsckReport,
+) {
+    let snapshot = Snapshot::new(store, manifest.clone());
+    let Ok(entries) = snapshot.schema_entries() else {
+        return;
+    };
+    let mut labels = std::collections::BTreeMap::new();
+    for entry in entries {
+        if let acetone_model::schema::SchemaEntry::Label { name, def } = entry {
+            labels.insert(name, def);
+        }
+    }
+    // Fast path: no declared constraints, nothing to materialise.
+    if labels
+        .values()
+        .all(|def| def.exists().is_empty() && def.unique().is_empty())
+    {
+        return;
+    }
+    let Ok(node_list) = snapshot.nodes() else {
+        return;
+    };
+    let mut nodes = crate::constraints::NodeSet::new();
+    for (key, record) in node_list {
+        let Ok(encoded) = key.encode() else {
+            continue;
+        };
+        nodes.insert(encoded, (key, record));
+    }
+    let Ok(violations) = crate::constraints::check_nodes(&labels, &nodes, None) else {
+        return;
+    };
+    let total = violations.len();
+    for violation in violations.iter().take(crate::constraints::REPORT_LIMIT) {
+        report.push(
+            FindingKind::ConstraintViolation,
+            origin,
+            Some(MapId::Nodes),
+            violation.to_string(),
+        );
+    }
+    if total > crate::constraints::REPORT_LIMIT {
+        report.push(
+            FindingKind::ConstraintViolation,
+            origin,
+            Some(MapId::Nodes),
+            format!(
+                "… and {} more constraint violation(s)",
+                total - crate::constraints::REPORT_LIMIT
             ),
         );
     }

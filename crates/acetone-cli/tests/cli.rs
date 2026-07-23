@@ -2807,6 +2807,182 @@ fn json_output_escapes_hostile_property_values() {
     assert_eq!(v["properties"]["note"], "ok\u{1b}[31m\u{7f}\u{9b}m");
 }
 
+#[test]
+fn retrofit_declare_over_violating_data_is_refused() {
+    // acetone-9gw retrofit gap: `declare-label --require/--unique` over
+    // existing data the new constraint set would violate must be refused with
+    // the violating nodes named — not accepted silently, leaving the
+    // violations to fail unrelated writes later.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let out = acetone(&repo, &["declare-label", "Service", "--key", "name"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (:Service {name: 'a', ip: '10.0.0.1'}), (:Service {name: 'b', ip: '10.0.0.1'})",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Retrofitting --require tier over nodes without tier is refused,
+    // naming the violating nodes and the property.
+    let out = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Service",
+            "--key",
+            "name",
+            "--require",
+            "tier",
+        ],
+    );
+    assert!(!out.status.success(), "must refuse: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("\"tier\""), "{err}");
+    assert!(err.contains("\"a\"") && err.contains("\"b\""), "{err}");
+
+    // Retrofitting --unique ip over a duplicated value is refused too.
+    let out = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Service",
+            "--key",
+            "name",
+            "--unique",
+            "ip",
+        ],
+    );
+    assert!(!out.status.success(), "must refuse: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("UNIQUE"), "{err}");
+    assert!(err.contains("\"ip\""), "{err}");
+
+    // The refused declarations were not staged: a node violating the
+    // attempted constraint still writes cleanly under the old schema.
+    let out = acetone(&repo, &["query", "CREATE (:Service {name: 'c'})"]);
+    assert!(
+        out.status.success(),
+        "refused declare must leave the schema unchanged: {}",
+        stderr(&out)
+    );
+
+    // A retrofit the data satisfies is accepted.
+    for (name, ip) in [("a", "10.0.0.1"), ("b", "10.0.0.2"), ("c", "10.0.0.3")] {
+        let set =
+            format!("MATCH (s:Service {{name: '{name}'}}) SET s.tier = 'gold', s.ip = '{ip}'");
+        let out = acetone(&repo, &["query", &set]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let out = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Service",
+            "--key",
+            "name",
+            "--require",
+            "tier",
+            "--unique",
+            "ip",
+        ],
+    );
+    assert!(out.status.success(), "clean retrofit: {}", stderr(&out));
+}
+
+#[test]
+fn put_node_enforces_declared_constraints() {
+    // PR #184 review MAJOR: the put-node plumbing bypassed declared
+    // constraints exactly as import did. It must refuse what Cypher CREATE
+    // refuses, with the same violation rendering.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let out = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Service",
+            "--key",
+            "name",
+            "--require",
+            "tier",
+            "--unique",
+            "ip",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Missing the required property: refused, naming node and property.
+    let out = acetone(&repo, &["put-node", "Service", "bad"]);
+    assert!(!out.status.success(), "must refuse: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("\"Service\" [\"bad\"]"), "{err}");
+    assert!(
+        err.contains("missing required property \"tier\""),
+        "consistent with the import checker's rendering: {err}"
+    );
+
+    // Valid put-node works.
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            "Service",
+            "a",
+            "--prop",
+            "tier=gold",
+            "--prop",
+            "ip=10.0.0.1",
+        ],
+    );
+    assert!(out.status.success(), "valid put-node: {}", stderr(&out));
+
+    // UNIQUE collision with the existing node: refused, naming both nodes.
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            "Service",
+            "b",
+            "--prop",
+            "tier=gold",
+            "--prop",
+            "ip=10.0.0.1",
+        ],
+    );
+    assert!(!out.status.success(), "must refuse: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("UNIQUE \"Service\".\"ip\""), "{err}");
+    assert!(
+        err.contains("\"Service\" [\"a\"]") && err.contains("\"Service\" [\"b\"]"),
+        "{err}"
+    );
+    // The refused node was not staged.
+    let out = acetone(&repo, &["get-node", "Service", "b"]);
+    assert!(!out.status.success(), "b must not exist: {}", stdout(&out));
+
+    // Replacing a node with itself (same key, same unique value) is not a
+    // self-collision — put-node stays an upsert.
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            "Service",
+            "a",
+            "--prop",
+            "tier=bronze",
+            "--prop",
+            "ip=10.0.0.1",
+        ],
+    );
+    assert!(out.status.success(), "self-replace: {}", stderr(&out));
+}
+
 /// The `commit_hex` helper reads the "committed <hex>" line; this reads the
 /// first (newest) commit hash out of `log`.
 fn commit_hex_from_log(repo: &Path) -> String {

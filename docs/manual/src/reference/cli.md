@@ -155,7 +155,9 @@ repeat it, in order, for a composite key. Declaring the label is required
 before Cypher `CREATE`/`MERGE` can persist nodes of it (node identity is
 `(primary label, key tuple)` — Invariant #3). `--require` adds an existence
 constraint; `--unique` adds a uniqueness constraint on a non-key property;
-both may be repeated.
+both may be repeated. Redeclaring a label replaces its whole constraint set,
+and a declaration that existing nodes of the label would violate is refused
+with the violating nodes named — backfill first, declare after.
 
 ### `acetone declare-rel-type <RTYPE>`
 
@@ -189,7 +191,10 @@ Read-only; `--at` inspects any version without checking it out. Takes
 Import a source file, recording provenance trailers
 (`Acetone-Source`/`-Extractor`/`-Source-Hash`) and detecting a no-op when the
 source is unchanged. Requires a clean workspace — declare and `commit` the
-target label's schema (and any relationship type) first.
+target label's schema (and any relationship type) first. Declared
+constraints (`--require`, `--unique`) are enforced over the imported rows
+exactly as on the Cypher write path: any violation fails the whole import
+atomically, with the violations listed.
 
 - **Node mode**: `--label <LABEL>` maps each row to a node; the label's
   declared key selects which fields form the node key.
@@ -229,10 +234,10 @@ workspace (commit separately with `acetone commit`). Conveniences:
 
 Verify repository integrity: manifest decode, chunk reachability and
 prolly-tree structure for every version reachable from workspaces, branches
-and tags; edge-map symmetry and index consistency as advisories; and a
-history-independence spot-check (a non-canonical map is an error). Exits
-non-zero when any error-severity finding exists. See the
-[recovery runbook](../recovery/runbook.md).
+and tags; edge-map symmetry, index consistency and declared-constraint
+breaches as advisories; and a history-independence spot-check (a
+non-canonical map is an error). Exits non-zero when any error-severity
+finding exists. See the [recovery runbook](../recovery/runbook.md).
 
 ### `acetone gc`
 
@@ -263,7 +268,8 @@ else as a string.
 ### `acetone put-node <LABEL> <KEY> [--prop KEY=VALUE]...`
 
 Insert or replace a node. `--prop` sets a non-key property and may be
-repeated.
+repeated. Declared constraints (`--require`, `--unique`) are enforced as on
+the Cypher write path; a write to an undeclared label stays raw.
 
 ### `acetone get-node <LABEL> <KEY>`
 

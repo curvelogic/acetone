@@ -950,3 +950,131 @@ fn a_dangling_edge_is_a_referential_integrity_error() {
         danglers[0].detail
     );
 }
+
+// --- declared-constraint advisories (acetone-9gw) ---------------------------
+
+/// Declare `Service { name (key), require tier, unique ip }` and commit.
+fn declare_service(repo: &Repository) {
+    use acetone_model::schema::{LabelDef, SchemaEntry};
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "Service".into(),
+        def: LabelDef::new(
+            vec!["name".into()],
+            Default::default(),
+            ["tier".to_owned()],
+            ["ip".to_owned()],
+        )
+        .expect("label"),
+    })
+    .expect("schema");
+    tx.commit("declare Service", &[], None).expect("commit");
+}
+
+/// A repository holding pre-fix constraint violations (written through the
+/// raw transaction API, exactly as the pre-acetone-9gw import did) gets a
+/// named **advisory** — not an error: fsck must be honest about the breach
+/// without bricking repositories that predate enforcement.
+#[test]
+fn constraint_violations_are_a_named_advisory_not_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        // Missing required `tier`.
+        tx.put_node(
+            &node("Service", "bare"),
+            &NodeRecord::new([], Default::default()),
+        )
+        .expect("put");
+        // Two nodes sharing a UNIQUE `ip`.
+        for name in ["a", "b"] {
+            tx.put_node(
+                &node("Service", name),
+                &NodeRecord::new(
+                    [],
+                    [
+                        ("tier".to_owned(), Value::String("gold".into())),
+                        ("ip".to_owned(), Value::String("10.0.0.1".into())),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            )
+            .expect("put");
+        }
+        tx.commit("pre-fix violations", &[], None).expect("commit");
+    }
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        !report.has_errors(),
+        "constraint breaches must not be errors: {:?}",
+        report.findings
+    );
+    let constraint_findings: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::ConstraintViolation)
+        .collect();
+    // One missing-required for "bare", one UNIQUE collision for a/b —
+    // deduplicated across the commit and the (identical) workspace manifest.
+    assert_eq!(
+        constraint_findings.len(),
+        2,
+        "findings: {:?}",
+        report.findings
+    );
+    assert!(
+        constraint_findings
+            .iter()
+            .all(|f| f.severity == Severity::Advisory)
+    );
+    let details: Vec<&str> = constraint_findings
+        .iter()
+        .map(|f| f.detail.as_str())
+        .collect();
+    assert!(
+        details
+            .iter()
+            .any(|d| d.contains("\"bare\"") && d.contains("\"tier\"")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|d| d.contains("UNIQUE") && d.contains("\"a\"") && d.contains("\"b\"")),
+        "{details:?}"
+    );
+}
+
+/// A constrained but satisfied repository stays entirely clean — the
+/// advisory pass must not cry wolf.
+#[test]
+fn satisfied_constraints_yield_no_findings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        for (name, ip) in [("a", "10.0.0.1"), ("b", "10.0.0.2")] {
+            tx.put_node(
+                &node("Service", name),
+                &NodeRecord::new(
+                    [],
+                    [
+                        ("tier".to_owned(), Value::String("gold".into())),
+                        ("ip".to_owned(), Value::String(ip.into())),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            )
+            .expect("put");
+        }
+        tx.commit("valid data", &[], None).expect("commit");
+    }
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(report.is_clean(), "findings: {:?}", report.findings);
+}
