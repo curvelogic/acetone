@@ -49,6 +49,25 @@ gh attestation verify acetone-v<version>-<target>.tar.gz --repo curvelogic/aceto
 
 Build a binary locally with `cargo build --release --bin acetone`.
 
+## Tracked execution: the release formula
+
+The flow above is also encoded as a beads formula —
+`.beads/formulas/release.formula.toml` (ADR-0057) — a dependency DAG
+(`preflight → prep → land → build → publish → post-publish`) whose steps point
+back at the sections of this document. Instantiate it to run a release as
+tracked, dependency-ordered beads:
+
+```
+bd mol wisp release --var version=<version>   # ephemeral run (recommended)
+bd mol squash <molecule-root>                 # digest it when done
+```
+
+The `publish` step carries a human gate: the molecule parks until Greg
+publishes the draft and the gate is resolved (`bd gate resolve`). This
+document remains the narrative authority — the formula deliberately contains
+pointers and acceptance criteria, not commands, so it cannot drift from what
+is written here or in `.github/workflows/release.yml`.
+
 ## Homebrew
 
 The tap is [`curvelogic/homebrew-tap`](https://github.com/curvelogic/homebrew-tap).
