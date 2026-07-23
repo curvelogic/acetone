@@ -56,7 +56,10 @@ pub const MAX_CHUNK_MAX_BYTES: u32 = 1 << 20;
 /// `acetone_graph::repo::default_chunk_params()` (max 64 KiB). Code that
 /// creates or migrates a real repository must take its parameters from there
 /// (or the repo's own manifest), never from this `Default`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Ord` is derived so parameters can key ordered memo/dedup structures
+// (e.g. fsck's cross-version canonical-tree memo, acetone-7fe); the ordering
+// itself carries no meaning and is not part of any on-disk format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkParams {
     /// No cut before the chunk reaches this many bytes.
     min_bytes: u32,

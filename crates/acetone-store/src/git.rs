@@ -36,6 +36,19 @@ use crate::error::StoreError;
 use crate::hash::Hash;
 use crate::store::{ChunkStore, Commit, CommitStore, NewCommit, RefStore, RewriteCommit};
 
+/// Upper bound on the annotated-tag indirection [`GitStore::peel_tag`] will
+/// follow. Content addressing makes a true tag cycle impossible (a tag
+/// object cannot reference itself), but a hostile repository can still nest
+/// tags arbitrarily deep; bounding the walk keeps peeling O(1) on such
+/// input. Any legitimate chain is one or two levels.
+pub const MAX_TAG_PEEL_DEPTH: usize = 32;
+
+/// Upper bound on the symbolic-ref indirection
+/// [`GitStore::resolve_symref`] will follow before declaring the chain
+/// corrupt. Symbolic refs are name-addressed, so — unlike tags — a cycle
+/// *is* representable on disk; git's own resolver stops at 5 levels.
+pub const MAX_SYMREF_DEPTH: usize = 10;
+
 /// Default hard cap on the size of any single object this store will
 /// materialise: 64 MiB.
 ///
@@ -420,6 +433,105 @@ impl GitStore {
             .edit_reference(edit)
             .map_err(|e| map_ref_edit_error(name, e))?;
         Ok(())
+    }
+
+    /// Peel annotated-tag indirection: follow tag objects from `id` until
+    /// the current id no longer names a tag object present in the store, and
+    /// return that id (git's `<rev>^{}`). Identity for anything that is
+    /// *not* a present tag object — a commit, tree, blob or absent id peels
+    /// to itself — so the caller reads the result and gets ordinary
+    /// absence/kind handling from that read. Errors only when a tag object
+    /// exists but does not decode (or exceeds the size cap), or the chain
+    /// reaches [`MAX_TAG_PEEL_DEPTH`] levels (the deepest resolvable chain
+    /// is one less). Read-only; used by `fsck` to
+    /// verify the commit behind an annotated tag (acetone-8t3).
+    pub fn peel_tag(&self, id: &Hash) -> Result<Hash, StoreError> {
+        let mut current = *id;
+        for _ in 0..MAX_TAG_PEEL_DEPTH {
+            let Some(header) = self.find_header(&current)? else {
+                return Ok(current);
+            };
+            if header.kind() != gix::object::Kind::Tag {
+                return Ok(current);
+            }
+            let data =
+                self.read_object_checked(&current, &header, gix::object::Kind::Tag, "tag")?;
+            let tag = gix::objs::TagRef::from_bytes(&data, self.repo.object_hash())
+                .map_err(|e| StoreError::corrupt("tag object", e.to_string()))?;
+            current = Hash::from_oid(tag.target());
+        }
+        Err(StoreError::corrupt(
+            "tag object",
+            format!("annotated tag chain exceeds {MAX_TAG_PEEL_DEPTH} levels"),
+        ))
+    }
+
+    /// All **symbolic** refs whose full name starts with `prefix` (itself
+    /// under `refs/`), as `(full name, immediate target name)` pairs in name
+    /// order — the complement of [`RefStore::list_refs`], which lists only
+    /// direct refs. `fsck` enumerates these so a symbolic workspace, branch
+    /// or tag ref is resolved and verified (or named as unverifiable)
+    /// rather than silently skipped (acetone-5lo).
+    pub fn list_symbolic_refs(&self, prefix: &str) -> Result<Vec<(String, String)>, StoreError> {
+        if !prefix.starts_with("refs/") {
+            return Err(StoreError::InvalidRefName {
+                name: prefix.to_owned(),
+                reason: "ref prefixes must be full names under refs/".into(),
+            });
+        }
+        let platform = self
+            .repo
+            .references()
+            .map_err(|e| StoreError::backend("listing symbolic refs", e))?;
+        let iter = platform
+            .prefixed(prefix)
+            .map_err(|e| StoreError::backend("listing symbolic refs", e))?;
+        let mut out = Vec::new();
+        for reference in iter {
+            let reference = reference.map_err(|e| {
+                StoreError::backend("listing symbolic refs", std::io::Error::other(e))
+            })?;
+            if let gix::refs::TargetRef::Symbolic(target) = reference.target() {
+                out.push((
+                    reference.name().as_bstr().to_string(),
+                    target.as_bstr().to_string(),
+                ));
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// Resolve `name` through any chain of symbolic refs to the object id it
+    /// ultimately names. A direct ref resolves to its own target (identity);
+    /// `Ok(None)` when `name` — or the ref a symbolic chain ends at — does
+    /// not exist (an absent ref, or a dangling/unborn symref). A chain that
+    /// reaches [`MAX_SYMREF_DEPTH`] hops (which includes every on-disk
+    /// cycle; the deepest resolvable chain is one less) is a
+    /// [`StoreError::Corrupt`].
+    pub fn resolve_symref(&self, name: &str) -> Result<Option<Hash>, StoreError> {
+        let mut current = validated_ref_name(name)?;
+        for _ in 0..MAX_SYMREF_DEPTH {
+            let reference = self
+                .repo
+                .try_find_reference(current.as_bstr())
+                .map_err(|e| StoreError::backend("resolving symbolic ref", e))?;
+            match reference {
+                None => return Ok(None),
+                Some(reference) => match reference.target() {
+                    gix::refs::TargetRef::Object(oid) => {
+                        return Ok(Some(Hash::from_oid(oid.to_owned())));
+                    }
+                    gix::refs::TargetRef::Symbolic(target) => current = target.to_owned(),
+                },
+            }
+        }
+        Err(StoreError::corrupt(
+            "symbolic ref",
+            format!(
+                "chain from {name:?} exceeds {MAX_SYMREF_DEPTH} levels (a cycle, or hostile nesting)"
+            ),
+        ))
     }
 
     /// Resolve the manifest blob a workspace ref points at. The ref value is

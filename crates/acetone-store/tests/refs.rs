@@ -289,3 +289,126 @@ fn symbolic_ref_is_error_not_value() {
         other => panic!("expected SymbolicRef, got {other:?}"),
     }
 }
+
+#[test]
+fn symbolic_refs_are_listed_separately_and_resolve() {
+    // acetone-5lo: `list_refs` keeps its direct-refs-only contract (branch
+    // listing must not double-list a branch through an alias), and
+    // `list_symbolic_refs` + `resolve_symref` surface what it skips, so fsck
+    // can walk symbolic workspaces/branches/tags instead of missing them.
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    let v1 = store.put(b"v1").expect("put");
+    store
+        .write_ref("refs/acetone/workspaces/real", None, &v1)
+        .expect("create");
+    git(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/acetone/workspaces/alias",
+            "refs/acetone/workspaces/real",
+        ],
+    );
+    git(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/acetone/workspaces/alias2",
+            "refs/acetone/workspaces/alias",
+        ],
+    );
+    git(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/acetone/workspaces/dangle",
+            "refs/acetone/workspaces/nope",
+        ],
+    );
+
+    // Direct listing is unchanged: only the direct ref appears.
+    let direct = store
+        .list_refs("refs/acetone/workspaces/")
+        .expect("list_refs");
+    assert_eq!(
+        direct,
+        vec![("refs/acetone/workspaces/real".to_owned(), v1)],
+        "list_refs must keep listing only direct refs"
+    );
+
+    // The symbolic refs are enumerable, with their immediate targets, in
+    // name order.
+    let symbolic = store
+        .list_symbolic_refs("refs/acetone/workspaces/")
+        .expect("list_symbolic_refs");
+    assert_eq!(
+        symbolic,
+        vec![
+            (
+                "refs/acetone/workspaces/alias".to_owned(),
+                "refs/acetone/workspaces/real".to_owned()
+            ),
+            (
+                "refs/acetone/workspaces/alias2".to_owned(),
+                "refs/acetone/workspaces/alias".to_owned()
+            ),
+            (
+                "refs/acetone/workspaces/dangle".to_owned(),
+                "refs/acetone/workspaces/nope".to_owned()
+            ),
+        ]
+    );
+
+    // Resolution follows chains of any (bounded) length to the object.
+    assert_eq!(
+        store
+            .resolve_symref("refs/acetone/workspaces/alias")
+            .expect("resolve"),
+        Some(v1)
+    );
+    assert_eq!(
+        store
+            .resolve_symref("refs/acetone/workspaces/alias2")
+            .expect("resolve chain"),
+        Some(v1)
+    );
+    // A direct ref resolves to its own target (identity on non-symrefs).
+    assert_eq!(
+        store
+            .resolve_symref("refs/acetone/workspaces/real")
+            .expect("resolve direct"),
+        Some(v1)
+    );
+    // A dangling symref and an absent ref both resolve to nothing.
+    assert_eq!(
+        store
+            .resolve_symref("refs/acetone/workspaces/dangle")
+            .expect("resolve dangling"),
+        None
+    );
+    assert_eq!(
+        store
+            .resolve_symref("refs/acetone/workspaces/absent")
+            .expect("resolve absent"),
+        None
+    );
+}
+
+#[test]
+fn symbolic_ref_cycle_is_a_typed_error_not_a_hang() {
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    git(
+        &repo,
+        &["symbolic-ref", "refs/heads/cyc-a", "refs/heads/cyc-b"],
+    );
+    git(
+        &repo,
+        &["symbolic-ref", "refs/heads/cyc-b", "refs/heads/cyc-a"],
+    );
+    match store.resolve_symref("refs/heads/cyc-a") {
+        Err(StoreError::Corrupt { .. }) => {}
+        other => panic!("expected Corrupt for a symref cycle, got {other:?}"),
+    }
+}
