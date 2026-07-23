@@ -1782,6 +1782,12 @@ fn accumulate(aggregate: &BoundExpr, group: &[Row], ctx: &EvalCtx) -> Result<Val
         "collect" => {
             // collect() materialises a list; hold it to the collection cap.
             ctx.governor.collection(values.len() as u64)?;
+            // Each collected value gains a container level — hold it to the
+            // construction-time depth cap too (acetone-19x). O(1) for the
+            // common scalar/entity elements.
+            for value in &values {
+                crate::exec::eval::ensure_nestable(value, *span)?;
+            }
             Ok(Value::List(values))
         }
         "sum" => {

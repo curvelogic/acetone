@@ -18,6 +18,27 @@ use std::sync::Arc;
 
 use acetone_model::Value as ModelValue;
 
+/// Maximum container nesting depth of a runtime [`Value`] the executor will
+/// construct (acetone-19x): lists and maps count one level each; scalars and
+/// entities count one. Construction seams refuse to nest a value past this
+/// cap (see `exec::eval::ensure_nestable`), which makes over-deep values
+/// unrepresentable — so every recursive walk over runtime values
+/// ([`Value::distinct_key`], [`Value::global_cmp`], [`Value::eq3`],
+/// [`Value::format`], clone, and the compiler-generated drop glue) is bounded
+/// on a default stack without per-walk guards. A shallow AST can otherwise
+/// build an arbitrarily deep value (`reduce(s = [0], y IN range(1, N) | [s])`)
+/// and abort the process in any of those walks.
+///
+/// This is a fixed structural cap, not a [`crate::exec::QueryLimits`] knob:
+/// it guards process integrity rather than budgeting work, so it is
+/// deliberately not configurable.
+pub(crate) const MAX_VALUE_DEPTH: usize = 256;
+const _: () = assert!(
+    MAX_VALUE_DEPTH > acetone_model::values::MAX_DEPTH,
+    "the construction cap must sit above the model's encode/decode cap, or \
+     legitimate stored values could not be carried by the runtime"
+);
+
 /// Opaque, stable entity identity (in-memory counter bytes or storage key
 /// bytes). Equality of entities is identity, not property equality.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -378,6 +399,30 @@ impl Value {
         out
     }
 
+    /// Does this value's container nesting (lists and maps) exceed `limit`
+    /// levels? Entities and scalars count one level and are not descended
+    /// into: entity properties are themselves cap-checked containers, so any
+    /// walk that does descend them stays within [`MAX_VALUE_DEPTH`] plus a
+    /// small constant for the entity wrapper.
+    ///
+    /// Iterative (explicit stack) with early exit, so the *checker* is safe
+    /// even on a value deeper than the cap — e.g. one handed straight to the
+    /// library API by an embedder.
+    pub(crate) fn nesting_exceeds(&self, limit: usize) -> bool {
+        let mut stack: Vec<(&Value, usize)> = vec![(self, 1)];
+        while let Some((value, depth)) = stack.pop() {
+            if depth > limit {
+                return true;
+            }
+            match value {
+                Value::List(items) => stack.extend(items.iter().map(|v| (v, depth + 1))),
+                Value::Map(map) => stack.extend(map.values().map(|v| (v, depth + 1))),
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn push_distinct_key(&self, out: &mut Vec<u8>) {
         fn len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
             out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
@@ -412,7 +457,18 @@ impl Value {
             }
             Value::Path(p) => {
                 out.push(4);
-                out.extend_from_slice(&((p.nodes.len() + p.rels.len()) as u64).to_be_bytes());
+                // Two separate counts (acetone-19x review nit): a combined
+                // count would let a malformed (2 nodes, 1 rel) shape share a
+                // key with a (1 node, 2 rels) shape whose concatenated ids
+                // coincide. Well-formed paths always satisfy
+                // `nodes = rels + 1`, so for them the split count carries the
+                // same information as the old combined one and key-equality
+                // still agrees with `equivalent`; for malformed values the
+                // key becomes strictly finer — the safe direction for dedup.
+                // Runtime-only: this key is never persisted or derived into
+                // stored bytes.
+                out.extend_from_slice(&(p.nodes.len() as u64).to_be_bytes());
+                out.extend_from_slice(&(p.rels.len() as u64).to_be_bytes());
                 for n in &p.nodes {
                     len_prefixed(out, &n.id.0);
                 }
@@ -598,6 +654,88 @@ mod tests {
         let ab_c = concat(&[Value::String("ab".into()), Value::String("c".into())]);
         let a_bc = concat(&[Value::String("a".into()), Value::String("bc".into())]);
         assert_ne!(ab_c, a_bc);
+    }
+
+    fn node(id: &[u8]) -> NodeValue {
+        NodeValue {
+            id: EntityId::from_bytes(id),
+            labels: vec!["N".to_string()],
+            properties: BTreeMap::new(),
+        }
+    }
+
+    fn rel(id: &[u8], start: &[u8], end: &[u8]) -> RelValue {
+        RelValue {
+            id: EntityId::from_bytes(id),
+            rel_type: "R".to_string(),
+            start: EntityId::from_bytes(start),
+            end: EntityId::from_bytes(end),
+            properties: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn path_distinct_key_separates_node_and_rel_counts() {
+        // Malformed shapes with identical concatenated id bytes: (2 nodes,
+        // 1 rel) vs (1 node, 2 rels). A combined count keyed these the same;
+        // the split counts must not. (A (1 node, 2 rels) shape cannot come
+        // from a real graph — paths alternate and satisfy nodes = rels + 1 —
+        // so this is constructed directly as the defensive case it guards.)
+        let two_nodes_one_rel = Value::Path(PathValue {
+            nodes: vec![node(b"a"), node(b"b")],
+            rels: vec![rel(b"c", b"a", b"b")],
+        });
+        let one_node_two_rels = Value::Path(PathValue {
+            nodes: vec![node(b"a")],
+            rels: vec![rel(b"b", b"a", b"a"), rel(b"c", b"a", b"a")],
+        });
+        assert_ne!(
+            two_nodes_one_rel.distinct_key(),
+            one_node_two_rels.distinct_key()
+        );
+    }
+
+    #[test]
+    fn well_formed_path_keys_agree_with_equivalent() {
+        let path = |rel_id: &[u8]| {
+            Value::Path(PathValue {
+                nodes: vec![node(b"a"), node(b"b")],
+                rels: vec![rel(rel_id, b"a", b"b")],
+            })
+        };
+        // Same entity ids: equivalent, and the keys agree.
+        assert!(path(b"r1").equivalent(&path(b"r1")));
+        assert_eq!(path(b"r1").distinct_key(), path(b"r1").distinct_key());
+        // Different relationship: not equivalent, and the keys differ.
+        assert!(!path(b"r1").equivalent(&path(b"r2")));
+        assert_ne!(path(b"r1").distinct_key(), path(b"r2").distinct_key());
+    }
+
+    #[test]
+    fn nesting_exceeds_measures_container_depth_only() {
+        // Scalars and entities are one level.
+        assert!(!Value::Int(1).nesting_exceeds(1));
+        assert!(!Value::Node(node(b"a")).nesting_exceeds(1));
+        // [[1]] is three levels; a map counts a level too.
+        let nested = Value::List(vec![Value::List(vec![Value::Int(1)])]);
+        assert!(nested.nesting_exceeds(2));
+        assert!(!nested.nesting_exceeds(3));
+        let map = Value::Map(BTreeMap::from([("k".to_string(), nested)]));
+        assert!(map.nesting_exceeds(3));
+        assert!(!map.nesting_exceeds(4));
+        // The checker itself must survive a value far deeper than the cap.
+        let mut deep = Value::Int(0);
+        for _ in 0..100_000 {
+            deep = Value::List(vec![deep]);
+        }
+        assert!(deep.nesting_exceeds(MAX_VALUE_DEPTH));
+        // Dismantle iteratively so dropping the fixture cannot recurse.
+        let mut stack = vec![deep];
+        while let Some(value) = stack.pop() {
+            if let Value::List(items) = value {
+                stack.extend(items);
+            }
+        }
     }
 
     #[test]
