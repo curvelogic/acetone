@@ -216,8 +216,10 @@ creates the replacement edges and deletes the old ones:
 
 ```console
 $ acetone query 'CREATE (:Host {name: "app3", region: "eu-west", os: "linux"})'
+(no columns)
 1 node created
 $ acetone query 'MATCH (s:Service)-[r:RUNS_ON]->(:Host {name: "app1"}), (h:Host {name: "app3"}) CREATE (s)-[:RUNS_ON]->(h) DELETE r'
+(no columns)
 2 relationships created, 2 relationships deleted
 $ acetone commit -m "decommission app1: move identity and billing to app3"
 committed 12d48bc3bfc7059cfdcef41d40449cc341fc06b9
@@ -229,6 +231,7 @@ Meanwhile life goes on: back on `main`, an unrelated change lands —
 $ acetone checkout main
 switched to branch "main"
 $ acetone query 'MATCH (s:Service {name: "postgres"}) SET s.version = "16.4"'
+(no columns)
 1 property set
 $ acetone commit -m "postgres upgraded to 16.4"
 committed 815427f405191decace4f423ef78a67e997fd6e8

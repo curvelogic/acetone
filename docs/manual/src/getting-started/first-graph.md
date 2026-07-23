@@ -70,16 +70,23 @@ Now Cypher `CREATE` works:
 
 ```console
 $ acetone query 'CREATE (:Host {name: "web1", os: "linux"})'
+(no columns)
 1 node created
 $ acetone query 'CREATE (:Host {name: "web2", os: "linux"}), (:Service {name: "billing", port: 8080})'
+(no columns)
 2 nodes created
 ```
+
+(The `(no columns)` line is how the table renderer shows a result with no
+columns at all — a write-only query returns one, then prints its mutation
+summary.)
 
 Connect the service to the host it depends on — match both endpoints, then
 create the relationship:
 
 ```console
 $ acetone query 'MATCH (s:Service {name: "billing"}), (h:Host {name: "web1"}) CREATE (s)-[:DEPENDS_ON]->(h)'
+(no columns)
 1 relationship created
 ```
 
@@ -149,6 +156,7 @@ Make a change with `SET` and commit again:
 
 ```console
 $ acetone query 'MATCH (h:Host {name: "web2"}) SET h.os = "freebsd"'
+(no columns)
 1 property set
 $ acetone commit -m "web2 reinstalled with FreeBSD"
 committed 02560fb2db8d94dc283e15098a3d8dd54bbab93d
