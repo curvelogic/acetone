@@ -1193,3 +1193,148 @@ fn changing_a_key_of_a_label_used_only_as_secondary_is_allowed() {
     tx.save()
         .expect("changing a secondary-only label's key must be allowed");
 }
+
+// ---------------------------------------------------------------------------
+// log_all (acetone-b6q): full-reachability history, deterministic order.
+// ---------------------------------------------------------------------------
+
+/// Build the manual's exact scenario: a branch-side commit merged back into
+/// main. Returns `(repo, base, side, main_second, merge)`.
+fn merged_history(dir: &Path) -> (Repository, [acetone_store::Hash; 4]) {
+    let repo = init_repo(dir);
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[])).expect("put");
+    let base = tx.commit("base", &[], None).expect("commit");
+
+    repo.create_branch("side", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("side").expect("checkout side");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web2"), &record(&[])).expect("put");
+    let side = tx.commit("side work", &[], None).expect("commit");
+
+    repo.checkout_branch("main").expect("checkout main");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web3"), &record(&[])).expect("put");
+    let main_second = tx.commit("main work", &[], None).expect("commit");
+
+    let merge = match repo.merge("side", "merge side").expect("merge") {
+        acetone_graph::merge::MergeOutcome::Merged(h) => h,
+        other => panic!("expected Merged, got {other:?}"),
+    };
+    (repo, [base, side, main_second, merge])
+}
+
+#[test]
+fn log_follows_first_parent_but_log_all_sees_every_branch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (repo, [base, side, main_second, merge]) = merged_history(dir.path());
+
+    // The existing contract is unchanged: `log` walks first parents only,
+    // so the branch-side commit is invisible from main.
+    let first_parent = repo.log(None).expect("log");
+    let ids: Vec<_> = first_parent.iter().map(|e| e.id).collect();
+    assert_eq!(ids, vec![merge, main_second, base]);
+
+    // `log_all` covers every branch: the side commit appears exactly once.
+    let all = repo.log_all().expect("log_all");
+    let ids: Vec<_> = all.iter().map(|e| e.id).collect();
+    assert_eq!(ids.len(), 4, "every commit exactly once: {ids:?}");
+    assert!(ids.contains(&side), "branch-side commit must be visible");
+    // Newest-first topological order: the merge precedes both its parents,
+    // and every commit precedes `base`.
+    let pos = |h: &acetone_store::Hash| ids.iter().position(|i| i == h).unwrap();
+    assert_eq!(pos(&merge), 0, "merge commit is the newest tip");
+    assert!(pos(&main_second) < pos(&base));
+    assert!(pos(&side) < pos(&base));
+    assert_eq!(pos(&base), 3, "root comes last");
+
+    // The merge entry reports both parents, in [ours, theirs] order.
+    let merge_entry = all.iter().find(|e| e.id == merge).unwrap();
+    assert_eq!(merge_entry.parents, vec![main_second, side]);
+}
+
+#[test]
+fn log_all_is_deterministic_and_matches_log_on_linear_history() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "a"), &record(&[])).expect("put");
+    tx.commit("one", &[], None).expect("commit");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "b"), &record(&[])).expect("put");
+    tx.commit("two", &[], None).expect("commit");
+
+    // Single linear branch: log_all and log agree exactly.
+    let linear: Vec<_> = repo.log(None).expect("log").iter().map(|e| e.id).collect();
+    let all: Vec<_> = repo.log_all().expect("all").iter().map(|e| e.id).collect();
+    assert_eq!(linear, all);
+
+    // Determinism: repeated calls yield the identical sequence.
+    let again: Vec<_> = repo.log_all().expect("all").iter().map(|e| e.id).collect();
+    assert_eq!(all, again);
+}
+
+// ---------------------------------------------------------------------------
+// delete_branch (acetone-7qw.1): ref removal with a checked-out guard.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delete_branch_removes_the_ref_and_returns_its_tip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[])).expect("put");
+    let head = tx.commit("base", &[], None).expect("commit");
+    repo.create_branch("rescue", None).expect("branch");
+
+    let was = repo.delete_branch("rescue").expect("delete");
+    assert_eq!(was, head, "returns the commit the branch pointed at");
+    let names: Vec<_> = repo
+        .branches()
+        .expect("branches")
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(names, vec!["main".to_owned()], "rescue is gone");
+    // The commit itself is untouched — deletion is ref plumbing only.
+    assert_eq!(
+        repo.snapshot(&head.to_hex())
+            .expect("snapshot")
+            .nodes()
+            .expect("nodes")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn delete_branch_refuses_the_checked_out_branch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node("Host", "web1"), &record(&[])).expect("put");
+    tx.commit("base", &[], None).expect("commit");
+
+    match repo.delete_branch(DEFAULT_BRANCH) {
+        Err(GraphError::BranchCheckedOut { name }) => assert_eq!(name, "main"),
+        other => panic!("expected BranchCheckedOut, got {other:?}"),
+    }
+    // Still there.
+    assert!(
+        repo.branches()
+            .expect("branches")
+            .iter()
+            .any(|(n, _)| n == "main")
+    );
+}
+
+#[test]
+fn delete_branch_reports_a_missing_branch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    match repo.delete_branch("nonesuch") {
+        Err(GraphError::NoSuchBranch { name }) => assert_eq!(name, "nonesuch"),
+        other => panic!("expected NoSuchBranch, got {other:?}"),
+    }
+}

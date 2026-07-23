@@ -115,6 +115,13 @@ pub enum GraphError {
         /// Branch name.
         name: String,
     },
+    /// Deleting the checked-out branch is refused: it would leave the
+    /// checked-out ref naming a branch that does not exist.
+    #[error("cannot delete branch {name:?}: it is checked out — switch to another branch first")]
+    BranchCheckedOut {
+        /// Branch name.
+        name: String,
+    },
     /// A node lookup supplied the wrong number of key values for the label's
     /// declared key tuple (e.g. `CALL acetone.blame` on a composite-key label
     /// with the CLI's single-column key plumbing). Without this guard the

@@ -2996,3 +2996,227 @@ fn commit_hex_from_log(repo: &Path) -> String {
         .unwrap()
         .to_string()
 }
+
+// ---------------------------------------------------------------------------
+// log --all and merge-parent display (acetone-b6q)
+// ---------------------------------------------------------------------------
+
+/// Build a merged history (the manual's exact scenario): a commit on a side
+/// branch, one on main, and a clean merge. Returns
+/// `(base, side, main_second, merge)` commit hashes.
+fn merged_history(repo: &Path) -> (String, String, String, String) {
+    assert!(init(repo).status.success());
+    assert!(
+        acetone(repo, &["declare-label", "Host", "--key", "name"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(repo, &["query", "CREATE (:Host {name:'web1'})"])
+            .status
+            .success()
+    );
+    let base = commit_hex(&acetone(repo, &["commit", "-m", "base"]));
+
+    assert!(acetone(repo, &["branch", "side"]).status.success());
+    assert!(acetone(repo, &["checkout", "side"]).status.success());
+    assert!(
+        acetone(repo, &["query", "CREATE (:Host {name:'web2'})"])
+            .status
+            .success()
+    );
+    let side = commit_hex(&acetone(repo, &["commit", "-m", "side work"]));
+
+    assert!(acetone(repo, &["checkout", "main"]).status.success());
+    assert!(
+        acetone(repo, &["query", "CREATE (:Host {name:'web3'})"])
+            .status
+            .success()
+    );
+    let main_second = commit_hex(&acetone(repo, &["commit", "-m", "main work"]));
+
+    let out = acetone(repo, &["merge", "side", "-m", "merge side"]);
+    assert!(out.status.success(), "clean merge: {}", stderr(&out));
+    let merge = commit_hex_from_log(repo);
+    (base, side, main_second, merge)
+}
+
+#[test]
+fn log_all_shows_branch_side_commits_and_merge_parents() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let (base, side, main_second, merge) = merged_history(&repo);
+
+    // Default log is unchanged: the first-parent chain only — the
+    // branch-side commit is invisible and no merge line appears.
+    let out = acetone(&repo, &["log"]);
+    assert!(out.status.success());
+    let text = stdout(&out);
+    assert!(!text.contains(&side), "first-parent log hides side: {text}");
+    assert!(!text.contains("merge:"), "no merge line by default: {text}");
+    assert_eq!(
+        text.lines().count(),
+        3,
+        "merge, main work, base only: {text}"
+    );
+
+    // --all covers every branch: the side commit appears, exactly once,
+    // and the merge commit displays both parent hashes.
+    let out = acetone(&repo, &["log", "--all"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains(&format!("{side} side work")),
+        "side commit visible: {text}"
+    );
+    assert_eq!(
+        text.matches(&side).count(),
+        2,
+        "side appears as its own line and as a merge parent: {text}"
+    );
+    assert!(
+        text.contains(&format!("    merge: {main_second} {side}")),
+        "merge parents in [ours, theirs] order: {text}"
+    );
+    // Newest-first: the merge commit is the first line; the root the last.
+    assert!(text.starts_with(&format!("{merge} merge side")), "{text}");
+    assert!(
+        text.trim_end().ends_with(&format!("{base} base")),
+        "{text}"
+    );
+
+    // JSON: same entry shape as plain log --json, more rows, parents intact.
+    let out = acetone(&repo, &["log", "--all", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    let entries = v.as_array().expect("array");
+    assert_eq!(entries.len(), 4, "all four commits: {v}");
+    assert_eq!(entries[0]["hash"], merge.as_str());
+    assert_eq!(
+        entries[0]["parents"],
+        serde_json::json!([main_second, side])
+    );
+    assert!(
+        entries.iter().any(|e| e["hash"] == side.as_str()),
+        "side commit in JSON: {v}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// branch start point and deletion (acetone-7qw.1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn branch_takes_a_start_point_and_supports_deletion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "Host", "--key", "name"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'web1'})"])
+            .status
+            .success()
+    );
+    let first = commit_hex(&acetone(&repo, &["commit", "-m", "first"]));
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'web2'})"])
+            .status
+            .success()
+    );
+    let second = commit_hex(&acetone(&repo, &["commit", "-m", "second"]));
+
+    // Create at an explicit commit hash, not the current head.
+    let out = acetone(&repo, &["branch", "rescue", &first]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains(&format!("created branch \"rescue\" at {first}")));
+
+    // The branch really is at the old commit: time travel sees one host.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "--at",
+            "rescue",
+            "MATCH (h:Host) RETURN count(h) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "n\n1");
+
+    // A branch short name works as the start point too.
+    let out = acetone(&repo, &["branch", "rescue2", "rescue", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    assert_eq!(v, serde_json::json!({ "created": "rescue2", "hash": first }));
+
+    // An unresolvable start point is a clear error, and creates nothing.
+    let out = acetone(&repo, &["branch", "ghost", "nonesuch"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("cannot resolve \"nonesuch\""),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&acetone(&repo, &["branch"])).contains("ghost"));
+
+    // Delete: the ref goes, the commits stay.
+    let out = acetone(&repo, &["branch", "--delete", "rescue"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains(&format!("deleted branch \"rescue\" (was {first})")));
+    let listing = stdout(&acetone(&repo, &["branch"]));
+    assert!(!listing.contains("rescue\n"), "rescue gone: {listing}");
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "--at",
+            &first,
+            "MATCH (h:Host) RETURN count(h) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(
+        stdout(&out).trim(),
+        "n\n1",
+        "deleted branch's commit still readable by hash"
+    );
+
+    // Delete with --json.
+    let out = acetone(&repo, &["branch", "--delete", "rescue2", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_stdout(&out);
+    assert_eq!(v, serde_json::json!({ "deleted": "rescue2", "hash": first }));
+
+    // The checked-out branch is protected, with a clear refusal.
+    let out = acetone(&repo, &["branch", "--delete", "main"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("cannot delete branch \"main\": it is checked out"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stdout(&acetone(&repo, &["branch"])).contains("* main"));
+
+    // Deleting a branch that does not exist is a clear error.
+    let out = acetone(&repo, &["branch", "--delete", "nonesuch"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("no such branch \"nonesuch\""),
+        "{}",
+        stderr(&out)
+    );
+
+    // --delete conflicts with the positionals (clap-level grammar).
+    let out = acetone(&repo, &["branch", "extra", "--delete", "main"]);
+    assert!(!out.status.success());
+
+    // Head unchanged by all of the above.
+    let out = acetone(&repo, &["status"]);
+    assert!(stdout(&out).contains(&format!("HEAD: {second}")));
+}

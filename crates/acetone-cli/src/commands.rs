@@ -36,8 +36,19 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             trailer,
             allow_empty,
         } => commit(repo_path, &message, &trailer, allow_empty),
-        Command::Log { json } => log(repo_path, json),
-        Command::Branch { name, json } => branch(repo_path, name.as_deref(), json),
+        Command::Log { all, json } => log(repo_path, all, json),
+        Command::Branch {
+            name,
+            refspec,
+            delete,
+            json,
+        } => branch(
+            repo_path,
+            name.as_deref(),
+            refspec.as_deref(),
+            delete.as_deref(),
+            json,
+        ),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
         Command::Merge {
             refspec,
@@ -345,9 +356,12 @@ pub(crate) fn commit(
     Ok(())
 }
 
-fn log(repo_path: &Path, json: bool) -> Result<()> {
+fn log(repo_path: &Path, all: bool, json: bool) -> Result<()> {
     let repo = open(repo_path)?;
-    let entries = repo.log(None)?;
+    // Default: the current branch's first-parent chain (its own changelog).
+    // `--all`: every commit reachable from any branch, deterministic
+    // newest-first topological order (acetone-b6q).
+    let entries = if all { repo.log_all()? } else { repo.log(None)? };
     if json {
         // serde_json escapes control characters, so hostile-clone messages
         // and trailers cannot inject raw terminal escapes here (no
@@ -384,6 +398,14 @@ fn log(repo_path: &Path, json: bool) -> Result<()> {
         // sanitise before they reach the terminal.
         let subject = entry.message.lines().next().unwrap_or("");
         outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
+        // Under --all, merge structure is shown honestly: a merge commit's
+        // parent hashes, printed before any trailers (so a hostile
+        // `merge:` trailer cannot pre-empt the real line). The default
+        // first-parent output is unchanged.
+        if all && entry.parents.len() > 1 {
+            let parents: Vec<String> = entry.parents.iter().map(|p| p.to_hex()).collect();
+            outln!("    merge: {}", parents.join(" "));
+        }
         for (key, value) in &entry.trailers {
             outln!("    {}: {}", sanitise_line(key), sanitise_line(value));
         }
@@ -391,8 +413,28 @@ fn log(repo_path: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn branch(repo_path: &Path, name: Option<&str>, json: bool) -> Result<()> {
+fn branch(
+    repo_path: &Path,
+    name: Option<&str>,
+    refspec: Option<&str>,
+    delete: Option<&str>,
+    json: bool,
+) -> Result<()> {
     let repo = open(repo_path)?;
+    if let Some(name) = delete {
+        // Ref removal only: the commits stay in the store, reachable by
+        // hash, until a git-level gc expires them (acetone gc never
+        // deletes). The library refuses to delete the checked-out branch.
+        let was = repo
+            .delete_branch(name)
+            .with_context(|| format!("deleting branch {name:?}"))?;
+        if json {
+            emit_json(&json!({ "deleted": name, "hash": was.to_hex() }));
+            return Ok(());
+        }
+        outln!("deleted branch {name:?} (was {})", was.to_hex());
+        return Ok(());
+    }
     match name {
         None => {
             let current = repo.current_branch()?;
@@ -428,7 +470,7 @@ fn branch(repo_path: &Path, name: Option<&str>, json: bool) -> Result<()> {
         }
         Some(name) => {
             let target = repo
-                .create_branch(name, None)
+                .create_branch(name, refspec)
                 .with_context(|| format!("creating branch {name:?}"))?;
             if json {
                 emit_json(&json!({ "created": name, "hash": target.to_hex() }));
