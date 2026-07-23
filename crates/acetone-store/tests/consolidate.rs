@@ -420,6 +420,57 @@ fn re_consolidating_an_unchanged_repo_is_a_stable_no_op() {
 }
 
 #[test]
+fn a_tampered_pack_stem_cannot_reach_outside_objects_pack() {
+    // acetone-c2a finding 3: the sidecar pack list is plain text in `.git`, so
+    // its lines are untrusted input. A tampered traversal stem (`../escape`)
+    // must never be joined into a filesystem path: without sanitisation, the
+    // supersede pass would read `objects/pack/../escape.idx`, find it absent,
+    // take the "already gone" branch and delete `objects/pack/../escape.pack`
+    // — a file OUTSIDE the pack directory. Sanitised, the stem is ignored
+    // (ignoring is the safe direction: a skipped stem can only mean a pack is
+    // NOT deleted) and dropped from the sidecar on the next rewrite.
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    build_history(&store, 8, 2);
+    store
+        .consolidate(ConsolidateOptions::default())
+        .expect("first consolidate");
+
+    // Plant a decoy victim outside objects/pack, and the traversal stem that
+    // targets it. Deliberately no `objects/escape.idx`, to steer the
+    // unsanitised code down its deleting branch.
+    let decoy = repo.join("objects").join("escape.pack");
+    std::fs::write(&decoy, b"decoy: must survive").expect("write decoy");
+    let sidecar = repo.join("acetone-consolidation-packs");
+    let mut list = std::fs::read_to_string(&sidecar).expect("sidecar exists");
+    list.push_str("\n../escape\n");
+    std::fs::write(&sidecar, &list).expect("tamper sidecar");
+
+    // The supersede pass runs on every consolidation; it must not touch the
+    // decoy.
+    store
+        .consolidate(ConsolidateOptions::default())
+        .expect("second consolidate");
+    assert!(
+        decoy.exists(),
+        "a tampered '../escape' stem deleted a file outside objects/pack"
+    );
+    // The bogus line is gone from the rewritten sidecar (self-healing), while
+    // the live pack is still tracked.
+    let healed = std::fs::read_to_string(&sidecar).expect("sidecar");
+    assert!(
+        !healed.contains("escape"),
+        "the tampered stem should be dropped on rewrite, got: {healed:?}"
+    );
+    assert_eq!(
+        pack_count(&repo),
+        1,
+        "the real pack is still tracked/present"
+    );
+    git(&repo, &["fsck", "--strict"]);
+}
+
+#[test]
 fn a_later_consolidation_supersedes_the_earlier_pack() {
     let (dir, store) = new_store();
     let repo = repo_path(&dir);
