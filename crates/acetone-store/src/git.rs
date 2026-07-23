@@ -815,6 +815,15 @@ impl GitStore {
         Ok(Some((object.kind, object.data)))
     }
 
+    /// Whether an object with `hash` is present in the store, of any git kind
+    /// (blob, tree, commit or tag). A cheap header probe — it does not read the
+    /// object body. `migrate` recovery uses it to refuse a journalled ref swing
+    /// whose target names no object (`Hash::from_hex` accepts any 40-hex
+    /// string), so a crafted journal cannot dangle a ref at a bogus hash.
+    pub fn contains_object(&self, hash: &Hash) -> Result<bool, StoreError> {
+        Ok(self.find_header(hash)?.is_some())
+    }
+
     /// Look up an object header, translating "not found" to `None`.
     fn find_header(&self, hash: &Hash) -> Result<Option<gix::odb::find::Header>, StoreError> {
         self.repo

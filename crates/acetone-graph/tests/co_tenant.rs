@@ -8,13 +8,13 @@ use std::path::Path;
 use std::process::Command;
 
 use acetone_graph::repo::{InitOptions, Repository};
-use acetone_graph::{Rechunk, rewrite_history};
+use acetone_graph::{MigrateJournal, Rechunk, pending_migration, rewrite_history};
 use acetone_model::Value;
 use acetone_model::graph_keys::NodeKey;
 use acetone_model::records::NodeRecord;
 use acetone_model::schema::{LabelDef, SchemaEntry};
 use acetone_prolly::ChunkParams;
-use acetone_store::RefStore;
+use acetone_store::{ChunkStore, Hash, RefStore, RefSwing};
 
 /// Run `git -C <dir> <args>`, asserting success, returning trimmed stdout.
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -684,5 +684,76 @@ fn init_co_tenant_rejects_bad_graph_names_and_duplicates() {
     assert!(
         Repository::init_co_tenant(&project, "g", InitOptions::default()).is_err(),
         "re-initialising the same graph must fail"
+    );
+}
+
+#[test]
+fn migrate_recovery_refuses_a_journal_naming_the_code_branch() {
+    // Co-tenant isolation (acetone-w9uu): a migrate journal is local-only,
+    // transient state carried on disk (`refs/acetone/<graph>/migrate-journal`).
+    // Because a routine `acetone migrate` completes any pending journal BEFORE
+    // its guards, a journal crafted to name a FOREIGN ref — the user's code
+    // branch `refs/heads/main` — with `expected` = its current value would let
+    // a migrate silently repoint the victim's code branch. Recovery must
+    // refuse such a journal, leaving the foreign ref untouched and the journal
+    // in place (the same refuse-and-keep semantics as a ref moved externally).
+    let (project, _dir, code_commit, _blob) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 20);
+
+    // A real, existing object to use as the crafted swing's target: the
+    // graph's own branch head. The point is the NAME (a foreign ref), not a
+    // bogus target — so the ownership check, not the existence check, is what
+    // refuses it.
+    let graph_head = graph
+        .store()
+        .read_ref("refs/heads/acetone/g/main")
+        .expect("read")
+        .expect("graph branch exists");
+    let code_main = Hash::from_hex(&code_commit).expect("code main hash");
+
+    // Forge a journal that would repoint the user's code branch to the graph
+    // head, and hang it off the graph's private journal ref exactly as a real
+    // interrupted migration would.
+    let journal = MigrateJournal {
+        swings: vec![RefSwing {
+            name: "refs/heads/main".into(),
+            expected: Some(code_main),
+            new: graph_head,
+        }],
+    };
+    let blob = graph.store().put(&journal.encode()).expect("journal blob");
+    graph
+        .store()
+        .write_ref(graph.namespace().migrate_journal_ref(), None, &blob)
+        .expect("journal ref");
+
+    // A routine migrate must refuse: recovery runs first and rejects the
+    // foreign ref.
+    match rewrite_history(&graph, &Rechunk::new(ChunkParams::default())) {
+        Err(acetone_graph::GraphError::Migrate(msg)) => {
+            assert!(
+                msg.contains("refs/heads/main"),
+                "names the offending ref: {msg}"
+            );
+            assert!(
+                msg.contains("owned") || msg.contains("foreign"),
+                "explains it is not the graph's ref: {msg}"
+            );
+        }
+        other => panic!("expected a foreign-ref recovery refusal, got {other:?}"),
+    }
+
+    // The victim's code branch never moved, and the journal is kept for the
+    // operator to inspect and delete by hand.
+    assert_eq!(
+        git(&project, &["rev-parse", "refs/heads/main"]),
+        code_commit,
+        "the code branch must not be repointed"
+    );
+    assert!(
+        pending_migration(&graph).expect("pending").is_some(),
+        "the refused journal is kept, not silently cleared"
     );
 }

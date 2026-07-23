@@ -685,3 +685,43 @@ fn recovery_refuses_a_ref_moved_while_the_migration_lay_interrupted() {
     assert_eq!(target(&repo, "refs/tags/v1"), Some(old.tag));
     assert!(pending_migration(&repo).expect("pending").is_some());
 }
+
+#[test]
+fn recovery_refuses_a_swing_whose_target_names_no_object() {
+    // Sub-issue of acetone-w9uu (defence in depth): the journal is untrusted
+    // on-disk state, and `Hash::from_hex` accepts any 40-hex string, so a
+    // crafted journal can swing a ref to a target that names no object at all.
+    // Recovery must refuse before dangling the ref, keeping the journal.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let head = put_range(&repo, 0, 50, "first");
+
+    // A syntactically valid hash that names no object in the store.
+    let ghost = Hash::from_hex("dead00000000000000000000000000000000beef").expect("hex");
+    let journal = MigrateJournal {
+        swings: vec![RefSwing {
+            name: "refs/heads/main".into(),
+            expected: Some(head),
+            new: ghost,
+        }],
+    };
+    let blob = repo.store().put(&journal.encode()).expect("journal blob");
+    repo.store()
+        .write_ref(repo.namespace().migrate_journal_ref(), None, &blob)
+        .expect("journal ref");
+
+    let params = ChunkParams::new(512, 10, 8192).expect("params");
+    match rewrite_history(&repo, &Rechunk::new(params)) {
+        Err(acetone_graph::GraphError::Migrate(msg)) => {
+            assert!(
+                msg.contains("no object"),
+                "explains the dangling target: {msg}"
+            );
+        }
+        other => panic!("expected a dangling-target refusal, got {other:?}"),
+    }
+
+    // The ref never moved to the ghost, and the journal is kept.
+    assert_eq!(target(&repo, "refs/heads/main"), Some(head));
+    assert!(pending_migration(&repo).expect("pending").is_some());
+}
