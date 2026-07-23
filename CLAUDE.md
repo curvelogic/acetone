@@ -66,16 +66,17 @@ The design record lives in `docs/` and is authoritative:
 
 - `docs/acetone-01-design-space.md` — vision, prior art, and the six shaping decisions
 - `docs/acetone-02-spec.md` — the v0.1 specification (data model, storage, encodings, query language, diff/merge, CLI)
-- `docs/acetone-03-roadmap.md` — phased implementation plan (Phase 0–6) with exit criteria and decision gates
+- `docs/acetone-03-roadmap.md` — phased implementation plan (Phase 0–9) with exit criteria and decision gates
 
 Read the spec before implementing anything; when code and spec diverge, either fix the code or update the spec deliberately — never silently.
 
 ## Architecture Overview
 
-Cargo workspace of six crates with strictly downward dependencies:
+Cargo workspace of seven crates with strictly downward dependencies:
 
 ```
 acetone-cli     — thin CLI client
+acetone-core    — the library façade: the single dependency for library consumers; curated surface frozen at 0.2 (STABILITY.md, ADR-0046)
 acetone-cypher  — parser front end, binder, planner, iterator-model executor, TCK harness
 acetone-graph   — graph mutations, constraints, validation, merge orchestration
 acetone-model   — node/edge keys, records, order-preserving encodings, schema, manifest
