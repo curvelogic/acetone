@@ -3,7 +3,9 @@
 This chapter walks the minimal happy path end to end: create a repository,
 declare a schema, create and query some data, commit it, change it, and look
 back through history. Every command and every line of output below was
-produced by running acetone exactly as shown.
+produced by running acetone exactly as shown; replay it yourself and
+everything matches, except the commit hashes, which differ from repository
+to repository.
 
 ## Create a repository
 

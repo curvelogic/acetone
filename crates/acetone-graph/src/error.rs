@@ -267,7 +267,15 @@ pub enum GraphError {
     },
     /// Creating or inspecting the lock file failed for filesystem
     /// reasons other than the lock being held.
-    #[error("lock file I/O at {path}: {source}")]
+    ///
+    /// The cause is exposed through `source()` (thiserror infers it from
+    /// the field name) and deliberately **not** interpolated into this
+    /// variant's `Display`: a chain-walking printer such as the CLI's
+    /// `anyhow` `{:#}` renders the cause once via the chain, and rendering
+    /// it in both places printed it twice (acetone-cbl.3). `GraphError` is
+    /// re-exported on acetone-core's frozen surface (STABILITY.md), so the
+    /// field keeps its name.
+    #[error("lock file I/O at {path}")]
     LockIo {
         /// The lock file's path.
         path: PathBuf,

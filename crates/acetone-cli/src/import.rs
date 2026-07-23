@@ -319,7 +319,11 @@ pub fn run(
     let target = branch.unwrap_or("the current branch");
     match outcome {
         ImportOutcome::NoChange => {
-            outln!("source unchanged; nothing imported");
+            // The no-op check is graph-level (workspace dirtiness after
+            // applying the source), not source-level: the source may never
+            // have been imported before and still change nothing, e.g. when
+            // it repeats rows the graph already holds (acetone-cbl.3).
+            outln!("import produced no graph changes; nothing to commit");
         }
         ImportOutcome::Committed {
             commit,

@@ -50,6 +50,10 @@ error:  line 1, column 8: integer literal 9223372036854775808 is out of range (i
 input:  MATCH (n) AT 3db804f9 RETURN n
 error:  line 1, column 14: a refspec after AT must be a string literal or a parameter — try AT '3db804f9' (or AT $ref)
 
+### parse/map-projection
+input:  MATCH (s:Host) RETURN s{.name, .tier}
+error:  line 1, column 24: map projections (`s{.name, …}`) are not supported — return the properties individually instead
+
 ### bind/undefined-variable
 input:  MATCH (n) RETURN m
 error:  line 1, column 18: undefined variable 'm'
@@ -84,7 +88,7 @@ error:  line 1, column 7: unknown label "Hst" (not declared in the schema) — d
 
 ### bind/unknown-label-nonsense (strict)
 input:  MATCH (n:Zzzzzz) RETURN n
-error:  line 1, column 7: unknown label "Zzzzzz" (not declared in the schema)
+error:  line 1, column 7: unknown label "Zzzzzz" (not declared in the schema) — declare it first, e.g. `acetone declare-label "Zzzzzz" --key <property>`
 
 ### bind/unknown-rel-type-typo (strict)
 input:  MATCH (h:Host)-[:RUNZ]->(x:Host) RETURN h

@@ -40,6 +40,20 @@ impl fmt::Display for Suggestion {
     }
 }
 
+/// The suffix appended to an unknown-label error: the near-miss suggestion
+/// when one exists, otherwise how to declare the label (mirroring the
+/// write-time Invariant-#3 hint).
+fn unknown_label_guidance(name: &str, suggestion: &Suggestion) -> String {
+    if suggestion.0.is_some() {
+        suggestion.to_string()
+    } else {
+        format!(
+            " — declare it first, e.g. `acetone declare-label {} --key <property>`",
+            acetone_model::display::format_label(name)
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BindError {
     #[error("undefined variable '{name}'")]
@@ -86,7 +100,17 @@ pub enum BindError {
     #[error("expressions in a projection must be aliased before reuse")]
     NoExpressionAlias { span: Span },
 
-    #[error("unknown label {name:?} (not declared in the schema){suggestion}")]
+    // With a near miss the suggestion is the guidance (declaring a typo would
+    // be the wrong fix); without one, the same declare-first hint as the
+    // write-time Invariant-#3 path, so the quality of the guidance does not
+    // depend on which layer catches the mistake (acetone-cbl.3). The label is
+    // echoed into a suggested shell command, so it is escaped
+    // (`format_label`) — a backtick-quoted Cypher identifier can carry
+    // control characters, which must never reach the terminal raw.
+    #[error(
+        "unknown label {name:?} (not declared in the schema){}",
+        unknown_label_guidance(.name, .suggestion)
+    )]
     UnknownLabel {
         name: String,
         span: Span,

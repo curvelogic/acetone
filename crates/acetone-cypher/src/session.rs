@@ -85,7 +85,20 @@ impl QueryError {
             QueryError::Parse(e) => e.render(source),
             QueryError::Bind(e) => e.render(source),
             QueryError::Exec(e) => e.render(source),
-            other => other.to_string(),
+            other => {
+                // Non-span errors may carry a `source()` chain whose text is
+                // not part of their own Display (e.g. `GraphError::LockIo`'s
+                // I/O cause, acetone-cbl.3); this rendering is a plain
+                // string, so append the chain here — once — or it is lost.
+                let mut out = other.to_string();
+                let mut cause = std::error::Error::source(other);
+                while let Some(err) = cause {
+                    out.push_str(": ");
+                    out.push_str(&err.to_string());
+                    cause = err.source();
+                }
+                out
+            }
         }
     }
 }

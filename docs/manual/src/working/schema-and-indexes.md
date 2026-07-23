@@ -281,7 +281,7 @@ it is not a label at all:
 
 ```console
 $ acetone query --at refs/tags/inventory-v1 'MATCH (i:Interface) RETURN count(i)'
-error: line 1, column 7: unknown label "Interface" (not declared in the schema)
+error: line 1, column 7: unknown label "Interface" (not declared in the schema) — declare it first, e.g. `acetone declare-label "Interface" --key <property>`
 ```
 
 (`acetone schema` takes `--at` too, printing the declarations of exactly

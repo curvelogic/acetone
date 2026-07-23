@@ -87,6 +87,12 @@ const DIAGNOSTICS: &[(&str, &str)] = &[
         "RETURN 9223372036854775808 AS literal",
     ),
     ("parse/at-bare-refspec", "MATCH (n) AT 3db804f9 RETURN n"),
+    // An unsupported construct is named, not mis-diagnosed as a clause-
+    // structure problem ("no clause may follow RETURN").
+    (
+        "parse/map-projection",
+        "MATCH (s:Host) RETURN s{.name, .tier}",
+    ),
     // --- binder ---
     ("bind/undefined-variable", "MATCH (n) RETURN m"),
     (

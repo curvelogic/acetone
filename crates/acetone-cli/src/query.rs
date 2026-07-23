@@ -116,7 +116,14 @@ fn parse_params(specs: &[String]) -> Result<BTreeMap<String, Value>> {
 
 /// Render a query outcome: the rows, plus a write summary when a write ran.
 fn render_outcome(outcome: &QueryOutcome, format: Format, max_rows: Option<usize>) {
-    render(outcome.result(), format, max_rows);
+    // A write-only statement (no RETURN) has no columns; its table output is
+    // the mutation summary alone — a "(no columns)" placeholder above it is
+    // noise (acetone-cbl.3). The machine formats stay as they are: their
+    // consumers expect a result document even when it is empty.
+    let write_only = outcome.is_write() && outcome.result().columns.is_empty();
+    if !(write_only && format == Format::Table) {
+        render(outcome.result(), format, max_rows);
+    }
     if outcome.is_write() {
         render_write_summary(&outcome.result().stats);
     }
