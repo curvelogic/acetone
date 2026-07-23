@@ -441,8 +441,9 @@ impl GitStore {
     /// *not* a present tag object — a commit, tree, blob or absent id peels
     /// to itself — so the caller reads the result and gets ordinary
     /// absence/kind handling from that read. Errors only when a tag object
-    /// exists but does not decode (or exceeds the size cap), or the chain is
-    /// deeper than [`MAX_TAG_PEEL_DEPTH`]. Read-only; used by `fsck` to
+    /// exists but does not decode (or exceeds the size cap), or the chain
+    /// reaches [`MAX_TAG_PEEL_DEPTH`] levels (the deepest resolvable chain
+    /// is one less). Read-only; used by `fsck` to
     /// verify the commit behind an annotated tag (acetone-8t3).
     pub fn peel_tag(&self, id: &Hash) -> Result<Hash, StoreError> {
         let mut current = *id;
@@ -504,9 +505,10 @@ impl GitStore {
     /// Resolve `name` through any chain of symbolic refs to the object id it
     /// ultimately names. A direct ref resolves to its own target (identity);
     /// `Ok(None)` when `name` — or the ref a symbolic chain ends at — does
-    /// not exist (an absent ref, or a dangling/unborn symref). A chain
-    /// longer than [`MAX_SYMREF_DEPTH`] (which includes every on-disk
-    /// cycle) is a [`StoreError::Corrupt`].
+    /// not exist (an absent ref, or a dangling/unborn symref). A chain that
+    /// reaches [`MAX_SYMREF_DEPTH`] hops (which includes every on-disk
+    /// cycle; the deepest resolvable chain is one less) is a
+    /// [`StoreError::Corrupt`].
     pub fn resolve_symref(&self, name: &str) -> Result<Option<Hash>, StoreError> {
         let mut current = validated_ref_name(name)?;
         for _ in 0..MAX_SYMREF_DEPTH {
