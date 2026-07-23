@@ -66,7 +66,7 @@ The design record lives in `docs/` and is authoritative:
 
 - `docs/acetone-01-design-space.md` — vision, prior art, and the six shaping decisions
 - `docs/acetone-02-spec.md` — the v0.1 specification (data model, storage, encodings, query language, diff/merge, CLI)
-- `docs/acetone-03-roadmap.md` — phased implementation plan (Phase 0–6) with exit criteria and decision gates
+- `docs/acetone-03-roadmap.md` — phased implementation plan (Phase 0–9) with exit criteria and decision gates
 
 Read the spec before implementing anything; when code and spec diverge, either fix the code or update the spec deliberately — never silently.
 
