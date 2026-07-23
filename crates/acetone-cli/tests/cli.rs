@@ -2777,6 +2777,95 @@ fn retrofit_declare_over_violating_data_is_refused() {
     assert!(out.status.success(), "clean retrofit: {}", stderr(&out));
 }
 
+#[test]
+fn put_node_enforces_declared_constraints() {
+    // PR #184 review MAJOR: the put-node plumbing bypassed declared
+    // constraints exactly as import did. It must refuse what Cypher CREATE
+    // refuses, with the same violation rendering.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let out = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Service",
+            "--key",
+            "name",
+            "--require",
+            "tier",
+            "--unique",
+            "ip",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Missing the required property: refused, naming node and property.
+    let out = acetone(&repo, &["put-node", "Service", "bad"]);
+    assert!(!out.status.success(), "must refuse: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("\"Service\" [\"bad\"]"), "{err}");
+    assert!(
+        err.contains("missing required property \"tier\""),
+        "consistent with the import checker's rendering: {err}"
+    );
+
+    // Valid put-node works.
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            "Service",
+            "a",
+            "--prop",
+            "tier=gold",
+            "--prop",
+            "ip=10.0.0.1",
+        ],
+    );
+    assert!(out.status.success(), "valid put-node: {}", stderr(&out));
+
+    // UNIQUE collision with the existing node: refused, naming both nodes.
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            "Service",
+            "b",
+            "--prop",
+            "tier=gold",
+            "--prop",
+            "ip=10.0.0.1",
+        ],
+    );
+    assert!(!out.status.success(), "must refuse: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("UNIQUE \"Service\".\"ip\""), "{err}");
+    assert!(
+        err.contains("\"Service\" [\"a\"]") && err.contains("\"Service\" [\"b\"]"),
+        "{err}"
+    );
+    // The refused node was not staged.
+    let out = acetone(&repo, &["get-node", "Service", "b"]);
+    assert!(!out.status.success(), "b must not exist: {}", stdout(&out));
+
+    // Replacing a node with itself (same key, same unique value) is not a
+    // self-collision — put-node stays an upsert.
+    let out = acetone(
+        &repo,
+        &[
+            "put-node",
+            "Service",
+            "a",
+            "--prop",
+            "tier=bronze",
+            "--prop",
+            "ip=10.0.0.1",
+        ],
+    );
+    assert!(out.status.success(), "self-replace: {}", stderr(&out));
+}
+
 /// The `commit_hex` helper reads the "committed <hex>" line; this reads the
 /// first (newest) commit hash out of `log`.
 fn commit_hex_from_log(repo: &Path) -> String {

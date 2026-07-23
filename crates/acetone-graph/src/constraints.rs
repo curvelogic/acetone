@@ -199,6 +199,40 @@ pub fn check_nodes(
     Ok(violations)
 }
 
+/// Check a single would-be node upsert against `snapshot`'s schema and
+/// nodes — the guard for plumbing writes (`acetone put-node`), mirroring the
+/// import path's final-state check with a one-key focus: the write is judged
+/// against the workspace as it would be *after* the put (so replacing a node
+/// with itself is never a self-collision), and only violations involving the
+/// written key are reported (a pre-existing breach elsewhere is fsck's
+/// business, not this write's).
+pub fn check_upsert(
+    snapshot: &Snapshot<'_>,
+    key: &NodeKey,
+    record: &NodeRecord,
+) -> Result<Vec<ConstraintViolation>, GraphError> {
+    let mut labels = BTreeMap::new();
+    for entry in snapshot.schema_entries()? {
+        if let acetone_model::schema::SchemaEntry::Label { name, def } = entry {
+            labels.insert(name, def);
+        }
+    }
+    // Fast path: an undeclared or unconstrained label has nothing to check —
+    // plumbing writes to schema-less labels stay raw, like `put_node` itself.
+    match labels.get(key.label()) {
+        Some(def) if !def.exists().is_empty() || !def.unique().is_empty() => {}
+        _ => return Ok(Vec::new()),
+    }
+    let mut nodes = NodeSet::new();
+    for (k, r) in snapshot.nodes()? {
+        nodes.insert(k.encode()?, (k, r));
+    }
+    let encoded = key.encode()?;
+    let focus: BTreeSet<Vec<u8>> = [encoded.clone()].into_iter().collect();
+    nodes.insert(encoded, (key.clone(), record.clone()));
+    check_nodes(&labels, &nodes, Some(&focus))
+}
+
 /// Check every existing node bearing `label` against `def` — the backfill
 /// check run when a label is (re)declared over existing data, closing the
 /// silent-retrofit gap: a `--require`/`--unique` set the data already

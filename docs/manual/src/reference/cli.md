@@ -268,7 +268,8 @@ else as a string.
 ### `acetone put-node <LABEL> <KEY> [--prop KEY=VALUE]...`
 
 Insert or replace a node. `--prop` sets a non-key property and may be
-repeated.
+repeated. Declared constraints (`--require`, `--unique`) are enforced as on
+the Cypher write path; a write to an undeclared label stays raw.
 
 ### `acetone get-node <LABEL> <KEY>`
 

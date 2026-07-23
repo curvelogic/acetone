@@ -940,6 +940,22 @@ fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Resul
         properties.insert(name.to_owned(), parse_value(value));
     }
     let record = NodeRecord::new(std::iter::empty::<String>(), properties);
+    // Constraint guard (acetone-9gw, PR #184 review): plumbing must not
+    // bypass what Cypher CREATE and import enforce. Judged against the
+    // post-put state with a one-key focus, so an upsert of the same node is
+    // never a self-collision. Undeclared labels stay raw, as before.
+    {
+        let snapshot = repo.workspace_snapshot()?;
+        let violations =
+            acetone_core::graph::constraints::check_upsert(&snapshot, &node_key, &record)?;
+        if !violations.is_empty() {
+            bail!(
+                "cannot put node {}: {}",
+                format_node_key(&node_key),
+                acetone_core::graph::constraints::ConstraintViolations(violations)
+            );
+        }
+    }
     let mut txn = repo.begin_write()?;
     txn.put_node(&node_key, &record)?;
     txn.save().context("saving workspace")?;
