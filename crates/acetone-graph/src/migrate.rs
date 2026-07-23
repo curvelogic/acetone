@@ -88,6 +88,7 @@ use acetone_store::{
 };
 
 use crate::error::GraphError;
+use crate::refns::GraphRefNamespace;
 use crate::repo::{Repository, WORKTREE_WORKSPACE_REF, manifest_chunk_set, summarise};
 
 /// A transform applied to every graph version during a migration: it maps one
@@ -266,6 +267,63 @@ pub fn pending_migration(repo: &Repository) -> Result<Option<MigrateJournal>, Gr
     Ok(Some(MigrateJournal::decode(&data)?))
 }
 
+/// Whether a migration of the graph behind `namespace` may legitimately swing
+/// the ref `name`. The allow-list is exactly what [`rewrite_history`] plans:
+/// the graph's own branches, tags and private namespace
+/// ([`GraphRefNamespace::owns_ref`]), plus the per-worktree workspace pointer
+/// [`WORKTREE_WORKSPACE_REF`] — the one legitimate swing target `owns_ref` does
+/// not own in the co-tenant layout (it sits outside the graph's private
+/// prefixes). Any other ref in a journal — the user's code branch, another
+/// co-tenant graph's refs — is foreign and must never be applied by recovery
+/// (acetone-w9uu).
+fn migrate_may_swing(namespace: &GraphRefNamespace, name: &str) -> bool {
+    namespace.owns_ref(name) || name == WORKTREE_WORKSPACE_REF
+}
+
+/// Validate every journalled swing before any of it is applied — the security
+/// boundary for a migrate journal, which is untrusted on-disk state that may
+/// have been crafted (acetone-w9uu). A journal is refused, and **kept**, if any
+/// swing:
+///
+/// 1. names a ref this graph may not swing ([`migrate_may_swing`]) — e.g. a
+///    crafted journal naming the user's `refs/heads/main` in co-tenant mode,
+///    which a routine `migrate` would otherwise repoint before its guards; or
+/// 2. moves a ref to a target that names no object in the store — defence in
+///    depth, since [`Hash::from_hex`] accepts any 40-hex string, so a bogus
+///    hash could otherwise dangle a ref.
+///
+/// The refusal returns before any ref moves, so the repository and the journal
+/// are left exactly as found — the same refuse-and-keep semantics as a ref
+/// moved externally. The same check runs when [`rewrite_history`] first
+/// journals its freshly-planned swings, so a legitimate run and a recovered run
+/// share one validation point.
+fn validate_journal_swings(repo: &Repository, swings: &[RefSwing]) -> Result<(), GraphError> {
+    let namespace = repo.namespace();
+    for swing in swings {
+        if !migrate_may_swing(namespace, &swing.name) {
+            return Err(GraphError::Migrate(format!(
+                "migration journal names ref {:?}, which is not owned by this graph — refusing to \
+                 apply it. A migration only ever swings the graph's own branches, tags and \
+                 workspace, so a journal naming a foreign ref is not one this graph wrote. \
+                 Resolve it by hand, then delete {:?} to clear the journal",
+                swing.name,
+                namespace.migrate_journal_ref(),
+            )));
+        }
+        if !repo.store().contains_object(&swing.new)? {
+            return Err(GraphError::Migrate(format!(
+                "migration journal swings ref {:?} to {}, which names no object in the store — \
+                 refusing to dangle the ref. Resolve it by hand, then delete {:?} to clear the \
+                 journal",
+                swing.name,
+                swing.new.to_hex(),
+                namespace.migrate_journal_ref(),
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Complete the ref swing of an interrupted migration, if one is journalled:
 /// every journalled ref still at its old value is moved to its recorded new
 /// value (in one batched transaction), then the journal is cleared. A ref at
@@ -277,6 +335,10 @@ fn recover_pending(repo: &Repository) -> Result<bool, GraphError> {
     let Some(journal) = pending_migration(repo)? else {
         return Ok(false);
     };
+    // The journal is untrusted on-disk state: refuse (and keep) any journal
+    // that names a foreign ref or a non-existent target before applying a
+    // single swing (acetone-w9uu).
+    validate_journal_swings(repo, &journal.swings)?;
     let store = repo.store();
     let mut remaining: Vec<RefSwing> = Vec::new();
     for swing in &journal.swings {
@@ -462,6 +524,11 @@ pub fn rewrite_history(
 
     // Journal, swing atomically, clear the journal (module docs, phases 2-4).
     if !swings.is_empty() {
+        // Same validation the recovery path applies, so a legitimate run and a
+        // recovered run share one point of truth for "what may migrate swing".
+        // These freshly-planned swings are trusted by construction; the check
+        // is a cheap internal invariant guard (acetone-w9uu).
+        validate_journal_swings(repo, &swings)?;
         let journal = MigrateJournal {
             swings: swings.clone(),
         };
