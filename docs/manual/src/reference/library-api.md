@@ -85,7 +85,8 @@ The pieces, in the order they appear:
   a git commit and returns its `Hash`.
 - **`Session`** is the governed query entry point (ADR-0039). `run` executes
   a read or write query against the workspace with default limits; `run_with`
-  takes explicit parameters and a `QueryLimits` governor budget; `query_at`
+  takes explicit parameters and a `QueryLimits` governor budget
+  (`query_at_with` is the historical-read counterpart); `query_at`
   runs a read-only query against any historical version — time travel by
   refspec. A write query advances the workspace exactly as `save()` does; it
   still takes a separate `commit` to make history.

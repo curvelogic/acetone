@@ -398,6 +398,49 @@ fn run_with_binds_query_parameters() {
 }
 
 #[test]
+fn over_deep_parameters_are_refused_at_ingestion() {
+    // An embedder can hand the session a value deeper than anything the
+    // language can construct; both parameter doors must refuse it with the
+    // executor's typed depth error, never walk it (acetone-19x follow-up).
+    // 400 levels is past the 256 cap while still safe for ordinary drop glue.
+    let (_d, repo) = repo();
+    seed(&repo);
+    let commit = commit(&repo, "seed");
+    let mut deep = RtValue::Int(0);
+    for _ in 0..400 {
+        deep = RtValue::List(vec![deep]);
+    }
+    let params = BTreeMap::from([("p".to_string(), deep)]);
+    let session = Session::new(&repo);
+    let err = session
+        .run_with("RETURN $p", &params, &QueryLimits::default())
+        .expect_err("run_with must refuse an over-deep parameter");
+    assert!(
+        matches!(
+            err,
+            QueryError::Exec(acetone_cypher::exec::ExecError::ResourceExceeded {
+                limit: acetone_cypher::exec::ResourceLimit::ValueDepth,
+                ..
+            })
+        ),
+        "unexpected error: {err:?}"
+    );
+    let err = session
+        .query_at_with("RETURN $p", &commit, &params, &QueryLimits::default())
+        .expect_err("query_at_with must refuse an over-deep parameter");
+    assert!(
+        matches!(
+            err,
+            QueryError::Exec(acetone_cypher::exec::ExecError::ResourceExceeded {
+                limit: acetone_cypher::exec::ResourceLimit::ValueDepth,
+                ..
+            })
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
 fn call_acetone_blame_runs_through_the_session_procedures() {
     let (_d, repo) = repo();
     seed(&repo);

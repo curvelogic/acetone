@@ -601,21 +601,84 @@ $ acetone query 'UNWIND ["db1", "db2"] AS name MATCH (h:Host {name: name}) RETUR
 (`UNWIND` over a list of maps plus `CREATE` is the bulk-insert idiom — see
 the [write recipes](#changing-the-graph-write-recipes) below.)
 
-## Parameters: a current gap
+## Parameters
 
-The query language parses parameters (`$name`), and the Rust library API
-accepts a parameter map — but the CLI does not yet have a `--param` flag, so
-from the command line a parameterised query has nothing to bind against:
+A query reads `$name` wherever a value could appear, and `--param KEY=VALUE`
+(repeatable) binds it — keeping the query text fixed while the values come
+from a script or a loop:
+
+```console
+$ acetone query 'MATCH (s:Service {name: $name}) RETURN s.name, s.tier' --param 'name="billing"'
+┌─────────┬────────┐
+│ s.name  │ s.tier │
+├─────────┼────────┤
+│ billing │ core   │
+└─────────┴────────┘
+1 row
+```
+
+The VALUE is parsed as a **Cypher literal**, with exactly the typing and
+quoting the same text would have inline in a query: `42` is an integer,
+`2.5` a float, `true`/`false`/`null` themselves, `"billing"` or `'billing'`
+a string, and lists and maps of literals work too — a list parameter with
+`IN` is the batch-lookup idiom:
+
+```console
+$ acetone query 'MATCH (h:Host) WHERE h.name IN $names RETURN h.name, h.region ORDER BY h.name' --param "names=['db1', 'db2', 'ghost']"
+┌────────┬────────────┐
+│ h.name │ h.region   │
+├────────┼────────────┤
+│ db1    │ eu-west    │
+│ db2    │ eu-central │
+└────────┴────────────┘
+2 rows
+```
+
+Because strings must be quoted *for Cypher* as well as for your shell, the
+comfortable pattern is to single-quote the whole `KEY=VALUE` and use double
+quotes inside, as above. A bare unquoted word is an error, not silently a
+string — a typo'd `tru` must fail loudly rather than bind the string
+`"tru"` and quietly match nothing:
+
+```console
+$ acetone query 'MATCH (s:Service {name: $name}) RETURN s.name' --param name=billing
+error: --param name: bare word 'billing' is not a literal — quote strings: "billing"
+```
+
+A parameter the query uses but nothing binds is still an error, as before:
 
 ```console
 $ acetone query 'MATCH (s:Service {name: $name}) RETURN s.name'
 error: line 1, column 25: missing parameter 'name'
 ```
 
-Until the flag lands, interpolate values into the query text from your shell
-or script — with the usual care about quoting (single-quote the query for the
-shell, use double quotes for Cypher strings inside it). Parameterised
-queries work today from the [library API](../reference/library-api.md).
+(The converse — a `--param` the query never mentions — is accepted
+silently, as in Neo4j, so one standard set of bindings can serve many
+queries.)
+
+`--param` composes with `--at`, so a parameterised lookup works against a
+past version too. In the [shell](../reference/cli.md), `:param <name>
+<literal>` binds a parameter for every following statement (`:param` alone
+lists the current bindings, `:param-clear` drops them):
+
+```console
+$ acetone shell
+acetone shell — enter queries, ':quit' to exit, ':help' for commands
+acetone:main> :param name "identity"
+acetone:main> MATCH (s:Service {name: $name}) RETURN s.name, s.tier;
+┌──────────┬────────┐
+│ s.name   │ s.tier │
+├──────────┼────────┤
+│ identity │ core   │
+└──────────┴────────┘
+1 row
+```
+
+The [library API](../reference/library-api.md) takes the same bindings as a
+parameter map on `run_with`/`query_at_with`. (Interpolating values into the
+query text from the shell still works, of course, but parameters spare you
+the escaping — and a value that arrives in a variable never gets to
+rewrite your query.)
 
 ## Changing the graph: write recipes
 

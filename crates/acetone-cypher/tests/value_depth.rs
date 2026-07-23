@@ -116,6 +116,63 @@ fn list_comprehension_element_is_capped() {
     );
 }
 
+// --- The last door: an embedder-supplied parameter map can carry a value
+// --- deeper than anything the language can construct. Ingestion must refuse
+// --- it with the same typed error, before any recursive walk touches it.
+
+/// Build a list nested `depth` container levels deep, iteratively.
+fn deep_list(depth: usize) -> Value {
+    let mut value = Value::Int(0);
+    for _ in 0..depth {
+        value = Value::List(vec![value]);
+    }
+    value
+}
+
+/// Tear a deep value down iteratively — drop glue recurses per container
+/// level, so the test must not let a 200k-deep value drop naturally.
+fn dismantle(value: Value) {
+    let mut stack = vec![value];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::List(items) => stack.extend(items),
+            Value::Map(map) => stack.extend(map.into_values()),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn embedder_supplied_deep_param_is_refused_at_ingestion() {
+    // 200k levels: before the ingestion guard this SIGABRTed the process in
+    // `distinct_key` (the construction-seam caps never see a value that
+    // arrives pre-built through the parameter map).
+    let mut params = BTreeMap::new();
+    params.insert("p".to_string(), deep_list(200_000));
+    match run_query("RETURN DISTINCT $p AS g", &EmptyGraph, &params) {
+        Err(QueryError::Exec(ExecError::ResourceExceeded {
+            limit: ResourceLimit::ValueDepth,
+            ..
+        })) => {}
+        Err(other) => panic!("expected the value-depth error, got {other:?}"),
+        Ok(_) => panic!("expected the value-depth error, got success"),
+    }
+    for (_, value) in params {
+        dismantle(value);
+    }
+}
+
+#[test]
+fn param_at_the_cap_is_accepted() {
+    // Depth 256 is exactly what the language itself can construct — a
+    // parameter at the cap must flow, only deeper is unrepresentable.
+    let mut params = BTreeMap::new();
+    params.insert("p".to_string(), deep_list(255)); // + the Int = depth 256
+    let result = run_query("RETURN $p AS g", &EmptyGraph, &params)
+        .expect("a parameter at the cap is a legitimate value");
+    assert_eq!(nesting_depth(&result.rows[0][0]), 256);
+}
+
 // --- Legitimate nesting keeps working, through exactly the walks that used
 // --- to crash.
 

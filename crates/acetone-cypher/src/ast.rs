@@ -444,7 +444,7 @@ impl Expr {
     /// Borrow every direct child expression, including those buried in an
     /// embedded pattern's property maps. Keep in step with
     /// [`Expr::take_children`].
-    fn children(&self) -> Vec<&Expr> {
+    pub(crate) fn children(&self) -> Vec<&Expr> {
         let mut out = Vec::new();
         match self {
             Expr::Literal { .. } | Expr::Parameter { .. } | Expr::Variable { .. } => {}

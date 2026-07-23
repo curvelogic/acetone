@@ -214,19 +214,28 @@ schema reproduces identical map roots. With `--label` or `--edge`, export a
 single table (to stdout, or to `-o <file>`); with neither, `-o` names the
 directory to write one table per label and type into.
 
-### `acetone query <CYPHER> [--at <REF>] [-f table|json|csv]`
+### `acetone query <CYPHER> [--at <REF>] [-f table|json|csv] [--param KEY=VALUE]...`
 
 Run an openCypher read query (alias: `acetone cypher`). `--at` reads a past
-version — whole-query time travel. Advisories (non-error diagnostics, e.g. a
-match on an undeclared label) go to stderr and never affect rows or exit
-status.
+version — whole-query time travel. `--param KEY=VALUE` (repeatable) binds
+the query's `$KEY`; VALUE is parsed as a Cypher literal — a number, quoted
+string, `true`/`false`, `null`, or a list/map of literals — so quoting and
+typing match the same text written inline (a bare unquoted word is an error,
+never silently a string; see the
+[cookbook](../working/query-cookbook.md#parameters)). KEY may be written
+with or without the `$` sigil; a `--param` the query never uses is accepted
+silently, as in Neo4j. Advisories (non-error
+diagnostics, e.g. a match on an undeclared label) go to stderr and never
+affect rows or exit status.
 
 ### `acetone shell`
 
 Start an interactive Cypher shell (readline REPL). Enter queries — read or
 write — to run them against the current workspace state; a write advances the
 workspace (commit separately with `acetone commit`). Conveniences:
-`:checkout <ref>`, `:log`, `:format <table|json|csv>`, `:quit`.
+`:checkout <ref>`, `:log`, `:format <table|json|csv>`,
+`:param <name> <literal>` (bind `$name` for later statements; bare `:param`
+lists, `:param-clear` drops), `:quit`.
 
 ## Maintenance commands
 

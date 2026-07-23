@@ -98,9 +98,14 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             repo_path, &src_label, &src_key, &rtype, &dst_label, &dst_key,
         ),
         Command::ListNodes { label, json } => list_nodes(repo_path, label.as_deref(), json),
-        Command::Query { cypher, at, format } => {
+        Command::Query {
+            cypher,
+            at,
+            format,
+            param,
+        } => {
             let format = crate::query::Format::parse(&format)?;
-            crate::query::run(repo_path, &cypher, at.as_deref(), format)
+            crate::query::run(repo_path, &cypher, at.as_deref(), format, &param)
         }
         Command::Shell => crate::query::shell(repo_path),
         Command::Fsck => fsck(repo_path),
