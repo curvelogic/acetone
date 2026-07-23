@@ -224,7 +224,7 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
     // While a merge is in progress, report how many conflicts remain and
     // whether any is a graph-level violation (which resolves by editing the
     // graph, not by picking a side). Graph violations are re-derived live
-    // (ADR-0056), so a violation left by a resolution shows up here too.
+    // (ADR-0058), so a violation left by a resolution shows up here too.
     let (merge_remaining, merge_has_graph) = if repo.merge_head()?.is_some() {
         let conflicts = repo.conflicts()?;
         let has_graph = conflicts.iter().any(|c| {
@@ -523,7 +523,7 @@ fn resolve(repo_path: &Path, all_ours: bool, all_theirs: bool) -> Result<()> {
     let count = repo.resolve_all(side).context("resolving conflicts")?;
     // The resolved graph may still carry (or newly compose) graph-level
     // violations — e.g. picking the side that deleted a node while the merge
-    // kept an edge to it (acetone-jm8). They are re-derived live (ADR-0056):
+    // kept an edge to it (acetone-jm8). They are re-derived live (ADR-0058):
     // tell the operator now, not at the commit refusal.
     let violations: Vec<String> = repo
         .conflicts()?

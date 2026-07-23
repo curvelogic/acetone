@@ -1828,7 +1828,7 @@ fn resolution_left_violations_surface_through_resolve_conflicts_and_commit() {
     // single-class outcome. Once `resolve --all-theirs` clears the cell
     // conflict, the dangling edge must stop being silent: it surfaces in
     // resolve's output, in `status`, via CALL acetone.conflicts() (the `kind`
-    // column, ADR-0056), and the commit refusal names the edge.
+    // column, ADR-0058), and the commit refusal names the edge.
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = dir.path().join("repo");
     assert!(init(&repo).status.success());

@@ -11,7 +11,7 @@
 //! (the same map key edited incompatibly on both sides — resolvable by
 //! picking a side) from a graph-level violation (dangling edge / constraint,
 //! resolved by ordinary writes; acetone-14c.4c). Graph-violation entries are
-//! **advisory markers only** (ADR-0056): their details are never decoded —
+//! **advisory markers only** (ADR-0058): their details are never decoded —
 //! reporting re-derives the violations live from the workspace graph, so a
 //! repair (or a violation introduced *after* persistence, by a resolution) is
 //! always reflected. The encoding is unchanged from ADR-0020/0041.
@@ -66,7 +66,7 @@ pub enum WorkspaceConflict {
     /// A graph-level violation (dangling edge / constraint breach). Not read
     /// back from the persisted map — the map only carries advisory markers —
     /// but **re-derived live** from the workspace graph against the merge
-    /// base (ADR-0056), so it appears whether the merge itself composed the
+    /// base (ADR-0058), so it appears whether the merge itself composed the
     /// violation or a later cell resolution did, and disappears as soon as a
     /// repair write fixes it. Resolved by ordinary writes, gated by
     /// completion re-validation (ADR-0041).
@@ -76,7 +76,7 @@ pub enum WorkspaceConflict {
 /// The entries of a persisted `conflicts` map root: the cell conflicts (as
 /// [`WorkspaceConflict::Cell`], in map order) and a count of the advisory
 /// graph-violation markers. The markers' violation details are deliberately
-/// not decoded — reporting re-derives them live (ADR-0056); the persisted
+/// not decoded — reporting re-derives them live (ADR-0058); the persisted
 /// entries only record that the merge flagged the workspace.
 pub(crate) struct PersistedEntries {
     /// The cell conflicts, in map order — always `WorkspaceConflict::Cell`.

@@ -546,7 +546,7 @@ fn rebuild_reverse<S: ChunkStore>(
 /// against the merge base before the two-parent commit lands: a resolution can
 /// itself introduce a breach (a dangling edge, a resolve-to-delete of a
 /// required property, a UNIQUE collision), which must be caught, not committed.
-/// And called by `Repository::conflicts` (ADR-0056, acetone-jm8) once no cell
+/// And called by `Repository::conflicts` (ADR-0058, acetone-jm8) once no cell
 /// conflicts remain, so those same breaches are visible as structured conflict
 /// data *before* completion refuses them.
 pub(crate) fn validate_merged<S: ChunkStore>(

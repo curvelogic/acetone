@@ -6,7 +6,7 @@
 //! here. The gap this file closes (PR #178): once the cell conflicts are
 //! resolved, the violation the merge composed must surface as structured
 //! conflict data — `Repository::conflicts` re-derives graph violations live
-//! over the resolved workspace (ADR-0056), and merge completion refuses with
+//! over the resolved workspace (ADR-0058), and merge completion refuses with
 //! an error that names each violation (`GraphError::MergeViolations`), not an
 //! anonymous string.
 

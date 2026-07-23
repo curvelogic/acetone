@@ -632,7 +632,7 @@ impl Repository {
     /// persisted and `MERGE_HEAD` names `theirs`. **Cell** conflicts are
     /// settled with `resolve` then `commit` (acetone-14c.4a); **graph-level**
     /// violations are repaired by ordinary writes, re-derived live by
-    /// [`Repository::conflicts`] (ADR-0056) and gated by completion
+    /// [`Repository::conflicts`] (ADR-0058) and gated by completion
     /// re-validation at `commit`.
     ///
     /// The merge is a pure function of the three commit manifests (Invariant
@@ -903,7 +903,7 @@ impl Repository {
     /// order. While any remain, the workspace graph is partial (conflicted
     /// keys absent), so graph validation would be meaningless (ADR-0016) and
     /// only the cell conflicts are reported. Once every cell conflict is
-    /// resolved, **graph-level** violations are re-derived live (ADR-0056):
+    /// resolved, **graph-level** violations are re-derived live (ADR-0058):
     /// the same pure `validate_merged` that gates merge and completion runs
     /// over the current workspace against the merge base, so a violation the
     /// merge composed — or one a resolution introduced (acetone-jm8) — is
@@ -953,7 +953,7 @@ impl Repository {
     /// (acetone-14c.4c). The resolution itself may leave the graph invalid
     /// (e.g. taking the side that deleted a node while the merge kept an edge
     /// to it, acetone-jm8): check [`Repository::conflicts`] afterwards, which
-    /// re-derives any graph violation live (ADR-0056); completion will refuse
+    /// re-derives any graph violation live (ADR-0058); completion will refuse
     /// while one remains.
     pub fn resolve_all(&self, side: ResolveSide) -> Result<usize, GraphError> {
         let theirs = self

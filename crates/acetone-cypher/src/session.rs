@@ -531,7 +531,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                 };
 
                 // Graph-level violations name entities of the *workspace*
-                // graph (re-derived live over the resolved merge, ADR-0056 /
+                // graph (re-derived live over the resolved merge, ADR-0058 /
                 // acetone-jm8), so their `node` column renders from the
                 // workspace snapshot, not from either side of the merge.
                 let has_graph = conflicts

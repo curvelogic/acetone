@@ -588,7 +588,7 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         // `kind` classifies the conflict (acetone-jm8): `cell` for a cell-level
         // clash, or a graph-level violation class — `dangling-edge`,
         // `missing-required`, `unique` — re-derived live over the workspace
-        // graph once every cell conflict is resolved (ADR-0056), so a
+        // graph once every cell conflict is resolved (ADR-0058), so a
         // violation the merge composed or a resolution introduced is visible
         // before `commit` refuses it. A UNIQUE collision yields one row per
         // colliding node.
