@@ -244,6 +244,27 @@ mod tests {
     }
 
     #[test]
+    fn unknown_label_without_a_near_miss_carries_the_declare_hint() {
+        // Parity with the write-time Invariant-#3 path (acetone-cbl.3): when
+        // nothing in the schema is close, tell the user how to declare the
+        // label instead of leaving a terse "unknown label".
+        let err = bind_suggest("MATCH (x:Person) RETURN x");
+        assert!(matches!(err, BindError::UnknownLabel { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "declare it first, e.g. `acetone declare-label \"Person\" --key <property>`"
+            ),
+            "declare hint expected: {msg}"
+        );
+        // A near miss keeps the did-you-mean and gets no declare hint —
+        // declaring a typo would be the wrong fix.
+        let msg = bind_suggest("MATCH (x:Hst) RETURN x").to_string();
+        assert!(msg.contains("did you mean \"Host\"?"), "{msg}");
+        assert!(!msg.contains("declare-label"), "{msg}");
+    }
+
+    #[test]
     fn near_typos_get_a_did_you_mean_and_nonsense_does_not() {
         // Label: a one-edit typo suggests the declared label; nonsense does not.
         let err = bind_suggest("MATCH (x:Hst) RETURN x");

@@ -30,7 +30,7 @@ stderr: error: cannot persist node: this node has no labels — in Cypher a labe
 ### schema-not-declared
 argv:   acetone query CREATE (:Widget {sku: 'a'});
 status: 1
-stderr: error: line 1, column 8: unknown label "Widget" (not declared in the schema)
+stderr: error: line 1, column 8: unknown label "Widget" (not declared in the schema) — declare it first, e.g. `acetone declare-label "Widget" --key <property>`
 
 ### parse-error
 argv:   acetone query MATCH (n) RETRUN n

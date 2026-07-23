@@ -1148,6 +1148,20 @@ impl Parser<'_> {
             } else if self.at(&TokenKind::LBracket) {
                 self.bump();
                 expr = self.index_or_slice(expr)?;
+            } else if self.at(&TokenKind::LBrace) && matches!(expr, Expr::Variable { .. }) {
+                // `s{.name, .tier}` is an openCypher map projection. It is
+                // not supported, but without this arm the `{…}` block falls
+                // out of the expression and the caller mis-diagnoses it
+                // (e.g. "no clause may follow RETURN" after `RETURN s{…}`) —
+                // name the construct instead (acetone-cbl.3). No supported
+                // syntax puts `{` directly after a variable expression, so
+                // this cannot mask a valid parse.
+                return Err(ParseError::QueryStructure {
+                    message: "map projections (`s{.name, …}`) are not supported — \
+                              return the properties individually instead"
+                        .into(),
+                    span: self.peek().span,
+                });
             } else if self.at_kw2("IS", "NULL") {
                 let end = self.peek_at(1).span;
                 self.bump();
@@ -1671,6 +1685,25 @@ mod tests {
             panic!("expected an expression item");
         };
         expr
+    }
+
+    #[test]
+    fn map_projection_is_named_not_misdiagnosed() {
+        // `s{.name}` is an openCypher map projection — unsupported, but the
+        // error must say so rather than mis-diagnose the query's clause
+        // structure (acetone-cbl.3).
+        for input in [
+            "MATCH (s:Host) RETURN s{.name, .tier}",
+            "MATCH (s:Host) WITH s{.name} AS m RETURN m",
+        ] {
+            let err = parse_err(input);
+            let msg = err.to_string();
+            assert!(msg.contains("map projection"), "{input:?}: {msg}");
+            assert!(!msg.contains("no clause may follow"), "{input:?}: {msg}");
+        }
+        // Map literals and node-pattern properties still parse.
+        parse_ok("RETURN {name: 'a'} AS m");
+        parse_ok("MATCH (s:Host {name: 'a'}) RETURN s");
     }
 
     #[test]
