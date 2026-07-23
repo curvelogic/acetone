@@ -14,9 +14,11 @@ what the tag-protection ruleset (only you may create `v*`) requires.
 The flow:
 
 1. **Bump the version** in the root `Cargo.toml` (`[workspace.package] version`)
-   and the `acetone-*` path-dependency pins in `[workspace.dependencies]`, on
-   `main`. `acetone --version` and the binaries then report it. (Already `0.1.0`
-   for the first release.)
+   and the `acetone-*` path-dependency pins in `[workspace.dependencies]` — on
+   a branch, landed by PR with review per CLAUDE.md's branch discipline (never
+   directly on `main`; the Release workflow builds whatever `main` points at,
+   so dispatch it only after this PR has merged). `acetone --version` and the
+   binaries then report it.
 1b. **Write the changelog section.** Move the accumulated `## [Unreleased]`
    entries in `CHANGELOG.md` under a new `## [<version>] - <date>` heading (Keep
    a Changelog format). **This section is the release body** — the workflow
@@ -48,6 +50,25 @@ gh attestation verify acetone-v<version>-<target>.tar.gz --repo curvelogic/aceto
 ```
 
 Build a binary locally with `cargo build --release --bin acetone`.
+
+## Tracked execution: the release formula
+
+The flow above is also encoded as a beads formula —
+`.beads/formulas/release.formula.toml` (ADR-0057) — a dependency DAG
+(`preflight → prep → land → build → publish → post-publish`) whose steps point
+back at the sections of this document. Instantiate it to run a release as
+tracked, dependency-ordered beads:
+
+```
+bd mol wisp release --var version=<version>   # ephemeral run (recommended)
+bd mol squash <molecule-root>                 # digest it when done
+```
+
+The `publish` step carries a human gate: the molecule parks until Greg
+publishes the draft and the gate is resolved (`bd gate resolve`). This
+document remains the narrative authority — the formula deliberately contains
+pointers and acceptance criteria, not commands, so it cannot drift from what
+is written here or in `.github/workflows/release.yml`.
 
 ## Homebrew
 

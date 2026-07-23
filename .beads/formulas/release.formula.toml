@@ -1,0 +1,138 @@
+# Release formula for acetone (experiment: acetone-bxv, ADR-0057).
+#
+# The narrative authority for releasing is docs/RELEASING.md — this formula is
+# the *tracked execution path*: it turns that document into a dependency DAG of
+# beads so a release run is claimable, blockable, and auditable via bd.
+#
+# Steps are deliberately POINTERS to RELEASING.md sections plus acceptance
+# criteria. They do not duplicate commands from .github/workflows/release.yml,
+# so they cannot drift from it.
+#
+# Usage (see ADR-0057):
+#   bd cook release --var version=X.Y.Z      # inspect the resolved plan
+#   bd mol wisp release --var version=X.Y.Z  # instantiate for a real release
+#   bd mol squash <root>                     # condense to a digest afterwards
+
+formula = "release"
+description = "Cut an acetone release: preflight, prep, land, build draft, Greg publishes, post-publish"
+version = 1
+type = "workflow"
+phase = "vapor"
+
+[vars.version]
+description = "Release version (becomes workspace Cargo.toml version and tag v<version>)"
+required = true
+pattern = "^\\d+\\.\\d+\\.\\d+$"
+
+[[steps]]
+id = "preflight"
+title = "Preflight: confirm {{version}} is ready to cut"
+description = """
+Pointer: docs/RELEASING.md, 'Cutting a release'.
+
+Checks before touching anything:
+1. main is green — the latest CI run on the tip of main passed.
+2. No stray draft releases on GitHub — a leftover draft would collide with
+   the new v{{version}} draft.
+3. Scope agrees — the [Unreleased] section of CHANGELOG.md matches what this
+   release claims to ship (cross-check the current phase report).
+
+Done when: all three are confirmed and recorded in a note on this bead.
+"""
+
+[[steps]]
+id = "prep"
+title = "Prep {{version}}: version bump and changelog cut"
+needs = ["preflight"]
+description = """
+Pointer: docs/RELEASING.md, steps 1 and 1b.
+
+On a branch (never on main):
+1. Bump [workspace.package] version to {{version}} in the root Cargo.toml AND
+   every acetone-* path-dependency pin in [workspace.dependencies] (six as of 0.3.x).
+2. Move the accumulated [Unreleased] entries in CHANGELOG.md under a new
+   '## [{{version}}] - <date>' heading. This section becomes the release body
+   verbatim (body_path), so keep it curated and human-readable.
+3. Verify locally that the changelog extractor in
+   .github/workflows/release.yml ('Extract release notes from CHANGELOG')
+   emits a non-empty section for {{version}} — run that awk against the
+   edited CHANGELOG.md.
+
+Done when: a local build reports {{version}} from 'acetone --version' and the
+extractor produces the new section.
+"""
+
+[[steps]]
+id = "land"
+title = "Land the {{version}} prep PR before any build"
+needs = ["prep"]
+description = """
+Pointer: CLAUDE.md branch discipline and review gate.
+
+Open the prep PR, get a fresh-subagent adversarial review, obtain sign-off,
+squash-merge, delete the branch.
+
+HARD ORDERING (the 0.3.0 lesson): the Release workflow must NOT be dispatched
+until this PR is on main — the workflow builds whatever main points at, and
+at 0.3.0 it was dispatched before the prep landed.
+
+Done when: the prep commit is the tip of main and CI on that commit is green.
+"""
+
+[[steps]]
+id = "build"
+title = "Build the v{{version}} draft release"
+needs = ["land"]
+description = """
+Pointer: docs/RELEASING.md, steps 2 and 3.
+
+1. Dispatch the Release workflow (Actions tab, workflow_dispatch) from main.
+2. When it completes, verify the draft release v{{version}} carries exactly
+   one .tar.gz + .tar.gz.sha256 per built target (8 assets for the 4-target matrix as of 0.3.x).
+3. Download one archive, verify its checksum against the matching .sha256
+   asset, unpack, and smoke-test the binary — 'acetone --version' must report
+   {{version}}.
+
+Done when: the draft looks publishable and the verification evidence is
+recorded in a note on this bead.
+"""
+
+[[steps]]
+id = "publish"
+title = "Greg publishes the draft v{{version}}"
+needs = ["build"]
+description = """
+Pointer: docs/RELEASING.md, step 4.
+
+HUMAN GATE — publishing the draft is Greg's approval, and GitHub creates the
+tag v{{version}} at that moment (the tag ruleset permits only Greg to create
+v* tags). No agent publishes a release.
+
+Agents park here: the molecule resumes when the gate on this step is resolved
+('bd gate resolve <gate-id>') after Greg has published.
+"""
+
+[steps.gate]
+type = "human"
+
+[[steps]]
+id = "post-publish"
+title = "Post-publish for {{version}}: tap PR and squash to digest"
+needs = ["publish"]
+description = """
+Pointer: docs/RELEASING.md, step 5 and the 'Homebrew' section.
+
+The Homebrew tap PR is AUTOMATED: publishing the release triggers
+.github/workflows/homebrew-bump.yml, which regenerates Formula/acetone.rb and
+opens a PR on curvelogic/homebrew-tap. Do not create one by hand.
+
+1. Verify the tap PR appeared (if the workflow failed, re-run it from the
+   Actions tab with the tag input), review it, and merge it.
+2. Confirm the tag v{{version}} exists and provenance verifies:
+   'gh attestation verify' on one published archive (RELEASING.md shows the
+   exact invocation).
+3. Condense the finished run: 'bd mol squash <molecule-root>' to leave a
+   permanent digest of the release execution.
+
+Done when: the tap serves {{version}} and the digest bead exists.
+"""
