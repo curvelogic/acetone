@@ -1043,6 +1043,55 @@ mod tests {
     }
 
     #[test]
+    fn chained_comparisons_evaluate_as_conjunctions() {
+        // Range semantics (TCK Comparison3): only the middle value is
+        // inside the open range.
+        let mut graph = MemoryGraph::new();
+        for num in [1i64, 2, 3] {
+            let mut props = BTreeMap::new();
+            props.insert("num".to_string(), Value::Int(num));
+            graph.add_node(["N"], props);
+        }
+        let result = run_query(
+            "MATCH (n) WHERE 1 < n.num < 3 RETURN n.num",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::Int(2)));
+        let result = run_query(
+            "MATCH (n) WHERE 1 <= n.num <= 3 RETURN n.num",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 3);
+        // Three-valued: a false conjunct wins over an unknown one.
+        assert!(matches!(single("RETURN 3 < 2 < null"), Value::Bool(false)));
+        assert!(single("RETURN 1 < 2 < null").is_null());
+        // Mixed operator chains (TCK Comparison4 shape).
+        assert!(matches!(single("RETURN 1 < 2 = 2 <> 3"), Value::Bool(true)));
+        assert!(matches!(
+            single("RETURN 1 < 2 = 3 <> 3"),
+            Value::Bool(false)
+        ));
+        // Aggregates in a chain: the duplicated Aggregate clones and the
+        // slot machinery stay aligned because collect_aggregates and
+        // eval traverse the same desugared tree and AND evaluates both
+        // sides strictly. Pinned so a future short-circuiting AND cannot
+        // silently desync the slots (PR #203 review).
+        let result = run_query(
+            "MATCH (n) RETURN min(n.num) < max(n.num) < 10 AS chained, count(*) AS c",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert!(matches!(&result.rows[0][0], Value::Bool(true)));
+        assert!(matches!(&result.rows[0][1], Value::Int(3)));
+    }
+
+    #[test]
     fn pattern_comprehension_evaluates() {
         let graph = host_graph();
         // Degree counting through size() (TCK List6 shape).

@@ -1073,8 +1073,16 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    /// Comparisons chain (openCypher; TCK Comparison3/4): `a < b <= c`
+    /// means `a < b AND b <= c`, with every comparison operator — `=`
+    /// and `<>` included — participating in the chain. Desugared here
+    /// into a conjunction of adjacent pairs. Interior operands are
+    /// duplicated: they are side-effect-free, but they evaluate (and
+    /// charge the governor) once per conjunct that mentions them, so an
+    /// expensive interior operand pays twice.
     fn expr_comparison(&mut self) -> Result<Expr, ParseError> {
-        let mut lhs = self.expr_string_list()?;
+        let mut operands = vec![self.expr_string_list()?];
+        let mut ops = Vec::new();
         loop {
             let op = if self.eat(&TokenKind::Eq) {
                 BinaryOp::Eq
@@ -1091,16 +1099,33 @@ impl Parser<'_> {
             } else {
                 break;
             };
-            let rhs = self.expr_string_list()?;
+            ops.push(op);
+            operands.push(self.expr_string_list()?);
+        }
+        if ops.is_empty() {
+            return Ok(operands.pop().expect("one operand parsed"));
+        }
+        let mut conjuncts = ops.into_iter().enumerate().map(|(i, op)| {
+            let lhs = operands[i].clone();
+            let rhs = operands[i + 1].clone();
             let span = lhs.span().to(rhs.span());
-            lhs = Expr::Binary {
+            Expr::Binary {
                 op,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
                 span,
-            };
-        }
-        Ok(lhs)
+            }
+        });
+        let first = conjuncts.next().expect("at least one comparison");
+        Ok(conjuncts.fold(first, |acc, next| {
+            let span = acc.span().to(next.span());
+            Expr::Binary {
+                op: BinaryOp::And,
+                lhs: Box::new(acc),
+                rhs: Box::new(next),
+                span,
+            }
+        }))
     }
 
     /// String/list operators (`IN`, `STARTS WITH`, `ENDS WITH`,
@@ -2044,6 +2069,81 @@ mod tests {
         }
         // A trailing WHERE stays within the standalone call.
         parse_ok("CALL acetone.diff('a', 'b') YIELD * WHERE kind = 'added'");
+    }
+
+    #[test]
+    fn chained_comparisons_desugar_to_conjunctions() {
+        // `1 < x < 3` means `1 < x AND x < 3` (openCypher chained
+        // comparison, TCK Comparison3/4) — never `(1 < x) < 3`.
+        let q = parse_ok("MATCH (n) WHERE 1 < n.num < 3 RETURN n.num");
+        let Clause::Match(m) = &q.clauses[0] else {
+            panic!("expected MATCH");
+        };
+        let Some(Expr::Binary {
+            op: BinaryOp::And,
+            lhs,
+            rhs,
+            ..
+        }) = &m.where_clause
+        else {
+            panic!("expected AND, got {:?}", m.where_clause);
+        };
+        assert!(matches!(
+            &**lhs,
+            Expr::Binary {
+                op: BinaryOp::Lt,
+                ..
+            }
+        ));
+        let Expr::Binary {
+            op: BinaryOp::Lt,
+            lhs: mid,
+            ..
+        } = &**rhs
+        else {
+            panic!("expected Lt, got {rhs:?}");
+        };
+        // The middle operand is duplicated into both conjuncts.
+        assert!(matches!(&**mid, Expr::Property { key, .. } if key == "num"));
+
+        // Longer mixed chains fold left-to-right pairwise (Comparison4).
+        let q = parse_ok("MATCH (n)-->(m) WHERE n.p1 < m.p1 = n.p2 <> m.p2 RETURN m");
+        let Clause::Match(m) = &q.clauses[0] else {
+            panic!("expected MATCH");
+        };
+        let mut conjuncts = 0;
+        let mut stack = vec![m.where_clause.as_ref().unwrap()];
+        while let Some(expr) = stack.pop() {
+            match expr {
+                Expr::Binary {
+                    op: BinaryOp::And,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    stack.push(lhs);
+                    stack.push(rhs);
+                }
+                _ => conjuncts += 1,
+            }
+        }
+        assert_eq!(conjuncts, 3);
+
+        // Single comparisons are unchanged.
+        let q = parse_ok("RETURN 1 < 2 AS b");
+        let Clause::Return(ret) = &q.clauses[0] else {
+            panic!("expected RETURN");
+        };
+        let ProjectionItem::Expr { expr, .. } = &ret.items[0] else {
+            panic!("expected item");
+        };
+        assert!(matches!(
+            expr,
+            Expr::Binary {
+                op: BinaryOp::Lt,
+                ..
+            }
+        ));
     }
 
     #[test]
