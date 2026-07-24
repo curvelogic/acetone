@@ -382,6 +382,20 @@ impl Parser<'_> {
             clauses.push(self.clause()?);
         }
         let span = start.to(self.prev_span());
+        // `YIELD *` is only legal when the CALL is the whole query
+        // (openCypher; TCK Call5 [7][8]) — an in-query call must name its
+        // yield columns so the projection is explicit.
+        if clauses.len() > 1
+            && let Some(call_span) = clauses.iter().find_map(|clause| match clause {
+                Clause::Call(call) if call.yield_all => Some(call.span),
+                _ => None,
+            })
+        {
+            return Err(ParseError::QueryStructure {
+                message: "YIELD * is only allowed in a standalone CALL".into(),
+                span: call_span,
+            });
+        }
         match clauses.last() {
             None => Err(ParseError::QueryStructure {
                 message: "empty query".into(),
@@ -771,7 +785,7 @@ impl Parser<'_> {
                 loop {
                     let column = self.binding_name("a yield column", "a yield item")?.0;
                     let alias = if self.eat_kw("AS") {
-                        Some(self.binding_name("a yield alias", "a yield alias")?.0)
+                        Some(self.binding_name("an alias after AS", "a yield alias")?.0)
                     } else {
                         None
                     };
@@ -1936,6 +1950,26 @@ mod tests {
         };
         assert!(c.yield_all);
         assert!(c.yield_items.is_empty());
+    }
+
+    #[test]
+    fn in_query_yield_star_is_rejected() {
+        // `YIELD *` is standalone-only (TCK Call5 [7][8]): a call combined
+        // with any other clause must name its yield columns.
+        for input in [
+            "CALL acetone.log('main') YIELD * RETURN commit",
+            "MATCH (n) CALL acetone.diff('a', 'b') YIELD * RETURN n",
+            "CALL acetone.diff('a', 'b') YIELD * WITH kind RETURN kind",
+        ] {
+            let err = parse_err(input);
+            assert!(
+                matches!(err, ParseError::QueryStructure { .. }),
+                "{input}: {err:?}"
+            );
+            assert!(err.to_string().contains("standalone CALL"), "{input}");
+        }
+        // A trailing WHERE stays within the standalone call.
+        parse_ok("CALL acetone.diff('a', 'b') YIELD * WHERE kind = 'added'");
     }
 
     #[test]

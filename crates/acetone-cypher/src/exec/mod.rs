@@ -949,6 +949,51 @@ mod tests {
     }
 
     #[test]
+    fn call_yield_same_column_under_two_aliases_is_pinned() {
+        // The TCK is silent on repeating a *source* column under distinct
+        // aliases; acetone accepts it and both aliases receive the column's
+        // value. Pinned so a refactor cannot change it silently.
+        let provider = FixedProcedures(vec![vec![
+            Value::String("added".into()),
+            Value::String("N".into()),
+            Value::String("k1".into()),
+            Value::Null,
+        ]]);
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD kind AS a, kind AS b RETURN a, b",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["a", "b"]);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "added"));
+        assert!(matches!(&result.rows[0][1], Value::String(s) if s == "added"));
+    }
+
+    #[test]
+    fn standalone_yield_star_supports_where() {
+        let provider = FixedProcedures(vec![
+            vec![
+                Value::String("added".into()),
+                Value::String("N".into()),
+                Value::String("k1".into()),
+                Value::Null,
+            ],
+            vec![
+                Value::String("removed".into()),
+                Value::String("N".into()),
+                Value::String("k2".into()),
+                Value::Null,
+            ],
+        ]);
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD * WHERE kind = 'added'",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["kind", "label", "key", "node"]);
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][2], Value::String(s) if s == "k1"));
+    }
+
+    #[test]
     fn call_yield_star_projects_declared_columns() {
         let provider = FixedProcedures(vec![vec![
             Value::String("abc123".into()),

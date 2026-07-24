@@ -348,6 +348,20 @@ fn run_versioned(
                         identifier_vars.insert(y.var);
                     }
                 }
+                // The binder validated every YIELD column against the
+                // procedure's declared yields, so the position is always
+                // found; resolve once, outside the row loop.
+                let positions: Vec<(usize, VarId)> = yields
+                    .iter()
+                    .map(|y| {
+                        let index = procedure
+                            .yields
+                            .iter()
+                            .position(|column| *column == y.column.as_str())
+                            .expect("bound yield column is declared");
+                        (index, y.var)
+                    })
+                    .collect();
                 // For each incoming row, evaluate the arguments in its
                 // context, run the procedure, and emit one row per result
                 // tuple with the requested YIELD columns bound.
@@ -378,16 +392,8 @@ fn run_versioned(
                             procedure.yields.len()
                         );
                         let mut next = row.clone();
-                        for y in yields {
-                            // The binder validated every YIELD column against
-                            // the procedure's declared yields, so the position
-                            // is always found.
-                            let index = procedure
-                                .yields
-                                .iter()
-                                .position(|column| *column == y.column.as_str())
-                                .expect("bound yield column is declared");
-                            next.set(y.var, tuple.get(index).cloned().unwrap_or(Value::Null));
+                        for (index, var) in &positions {
+                            next.set(*var, tuple.get(*index).cloned().unwrap_or(Value::Null));
                         }
                         if let Some(pred) = where_clause {
                             let pred_ctx = EvalCtx::new(&graph, parameters, governor);
