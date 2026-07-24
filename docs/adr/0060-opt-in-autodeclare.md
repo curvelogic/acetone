@@ -5,8 +5,8 @@
 ## Context
 
 Acetone's schema is mandatory for identity: every node label must declare a
-key before Cypher can persist nodes of it, and every relationship type must
-be declared before use (spec §2). That is exactly right for the
+key before Cypher can persist nodes of it (spec §2), and every relationship
+type must be declared before use (enforced by the binder). That is exactly right for the
 audited-registry use case — schema changes are deliberate history — and
 exactly wrong for interactive experimentation, where the declare-first
 round-trip is the single largest piece of dogfooding friction.
