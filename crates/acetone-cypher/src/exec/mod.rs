@@ -1043,6 +1043,130 @@ mod tests {
     }
 
     #[test]
+    fn unwind_streams_into_a_following_with_limit() {
+        // UNWIND materialises only SKIP+LIMIT rows when the next WITH
+        // truncates the stream per row (TCK Aggregation3 [2] at full
+        // scale): the row governor must not trip on rows LIMIT would
+        // discard anyway.
+        let tight = QueryLimits {
+            max_result_rows: 50,
+            ..QueryLimits::default()
+        };
+        let result = run_query_with_limits(
+            "UNWIND range(1, 1000) AS i WITH i LIMIT 10 RETURN sum(i) AS s",
+            &EmptyGraph,
+            &BTreeMap::new(),
+            &tight,
+        )
+        .expect("limited unwind");
+        assert!(matches!(&result.rows[0][0], Value::Int(55)));
+        // SKIP widens the bound and keeps its semantics.
+        let result = run_query_with_limits(
+            "UNWIND range(1, 1000) AS i WITH i SKIP 5 LIMIT 3 RETURN collect(i) AS c",
+            &EmptyGraph,
+            &BTreeMap::new(),
+            &tight,
+        )
+        .expect("skip+limit");
+        let Value::List(items) = &result.rows[0][0] else {
+            panic!("expected list");
+        };
+        assert!(matches!(
+            items[..],
+            [Value::Int(6), Value::Int(7), Value::Int(8)]
+        ));
+        // No pushdown when the WITH sorts, de-duplicates, aggregates or
+        // filters — those genuinely need the full expansion, which stays
+        // governed. (WHERE: project() filters before SKIP/LIMIT,
+        // acetone-2ck.9, so a capped input would change the answer.)
+        for query in [
+            "UNWIND range(1, 1000) AS i WITH DISTINCT i LIMIT 10 RETURN count(i) AS c",
+            "UNWIND range(1, 1000) AS i WITH i ORDER BY i DESC LIMIT 10 RETURN collect(i)[0] AS c",
+            "UNWIND range(1, 1000) AS i WITH sum(i) AS s LIMIT 10 RETURN s",
+            "UNWIND range(1, 1000) AS i WITH i LIMIT 10 WHERE i > 5 RETURN i",
+        ] {
+            let err =
+                run_query_with_limits(query, &EmptyGraph, &BTreeMap::new(), &tight).unwrap_err();
+            assert!(
+                matches!(err, QueryError::Exec(ExecError::ResourceExceeded { .. })),
+                "{query}: {err:?}"
+            );
+        }
+        // And under generous limits the unsafe-to-cap forms stay correct.
+        // WHERE + LIMIT keeps the engine's established answer (WHERE
+        // filters first, then LIMIT — acetone-2ck.9): a capped input
+        // would return no rows here (PR #204 review finding).
+        let result = run_query(
+            "UNWIND range(1, 1000) AS i WITH i LIMIT 3 WHERE i > 5 RETURN i",
+            &EmptyGraph,
+            &BTreeMap::new(),
+        )
+        .expect("limit + where");
+        let values: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|row| match &row[0] {
+                Value::Int(n) => *n,
+                other => panic!("expected ints, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(values, vec![6, 7, 8]);
+        let result = run_query(
+            "UNWIND range(1, 1000) AS i WITH i ORDER BY i DESC LIMIT 3 RETURN collect(i) AS c",
+            &EmptyGraph,
+            &BTreeMap::new(),
+        )
+        .expect("order by limit");
+        let Value::List(items) = &result.rows[0][0] else {
+            panic!("expected list");
+        };
+        assert!(matches!(
+            items[..],
+            [Value::Int(1000), Value::Int(999), Value::Int(998)]
+        ));
+    }
+
+    #[test]
+    fn bound_rel_list_var_length_pins_the_path() {
+        // TCK Match4 [8]: a var-length pattern whose variable is already
+        // bound to a relationship list matches exactly that path — never
+        // a fresh enumeration.
+        let mut graph = MemoryGraph::new();
+        let n1 = graph.add_node(["N"], BTreeMap::new());
+        let n2 = graph.add_node(["N"], BTreeMap::new());
+        let n3 = graph.add_node(["N"], BTreeMap::new());
+        let n4 = graph.add_node(["N"], BTreeMap::new());
+        graph.add_rel(&n1, "T", &n2, BTreeMap::new());
+        graph.add_rel(&n2, "T", &n3, BTreeMap::new());
+        graph.add_rel(&n3, "T", &n4, BTreeMap::new());
+        let result = run_query(
+            "MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs LIMIT 1 \
+             MATCH (first)-[rs*]->(second) RETURN first, second",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("bound list");
+        assert_eq!(result.rows.len(), 1);
+        // A list in untraversable order matches nothing.
+        let result = run_query(
+            "MATCH ()-[r1]->()-[r2]->() WITH [r2, r1] AS rs LIMIT 1 \
+             MATCH (first)-[rs*]->(second) RETURN first",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("reversed list");
+        assert_eq!(result.rows.len(), 0);
+        // A null binding matches nothing.
+        let result = run_query(
+            "WITH null AS rs MATCH (first)-[rs*]->(second) RETURN first",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("null list");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
     fn chained_comparisons_evaluate_as_conjunctions() {
         // Range semantics (TCK Comparison3): only the middle value is
         // inside the open range.

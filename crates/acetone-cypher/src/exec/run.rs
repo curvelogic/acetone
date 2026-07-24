@@ -203,7 +203,7 @@ fn run_versioned(
     // of identifier expressions. Feeds `QueryResult::identifier_columns`.
     let mut identifier_vars: HashSet<VarId> = HashSet::new();
 
-    for clause in &query.clauses {
+    for (index, clause) in query.clauses.iter().enumerate() {
         match clause {
             BoundClause::Match {
                 optional,
@@ -246,13 +246,22 @@ fn run_versioned(
                     identifier_vars.insert(*alias);
                 }
                 let ctx = EvalCtx::new(&graph, parameters, governor);
+                // When the immediately following WITH truncates the
+                // stream per row, UNWIND materialises (and charges) only
+                // the rows that survive it (acetone-2ck.5).
+                let cap = unwind_row_cap(query.clauses.get(index + 1), &ctx)?;
                 let mut out = Vec::new();
-                for row in rows {
+                'rows: for row in rows {
                     let list = eval(expr, &row, &ctx)?;
                     match list {
                         Value::Null => {} // UNWIND null produces no rows
                         Value::List(items) => {
                             for item in items {
+                                if let Some(cap) = cap
+                                    && out.len() >= cap
+                                {
+                                    break 'rows;
+                                }
                                 governor.row(out.len())?;
                                 let mut next = row.clone();
                                 next.set(*alias, item);
@@ -1323,6 +1332,27 @@ fn expand_var_length(
     ctx: &EvalCtx,
     results: &mut Vec<MatchState>,
 ) -> Result<(), ExecError> {
+    // A rel variable already bound in the incoming row pins the exact
+    // hop sequence (openCypher bound relationships, TCK Match4 [8]): the
+    // pattern matches only the path traversing that list, in order.
+    let pinned: Option<Vec<EntityId>> = match rel_pattern.var {
+        Some(var) if state.row.contains(var) => match state.row.get(var) {
+            Value::List(items) => {
+                let mut ids = Vec::with_capacity(items.len());
+                for item in &items {
+                    match item {
+                        Value::Relationship(rel) => ids.push(rel.id.clone()),
+                        // A non-relationship element matches nothing.
+                        _ => return Ok(()),
+                    }
+                }
+                Some(ids)
+            }
+            // Bound null or a non-list matches nothing.
+            _ => return Ok(()),
+        },
+        _ => None,
+    };
     let mut stack = vec![VarHopFrame {
         from,
         state,
@@ -1336,12 +1366,20 @@ fn expand_var_length(
         hops,
     }) = stack.pop()
     {
-        if hops.len() >= min && node_satisfies(&from, node_pattern, &state.row, ctx)? {
+        let pinned_complete = pinned.as_ref().is_none_or(|ids| {
+            ids.len() == hops.len() && ids.iter().zip(&hops).all(|(id, hop)| *id == hop.id)
+        });
+        if hops.len() >= min
+            && pinned_complete
+            && node_satisfies(&from, node_pattern, &state.row, ctx)?
+        {
             let mut next = MatchState {
                 row: state.row.clone(),
                 used_rels: state.used_rels.clone(),
             };
-            if let Some(var) = rel_pattern.var {
+            if let Some(var) = rel_pattern.var
+                && pinned.is_none()
+            {
                 next.row.set(
                     var,
                     Value::List(hops.iter().cloned().map(Value::Relationship).collect()),
@@ -1382,6 +1420,14 @@ fn expand_var_length(
             // Charge every edge considered — this is the primary bound on an
             // unbounded `*` walk over a dense or cyclic graph.
             ctx.governor.hop()?;
+            // A pinned sequence prunes to its next relationship (and to
+            // its own length: past the end, nothing expands).
+            if let Some(ids) = &pinned {
+                match ids.get(hops.len()) {
+                    Some(id) if *id == rel.id => {}
+                    _ => continue,
+                }
+            }
             if state.used_rels.contains(&rel.id) {
                 continue;
             }
@@ -1636,6 +1682,39 @@ fn project(
     }
 
     Ok((columns, merged))
+}
+
+/// The row bound a following `WITH` imposes on an UNWIND's
+/// materialisation: `WITH <per-row items> [SKIP s] LIMIT k` with no
+/// DISTINCT, no ORDER BY, no aggregation and no WHERE consumes at most
+/// `s + k` input rows. A WHERE disables the cap: `project()` filters
+/// *before* SKIP/LIMIT (a recorded divergence from openCypher's
+/// WHERE-last order, acetone-2ck.9), and under that order the LIMIT may
+/// need arbitrarily many input rows. `None` when the next clause
+/// imposes no bound (sorting, de-duplication and aggregation genuinely
+/// need the full expansion). Note the cap also stops evaluating later
+/// input rows entirely, so an error one of them would have raised never
+/// surfaces — lazy-engine behaviour, but adjacency-dependent here.
+fn unwind_row_cap(next: Option<&BoundClause>, ctx: &EvalCtx) -> Result<Option<usize>, ExecError> {
+    let Some(BoundClause::With(projection)) = next else {
+        return Ok(None);
+    };
+    if projection.distinct
+        || projection.aggregating
+        || !projection.order_by.is_empty()
+        || projection.where_clause.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(limit) = &projection.limit else {
+        return Ok(None);
+    };
+    let constant = Row::default();
+    let mut cap = usize_bound(eval(limit, &constant, ctx)?, limit.span())?;
+    if let Some(skip) = &projection.skip {
+        cap = cap.saturating_add(usize_bound(eval(skip, &constant, ctx)?, skip.span())?);
+    }
+    Ok(Some(cap))
 }
 
 fn usize_bound(value: Value, span: crate::span::Span) -> Result<usize, ExecError> {
