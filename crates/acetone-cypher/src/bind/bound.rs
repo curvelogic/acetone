@@ -264,6 +264,14 @@ pub enum BoundExpr {
         negated: bool,
         span: Span,
     },
+    /// Label predicate in expression position: `n:A:B` — true when every
+    /// named label holds on the subject (a relationship subject tests its
+    /// type); null subject stays null.
+    HasLabels {
+        subject: Box<BoundExpr>,
+        labels: Vec<String>,
+        span: Span,
+    },
     Function {
         def: &'static FunctionDef,
         args: Vec<BoundExpr>,

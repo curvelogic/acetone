@@ -229,6 +229,10 @@ pub acetone_cypher::ast::Expr::FunctionCall::distinct: bool
 pub acetone_cypher::ast::Expr::FunctionCall::name: alloc::vec::Vec<alloc::string::String>
 pub acetone_cypher::ast::Expr::FunctionCall::span: acetone_cypher::span::Span
 pub acetone_cypher::ast::Expr::FunctionCall::star: bool
+pub acetone_cypher::ast::Expr::HasLabels
+pub acetone_cypher::ast::Expr::HasLabels::labels: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::ast::Expr::HasLabels::span: acetone_cypher::span::Span
+pub acetone_cypher::ast::Expr::HasLabels::subject: alloc::boxed::Box<acetone_cypher::ast::Expr>
 pub acetone_cypher::ast::Expr::Index
 pub acetone_cypher::ast::Expr::Index::base: alloc::boxed::Box<acetone_cypher::ast::Expr>
 pub acetone_cypher::ast::Expr::Index::index: alloc::boxed::Box<acetone_cypher::ast::Expr>
@@ -1448,6 +1452,10 @@ pub acetone_cypher::bind::bound::BoundExpr::Function
 pub acetone_cypher::bind::bound::BoundExpr::Function::args: alloc::vec::Vec<acetone_cypher::bind::bound::BoundExpr>
 pub acetone_cypher::bind::bound::BoundExpr::Function::def: &'static acetone_cypher::bind::bound::FunctionDef
 pub acetone_cypher::bind::bound::BoundExpr::Function::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::bound::BoundExpr::HasLabels
+pub acetone_cypher::bind::bound::BoundExpr::HasLabels::labels: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::bind::bound::BoundExpr::HasLabels::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::bound::BoundExpr::HasLabels::subject: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>
 pub acetone_cypher::bind::bound::BoundExpr::Index
 pub acetone_cypher::bind::bound::BoundExpr::Index::base: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>
 pub acetone_cypher::bind::bound::BoundExpr::Index::index: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>
@@ -2646,6 +2654,10 @@ pub acetone_cypher::bind::BoundExpr::Function
 pub acetone_cypher::bind::BoundExpr::Function::args: alloc::vec::Vec<acetone_cypher::bind::bound::BoundExpr>
 pub acetone_cypher::bind::BoundExpr::Function::def: &'static acetone_cypher::bind::bound::FunctionDef
 pub acetone_cypher::bind::BoundExpr::Function::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::BoundExpr::HasLabels
+pub acetone_cypher::bind::BoundExpr::HasLabels::labels: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::bind::BoundExpr::HasLabels::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::BoundExpr::HasLabels::subject: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>
 pub acetone_cypher::bind::BoundExpr::Index
 pub acetone_cypher::bind::BoundExpr::Index::base: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>
 pub acetone_cypher::bind::BoundExpr::Index::index: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>

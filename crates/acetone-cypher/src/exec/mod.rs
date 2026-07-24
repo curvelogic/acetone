@@ -1043,6 +1043,54 @@ mod tests {
     }
 
     #[test]
+    fn label_predicate_evaluates_on_nodes_rels_and_null() {
+        let graph = host_graph();
+        // Node: `n:Web` is true only for the Host+Web node (label-set
+        // membership, TCK Graph5 [1]).
+        let result = run_query(
+            "MATCH (n:Host) RETURN n.name, n:Web ORDER BY n.name",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 2);
+        assert!(matches!(&result.rows[0][1], Value::Bool(false)));
+        assert!(matches!(&result.rows[1][1], Value::Bool(true)));
+        // Conjunction: all named labels must hold (Graph5 [3][4],
+        // repeats and order irrelevant).
+        let result = run_query(
+            "MATCH (n) WHERE n:Web:Host:Web RETURN n.name",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "b"));
+        // Relationship: the test names the type.
+        let result = run_query(
+            "MATCH ()-[r]->() RETURN DISTINCT r:RUNS, r:OTHER",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::Bool(true)));
+        assert!(matches!(&result.rows[0][1], Value::Bool(false)));
+        // Null subject stays null (Graph5 [5]).
+        let result = run_query(
+            "MATCH (n:Software) OPTIONAL MATCH (n)-[:NONE]->(m) RETURN m:Web",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows[0][0].is_null());
+        // A non-entity subject is a type error, not a silent false.
+        let err = run_query("RETURN 1:Foo", &EmptyGraph, &BTreeMap::new()).unwrap_err();
+        assert!(matches!(err, QueryError::Exec(_)), "{err:?}");
+    }
+
+    #[test]
     fn bidirectional_relationship_matches_both_orientations() {
         // `<-[:RUNS]->` behaves exactly as the undirected `-[:RUNS]-`.
         let graph = host_graph();

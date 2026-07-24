@@ -1062,6 +1062,15 @@ impl<'a> Binder<'a> {
                 negated: *negated,
                 span: *span,
             }),
+            ast::Expr::HasLabels {
+                subject,
+                labels,
+                span,
+            } => Ok(BoundExpr::HasLabels {
+                subject: Box::new(self.expr(subject, ctx)?),
+                labels: labels.clone(),
+                span: *span,
+            }),
             ast::Expr::FunctionCall {
                 name,
                 distinct,
@@ -1334,6 +1343,7 @@ fn contains_aggregate(expr: &BoundExpr) -> bool {
                 stack.push(rhs);
             }
             BoundExpr::IsNull { operand, .. } => stack.push(operand),
+            BoundExpr::HasLabels { subject, .. } => stack.push(subject),
             BoundExpr::Function { args, .. } => stack.extend(args.iter()),
             BoundExpr::Case {
                 operand,

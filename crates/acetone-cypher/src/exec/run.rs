@@ -1686,6 +1686,7 @@ fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
         BoundExpr::Unary { operand, .. } | BoundExpr::IsNull { operand, .. } => {
             collect_aggregates(operand, out);
         }
+        BoundExpr::HasLabels { subject, .. } => collect_aggregates(subject, out),
         BoundExpr::Binary { lhs, rhs, .. } => {
             collect_aggregates(lhs, out);
             collect_aggregates(rhs, out);
