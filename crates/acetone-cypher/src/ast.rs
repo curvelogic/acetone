@@ -239,9 +239,18 @@ pub struct CallClause {
     /// Dotted procedure name, e.g. `["acetone", "diff"]`.
     pub procedure: Vec<String>,
     pub args: Vec<Expr>,
-    pub yield_items: Vec<String>,
+    pub yield_items: Vec<YieldItem>,
+    /// `YIELD *` — every declared column, expanded at bind time.
+    pub yield_all: bool,
     pub where_clause: Option<Expr>,
     pub span: Span,
+}
+
+/// One `YIELD` item: a procedure column, optionally rebound `AS alias`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct YieldItem {
+    pub column: String,
+    pub alias: Option<String>,
 }
 
 // --- Patterns --------------------------------------------------------------

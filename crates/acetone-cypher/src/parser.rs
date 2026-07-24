@@ -763,11 +763,22 @@ impl Parser<'_> {
             self.expect(&TokenKind::RParen, "')' after procedure arguments")?;
         }
         let mut yield_items = Vec::new();
+        let mut yield_all = false;
         if self.eat_kw("YIELD") {
-            loop {
-                yield_items.push(self.binding_name("a yield column", "a yield item")?.0);
-                if !self.eat(&TokenKind::Comma) {
-                    break;
+            if self.eat(&TokenKind::Star) {
+                yield_all = true;
+            } else {
+                loop {
+                    let column = self.binding_name("a yield column", "a yield item")?.0;
+                    let alias = if self.eat_kw("AS") {
+                        Some(self.binding_name("a yield alias", "a yield alias")?.0)
+                    } else {
+                        None
+                    };
+                    yield_items.push(YieldItem { column, alias });
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
                 }
             }
         }
@@ -780,6 +791,7 @@ impl Parser<'_> {
             procedure,
             args,
             yield_items,
+            yield_all,
             where_clause,
             span: start.to(self.prev_span()),
         }))
@@ -889,14 +901,10 @@ impl Parser<'_> {
         let direction = match (incoming, outgoing) {
             (true, false) => Direction::In,
             (false, true) => Direction::Out,
-            (false, false) => Direction::Undirected,
-            (true, true) => {
-                return Err(ParseError::Unexpected {
-                    expected: "a relationship pointing one way".into(),
-                    found: "'<-...->'".into(),
-                    span: start.to(self.prev_span()),
-                });
-            }
+            // openCypher permits arrows on both ends (`<-[..]->`); the
+            // pattern matches either orientation, exactly as the plain
+            // undirected form does (TCK Match3/Match5/Match6).
+            (false, false) | (true, true) => Direction::Undirected,
         };
         Ok(RelPattern {
             variable,
@@ -1905,6 +1913,49 @@ mod tests {
         // bracketed nesting — either way: an error, never a crash.
         let nested = format!("{}1{}", "[".repeat(1000), "]".repeat(1000));
         literal_err(&nested);
+    }
+
+    #[test]
+    fn call_yield_supports_aliases_and_star() {
+        // `YIELD col AS alias` list (TCK Call5).
+        let q = parse_ok("CALL acetone.diff('a', 'b') YIELD kind AS k, key RETURN k, key");
+        let Clause::Call(c) = &q.clauses[0] else {
+            panic!("expected CALL");
+        };
+        assert!(!c.yield_all);
+        assert_eq!(c.yield_items.len(), 2);
+        assert_eq!(c.yield_items[0].column, "kind");
+        assert_eq!(c.yield_items[0].alias.as_deref(), Some("k"));
+        assert_eq!(c.yield_items[1].column, "key");
+        assert_eq!(c.yield_items[1].alias, None);
+
+        // `YIELD *` requests every declared column.
+        let q = parse_ok("CALL acetone.log('main') YIELD *");
+        let Clause::Call(c) = &q.clauses[0] else {
+            panic!("expected CALL");
+        };
+        assert!(c.yield_all);
+        assert!(c.yield_items.is_empty());
+    }
+
+    #[test]
+    fn bidirectional_relationship_parses_as_undirected() {
+        // openCypher permits `<-[..]->`; it matches either orientation,
+        // exactly as the undirected form does (TCK Match3/Match5/Match6).
+        let q = parse_ok("MATCH (a)-->(x)<-->(b) RETURN x");
+        let Clause::Match(m) = &q.clauses[0] else {
+            panic!("expected MATCH");
+        };
+        let dirs: Vec<Direction> = m.patterns[0]
+            .steps
+            .iter()
+            .map(|(r, _)| r.direction)
+            .collect();
+        assert_eq!(dirs, vec![Direction::Out, Direction::Undirected]);
+
+        // Variable-length and typed forms too.
+        parse_ok("MATCH (a:A) MATCH (a)-[:LIKES]->()<-[:LIKES*3]->(c) RETURN c.name");
+        parse_ok("MATCH p = (n)<-->(k)<--(n) RETURN p");
     }
 
     #[test]

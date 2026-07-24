@@ -343,9 +343,9 @@ fn run_versioned(
                 // Yield variables bound from the procedure's declared
                 // identifier columns carry identifier-shaped text from here
                 // on (independent of how many rows the call produces).
-                for (name, var) in yields {
-                    if procedure.identifier_yields.contains(&name.as_str()) {
-                        identifier_vars.insert(*var);
+                for y in yields {
+                    if procedure.identifier_yields.contains(&y.column.as_str()) {
+                        identifier_vars.insert(y.var);
                     }
                 }
                 // For each incoming row, evaluate the arguments in its
@@ -378,16 +378,16 @@ fn run_versioned(
                             procedure.yields.len()
                         );
                         let mut next = row.clone();
-                        for (name, var) in yields {
+                        for y in yields {
                             // The binder validated every YIELD column against
                             // the procedure's declared yields, so the position
                             // is always found.
                             let index = procedure
                                 .yields
                                 .iter()
-                                .position(|column| *column == name.as_str())
+                                .position(|column| *column == y.column.as_str())
                                 .expect("bound yield column is declared");
-                            next.set(*var, tuple.get(index).cloned().unwrap_or(Value::Null));
+                            next.set(y.var, tuple.get(index).cloned().unwrap_or(Value::Null));
                         }
                         if let Some(pred) = where_clause {
                             let pred_ctx = EvalCtx::new(&graph, parameters, governor);
@@ -427,15 +427,15 @@ fn run_versioned(
         && !yields.is_empty()
     {
         result = Some(QueryResult {
-            columns: yields.iter().map(|(name, _)| name.clone()).collect(),
+            columns: yields.iter().map(|y| y.name.clone()).collect(),
             rows: rows
                 .iter()
-                .map(|row| yields.iter().map(|(_, var)| row.get(*var)).collect())
+                .map(|row| yields.iter().map(|y| row.get(y.var)).collect())
                 .collect(),
             // The Call clause registered identifier yield variables above.
             identifier_columns: yields
                 .iter()
-                .map(|(_, var)| identifier_vars.contains(var))
+                .map(|y| identifier_vars.contains(&y.var))
                 .collect(),
             stats: WriteSummary::default(),
             advisories: Vec::new(),

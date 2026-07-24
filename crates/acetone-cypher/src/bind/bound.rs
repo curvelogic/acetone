@@ -104,10 +104,19 @@ pub enum BoundClause {
         procedure: &'static ProcedureDef,
         args: Vec<BoundExpr>,
         /// Yielded columns bound as fresh Value variables.
-        yields: Vec<(String, VarId)>,
+        yields: Vec<BoundYield>,
         where_clause: Option<BoundExpr>,
         span: Span,
     },
+}
+
+/// One bound `YIELD` item: which declared procedure column is read, and the
+/// name it is bound under (the `AS` alias, or the column name itself).
+#[derive(Debug)]
+pub struct BoundYield {
+    pub column: String,
+    pub name: String,
+    pub var: VarId,
 }
 
 /// A resolved `SET` assignment. `target` is the bound entity variable
