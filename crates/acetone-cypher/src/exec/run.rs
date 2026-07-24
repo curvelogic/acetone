@@ -1687,16 +1687,11 @@ fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
             collect_aggregates(operand, out);
         }
         BoundExpr::HasLabels { subject, .. } => collect_aggregates(subject, out),
-        // Pattern property maps are NO_AGG-bound; where/map mirror
-        // ListComprehension's traversal.
-        BoundExpr::PatternComprehension {
-            where_clause, map, ..
-        } => {
-            if let Some(expr) = where_clause {
-                collect_aggregates(expr, out);
-            }
-            collect_aggregates(map, out);
-        }
+        // Every sub-expression (pattern properties, WHERE, map) is
+        // NO_AGG-bound, so a comprehension can never contain an
+        // aggregate — and its map runs per match, which the slot
+        // machinery could not honour anyway.
+        BoundExpr::PatternComprehension { .. } => {}
         BoundExpr::Binary { lhs, rhs, .. } => {
             collect_aggregates(lhs, out);
             collect_aggregates(rhs, out);

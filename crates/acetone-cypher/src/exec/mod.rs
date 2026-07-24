@@ -1107,6 +1107,46 @@ mod tests {
     }
 
     #[test]
+    fn pattern_comprehension_rejects_aggregates_and_pins_scoping() {
+        use crate::bind::{BindError, BindMode, Catalogue, bind};
+        let bind_err = |query: &str| {
+            let parsed = crate::parse(query).expect(query);
+            bind(query, &parsed, &Catalogue::empty(), BindMode::Lenient).unwrap_err()
+        };
+        // Aggregates inside the comprehension are InvalidAggregation —
+        // the map runs per match, outside any grouping (review of PR
+        // #202: previously bound with the outer context and produced
+        // silent wrong answers).
+        for query in [
+            "MATCH (n) RETURN [(n)-->(b) | count(b)] AS xs",
+            "MATCH (n) RETURN [(n)-->(b) WHERE count(b) > 0 | b.name] AS xs",
+        ] {
+            let err = bind_err(query);
+            assert!(
+                matches!(err, BindError::InvalidAggregation { .. }),
+                "{query}: {err:?}"
+            );
+        }
+        // Aggregating over the whole comprehension stays legal (TCK
+        // Pattern2 [6]).
+        let query = "MATCH (n) RETURN count([(n)-->(b) | b]) AS c";
+        let parsed = crate::parse(query).expect(query);
+        bind(query, &parsed, &Catalogue::empty(), BindMode::Lenient).expect(query);
+        // Fresh comprehension variables do not leak into the projection.
+        let err = bind_err("MATCH (n) RETURN [(n)-[r]->(b) | r] AS xs, r");
+        assert!(
+            matches!(err, BindError::UndefinedVariable { ref name, .. } if name == "r"),
+            "{err:?}"
+        );
+        // A comprehension path variable cannot shadow an outer binding.
+        let err = bind_err("MATCH p = (n)-->() RETURN [p = (n)-->() | p] AS xs");
+        assert!(
+            matches!(err, BindError::VariableAlreadyBound { ref name, .. } if name == "p"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
     fn label_predicate_evaluates_on_nodes_rels_and_null() {
         let graph = host_graph();
         // Node: `n:Web` is true only for the Host+Web node (label-set

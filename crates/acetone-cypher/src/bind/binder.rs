@@ -1081,13 +1081,17 @@ impl<'a> Binder<'a> {
                 // are visible to the WHERE and map expressions only;
                 // outer bindings referenced by name anchor the pattern.
                 // Restore the whole scope afterwards so nothing leaks.
+                // Aggregates are never valid inside the comprehension —
+                // the map runs once per match, outside any grouping —
+                // so both sub-expressions bind NO_AGG regardless of the
+                // surrounding context (openCypher InvalidAggregation).
                 let saved_scope = self.scope.clone();
                 let bound_pattern = self.path_pattern(pattern, true)?;
                 let bound_where = match where_clause {
-                    Some(expr) => Some(Box::new(self.expr(expr, ctx)?)),
+                    Some(expr) => Some(Box::new(self.expr(expr, NO_AGG)?)),
                     None => None,
                 };
-                let bound_map = Box::new(self.expr(map, ctx)?);
+                let bound_map = Box::new(self.expr(map, NO_AGG)?);
                 self.scope = saved_scope;
                 Ok(BoundExpr::PatternComprehension {
                     pattern: Box::new(bound_pattern),
