@@ -3366,6 +3366,21 @@ fn tag_creates_lists_and_deletes_through_the_graph_namespace() {
         stderr(&out)
     );
 
+    // An explicit empty message reads as bad input, not store corruption
+    // (PR #197 review finding 2).
+    let out = acetone(&repo, &["tag", "v3", "-m", ""]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("tag message must not be empty"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        !stderr(&out).contains("corrupt"),
+        "must not read as corruption: {}",
+        stderr(&out)
+    );
+
     // An unresolvable target is a clear error, and creates nothing.
     let out = acetone(&repo, &["tag", "ghost", "nonesuch"]);
     assert!(!out.status.success());

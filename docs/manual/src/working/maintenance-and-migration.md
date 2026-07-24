@@ -193,18 +193,20 @@ standalone repository that *is* the graph — no code co-tenant, no fetched
 clones to diverge — and wants a single-format history, or wants to retune
 storage. It refuses a dirty or mid-merge workspace. Annotated tags come
 along faithfully — each tag object is rewritten preserving its name, tagger
-and message, pointing at the rewritten commit — but a **signed** tag
-refuses the whole migration up front, because the rewritten bytes could
-never carry the original signature and dropping it silently is forbidden.
-Delete or re-tag it unsigned first:
+and message, pointing at the rewritten commit. The one tag migrate cannot
+carry is a **signed** one (made with `git tag -s`; `acetone tag` never
+signs): the rewritten bytes could never hold the original signature, and
+dropping it silently is forbidden, so a signed tag refuses the whole
+migration up front. Delete or re-tag it unsigned first:
 
 ```console
+$ git tag -s attested-2026-07 -m "signed audit point"
 $ acetone migrate
-error: rewriting history: cannot rewrite signed tag "audit-2026-07": the rewritten tag could not carry the original signature
-$ acetone tag --delete audit-2026-07
-deleted tag "audit-2026-07" (was 09b17f3ce41cfb44c73130f24e37cf9a06c48e70)
-$ acetone tag audit-2026-07 -m "quarterly audit point"
-created tag "audit-2026-07" at 38c6730b2a1f09e6f2f8f35c2ea52a0e6f1d9c44
+error: rewriting history: cannot rewrite signed tag "attested-2026-07": the rewritten tag could not carry the original signature
+$ git tag -d attested-2026-07
+Deleted tag 'attested-2026-07' (was 09b17f3)
+$ acetone tag attested-2026-07 -m "audit point, unsigned"
+created tag "attested-2026-07" at 38c6730b2a1f09e6f2f8f35c2ea52a0e6f1d9c44
 ```
 
 The transform it applies today is **re-chunking**: rebuilding every map under

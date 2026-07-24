@@ -121,6 +121,11 @@ pub enum GraphError {
         /// Tag short name.
         name: String,
     },
+    /// An explicitly supplied tag message was empty (or whitespace only).
+    /// Caught here, before the store's own guard, so the user sees a
+    /// validation message rather than a corruption report.
+    #[error("tag message must not be empty — omit the message to default it to the tag name")]
+    EmptyTagMessage,
     /// A tag that was expected not to exist already does. Tags are
     /// immutable pointers by design — move one by deleting and re-creating
     /// it deliberately.

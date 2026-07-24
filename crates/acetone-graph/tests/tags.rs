@@ -302,3 +302,17 @@ fn co_tenant_tags_land_in_the_graph_namespace_not_the_code_repos() {
     let listed = git(&project, &["tag", "--list", "acetone/inventory/*"]);
     assert_eq!(listed, "acetone/inventory/v1");
 }
+
+#[test]
+fn an_explicit_empty_message_is_a_validation_error_not_corruption() {
+    // PR #197 review finding 2: `-m ""` must read as bad input, not as a
+    // corrupt store.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    commit_one(&repo, "a");
+    assert!(matches!(
+        repo.create_tag("v1", None, Some("  \n")),
+        Err(GraphError::EmptyTagMessage)
+    ));
+    assert_eq!(repo.tags().expect("tags"), vec![], "no tag was created");
+}

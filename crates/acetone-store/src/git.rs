@@ -566,7 +566,7 @@ impl GitStore {
     /// unreachable object. Acetone never *creates* signed tags (ADR-0059 —
     /// `migrate` could not rewrite them; git is the escape hatch), so a
     /// message carrying a signature block is refused
-    /// ([`StoreError::SignedTag`]) rather than written as a lie.
+    /// ([`StoreError::SignedTagCreation`]) rather than written as a lie.
     pub fn create_tag(
         &self,
         name: &str,
@@ -575,7 +575,7 @@ impl GitStore {
         tagger: &crate::store::Signature,
     ) -> Result<Hash, StoreError> {
         if message_has_signature_block(message) {
-            return Err(StoreError::SignedTag {
+            return Err(StoreError::SignedTagCreation {
                 name: name.to_owned(),
             });
         }

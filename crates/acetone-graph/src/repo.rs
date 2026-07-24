@@ -542,6 +542,9 @@ impl Repository {
             None => self.head_commit()?.ok_or(GraphError::NoCurrentBranch)?,
         };
         let message = message.unwrap_or(name);
+        if message.trim().is_empty() {
+            return Err(GraphError::EmptyTagMessage);
+        }
         let tag_id = self
             .store
             .create_tag(name, &target, message, &Signature::default())?;

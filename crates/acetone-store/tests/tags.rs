@@ -294,6 +294,6 @@ fn create_tag_refuses_a_message_carrying_a_signature_block() {
     let sneaky = "msg\n-----BEGIN PGP SIGNATURE-----\n\nAAAA\n-----END PGP SIGNATURE-----\n";
     assert!(matches!(
         store.create_tag("v1", &c, sneaky, &Signature::default()),
-        Err(StoreError::SignedTag { name }) if name == "v1"
+        Err(StoreError::SignedTagCreation { name }) if name == "v1"
     ));
 }
