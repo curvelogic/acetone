@@ -251,7 +251,7 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
                 // the query under test in memory, then verify both the
                 // returned rows and the openCypher side effects.
                 FrontEnd::Accepted if is_write_query(query) => {
-                    write_verify(plan, query, expectation)
+                    fixture_verify(plan, query, expectation)
                 }
                 FrontEnd::Accepted => execute_and_verify(plan, query, expectation),
             }
@@ -260,17 +260,20 @@ pub fn classify(plan: &ScenarioPlan) -> Verdict {
 }
 
 /// Execute a front-end-accepted scenario when its fixtures need nothing
-/// the executor lacks (graph setup needs the Phase 3 write path; named
-/// fixture graphs, parameter tables and stub procedures need harness
-/// plumbing), and verify the result against the expected table.
+/// the executor lacks (named fixture graphs, parameter tables and stub
+/// procedures need harness plumbing), and verify the result against the
+/// expected table. A read scenario carrying `having executed:` setup or
+/// control queries routes through the same fixture machinery as the
+/// write path (acetone-cbl.2): the setup graph is built statement by
+/// statement, the read runs against it, and the "no side effects"
+/// assertion stays load-bearing.
 fn execute_and_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectation) -> Verdict {
-    let executable = plan.setup_queries.is_empty()
-        && plan.controls.is_empty()
-        && plan.named_graph.is_none()
-        && !plan.has_parameters
-        && !plan.needs_procedures;
+    let executable = plan.named_graph.is_none() && !plan.has_parameters && !plan.needs_procedures;
     if !executable {
         return Verdict::Unsupported(UnsupportedReason::Executor);
+    }
+    if !plan.setup_queries.is_empty() || !plan.controls.is_empty() {
+        return fixture_verify(plan, query, expectation);
     }
     let outcome = exec::run_query(query, &EmptyGraph, &std::collections::BTreeMap::new());
     let result = match outcome {
@@ -320,17 +323,19 @@ fn run_write_once(
     execute_write(&bound, &resolver, params).map_err(WriteRunError::Exec)
 }
 
-/// Run a write scenario end to end in memory (acetone-1h7): build the setup
-/// graph one statement at a time, execute the query under test, and verify
-/// both its rows and its openCypher side effects. Fixtures needing a named
-/// graph, parameters or stub procedures remain beyond the harness.
+/// Run a fixture-backed scenario end to end in memory (acetone-1h7 for
+/// writes; acetone-cbl.2 extends it to reads): build the setup graph one
+/// statement at a time, execute the query under test, and verify its
+/// rows, its openCypher side effects (a read must show none) and any
+/// control queries. Fixtures needing a named graph, parameters or stub
+/// procedures remain beyond the harness.
 ///
 /// Side effects are read from the *graph delta* (state before the query vs
 /// state after its changes are applied), not from the executor's per-op
 /// counters, because openCypher counts graph-state changes: distinct label
 /// tokens (`CREATE (:L),(:L)` is `+labels 1`), net node identities
 /// (`CREATE (n) DELETE n` is `+nodes 0`) and net property values.
-fn write_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectation) -> Verdict {
+fn fixture_verify(plan: &ScenarioPlan, query: &str, expectation: &Expectation) -> Verdict {
     if plan.named_graph.is_some() || plan.has_parameters || plan.needs_procedures {
         return Verdict::Unsupported(UnsupportedReason::Executor);
     }
