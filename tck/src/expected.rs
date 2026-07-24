@@ -32,6 +32,17 @@ pub fn parse_table(
 ) -> Result<ExpectedTable, ExpectedError> {
     let mut parsed_rows = Vec::new();
     for row in rows {
+        // Guard against silent column drift: the Gherkin layer cannot
+        // escape `|` inside a cell (the grammar splits at every pipe), so
+        // a cell containing one would shift or truncate its row. Refuse
+        // the table rather than compare against skewed cells.
+        if row.len() != header.len() {
+            return Err(ExpectedError::Malformed(format!(
+                "row width {} != header width {}",
+                row.len(),
+                header.len()
+            )));
+        }
         let mut parsed = Vec::new();
         for cell in row {
             parsed.push(parse_value(unescape_cell(cell.trim()).as_str())?);
@@ -69,7 +80,11 @@ fn unescape_cell(cell: &str) -> String {
 }
 
 fn parse_value(text: &str) -> Result<Value, ExpectedError> {
-    let mut parser = CellParser { text, at: 0 };
+    let mut parser = CellParser {
+        text,
+        at: 0,
+        depth: 0,
+    };
     let value = parser.value()?;
     parser.skip_ws();
     if parser.at != parser.text.len() {
@@ -81,7 +96,13 @@ fn parse_value(text: &str) -> Result<Value, ExpectedError> {
 struct CellParser<'a> {
     text: &'a str,
     at: usize,
+    depth: usize,
 }
+
+/// Nesting bound for cell values: the corpus is vendored, but treat
+/// cells as untrusted — a pathological `[[[[...]]]]` must error, not
+/// overflow the stack.
+const MAX_CELL_DEPTH: usize = 64;
 
 impl CellParser<'_> {
     fn rest(&self) -> &str {
@@ -104,6 +125,16 @@ impl CellParser<'_> {
     }
 
     fn value(&mut self) -> Result<Value, ExpectedError> {
+        self.depth += 1;
+        let value = self.value_at_depth();
+        self.depth -= 1;
+        value
+    }
+
+    fn value_at_depth(&mut self) -> Result<Value, ExpectedError> {
+        if self.depth > MAX_CELL_DEPTH {
+            return Err(ExpectedError::Malformed(self.text.to_string()));
+        }
         self.skip_ws();
         if self.rest().starts_with('<') {
             return self.path();
@@ -253,9 +284,14 @@ impl CellParser<'_> {
             let closed_plain = !closed_outgoing && self.eat("-");
             match (incoming, closed_outgoing, closed_plain) {
                 (true, false, true) | (false, true, false) => {}
-                // `-[:T]-` pins no orientation; `<-[:T]->` is not a path.
-                _ => {
+                // `-[:T]-` is legal notation whose orientation we cannot
+                // verify; anything else (`<-[:T]->`, a missing closer) is
+                // a broken cell and must count against us, not soft-bucket.
+                (false, false, true) => {
                     return Err(ExpectedError::UnsupportedNotation(self.text.to_string()));
+                }
+                _ => {
+                    return Err(ExpectedError::Malformed(self.text.to_string()));
                 }
             }
             self.skip_ws();
@@ -472,8 +508,14 @@ fn paths_match(expected: &PathValue, actual: &PathValue) -> bool {
             if !rels_match(want, got) {
                 return false;
             }
-            let forward = |path: &PathValue, rel: &RelValue| path.nodes[i].id.0 == rel.start.0;
-            let backward = |path: &PathValue, rel: &RelValue| path.nodes[i + 1].id.0 == rel.start.0;
+            // Both endpoints must link, not just the start, so a
+            // malformed actual path cannot slip through on one match.
+            let forward = |path: &PathValue, rel: &RelValue| {
+                path.nodes[i].id.0 == rel.start.0 && path.nodes[i + 1].id.0 == rel.end.0
+            };
+            let backward = |path: &PathValue, rel: &RelValue| {
+                path.nodes[i + 1].id.0 == rel.start.0 && path.nodes[i].id.0 == rel.end.0
+            };
             (forward(expected, want) && forward(actual, got))
                 || (backward(expected, want) && backward(actual, got))
         })
@@ -505,7 +547,13 @@ pub fn compare(expected: &ExpectedTable, actual: &QueryResult) -> Option<String>
         }
         None
     } else {
-        // Multiset comparison.
+        // Multiset comparison, greedy first-match consumption. Sound for
+        // *crediting*: row counts are equal and each actual row is
+        // consumed once, so a reported pass always exhibits a perfect
+        // matching, and a wrong actual row can never hide. Structural
+        // matching is an equivalence relation except at self-loop path
+        // steps (which match either orientation), where greedy choice
+        // could at worst produce a false Failed — never a false Passed.
         let mut remaining: Vec<&Vec<Value>> = actual.rows.iter().collect();
         for want in &expected.rows {
             match remaining.iter().position(|got| rows_match(want, got)) {
@@ -630,6 +678,52 @@ mod tests {
         assert!(!values_match(
             &expected,
             &make_node("real-id", &["A", "B"], None)
+        ));
+    }
+
+    #[test]
+    fn row_multiset_comparison_cannot_over_credit() {
+        let table = |cells: Vec<Vec<Value>>| ExpectedTable {
+            columns: vec!["x".to_string()],
+            rows: cells,
+            ordered: false,
+        };
+        let result = |cells: Vec<Vec<Value>>| QueryResult {
+            columns: vec!["x".to_string()],
+            identifier_columns: vec![false],
+            rows: cells,
+            stats: Default::default(),
+            advisories: Vec::new(),
+        };
+        // Duplicate expected rows need two matching actuals.
+        let expected = table(vec![vec![Value::Int(1)], vec![Value::Int(1)]]);
+        let actual = result(vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        assert!(compare(&expected, &actual).is_some());
+        // More expected rows than actual is a mismatch, not a pass.
+        let expected = table(vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        let actual = result(vec![vec![Value::Int(1)]]);
+        assert!(compare(&expected, &actual).is_some());
+        // And the honest case still matches, order-insensitively.
+        let expected = table(vec![vec![Value::Int(2)], vec![Value::Int(1)]]);
+        let actual = result(vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        assert!(compare(&expected, &actual).is_none());
+    }
+
+    #[test]
+    fn skewed_rows_and_deep_nesting_are_malformed() {
+        // A row wider or narrower than the header must refuse, never
+        // compare against shifted cells.
+        let header = vec!["a".to_string(), "b".to_string()];
+        let rows = vec![vec!["1".to_string()]];
+        assert!(matches!(
+            parse_table(&header, &rows, false),
+            Err(ExpectedError::Malformed(_))
+        ));
+        // Pathological nesting errors instead of overflowing the stack.
+        let deep = format!("{}1{}", "[".repeat(500), "]".repeat(500));
+        assert!(matches!(
+            parse_value(&deep),
+            Err(ExpectedError::Malformed(_))
         ));
     }
 
