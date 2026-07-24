@@ -434,6 +434,34 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
         BoundExpr::PatternPredicate { pattern, span: _ } => {
             Ok(Value::Bool(pattern_exists(pattern, row, ctx)?))
         }
+        BoundExpr::PatternComprehension {
+            pattern,
+            where_clause,
+            map,
+            span,
+        } => {
+            // Enumerate matches with the full MATCH machinery (var-length,
+            // path variables, relationship uniqueness within the pattern),
+            // anchored on the current row's bindings.
+            let state = crate::exec::run::MatchState {
+                row: row.clone(),
+                used_rels: std::collections::HashSet::new(),
+            };
+            let mut items = Vec::new();
+            for matched in crate::exec::run::match_path(pattern, state, ctx)? {
+                if let Some(pred) = where_clause
+                    && truth(&eval(pred, &matched.row, ctx)?, pred.span())? != Some(true)
+                {
+                    continue;
+                }
+                let value = eval(map, &matched.row, ctx)?;
+                ensure_nestable(&value, *span)?;
+                // Charge each collected element like other comprehensions.
+                ctx.governor.collection_push(items.len())?;
+                items.push(value);
+            }
+            Ok(Value::List(items))
+        }
     }
 }
 
@@ -1010,7 +1038,8 @@ impl BoundExpr {
             | BoundExpr::Index { span, .. }
             | BoundExpr::Slice { span, .. }
             | BoundExpr::PatternPredicate { span, .. }
-            | BoundExpr::HasLabels { span, .. } => *span,
+            | BoundExpr::HasLabels { span, .. }
+            | BoundExpr::PatternComprehension { span, .. } => *span,
         }
     }
 }

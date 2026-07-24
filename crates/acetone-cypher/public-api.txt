@@ -259,6 +259,11 @@ pub acetone_cypher::ast::Expr::MapLiteral::span: acetone_cypher::span::Span
 pub acetone_cypher::ast::Expr::Parameter
 pub acetone_cypher::ast::Expr::Parameter::name: alloc::string::String
 pub acetone_cypher::ast::Expr::Parameter::span: acetone_cypher::span::Span
+pub acetone_cypher::ast::Expr::PatternComprehension
+pub acetone_cypher::ast::Expr::PatternComprehension::map: alloc::boxed::Box<acetone_cypher::ast::Expr>
+pub acetone_cypher::ast::Expr::PatternComprehension::pattern: alloc::boxed::Box<acetone_cypher::ast::PathPattern>
+pub acetone_cypher::ast::Expr::PatternComprehension::span: acetone_cypher::span::Span
+pub acetone_cypher::ast::Expr::PatternComprehension::where_clause: core::option::Option<alloc::boxed::Box<acetone_cypher::ast::Expr>>
 pub acetone_cypher::ast::Expr::PatternPredicate
 pub acetone_cypher::ast::Expr::PatternPredicate::pattern: alloc::boxed::Box<acetone_cypher::ast::PathPattern>
 pub acetone_cypher::ast::Expr::PatternPredicate::span: acetone_cypher::span::Span
@@ -1482,6 +1487,11 @@ pub acetone_cypher::bind::bound::BoundExpr::MapLiteral::span: acetone_cypher::sp
 pub acetone_cypher::bind::bound::BoundExpr::Parameter
 pub acetone_cypher::bind::bound::BoundExpr::Parameter::name: alloc::string::String
 pub acetone_cypher::bind::bound::BoundExpr::Parameter::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::bound::BoundExpr::PatternComprehension
+pub acetone_cypher::bind::bound::BoundExpr::PatternComprehension::map: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>
+pub acetone_cypher::bind::bound::BoundExpr::PatternComprehension::pattern: alloc::boxed::Box<acetone_cypher::bind::bound::BoundPathPattern>
+pub acetone_cypher::bind::bound::BoundExpr::PatternComprehension::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::bound::BoundExpr::PatternComprehension::where_clause: core::option::Option<alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>>
 pub acetone_cypher::bind::bound::BoundExpr::PatternPredicate
 pub acetone_cypher::bind::bound::BoundExpr::PatternPredicate::pattern: alloc::boxed::Box<acetone_cypher::bind::bound::BoundPathPattern>
 pub acetone_cypher::bind::bound::BoundExpr::PatternPredicate::span: acetone_cypher::span::Span
@@ -2684,6 +2694,11 @@ pub acetone_cypher::bind::BoundExpr::MapLiteral::span: acetone_cypher::span::Spa
 pub acetone_cypher::bind::BoundExpr::Parameter
 pub acetone_cypher::bind::BoundExpr::Parameter::name: alloc::string::String
 pub acetone_cypher::bind::BoundExpr::Parameter::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::BoundExpr::PatternComprehension
+pub acetone_cypher::bind::BoundExpr::PatternComprehension::map: alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>
+pub acetone_cypher::bind::BoundExpr::PatternComprehension::pattern: alloc::boxed::Box<acetone_cypher::bind::bound::BoundPathPattern>
+pub acetone_cypher::bind::BoundExpr::PatternComprehension::span: acetone_cypher::span::Span
+pub acetone_cypher::bind::BoundExpr::PatternComprehension::where_clause: core::option::Option<alloc::boxed::Box<acetone_cypher::bind::bound::BoundExpr>>
 pub acetone_cypher::bind::BoundExpr::PatternPredicate
 pub acetone_cypher::bind::BoundExpr::PatternPredicate::pattern: alloc::boxed::Box<acetone_cypher::bind::bound::BoundPathPattern>
 pub acetone_cypher::bind::BoundExpr::PatternPredicate::span: acetone_cypher::span::Span
