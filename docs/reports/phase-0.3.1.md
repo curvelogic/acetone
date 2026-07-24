@@ -175,6 +175,7 @@ the Homebrew bump. The flow is available as a tracked molecule
   `commit_allow_empty`. Worth remembering when a behavioural default changes
   mid-phase: grep the test suite for the old assumption.
 - **A dropped merge, caught late.** PR #174's first auto-merge silently failed
-  on a transient status; the security review's TCK reconciliation (main sat at
-  1598, not the expected 1602) surfaced it. Auto-merge state deserves an
+  on a transient status; the security review's TCK reconciliation surfaced it — main sat at
+  1598 (1596 at 0.3.0, plus the +2 from the i64::MIN lexer fix in #163),
+  where #174's MERGE-relationship work should have taken it to 1602. Auto-merge state deserves an
   explicit post-check.

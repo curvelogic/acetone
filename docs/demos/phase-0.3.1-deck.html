@@ -216,7 +216,8 @@
         <li><b>Merge violations were invisible</b> — a resolved merge left a dangling edge that only <code>fsck</code> could name; the conflict flow said nothing. <span class="pr">jm8 · #187</span></li>
         <li><b>Time travel to a tag didn't work</b> — <code>--at</code> rejected short tag names and annotated tags that <code>log</code> already resolved. <span class="pr">lqq · #185</span></li>
         <li><b><code>log</code> hid merged branches</b> — first-parent only; needed <code>git log --all</code> to see the other side. <span class="pr">b6q · #190</span></li>
-        <li><b>No <code>--param</code>, no branch start-point</b> — capabilities the library had but the CLI couldn't reach. <span class="pr">9zt · #189, 7qw.1 · #190</span></li>
+        <li><b>No <code>query --param</code></b> — the library bound parameters; the CLI had no way to pass them. <span class="pr">9zt · #189</span></li>
+        <li><b>Branch stuck at the head</b> — no start-point, no delete; recovery needed raw <code>git update-ref</code>. <span class="pr">7qw.1 · #190</span></li>
       </ul>
       <p style="margin-top:16px"><strong>Documentation-by-execution earns its keep.</strong> The verify-against-the-binary rule is now enforced in CI.</p>
       <p class="num">04 / 12</p>
