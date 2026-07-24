@@ -1076,8 +1076,10 @@ impl Parser<'_> {
     /// Comparisons chain (openCypher; TCK Comparison3/4): `a < b <= c`
     /// means `a < b AND b <= c`, with every comparison operator — `=`
     /// and `<>` included — participating in the chain. Desugared here
-    /// into a conjunction of adjacent pairs (interior operands are
-    /// duplicated; they are side-effect-free expressions).
+    /// into a conjunction of adjacent pairs. Interior operands are
+    /// duplicated: they are side-effect-free, but they evaluate (and
+    /// charge the governor) once per conjunct that mentions them, so an
+    /// expensive interior operand pays twice.
     fn expr_comparison(&mut self) -> Result<Expr, ParseError> {
         let mut operands = vec![self.expr_string_list()?];
         let mut ops = Vec::new();
@@ -1103,12 +1105,12 @@ impl Parser<'_> {
         if ops.is_empty() {
             return Ok(operands.pop().expect("one operand parsed"));
         }
-        let mut conjuncts = ops.iter().enumerate().map(|(i, op)| {
+        let mut conjuncts = ops.into_iter().enumerate().map(|(i, op)| {
             let lhs = operands[i].clone();
             let rhs = operands[i + 1].clone();
             let span = lhs.span().to(rhs.span());
             Expr::Binary {
-                op: *op,
+                op,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
                 span,

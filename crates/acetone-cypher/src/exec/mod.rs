@@ -1076,6 +1076,19 @@ mod tests {
             single("RETURN 1 < 2 = 3 <> 3"),
             Value::Bool(false)
         ));
+        // Aggregates in a chain: the duplicated Aggregate clones and the
+        // slot machinery stay aligned because collect_aggregates and
+        // eval traverse the same desugared tree and AND evaluates both
+        // sides strictly. Pinned so a future short-circuiting AND cannot
+        // silently desync the slots (PR #203 review).
+        let result = run_query(
+            "MATCH (n) RETURN min(n.num) < max(n.num) < 10 AS chained, count(*) AS c",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert!(matches!(&result.rows[0][0], Value::Bool(true)));
+        assert!(matches!(&result.rows[0][1], Value::Int(3)));
     }
 
     #[test]
