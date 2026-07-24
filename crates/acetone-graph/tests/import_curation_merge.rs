@@ -31,8 +31,11 @@ impl SourceExtractor for Mock {
     fn name(&self) -> &str {
         "csv"
     }
-    fn extract(&mut self) -> Result<Vec<ImportRecord>, ImportError> {
-        Ok(self.records.clone())
+    fn next_record(&mut self) -> Result<Option<ImportRecord>, ImportError> {
+        if self.records.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.records.remove(0)))
     }
 }
 
@@ -69,6 +72,7 @@ fn import_opts(branch: Option<&str>) -> ImportOptions {
         message: None,
         provenance: provenance(),
         author: None,
+        batch_size: None,
     }
 }
 

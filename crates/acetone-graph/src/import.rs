@@ -90,15 +90,46 @@ pub struct EndpointRef {
 
 /// A source extractor: a deterministic map from a source to canonical records.
 ///
-/// `name` is recorded in the `Acetone-Extractor` trailer. `extract` reads the
-/// whole source; imports are bounded in v0.1 (a batched, streaming extractor
-/// interface can arrive later without changing the transform).
+/// `name` is recorded in the `Acetone-Extractor` trailer. Records are
+/// *pulled* one at a time (ADR-0062), so a source larger than memory
+/// imports in bounded resident memory: the importer stages and saves in
+/// batches as it pulls. Contract: a source must yield a node before any
+/// edge that references it — referential integrity is enforced at each
+/// batch's transaction boundary (ADR-0028), so a forward reference
+/// across batches fails the import.
 pub trait SourceExtractor {
     /// A stable identifier for this extractor (e.g. `"csv"`), recorded as
     /// provenance.
     fn name(&self) -> &str;
-    /// Produce the canonical records for the whole source.
-    fn extract(&mut self) -> Result<Vec<ImportRecord>, ImportError>;
+    /// Pull the next canonical record; `Ok(None)` ends the source.
+    fn next_record(&mut self) -> Result<Option<ImportRecord>, ImportError>;
+}
+
+/// A whole-source extractor over an in-memory record list — the library
+/// convenience for callers whose source already fits in memory, and the
+/// test harness's workhorse.
+pub struct VecExtractor {
+    name: String,
+    records: std::vec::IntoIter<ImportRecord>,
+}
+
+impl VecExtractor {
+    /// Wrap `records` as a source named `name` (the extractor trailer).
+    pub fn new(name: impl Into<String>, records: Vec<ImportRecord>) -> Self {
+        VecExtractor {
+            name: name.into(),
+            records: records.into_iter(),
+        }
+    }
+}
+
+impl SourceExtractor for VecExtractor {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn next_record(&mut self) -> Result<Option<ImportRecord>, ImportError> {
+        Ok(self.records.next())
+    }
 }
 
 /// Provenance recorded in commit trailers (spec §3.5).
@@ -111,6 +142,11 @@ pub struct Provenance {
     /// A hash of the raw source bytes (hex). → `Acetone-Source-Hash`.
     pub source_hash: String,
 }
+
+/// Records staged per transaction batch (ADR-0062). Small enough that a
+/// batch's canonical forms are negligible beside the tree caches; large
+/// enough that per-save overhead amortises.
+pub const DEFAULT_IMPORT_BATCH: usize = 8192;
 
 /// Options for one import run.
 #[derive(Debug, Clone)]
@@ -125,6 +161,11 @@ pub struct ImportOptions {
     pub provenance: Provenance,
     /// Commit author (defaults to the neutral acetone signature when `None`).
     pub author: Option<Signature>,
+    /// Records staged per transaction batch; `None` means
+    /// [`DEFAULT_IMPORT_BATCH`]. The final graph is batch-size independent
+    /// (identical roots — Invariant #1); the knob exists for memory
+    /// tuning and for the property tests that prove that independence.
+    pub batch_size: Option<usize>,
 }
 
 /// The result of an import run.
@@ -170,12 +211,11 @@ pub fn run(
         acetone_store::validate_trailer(token, value)?;
     }
 
-    // Extract before touching the workspace: a parse failure leaves the
-    // repository untouched.
-    let records = extractor.extract()?;
-
+    // Records stream in batches (ADR-0062): extraction interleaves with
+    // staging, so a failure mid-stream is cleaned up by
+    // `import_into_workspace` resetting the workspace to HEAD.
     match &opts.branch {
-        None => import_into_workspace(repo, records, &opts, &trailers),
+        None => import_into_workspace(repo, extractor, &opts, &trailers),
         Some(branch) => {
             let original = repo.current_branch()?.ok_or(GraphError::NoCurrentBranch)?;
             let original = repo
@@ -191,7 +231,7 @@ pub fn run(
                 .into());
             }
             switch_to_branch(repo, branch)?;
-            let result = import_into_workspace(repo, records, &opts, &trailers);
+            let result = import_into_workspace(repo, extractor, &opts, &trailers);
             // Return to the original branch. Provenance trailers were validated
             // up front, so the realistic post-save failure is gone and the
             // workspace is clean in every ordinary terminal state (no-op ⇒
@@ -234,90 +274,28 @@ fn switch_to_branch(repo: &Repository, branch: &str) -> Result<(), GraphError> {
     repo.checkout_branch(branch)
 }
 
-/// Map every record to canonical form, validate declared constraints, then
-/// stage, save and commit unless the graph is unchanged. The `trailers` are
-/// the already-validated provenance trailers from [`run`].
+/// Stream the source into the workspace in batches, then commit unless
+/// the graph is unchanged. The `trailers` are the already-validated
+/// provenance trailers from [`run`]. A mid-stream failure after any
+/// batch has saved resets the workspace to its committed state, so the
+/// caller is never left dirty (and, under `--branch`, never stranded).
 fn import_into_workspace(
     repo: &Repository,
-    records: Vec<ImportRecord>,
+    extractor: &mut dyn SourceExtractor,
     opts: &ImportOptions,
     trailers: &[(String, String)],
 ) -> Result<ImportOutcome, GraphError> {
-    let (labels, rtypes) = schema_maps(repo)?;
-
-    // Phase 1: map every record to its canonical form — nothing staged yet,
-    // so any failure leaves the workspace untouched.
-    let mut node_puts: Vec<(NodeKey, NodeRecord)> = Vec::new();
-    let mut edge_puts: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
-    for record in records {
-        match record {
-            ImportRecord::Node { label, properties } => {
-                let def = labels.get(&label).ok_or_else(|| {
-                    ImportError::Mapping(format!(
-                        "no schema for label {label:?}; declare it before importing"
-                    ))
-                })?;
-                node_puts.push(node_key_and_record(&label, def, properties)?);
-            }
-            ImportRecord::Edge {
-                rtype,
-                src,
-                dst,
-                discriminator,
-                properties,
-            } => {
-                let src_key = endpoint_key(&src, &labels)?;
-                let dst_key = endpoint_key(&dst, &labels)?;
-                let props = match rtypes.get(&rtype) {
-                    Some(def) => coerce_props(properties, def.types())?,
-                    None => properties,
-                };
-                let edge = EdgeKey::new(src_key, rtype, dst_key, discriminator)?;
-                edge_puts.push((edge, EdgeRecord::new(props)));
-            }
+    let (nodes, edges) = match stream_batches(repo, extractor, opts) {
+        Ok(counts) => counts,
+        Err(e) => {
+            // Best-effort cleanup; the import error always wins over any
+            // cleanup failure (an exceptional store failure here leaves
+            // the workspace dirty, exactly as a post-save failure always
+            // could — recoverable by a later reset).
+            let _ = repo.reset_workspace_to_head();
+            return Err(e);
         }
-    }
-    let nodes = node_puts.len();
-    let edges = edge_puts.len();
-
-    // Phase 2: enforce declared constraints (existence, UNIQUE — spec §2)
-    // over the would-be final state, exactly as the Cypher write path would
-    // have (acetone-9gw). The final state is the current workspace overlaid
-    // with the imported records, last record per key winning (mirroring
-    // `put_node`'s replace semantics). Only violations involving an imported
-    // key fail the import: a pre-existing breach the import does not touch
-    // is fsck's business, not this source's.
-    {
-        let snapshot = repo.workspace_snapshot()?;
-        let mut final_nodes = crate::constraints::NodeSet::new();
-        for (key, record) in snapshot.nodes()? {
-            final_nodes.insert(key.encode()?, (key, record));
-        }
-        let mut imported: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
-        for (key, record) in &node_puts {
-            let encoded = key.encode()?;
-            imported.insert(encoded.clone());
-            final_nodes.insert(encoded, (key.clone(), record.clone()));
-        }
-        let violations = crate::constraints::check_nodes(&labels, &final_nodes, Some(&imported))?;
-        if !violations.is_empty() {
-            return Err(
-                ImportError::Constraints(crate::constraints::ConstraintViolations(violations))
-                    .into(),
-            );
-        }
-    }
-
-    // Phase 3: stage and save. Referential integrity (dangling edges) is
-    // enforced by the transaction itself on save.
-    let mut txn = repo.begin_write()?;
-    for (key, record) in &node_puts {
-        txn.put_node(key, record)?;
-    }
-    for (key, record) in &edge_puts {
-        txn.put_edge(key, record)?;
-    }
-    txn.save()?;
+    };
 
     if !repo.is_dirty()? {
         return Ok(ImportOutcome::NoChange);
@@ -335,6 +313,243 @@ fn import_into_workspace(
         nodes,
         edges,
     })
+}
+
+/// Pull records, canonicalise, constraint-check and stage them in
+/// batches of `opts.batch_size` (ADR-0062). Returns `(nodes, edges)`
+/// counts of records staged. Referential integrity (dangling edges) is
+/// enforced by each batch's transaction on save (ADR-0028), which is
+/// where the extractor contract — nodes before the edges that reference
+/// them — is enforced.
+fn stream_batches(
+    repo: &Repository,
+    extractor: &mut dyn SourceExtractor,
+    opts: &ImportOptions,
+) -> Result<(usize, usize), GraphError> {
+    let (labels, rtypes) = schema_maps(repo)?;
+    let batch_size = opts.batch_size.unwrap_or(DEFAULT_IMPORT_BATCH).max(1);
+    let mut tracker = UniqueTracker::seed(repo, &labels)?;
+    let mut nodes = 0usize;
+    let mut edges = 0usize;
+    let mut done = false;
+    while !done {
+        // Canonicalise one batch — mapping failures surface before this
+        // batch stages anything.
+        let mut node_puts: Vec<(NodeKey, NodeRecord)> = Vec::new();
+        let mut edge_puts: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
+        while node_puts.len() + edge_puts.len() < batch_size {
+            let Some(record) = extractor.next_record()? else {
+                done = true;
+                break;
+            };
+            match record {
+                ImportRecord::Node { label, properties } => {
+                    let def = labels.get(&label).ok_or_else(|| {
+                        ImportError::Mapping(format!(
+                            "no schema for label {label:?}; declare it before importing"
+                        ))
+                    })?;
+                    node_puts.push(node_key_and_record(&label, def, properties)?);
+                }
+                ImportRecord::Edge {
+                    rtype,
+                    src,
+                    dst,
+                    discriminator,
+                    properties,
+                } => {
+                    let src_key = endpoint_key(&src, &labels)?;
+                    let dst_key = endpoint_key(&dst, &labels)?;
+                    let props = match rtypes.get(&rtype) {
+                        Some(def) => coerce_props(properties, def.types())?,
+                        None => properties,
+                    };
+                    let edge = EdgeKey::new(src_key, rtype, dst_key, discriminator)?;
+                    edge_puts.push((edge, EdgeRecord::new(props)));
+                }
+            }
+        }
+        if node_puts.is_empty() && edge_puts.is_empty() {
+            continue;
+        }
+
+        // Constraints (existence, UNIQUE — spec §2), per batch: the
+        // tracker sees the workspace plus every batch so far, with
+        // last-record-wins unclaiming, so the checks match the one-shot
+        // final-state semantics — except that a transient UNIQUE
+        // collision a *later* batch would have resolved is an error
+        // under streaming (recorded in ADR-0062).
+        let violations = tracker.apply_batch(&labels, &node_puts)?;
+        if !violations.is_empty() {
+            return Err(
+                ImportError::Constraints(crate::constraints::ConstraintViolations(violations))
+                    .into(),
+            );
+        }
+
+        let mut txn = repo.begin_write()?;
+        for (key, record) in &node_puts {
+            txn.put_node(key, record)?;
+        }
+        for (key, record) in &edge_puts {
+            txn.put_edge(key, record)?;
+        }
+        txn.save()?;
+        nodes += node_puts.len();
+        edges += edge_puts.len();
+    }
+    Ok((nodes, edges))
+}
+
+/// Streaming constraint enforcement (ADR-0062). Existence (`REQUIRE`) is
+/// per record. UNIQUE claims are tracked per `(label, property,
+/// canonical value encoding)` with the claiming keys — seeded by one
+/// pass over the workspace at import start (only when some label
+/// declares UNIQUE) and maintained across batches with replace-semantics
+/// unclaiming. Memory is O(claimed unique values), inherent without a
+/// persistent index (index-backed UNIQUE is acetone-ryg); with no UNIQUE
+/// constraints declared the tracker holds nothing.
+/// A UNIQUE claim's identity: `(label, property, value encoding)`.
+type ClaimTriple = (String, String, Vec<u8>);
+
+struct UniqueTracker {
+    /// Claim → owner key encodings.
+    claims: BTreeMap<ClaimTriple, std::collections::BTreeSet<Vec<u8>>>,
+    /// key encoding → the claim triples it currently owns, for unclaiming
+    /// when a later record replaces the key.
+    by_key: BTreeMap<Vec<u8>, Vec<ClaimTriple>>,
+    /// Representative value per claim triple, for violation reporting.
+    values: BTreeMap<ClaimTriple, Value>,
+    /// Key decode per owner encoding, for violation reporting.
+    keys: BTreeMap<Vec<u8>, NodeKey>,
+    active: bool,
+}
+
+impl UniqueTracker {
+    fn seed(
+        repo: &Repository,
+        labels: &BTreeMap<String, LabelDef>,
+    ) -> Result<UniqueTracker, GraphError> {
+        let mut tracker = UniqueTracker {
+            claims: BTreeMap::new(),
+            by_key: BTreeMap::new(),
+            values: BTreeMap::new(),
+            keys: BTreeMap::new(),
+            active: labels.values().any(|def| !def.unique().is_empty()),
+        };
+        if !tracker.active {
+            return Ok(tracker);
+        }
+        let snapshot = repo.workspace_snapshot()?;
+        for (key, record) in snapshot.nodes()? {
+            tracker.claim(labels, &key, &record)?;
+        }
+        Ok(tracker)
+    }
+
+    /// Register `(key, record)`'s unique-property claims, unclaiming
+    /// whatever the key held before (replace semantics).
+    fn claim(
+        &mut self,
+        labels: &BTreeMap<String, LabelDef>,
+        key: &NodeKey,
+        record: &NodeRecord,
+    ) -> Result<Vec<ClaimTriple>, GraphError> {
+        let Some(def) = labels.get(key.label()) else {
+            return Ok(Vec::new());
+        };
+        let mut touched = Vec::new();
+        if def.unique().is_empty() {
+            return Ok(touched);
+        }
+        let encoded = key.encode()?;
+        if let Some(previous) = self.by_key.remove(&encoded) {
+            for triple in previous {
+                if let Some(owners) = self.claims.get_mut(&triple) {
+                    owners.remove(&encoded);
+                    touched.push(triple);
+                }
+            }
+        }
+        let mut owned = Vec::new();
+        for property in def.unique() {
+            if let Some(value) = record.properties().get(property) {
+                let value_enc = acetone_model::values::encode_value(value)
+                    .map_err(acetone_model::records::RecordEncodeError::from)?;
+                let triple = (key.label().to_owned(), property.clone(), value_enc);
+                self.claims
+                    .entry(triple.clone())
+                    .or_default()
+                    .insert(encoded.clone());
+                self.values.insert(triple.clone(), value.clone());
+                touched.push(triple.clone());
+                owned.push(triple);
+            }
+        }
+        self.keys.insert(encoded.clone(), key.clone());
+        self.by_key.insert(encoded, owned);
+        Ok(touched)
+    }
+
+    /// Apply one batch's node puts and report the violations they cause:
+    /// missing required properties, and UNIQUE claim groups that end the
+    /// batch with two or more owners. The last record for a key wins
+    /// *before* the checks (`put_node` replace semantics), and checks run
+    /// in encoded-key order so violation reports are deterministic —
+    /// both matching the former whole-source final-state check. (Across
+    /// batches the supersede window has passed: a violating record only
+    /// corrected in a later batch errors under streaming — ADR-0062.)
+    fn apply_batch(
+        &mut self,
+        labels: &BTreeMap<String, LabelDef>,
+        node_puts: &[(NodeKey, NodeRecord)],
+    ) -> Result<Vec<crate::constraints::ConstraintViolation>, GraphError> {
+        let mut surviving: BTreeMap<Vec<u8>, &(NodeKey, NodeRecord)> = BTreeMap::new();
+        for put in node_puts {
+            surviving.insert(put.0.encode()?, put);
+        }
+        let mut violations = Vec::new();
+        let mut touched: std::collections::BTreeSet<ClaimTriple> =
+            std::collections::BTreeSet::new();
+        for (key, record) in surviving.values() {
+            // Existence: a required property must be a key property or
+            // present in the record.
+            if let Some(def) = labels.get(key.label()) {
+                for property in def.exists() {
+                    let present = def.key().iter().any(|k| k == property)
+                        || record.properties().contains_key(property);
+                    if !present {
+                        violations.push(crate::constraints::ConstraintViolation::MissingRequired {
+                            node: key.clone(),
+                            property: property.clone(),
+                        });
+                    }
+                }
+            }
+            if self.active {
+                touched.extend(self.claim(labels, key, record)?);
+            }
+        }
+        for triple in touched {
+            let Some(owners) = self.claims.get(&triple) else {
+                continue;
+            };
+            if owners.len() < 2 {
+                continue;
+            }
+            let (label, property, _) = &triple;
+            violations.push(crate::constraints::ConstraintViolation::Unique {
+                label: label.clone(),
+                property: property.clone(),
+                value: self.values.get(&triple).cloned().unwrap_or(Value::Null),
+                nodes: owners
+                    .iter()
+                    .filter_map(|encoded| self.keys.get(encoded).cloned())
+                    .collect(),
+            });
+        }
+        Ok(violations)
+    }
 }
 
 /// The label and relationship-type definitions of the current workspace,

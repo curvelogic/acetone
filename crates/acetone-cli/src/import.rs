@@ -5,6 +5,8 @@
 //! [`SourceExtractor`] and reports the outcome.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use acetone_core::graph::import::{
@@ -67,12 +69,73 @@ impl EndpointSpec {
 /// A parsed source row: field name → value.
 type Row = BTreeMap<String, Value>;
 
-/// A built-in file extractor: parse the bytes into rows, then apply the
-/// mapping. The parse is format-specific; the mapping is not.
+/// A built-in file extractor: pull rows from the source incrementally,
+/// then apply the mapping (ADR-0062). CSV and NDJSON stream in bounded
+/// memory; a JSON array is a single value and parses whole (documented
+/// residual — use CSV or NDJSON for sources larger than memory).
 struct FileExtractor {
     format: Format,
-    bytes: Vec<u8>,
     mapping: Mapping,
+    state: ExtractorState,
+}
+
+enum ExtractorState {
+    Csv {
+        headers: csv::StringRecord,
+        records: csv::StringRecordsIntoIter<BufReader<File>>,
+    },
+    Ndjson {
+        lines: std::io::Lines<BufReader<File>>,
+        line_no: usize,
+    },
+    Json {
+        rows: std::vec::IntoIter<Row>,
+    },
+}
+
+impl FileExtractor {
+    fn open(format: Format, source: &Path, mapping: Mapping) -> Result<FileExtractor> {
+        let open = || -> Result<BufReader<File>> {
+            let file = File::open(source)
+                .with_context(|| format!("opening import source {}", source.display()))?;
+            Ok(BufReader::new(file))
+        };
+        let state = match format {
+            Format::Csv => {
+                let mut reader = csv::ReaderBuilder::new()
+                    .has_headers(true)
+                    .from_reader(open()?);
+                let headers = reader
+                    .headers()
+                    .map_err(|e| anyhow::anyhow!("reading CSV header: {e}"))?
+                    .clone();
+                ExtractorState::Csv {
+                    headers,
+                    records: reader.into_records(),
+                }
+            }
+            Format::Ndjson => ExtractorState::Ndjson {
+                lines: open()?.lines(),
+                line_no: 0,
+            },
+            Format::Json => {
+                let mut bytes = Vec::new();
+                open()?
+                    .read_to_end(&mut bytes)
+                    .with_context(|| format!("reading import source {}", source.display()))?;
+                ExtractorState::Json {
+                    rows: parse_json(&bytes)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?
+                        .into_iter(),
+                }
+            }
+        };
+        Ok(FileExtractor {
+            format,
+            mapping,
+            state,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,37 +168,43 @@ impl SourceExtractor for FileExtractor {
         self.format.as_str()
     }
 
-    fn extract(&mut self) -> Result<Vec<ImportRecord>, ImportError> {
-        let rows = match self.format {
-            Format::Csv => parse_csv(&self.bytes)?,
-            Format::Json => parse_json(&self.bytes)?,
-            Format::Ndjson => parse_ndjson(&self.bytes)?,
+    fn next_record(&mut self) -> Result<Option<ImportRecord>, ImportError> {
+        let row = match &mut self.state {
+            ExtractorState::Csv { headers, records } => match records.next() {
+                None => return Ok(None),
+                Some(record) => {
+                    let record = record
+                        .map_err(|e| ImportError::Extract(format!("reading CSV row: {e}")))?;
+                    let mut row = Row::new();
+                    for (name, value) in headers.iter().zip(record.iter()) {
+                        row.insert(name.to_owned(), Value::String(value.to_owned()));
+                    }
+                    row
+                }
+            },
+            ExtractorState::Ndjson { lines, line_no } => loop {
+                let Some(line) = lines.next() else {
+                    return Ok(None);
+                };
+                *line_no += 1;
+                let line = line.map_err(|e| {
+                    ImportError::Extract(format!("reading NDJSON line {line_no}: {e}"))
+                })?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let value: serde_json::Value = serde_json::from_str(&line).map_err(|e| {
+                    ImportError::Extract(format!("parsing NDJSON line {line_no}: {e}"))
+                })?;
+                break json_object_to_row(&value)?;
+            },
+            ExtractorState::Json { rows } => match rows.next() {
+                None => return Ok(None),
+                Some(row) => row,
+            },
         };
-        rows.into_iter()
-            .map(|row| map_row(row, &self.mapping))
-            .collect()
+        map_row(row, &self.mapping).map(Some)
     }
-}
-
-/// Parse CSV with a header row; every cell is a string value.
-fn parse_csv(bytes: &[u8]) -> Result<Vec<Row>, ImportError> {
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(bytes);
-    let headers = reader
-        .headers()
-        .map_err(|e| ImportError::Extract(format!("reading CSV header: {e}")))?
-        .clone();
-    let mut rows = Vec::new();
-    for record in reader.records() {
-        let record = record.map_err(|e| ImportError::Extract(format!("reading CSV row: {e}")))?;
-        let mut row = Row::new();
-        for (name, value) in headers.iter().zip(record.iter()) {
-            row.insert(name.to_owned(), Value::String(value.to_owned()));
-        }
-        rows.push(row);
-    }
-    Ok(rows)
 }
 
 /// Parse a JSON array of objects.
@@ -146,22 +215,6 @@ fn parse_json(bytes: &[u8]) -> Result<Vec<Row>, ImportError> {
         .as_array()
         .ok_or_else(|| ImportError::Extract("JSON import expects an array of objects".into()))?;
     array.iter().map(json_object_to_row).collect()
-}
-
-/// Parse newline-delimited JSON objects (one per non-blank line).
-fn parse_ndjson(bytes: &[u8]) -> Result<Vec<Row>, ImportError> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|e| ImportError::Extract(format!("NDJSON is not valid UTF-8: {e}")))?;
-    let mut rows = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value: serde_json::Value = serde_json::from_str(line)
-            .map_err(|e| ImportError::Extract(format!("parsing NDJSON line {}: {e}", i + 1)))?;
-        rows.push(json_object_to_row(&value)?);
-    }
-    Ok(rows)
 }
 
 /// Convert a JSON object to a row, rejecting non-objects and nested objects.
@@ -265,14 +318,31 @@ fn take_endpoint(row: &mut Row, spec: &EndpointSpec) -> Result<EndpointRef, Impo
 }
 
 /// SHA-256 of the raw source bytes, lower-case hex — a git-object-format
-/// independent provenance hash (ADR-0021).
-fn source_hash(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
+/// independent provenance hash (ADR-0021). Streamed in 64 KiB chunks so
+/// hashing a source larger than memory stays O(1) resident (ADR-0062);
+/// the source is read twice — once to hash, once to parse — which keeps
+/// the provenance trailers validated before anything stages.
+fn source_hash(source: &Path) -> Result<String> {
+    let file = File::open(source)
+        .with_context(|| format!("opening import source {}", source.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .with_context(|| format!("reading import source {}", source.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    let digest = hasher.finalize();
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
         hex.push_str(&format!("{byte:02x}"));
     }
-    hex
+    Ok(hex)
 }
 
 /// Run the `import` subcommand.
@@ -292,15 +362,8 @@ pub fn run(
     let format = Format::parse(format)?;
     let mapping = build_mapping(label, edge, from, to, disc)?;
 
-    let bytes = std::fs::read(source)
-        .with_context(|| format!("reading import source {}", source.display()))?;
-    let hash = source_hash(&bytes);
-
-    let mut extractor = FileExtractor {
-        format,
-        bytes,
-        mapping,
-    };
+    let hash = source_hash(source)?;
+    let mut extractor = FileExtractor::open(format, source, mapping)?;
 
     let repo = crate::commands::open(repo_path)?;
     let opts = ImportOptions {
@@ -312,6 +375,7 @@ pub fn run(
             source_hash: hash,
         },
         author: None,
+        batch_size: None,
     };
 
     let outcome = acetone_core::graph::import(&repo, &mut extractor, opts).context("importing")?;
@@ -370,11 +434,36 @@ fn build_mapping(
 mod tests {
     use super::*;
 
+    fn temp_source(contents: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("source");
+        std::fs::write(&path, contents).expect("write");
+        (dir, path)
+    }
+
+    /// Pull every row through the streaming extractor under a node mapping.
+    fn rows_via(format: Format, contents: &[u8]) -> Vec<Row> {
+        let (_dir, path) = temp_source(contents);
+        let mapping = Mapping::Node { label: "N".into() };
+        let mut extractor = FileExtractor::open(format, &path, mapping).expect("open");
+        let mut rows = Vec::new();
+        while let Some(record) = extractor.next_record().expect("record") {
+            match record {
+                ImportRecord::Node { properties, .. } => rows.push(properties),
+                other => panic!("expected node, got {other:?}"),
+            }
+        }
+        rows
+    }
+
     #[test]
     fn source_hash_is_stable_and_sensitive() {
-        let a = source_hash(b"name,cores\nweb1,8\n");
-        let b = source_hash(b"name,cores\nweb1,8\n");
-        let c = source_hash(b"name,cores\nweb1,9\n");
+        let (_d1, p1) = temp_source(b"name,cores\nweb1,8\n");
+        let (_d2, p2) = temp_source(b"name,cores\nweb1,8\n");
+        let (_d3, p3) = temp_source(b"name,cores\nweb1,9\n");
+        let a = source_hash(&p1).expect("hash");
+        let b = source_hash(&p2).expect("hash");
+        let c = source_hash(&p3).expect("hash");
         assert_eq!(a, b);
         assert_ne!(a, c);
         // SHA-256 hex is 64 characters.
@@ -382,20 +471,34 @@ mod tests {
     }
 
     #[test]
-    fn csv_parses_header_and_rows_as_strings() {
-        let rows = parse_csv(b"name,cores\nweb1,8\ndb1,16\n").expect("csv");
+    fn csv_streams_header_and_rows_as_strings() {
+        let rows = rows_via(Format::Csv, b"name,cores\nweb1,8\ndb1,16\n");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].get("name"), Some(&Value::String("web1".into())));
         assert_eq!(rows[0].get("cores"), Some(&Value::String("8".into())));
+        // Quoted fields may contain newlines; the streaming reader must
+        // carry them across rows.
+        let rows = rows_via(
+            Format::Csv,
+            b"name,note\nweb1,\"line one\nline two\"\ndb1,plain\n",
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].get("note"),
+            Some(&Value::String("line one\nline two".into()))
+        );
     }
 
     #[test]
     fn json_array_and_ndjson_parse_to_typed_values() {
-        let json = parse_json(br#"[{"name":"web1","cores":8,"up":true}]"#).expect("json");
+        let json = rows_via(Format::Json, br#"[{"name":"web1","cores":8,"up":true}]"#);
         assert_eq!(json[0].get("cores"), Some(&Value::Int(8)));
         assert_eq!(json[0].get("up"), Some(&Value::Bool(true)));
 
-        let nd = parse_ndjson(b"{\"name\":\"web1\"}\n\n{\"name\":\"db1\"}\n").expect("ndjson");
+        let nd = rows_via(
+            Format::Ndjson,
+            b"{\"name\":\"web1\"}\n\n{\"name\":\"db1\"}\n",
+        );
         assert_eq!(nd.len(), 2);
         assert_eq!(nd[1].get("name"), Some(&Value::String("db1".into())));
     }

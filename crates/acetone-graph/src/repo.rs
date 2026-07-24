@@ -913,6 +913,38 @@ impl Repository {
         Ok(())
     }
 
+    /// Reset the workspace to its committed state, discarding staged but
+    /// uncommitted changes: the current branch tip's manifest, or the
+    /// init blank for an unborn branch. The primitive `abort_merge`
+    /// uses, exposed for callers that must clean up after a partial
+    /// batched operation (streaming import, ADR-0062) — and the
+    /// substrate for a future workspace-discard command (acetone-omk).
+    pub fn reset_workspace_to_head(&self) -> Result<(), GraphError> {
+        let _lock = WriteLock::acquire(self.store.git_dir())?;
+        let manifest = match self.head_commit()? {
+            Some(head) => self.manifest_at_commit(&head)?,
+            None => {
+                // Unborn branch: back to the init blank, preserving the
+                // workspace's chunk parameters.
+                let params = self.workspace_manifest()?.chunk_params;
+                let empty = acetone_prolly::empty(&self.store, params)?;
+                Manifest {
+                    chunk_params: params,
+                    schema: MapRoot::from_root(&empty),
+                    nodes: MapRoot::from_root(&empty),
+                    edges_fwd: MapRoot::from_root(&empty),
+                    edges_rev: MapRoot::from_root(&empty),
+                    indexes: Default::default(),
+                    conflicts: None,
+                }
+            }
+        };
+        let manifest_hash = self.store.put(&manifest.encode())?;
+        let tree = self.workspace_tree_for(&manifest_hash)?;
+        let expected = self.workspace_ref_value()?;
+        self.cas_workspace(expected.as_ref(), &tree)
+    }
+
     /// Blame a node: the commits that changed its record, newest first (spec
     /// §5.2, `CALL acetone.blame`; acetone-14c.6). Walks the first-parent
     /// chain from HEAD and probes the node map at `key` in each commit; a
