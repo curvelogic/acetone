@@ -535,28 +535,46 @@ impl<'a> Binder<'a> {
         for arg in &c.args {
             args.push(self.expr(arg, NO_AGG)?);
         }
-        let mut yields = Vec::new();
-        for column in &c.yield_items {
-            if !def.yields.contains(&column.as_str()) {
+        // `YIELD *` expands to every declared column, in declared order.
+        let requested: Vec<ast::YieldItem> = if c.yield_all {
+            def.yields
+                .iter()
+                .map(|column| ast::YieldItem {
+                    column: column.to_string(),
+                    alias: None,
+                })
+                .collect()
+        } else {
+            c.yield_items.clone()
+        };
+        let mut yields: Vec<BoundYield> = Vec::new();
+        for item in &requested {
+            if !def.yields.contains(&item.column.as_str()) {
                 return Err(BindError::UnknownYieldColumn {
                     procedure: name.clone(),
-                    column: column.clone(),
+                    column: item.column.clone(),
                     span: c.span,
                 });
             }
-            // A yield column cannot shadow a bound name (TCK Call1
-            // [15]) nor repeat (Call5 [5][6]) — both VariableAlreadyBound
-            // in TCK vocabulary.
-            if self.scope.contains_key(column.as_str())
-                || yields.iter().any(|(existing, _)| existing == column)
+            // A yield binding cannot shadow a bound name (TCK Call1 [15])
+            // nor repeat (Call5 [5][6]) — both VariableAlreadyBound in TCK
+            // vocabulary. The checks apply to the *binding* name (the alias
+            // when given), so `YIELD a AS b, b AS a` is legal.
+            let bound_name = item.alias.clone().unwrap_or_else(|| item.column.clone());
+            if self.scope.contains_key(bound_name.as_str())
+                || yields.iter().any(|y| y.name == bound_name)
             {
                 return Err(BindError::VariableAlreadyBound {
-                    name: column.clone(),
+                    name: bound_name,
                     span: c.span,
                 });
             }
-            let id = self.declare(column, EntityKind::Value, vec![]);
-            yields.push((column.clone(), id));
+            let id = self.declare(&bound_name, EntityKind::Value, vec![]);
+            yields.push(BoundYield {
+                column: item.column.clone(),
+                name: bound_name,
+                var: id,
+            });
         }
         let where_clause = match &c.where_clause {
             Some(expr) => Some(self.expr(expr, NO_AGG)?),

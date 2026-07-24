@@ -628,7 +628,8 @@ pub acetone_cypher::ast::CallClause::args: alloc::vec::Vec<acetone_cypher::ast::
 pub acetone_cypher::ast::CallClause::procedure: alloc::vec::Vec<alloc::string::String>
 pub acetone_cypher::ast::CallClause::span: acetone_cypher::span::Span
 pub acetone_cypher::ast::CallClause::where_clause: core::option::Option<acetone_cypher::ast::Expr>
-pub acetone_cypher::ast::CallClause::yield_items: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::ast::CallClause::yield_all: bool
+pub acetone_cypher::ast::CallClause::yield_items: alloc::vec::Vec<acetone_cypher::ast::YieldItem>
 impl core::clone::Clone for acetone_cypher::ast::CallClause
 pub fn acetone_cypher::ast::CallClause::clone(&self) -> acetone_cypher::ast::CallClause
 impl core::cmp::PartialEq for acetone_cypher::ast::CallClause
@@ -1271,6 +1272,47 @@ impl<T> core::convert::From<T> for acetone_cypher::ast::VarLength
 pub fn acetone_cypher::ast::VarLength::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::ast::VarLength
 pub type acetone_cypher::ast::VarLength::Output = T
+pub struct acetone_cypher::ast::YieldItem
+pub acetone_cypher::ast::YieldItem::alias: core::option::Option<alloc::string::String>
+pub acetone_cypher::ast::YieldItem::column: alloc::string::String
+impl core::clone::Clone for acetone_cypher::ast::YieldItem
+pub fn acetone_cypher::ast::YieldItem::clone(&self) -> acetone_cypher::ast::YieldItem
+impl core::cmp::PartialEq for acetone_cypher::ast::YieldItem
+pub fn acetone_cypher::ast::YieldItem::eq(&self, &acetone_cypher::ast::YieldItem) -> bool
+impl core::fmt::Debug for acetone_cypher::ast::YieldItem
+pub fn acetone_cypher::ast::YieldItem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_cypher::ast::YieldItem
+impl core::marker::Freeze for acetone_cypher::ast::YieldItem
+impl core::marker::Send for acetone_cypher::ast::YieldItem
+impl core::marker::Sync for acetone_cypher::ast::YieldItem
+impl core::marker::Unpin for acetone_cypher::ast::YieldItem
+impl core::marker::UnsafeUnpin for acetone_cypher::ast::YieldItem
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_cypher::ast::YieldItem
+impl core::panic::unwind_safe::UnwindSafe for acetone_cypher::ast::YieldItem
+impl<T, U> core::convert::Into<U> for acetone_cypher::ast::YieldItem where U: core::convert::From<T>
+pub fn acetone_cypher::ast::YieldItem::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_cypher::ast::YieldItem where U: core::convert::Into<T>
+pub type acetone_cypher::ast::YieldItem::Error = core::convert::Infallible
+pub fn acetone_cypher::ast::YieldItem::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_cypher::ast::YieldItem where U: core::convert::TryFrom<T>
+pub type acetone_cypher::ast::YieldItem::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_cypher::ast::YieldItem::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_cypher::ast::YieldItem where T: core::clone::Clone
+pub type acetone_cypher::ast::YieldItem::Owned = T
+pub fn acetone_cypher::ast::YieldItem::clone_into(&self, &mut T)
+pub fn acetone_cypher::ast::YieldItem::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_cypher::ast::YieldItem where T: 'static + ?core::marker::Sized
+pub fn acetone_cypher::ast::YieldItem::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_cypher::ast::YieldItem where T: ?core::marker::Sized
+pub fn acetone_cypher::ast::YieldItem::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_cypher::ast::YieldItem where T: ?core::marker::Sized
+pub fn acetone_cypher::ast::YieldItem::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_cypher::ast::YieldItem where T: core::clone::Clone
+pub unsafe fn acetone_cypher::ast::YieldItem::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_cypher::ast::YieldItem
+pub fn acetone_cypher::ast::YieldItem::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_cypher::ast::YieldItem
+pub type acetone_cypher::ast::YieldItem::Output = T
 pub mod acetone_cypher::bind
 pub mod acetone_cypher::bind::binder
 pub enum acetone_cypher::bind::binder::BindMode
@@ -1328,7 +1370,7 @@ pub acetone_cypher::bind::bound::BoundClause::Call::args: alloc::vec::Vec<aceton
 pub acetone_cypher::bind::bound::BoundClause::Call::procedure: &'static acetone_cypher::bind::bound::ProcedureDef
 pub acetone_cypher::bind::bound::BoundClause::Call::span: acetone_cypher::span::Span
 pub acetone_cypher::bind::bound::BoundClause::Call::where_clause: core::option::Option<acetone_cypher::bind::bound::BoundExpr>
-pub acetone_cypher::bind::bound::BoundClause::Call::yields: alloc::vec::Vec<(alloc::string::String, acetone_cypher::bind::bound::VarId)>
+pub acetone_cypher::bind::bound::BoundClause::Call::yields: alloc::vec::Vec<acetone_cypher::bind::bound::BoundYield>
 pub acetone_cypher::bind::bound::BoundClause::Create
 pub acetone_cypher::bind::bound::BoundClause::Create::patterns: alloc::vec::Vec<acetone_cypher::bind::bound::BoundPathPattern>
 pub acetone_cypher::bind::bound::BoundClause::Create::span: acetone_cypher::span::Span
@@ -1906,6 +1948,37 @@ impl<T> core::convert::From<T> for acetone_cypher::bind::bound::BoundRelPattern
 pub fn acetone_cypher::bind::bound::BoundRelPattern::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::bind::bound::BoundRelPattern
 pub type acetone_cypher::bind::bound::BoundRelPattern::Output = T
+pub struct acetone_cypher::bind::bound::BoundYield
+pub acetone_cypher::bind::bound::BoundYield::column: alloc::string::String
+pub acetone_cypher::bind::bound::BoundYield::name: alloc::string::String
+pub acetone_cypher::bind::bound::BoundYield::var: acetone_cypher::bind::bound::VarId
+impl core::fmt::Debug for acetone_cypher::bind::bound::BoundYield
+pub fn acetone_cypher::bind::bound::BoundYield::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_cypher::bind::bound::BoundYield
+impl core::marker::Send for acetone_cypher::bind::bound::BoundYield
+impl core::marker::Sync for acetone_cypher::bind::bound::BoundYield
+impl core::marker::Unpin for acetone_cypher::bind::bound::BoundYield
+impl core::marker::UnsafeUnpin for acetone_cypher::bind::bound::BoundYield
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_cypher::bind::bound::BoundYield
+impl core::panic::unwind_safe::UnwindSafe for acetone_cypher::bind::bound::BoundYield
+impl<T, U> core::convert::Into<U> for acetone_cypher::bind::bound::BoundYield where U: core::convert::From<T>
+pub fn acetone_cypher::bind::bound::BoundYield::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_cypher::bind::bound::BoundYield where U: core::convert::Into<T>
+pub type acetone_cypher::bind::bound::BoundYield::Error = core::convert::Infallible
+pub fn acetone_cypher::bind::bound::BoundYield::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_cypher::bind::bound::BoundYield where U: core::convert::TryFrom<T>
+pub type acetone_cypher::bind::bound::BoundYield::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_cypher::bind::bound::BoundYield::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for acetone_cypher::bind::bound::BoundYield where T: 'static + ?core::marker::Sized
+pub fn acetone_cypher::bind::bound::BoundYield::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_cypher::bind::bound::BoundYield where T: ?core::marker::Sized
+pub fn acetone_cypher::bind::bound::BoundYield::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_cypher::bind::bound::BoundYield where T: ?core::marker::Sized
+pub fn acetone_cypher::bind::bound::BoundYield::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_cypher::bind::bound::BoundYield
+pub fn acetone_cypher::bind::bound::BoundYield::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_cypher::bind::bound::BoundYield
+pub type acetone_cypher::bind::bound::BoundYield::Output = T
 pub struct acetone_cypher::bind::bound::FunctionDef
 pub acetone_cypher::bind::bound::FunctionDef::max_args: usize
 pub acetone_cypher::bind::bound::FunctionDef::min_args: usize
@@ -2495,7 +2568,7 @@ pub acetone_cypher::bind::BoundClause::Call::args: alloc::vec::Vec<acetone_cyphe
 pub acetone_cypher::bind::BoundClause::Call::procedure: &'static acetone_cypher::bind::bound::ProcedureDef
 pub acetone_cypher::bind::BoundClause::Call::span: acetone_cypher::span::Span
 pub acetone_cypher::bind::BoundClause::Call::where_clause: core::option::Option<acetone_cypher::bind::bound::BoundExpr>
-pub acetone_cypher::bind::BoundClause::Call::yields: alloc::vec::Vec<(alloc::string::String, acetone_cypher::bind::bound::VarId)>
+pub acetone_cypher::bind::BoundClause::Call::yields: alloc::vec::Vec<acetone_cypher::bind::bound::BoundYield>
 pub acetone_cypher::bind::BoundClause::Create
 pub acetone_cypher::bind::BoundClause::Create::patterns: alloc::vec::Vec<acetone_cypher::bind::bound::BoundPathPattern>
 pub acetone_cypher::bind::BoundClause::Create::span: acetone_cypher::span::Span

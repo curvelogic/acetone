@@ -903,6 +903,166 @@ mod tests {
     }
 
     #[test]
+    fn call_yield_aliases_bind_and_project() {
+        let provider = FixedProcedures(vec![
+            vec![
+                Value::String("added".into()),
+                Value::String("N".into()),
+                Value::String("k1".into()),
+                Value::Null,
+            ],
+            vec![
+                Value::String("removed".into()),
+                Value::String("N".into()),
+                Value::String("k2".into()),
+                Value::Null,
+            ],
+        ]);
+        // The alias is the bound name; the column name is no longer visible.
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD key AS k, kind WHERE kind = 'added' RETURN k, kind",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["k", "kind"]);
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "k1"));
+        assert!(matches!(&result.rows[0][1], Value::String(s) if s == "added"));
+    }
+
+    #[test]
+    fn call_yield_aliases_may_swap_column_names() {
+        // TCK Call5: `YIELD a AS b, b AS a` is valid — the checks apply to
+        // the *binding* names, which remain distinct.
+        let provider = FixedProcedures(vec![vec![
+            Value::String("added".into()),
+            Value::String("N".into()),
+            Value::String("k1".into()),
+            Value::Null,
+        ]]);
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD kind AS key, key AS kind RETURN key, kind",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["key", "kind"]);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "added"));
+        assert!(matches!(&result.rows[0][1], Value::String(s) if s == "k1"));
+    }
+
+    #[test]
+    fn call_yield_same_column_under_two_aliases_is_pinned() {
+        // The TCK is silent on repeating a *source* column under distinct
+        // aliases; acetone accepts it and both aliases receive the column's
+        // value. Pinned so a refactor cannot change it silently.
+        let provider = FixedProcedures(vec![vec![
+            Value::String("added".into()),
+            Value::String("N".into()),
+            Value::String("k1".into()),
+            Value::Null,
+        ]]);
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD kind AS a, kind AS b RETURN a, b",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["a", "b"]);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "added"));
+        assert!(matches!(&result.rows[0][1], Value::String(s) if s == "added"));
+    }
+
+    #[test]
+    fn standalone_yield_star_supports_where() {
+        let provider = FixedProcedures(vec![
+            vec![
+                Value::String("added".into()),
+                Value::String("N".into()),
+                Value::String("k1".into()),
+                Value::Null,
+            ],
+            vec![
+                Value::String("removed".into()),
+                Value::String("N".into()),
+                Value::String("k2".into()),
+                Value::Null,
+            ],
+        ]);
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD * WHERE kind = 'added'",
+            &provider,
+        );
+        assert_eq!(result.columns, vec!["kind", "label", "key", "node"]);
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][2], Value::String(s) if s == "k1"));
+    }
+
+    #[test]
+    fn call_yield_star_projects_declared_columns() {
+        let provider = FixedProcedures(vec![vec![
+            Value::String("abc123".into()),
+            Value::String("a subject".into()),
+        ]]);
+        let result = call_with("CALL acetone.log('main') YIELD *", &provider);
+        assert_eq!(result.columns, vec!["commit", "subject"]);
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::String(s) if s == "abc123"));
+    }
+
+    #[test]
+    fn call_yield_alias_collisions_are_already_bound() {
+        use crate::bind::{BindError, BindMode, Catalogue, bind};
+        for query in [
+            // Two yields aliased to the same name.
+            "CALL acetone.diff('a', 'b') YIELD kind AS x, key AS x RETURN x",
+            // An alias colliding with an unaliased column's binding name.
+            "CALL acetone.diff('a', 'b') YIELD kind, key AS kind RETURN kind",
+            // An alias shadowing an existing variable.
+            "MATCH (x) CALL acetone.diff('a', 'b') YIELD kind AS x RETURN x",
+        ] {
+            let parsed = crate::parse(query).expect(query);
+            let err = bind(query, &parsed, &Catalogue::empty(), BindMode::Lenient).unwrap_err();
+            assert!(
+                matches!(err, BindError::VariableAlreadyBound { .. }),
+                "{query}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn call_yield_alias_keeps_identifier_provenance() {
+        // acetone.diff declares `label` as an identifier yield; the flag
+        // follows the column through an alias.
+        let provider = FixedProcedures(vec![vec![
+            Value::String("added".into()),
+            Value::String("N".into()),
+            Value::String("k1".into()),
+            Value::Null,
+        ]]);
+        let result = call_with(
+            "CALL acetone.diff('a', 'b') YIELD label AS l, kind RETURN l, kind",
+            &provider,
+        );
+        assert_eq!(result.identifier_columns, vec![true, false]);
+    }
+
+    #[test]
+    fn bidirectional_relationship_matches_both_orientations() {
+        // `<-[:RUNS]->` behaves exactly as the undirected `-[:RUNS]-`.
+        let graph = host_graph();
+        let result = run_query(
+            "MATCH (a:Host {name: 'a'})<-[:RUNS]->(x) RETURN x",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 1);
+        let result = run_query(
+            "MATCH (s:Software)<-[:RUNS]->(x) RETURN x",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
     fn call_yields_virtual_diff_nodes() {
         // The diff virtual graph (acetone-14c.1): acetone.diff's `node` column
         // carries the changed node as a value labelled with its change kind,
