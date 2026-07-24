@@ -1686,16 +1686,24 @@ fn project(
 
 /// The row bound a following `WITH` imposes on an UNWIND's
 /// materialisation: `WITH <per-row items> [SKIP s] LIMIT k` with no
-/// DISTINCT, no ORDER BY and no aggregation consumes at most `s + k`
-/// input rows — its WHERE, if any, filters *after* SKIP/LIMIT in
-/// openCypher's clause order, so it does not affect the bound. `None`
-/// when the next clause imposes no such bound (sorting, de-duplication
-/// and aggregation genuinely need the full expansion).
+/// DISTINCT, no ORDER BY, no aggregation and no WHERE consumes at most
+/// `s + k` input rows. A WHERE disables the cap: `project()` filters
+/// *before* SKIP/LIMIT (a recorded divergence from openCypher's
+/// WHERE-last order, acetone-2ck.9), and under that order the LIMIT may
+/// need arbitrarily many input rows. `None` when the next clause
+/// imposes no bound (sorting, de-duplication and aggregation genuinely
+/// need the full expansion). Note the cap also stops evaluating later
+/// input rows entirely, so an error one of them would have raised never
+/// surfaces — lazy-engine behaviour, but adjacency-dependent here.
 fn unwind_row_cap(next: Option<&BoundClause>, ctx: &EvalCtx) -> Result<Option<usize>, ExecError> {
     let Some(BoundClause::With(projection)) = next else {
         return Ok(None);
     };
-    if projection.distinct || projection.aggregating || !projection.order_by.is_empty() {
+    if projection.distinct
+        || projection.aggregating
+        || !projection.order_by.is_empty()
+        || projection.where_clause.is_some()
+    {
         return Ok(None);
     }
     let Some(limit) = &projection.limit else {

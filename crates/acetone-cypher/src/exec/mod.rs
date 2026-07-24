@@ -1075,12 +1075,15 @@ mod tests {
             items[..],
             [Value::Int(6), Value::Int(7), Value::Int(8)]
         ));
-        // No pushdown when the WITH sorts, de-duplicates or aggregates —
-        // those genuinely need the full expansion, which stays governed.
+        // No pushdown when the WITH sorts, de-duplicates, aggregates or
+        // filters — those genuinely need the full expansion, which stays
+        // governed. (WHERE: project() filters before SKIP/LIMIT,
+        // acetone-2ck.9, so a capped input would change the answer.)
         for query in [
             "UNWIND range(1, 1000) AS i WITH DISTINCT i LIMIT 10 RETURN count(i) AS c",
             "UNWIND range(1, 1000) AS i WITH i ORDER BY i DESC LIMIT 10 RETURN collect(i)[0] AS c",
             "UNWIND range(1, 1000) AS i WITH sum(i) AS s LIMIT 10 RETURN s",
+            "UNWIND range(1, 1000) AS i WITH i LIMIT 10 WHERE i > 5 RETURN i",
         ] {
             let err =
                 run_query_with_limits(query, &EmptyGraph, &BTreeMap::new(), &tight).unwrap_err();
@@ -1090,6 +1093,24 @@ mod tests {
             );
         }
         // And under generous limits the unsafe-to-cap forms stay correct.
+        // WHERE + LIMIT keeps the engine's established answer (WHERE
+        // filters first, then LIMIT — acetone-2ck.9): a capped input
+        // would return no rows here (PR #204 review finding).
+        let result = run_query(
+            "UNWIND range(1, 1000) AS i WITH i LIMIT 3 WHERE i > 5 RETURN i",
+            &EmptyGraph,
+            &BTreeMap::new(),
+        )
+        .expect("limit + where");
+        let values: Vec<i64> = result
+            .rows
+            .iter()
+            .map(|row| match &row[0] {
+                Value::Int(n) => *n,
+                other => panic!("expected ints, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(values, vec![6, 7, 8]);
         let result = run_query(
             "UNWIND range(1, 1000) AS i WITH i ORDER BY i DESC LIMIT 3 RETURN collect(i) AS c",
             &EmptyGraph,
