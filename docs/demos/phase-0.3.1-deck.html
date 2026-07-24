@@ -1,0 +1,400 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent (house style) */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --crit: #b0413e;
+    --crit-soft: #f6e2e1;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215; --panel: #121b20; --ink: #e8eef0; --muted: #9fb0b8; --faint: #6d7f88;
+      --line: #22313a; --accent: #2dd4bf; --accent-soft: #12312e; --good: #4ade9f; --good-soft: #122b22;
+      --warn: #e2b264; --warn-soft: #2e2513; --crit: #ef8f8b; --crit-soft: #2f1817;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --crit:#b0413e; --crit-soft:#f6e2e1;
+    --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06); color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --crit:#ef8f8b; --crit-soft:#2f1817;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36); color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .deck { height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide { scroll-snap-align: start; min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: clamp(28px, 5vw, 72px); position: relative; }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px; }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  em { color: var(--ink); font-style: italic; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip { font-family: var(--mono); font-size: 12px; letter-spacing: .02em; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center; }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 18px 16px; box-shadow: var(--shadow); }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .card.lead { border-left: 3px solid var(--accent); }
+  .card.rule { border-left: 3px solid var(--warn); }
+  .card .big { font-size: clamp(30px, 4vw, 44px); font-weight: 680; letter-spacing: -.02em; color: var(--ink); line-height: 1; margin: 2px 0 6px; font-variant-numeric: tabular-nums; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  .term { background: #0d141a; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); font-family: var(--mono); font-size: 13.5px; line-height: 1.65; border: 1px solid #22313a; }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); align-items: center; }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term-title { font-family: var(--mono); font-size: 11px; color: #6d7f88; margin-left: auto; letter-spacing: .04em; }
+  .term .p { color: #2dd4bf; } .term .c { color: #e8eef0; } .term .o { color: #8b9aa2; }
+  .term .ok { color: #4ade9f; } .term .no { color: #f0a878; } .term .g { color: #7fb3ff; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step { flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; position: relative; }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  .flow .step.gate { background: var(--warn-soft); border-color: transparent; }
+  .flow .step.gate .k { color: var(--warn); }
+  @media (max-width: 760px) { .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; } .flow { gap: 8px; } }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+
+  .ec { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: var(--good); background: var(--good-soft); padding: 4px 10px; border-radius: 999px; margin-bottom: 12px; }
+  .ec.warn { color: var(--warn); background: var(--warn-soft); }
+</style>
+<title>Acetone · Phase 0.3.1 sprint demo</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Where we are"></a>
+  <a href="#s3" aria-label="The manual"></a>
+  <a href="#s4" aria-label="The manual found bugs"></a>
+  <a href="#s5" aria-label="Security hardening"></a>
+  <a href="#s6" aria-label="Constraint enforcement"></a>
+  <a href="#s7" aria-label="CLI and UX"></a>
+  <a href="#s8" aria-label="Review gate"></a>
+  <a href="#s9" aria-label="Security gate"></a>
+  <a href="#s10" aria-label="ADRs"></a>
+  <a href="#s11" aria-label="Live demo"></a>
+  <a href="#s12" aria-label="For Greg"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · 0.3.1 boundary</p>
+      <h1>Ready to hand over.</h1>
+      <p class="lede">0.3.0 made a graph a co-tenant of a git repo. 0.3.1 makes the workbench <strong>trustworthy to give to someone else</strong>: hardened against hostile input, honest about what it enforces, and documented well enough to run — and recover — from the book, not the source. No new headline feature; no on-disk format change.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>epics 7qw + 4zy · 0.3.1</span>
+        <span class="chip good"><span class="dot"></span>34 PRs, all reviewed</span>
+        <span class="chip good"><span class="dot"></span>Security gate: ready</span>
+        <span class="chip good"><span class="dot"></span>format_version 1, unchanged</span>
+      </div>
+      <p class="foot">base main @ 30db4d1 (v0.3.0) → v0.3.1</p>
+      <p class="num">01 / 12</p>
+    </div>
+  </section>
+
+  <!-- 2 · Where we are -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>Two standing epics, folded into one release.</h2>
+      <p>At the Phase 8 boundary the backlog triage surfaced a pattern: real bugs and security findings were accumulating in the P3 follow-up tier, and the operator's manual had been waiting since 0.1. Rather than carry both into Phase 9's scale-and-conformance work, we cut a dedicated quality release first.</p>
+      <div class="grid cols-2" style="margin-top:8px">
+        <div class="card lead"><span class="tag">acetone-7qw</span><h3>0.3.x quality &amp; security pass</h3><p>The bug, security, and correctness backlog — with homes and a policy (ADR-0054) so follow-ups get resolved in-phase, not net-grown.</p></div>
+        <div class="card lead"><span class="tag">acetone-4zy</span><h3>Operator's manual</h3><p>An mdBook to GitHub Pages — every command driven against the real CLI, kept honest by CI.</p></div>
+      </div>
+      <p style="margin-top:18px">The two turned out to reinforce each other: writing the manual is what found much of the quality backlog.</p>
+      <p class="num">02 / 12</p>
+    </div>
+  </section>
+
+  <!-- 3 · The manual -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <p class="eyebrow">What shipped · the manual</p>
+      <h2>A book you can run.</h2>
+      <p>Five parts, from install to a recovery runbook, plus a library/CLI reference. The discipline: <strong>every command and output is executed against the built binary</strong> — no invented transcripts — and a CI job re-runs the load-bearing examples so they can't rot.</p>
+      <div class="table-wrap" style="margin-top:8px">
+        <table>
+          <thead><tr><th>Part</th><th>Contents</th><th>PR</th></tr></thead>
+          <tbody>
+            <tr><td>I — Getting started</td><td>Install, first graph, the asset-registry worked example</td><td class="pr">#167</td></tr>
+            <tr><td>II — Working with a graph</td><td>Query cookbook, importing, history/branch/merge, schema, maintenance</td><td class="pr">#173, #175, #178</td></tr>
+            <tr><td>III — Recovery runbook</td><td>Ten failure scenarios, each broken and recovered for real</td><td class="pr">#180</td></tr>
+            <tr><td>IV–V — Reference</td><td>Library API (compiled example), CLI, conformance, glossary</td><td class="pr">#177</td></tr>
+            <tr><td>Pipeline</td><td>mdBook scaffold + Pages; <code>verify.sh</code> + link-check in CI</td><td class="pr">#162, #186</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="num">03 / 12</p>
+    </div>
+  </section>
+
+  <!-- 4 · The manual found bugs -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">The interesting part</p>
+      <h2>Writing the manual found six real bugs.</h2>
+      <p>Not code review — <em>driving the tool to document it</em>. Each was fixed in-phase, then folded back into the chapter that surfaced it.</p>
+      <ul class="clean" style="margin-top:6px">
+        <li><b>Import bypassed constraints</b> — a <code>Service</code> the manual imported without its required <code>tier</code> committed cleanly, where Cypher <code>CREATE</code> rejects it. A confirmed UNIQUE bypass too. <span class="pr">9gw · #184</span></li>
+        <li><b>Merge violations were invisible</b> — a resolved merge left a dangling edge that only <code>fsck</code> could name; the conflict flow said nothing. <span class="pr">jm8 · #187</span></li>
+        <li><b>Time travel to a tag didn't work</b> — <code>--at</code> rejected short tag names and annotated tags that <code>log</code> already resolved. <span class="pr">lqq · #185</span></li>
+        <li><b><code>log</code> hid merged branches</b> — first-parent only; needed <code>git log --all</code> to see the other side. <span class="pr">b6q · #190</span></li>
+        <li><b>No <code>query --param</code></b> — the library bound parameters; the CLI had no way to pass them. <span class="pr">9zt · #189</span></li>
+        <li><b>Branch stuck at the head</b> — no start-point, no delete; recovery needed raw <code>git update-ref</code>. <span class="pr">7qw.1 · #190</span></li>
+      </ul>
+      <p style="margin-top:16px"><strong>Documentation-by-execution earns its keep.</strong> The verify-against-the-binary rule is now enforced in CI.</p>
+      <p class="num">04 / 12</p>
+    </div>
+  </section>
+
+  <!-- 5 · Security hardening -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <p class="eyebrow">What shipped · hardening</p>
+      <h2>Made safe against input you didn't write.</h2>
+      <div class="grid cols-2">
+        <div class="card rule"><span class="tag">acetone-19x · #188</span><h3>A real process-abort DoS, fixed</h3><p>A query building a 200,000-deep value with <code>reduce</code>, then <code>DISTINCT</code>/<code>ORDER BY</code>, crashed the process with a stack overflow. Runtime value construction is now depth-capped; parameters bounded at ingestion.</p></div>
+        <div class="card rule"><span class="tag">acetone-c2a · #164</span><h3>gc path traversal, killed</h3><p>A crafted pack-sidecar stem could delete files outside the object directory — proven live, then closed. Plus co-tenant ref-ownership narrowed to an allow-list and a worktree-add TOCTOU closed.</p></div>
+        <div class="card"><span class="tag">acetone-0ds · #171</span><h3>Terminal spoofing</h3><p>Zero-width and invisible Unicode escaped on identifier output — including identifiers projected into result cells — completing the 0.1.1 bidi defence.</p></div>
+        <div class="card"><span class="tag">acetone-7vw · #172</span><h3>Encoding guards</h3><p>CBOR preallocation capped (memory amplification); non-round-trippable values rejected as node keys so identity can't diverge.</p></div>
+      </div>
+      <p style="margin-top:16px">Executor budgets now charge var-length expansion, grouping, and <code>replace()</code> amplification <span class="pr">#176</span>; <code>fsck</code> peels tags and walks symrefs instead of aborting <span class="pr">#165</span>; <code>migrate</code> rewrites tags in a crash-recoverable swing <span class="pr">#179</span>.</p>
+      <p class="num">05 / 12</p>
+    </div>
+  </section>
+
+  <!-- 6 · Constraint enforcement -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <p class="eyebrow">Correctness · the enforcement story</p>
+      <h2>A constraint now means the same thing on every path.</h2>
+      <p>The manual found that <code>import</code> and <code>put-node</code> could persist a node <code>CREATE</code> would reject. The fix wasn't to patch two spots — it was to route every write surface through one shared checker, then audit the rest of the surface deliberately.</p>
+      <div class="table-wrap" style="margin-top:6px">
+        <table>
+          <thead><tr><th>Write path</th><th>Before 0.3.1</th><th>Now</th></tr></thead>
+          <tbody>
+            <tr><td>Cypher <code>CREATE</code>/<code>SET</code></td><td>enforced</td><td>enforced (unchanged)</td></tr>
+            <tr><td><code>import</code></td><td class="pr">bypassed ✕</td><td><code>check_nodes</code> — atomic, names offenders</td></tr>
+            <tr><td><code>put-node</code></td><td class="pr">bypassed ✕</td><td><code>check_upsert</code></td></tr>
+            <tr><td><code>declare-label</code> retrofit</td><td class="pr">silent over bad data</td><td>refuses, names violating keys</td></tr>
+            <tr><td>merge completion</td><td>enforced</td><td>enforced + violations named</td></tr>
+            <tr><td><code>fsck</code></td><td>didn't check</td><td>reports breaches as advisories</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:14px">Two review cycles caught the <code>put-node</code> half — the same class as the import hole, found by insisting the plumbing audit close the class, not the instance.</p>
+      <p class="num">06 / 12</p>
+    </div>
+  </section>
+
+  <!-- 7 · CLI & UX -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <p class="eyebrow">What shipped · reachable through the tool</p>
+      <h2>The library's capabilities, now on the CLI.</h2>
+      <div class="grid cols-2">
+        <div class="card"><span class="tag">acetone-9zt · #189</span><h3><code>query --param KEY=VALUE</code></h3><p>Strict Cypher-literal binding — a bare word errors rather than silently becoming a string; no substitution into query text, so injection is structurally impossible. Composes with <code>--at</code>; shell <code>:param</code>.</p></div>
+        <div class="card"><span class="tag">acetone-b6q · #190</span><h3><code>log --all</code> + branch UX</h3><p>Walks every branch tip; merge commits show a structural parents line that hostile message content <em>cannot</em> forge. <code>branch NAME [REFSPEC]</code> and <code>branch --delete</code>.</p></div>
+        <div class="card"><span class="tag">acetone-lqq · #185</span><h3>Tag-aware time travel</h3><p><code>--at v1.2</code> resolves short tag names and peels annotated tags, with git-parity precedence.</p></div>
+        <div class="card"><span class="tag">acetone-cbl.3 · #192</span><h3>Errors that teach</h3><p>Unknown label suggests <code>declare-label</code>; write-only queries drop the stray <code>(no columns)</code> line; map projections and blame arity get named messages.</p></div>
+      </div>
+      <p class="num">07 / 12</p>
+    </div>
+  </section>
+
+  <!-- 8 · Review gate -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">How it landed</p>
+      <h2>Every PR through the gate — including the fix cycles.</h2>
+      <div class="grid cols-3" style="margin-bottom:18px">
+        <div class="card"><div class="big">34</div><p>PRs merged (#160–#194), one withdrawn</p></div>
+        <div class="card"><div class="big">1602</div><p>TCK scenarios pass — 41.1%, up from 1596</p></div>
+        <div class="card"><div class="big">0</div><p>direct commits to main; every change reviewed</p></div>
+      </div>
+      <p>The gate did real work this phase. Several PRs took a <strong>REQUEST-CHANGES → fix → re-review</strong> loop before merging — the adversarial reviewers caught a projected-identifier zero-width leak (#171), an SSH/X.509 signed-tag detection gap in <code>migrate</code> (#179), the <code>put-node</code> constraint hole (#184), and a stale flagship manual chapter (#187). The re-reviews found <em>new</em> bugs in the fixes twice.</p>
+      <p class="num">08 / 12</p>
+    </div>
+  </section>
+
+  <!-- 9 · Security gate -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="ec">Milestone security review · gate ready to close</p>
+      <h2>Swept the whole phase diff. One Medium, fixed in-phase.</h2>
+      <p>A fresh reviewer swept <code>v0.3.0..HEAD</code> — decode/panic paths, path/ref injection, both GitHub workflows, terminal spoofing, constraint completeness, dependencies, format stability — with focused sub-audits of migrate, the depth cap, and the new CLI surfaces. <strong>No blocker or high findings.</strong> <code>cargo audit</code> clean, no net-new dependencies, no format-byte change.</p>
+      <div class="risk" style="margin-top:8px">
+        <div class="r"><span class="id">w9uu</span><span class="t"><b style="color:var(--ink)">Medium, reproduced.</b> A crafted <code>migrate</code> journal could repoint a co-tenant's <em>code</em> branch — recovery validated ref format but not namespace ownership. Reachable only via an attacker-supplied on-disk repo; no escape standalone. <b style="color:var(--good)">Fixed in-phase</b> (#194) rather than deferred, per ADR-0054.</span></div>
+        <div class="r"><span class="id">becn</span><span class="t">Low — fsck names identifiers via the sentence path, so zero-width survives (reordering already neutralised). Accepted residual, filed.</span></div>
+      </div>
+      <p class="num">09 / 12</p>
+    </div>
+  </section>
+
+  <!-- 10 · ADRs -->
+  <section class="slide" id="s10">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions recorded</p>
+      <h2>Four ADRs — one needs your ratification.</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ADR</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr><td>0055</td><td>Roadmap-tail refresh — closed gates recorded, crates.io hold standing</td></tr>
+            <tr><td>0056</td><td>Repository lifecycle — recoverable checkout, read-only open, no-change-commit guard</td></tr>
+            <tr><td>0057</td><td>Release process encoded as a beads formula <span class="pr">(governance item, below)</span></td></tr>
+            <tr><td>0058</td><td>Graph violations re-derived live and named at merge completion</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card rule" style="margin-top:16px"><h3>Governance: ratify <code>.beads/formulas/</code> as governing-config</h3><p>ADR-0057 self-applied the full review path to the release formula, but CLAUDE.md's enumerated governing-config list doesn't yet name <code>.beads/formulas/</code>. Adding it is a governance change — proposed here, made only if you agree.</p></div>
+      <p class="num">10 / 12</p>
+    </div>
+  </section>
+
+  <!-- 11 · Live demo -->
+  <section class="slide" id="s11">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo · one step per turn</p>
+      <h2>Driven against the real 0.3.1 binary.</h2>
+      <p>We'll walk these at the terminal — announce, run, read the output, discuss — not batch them.</p>
+      <div class="term" style="margin-top:8px">
+        <div class="term-bar"><i></i><i></i><i></i><span class="term-title">acetone 0.3.1 · demo path</span></div>
+        <div class="term-body">
+<div class="l"><span class="o"># 1 · a constraint now holds on every path</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone import services.json --label Service</span></div>
+<div class="l"><span class="no">error: node "Service" ["billing"] is missing required property "tier"</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 2 · a resolved merge names its own violation</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone resolve --all-theirs</span></div>
+<div class="l"><span class="no">the resolved graph has 1 graph-level violation(s):</span></div>
+<div class="l"><span class="no">  dangling-edge  RUNS_ON  "Service"["identity"] -> "Host"["db2"]</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 3 · parameters, time travel, log --all</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query 'MATCH (s:Service) WHERE s.tier = $t RETURN s.name' --param t="'gold'" --at v0.3.0</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone log --all</span> <span class="o"># the merged-in branch is visible</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 4 · the DoS that used to abort — now a clean error</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query 'RETURN reduce(s=[0], x IN range(1,200000) | [s])'</span></div>
+<div class="l"><span class="no">error: value nesting exceeds the depth limit (256)</span></div>
+<div class="l"> </div>
+<div class="l"><span class="o"># 5 · the manual, verified in CI</span></div>
+<div class="l"><span class="p">$</span> <span class="c">docs/manual/verify.sh</span></div>
+<div class="l"><span class="ok">ALL 45 CHECKS PASSED</span></div>
+        </div>
+      </div>
+      <p class="num">11 / 12</p>
+    </div>
+  </section>
+
+  <!-- 12 · For Greg -->
+  <section class="slide" id="s12">
+    <div class="slide-inner">
+      <p class="eyebrow">Over to you</p>
+      <h2>Decisions queued, and the ship gate.</h2>
+      <div class="grid cols-2">
+        <div class="card lead"><h3>Decisions (the ADRs are the agenda)</h3>
+          <ul class="clean" style="margin-top:10px">
+            <li>Ratify <b><code>.beads/formulas/</code></b> into CLAUDE.md's governing-config list (ADR-0057).</li>
+            <li>Close the two roadmap gates: the <b>manual</b>, and the <b>TCK bar</b> for this release.</li>
+            <li><code>acetone-63m.12</code> — file the gix ref-transaction TOCTOU <b>upstream</b>? Still needs your go-ahead.</li>
+          </ul>
+        </div>
+        <div class="card rule"><h3>Actions on your machine / accounts</h3>
+          <ul class="clean" style="margin-top:10px">
+            <li>Create the <b><code>HOMEBREW_TAP_TOKEN</code></b> secret so the tap auto-bump can push.</li>
+            <li>Enable <b>Settings → Pages → GitHub Actions</b> so the manual publishes.</li>
+            <li><b>Publish the draft</b> — that creates the <code>v0.3.1</code> tag as you, and triggers the tap bump. Prep has landed on main; the workflow builds from there.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="flow" style="margin-top:20px">
+        <div class="step"><div class="k">PREFLIGHT</div><div class="v">main green</div><div class="d">done</div></div>
+        <div class="step"><div class="k">PREP</div><div class="v">bump + changelog</div><div class="d">#193 merged</div></div>
+        <div class="step"><div class="k">BUILD</div><div class="v">draft + attest</div><div class="d">on your dispatch</div></div>
+        <div class="step gate"><div class="k">PUBLISH ▸ GATE</div><div class="v">you publish</div><div class="d">creates the tag</div></div>
+        <div class="step"><div class="k">POST</div><div class="v">tap PR</div><div class="d">automatic</div></div>
+      </div>
+      <p class="foot">Phase report: docs/reports/phase-0.3.1.md · Release: bd mol wisp release --var version=0.3.1</p>
+      <p class="num">12 / 12</p>
+    </div>
+  </section>
+
+</main>
