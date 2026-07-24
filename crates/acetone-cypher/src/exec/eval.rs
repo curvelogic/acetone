@@ -219,7 +219,7 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             subject,
             labels,
             span,
-        } => match eval(subject, row, ctx)? {
+        } => match eval(subject, row, ctx)?.decayed() {
             Value::Null => Ok(Value::Null),
             Value::Node(node) => Ok(Value::Bool(
                 labels.iter().all(|label| node.labels.contains(label)),
