@@ -126,6 +126,21 @@ ref name or commit hash); the new branch is not checked out.
 commit or graph data is deleted, so the branch's commits stay reachable by
 hash — and the checked-out branch is refused. Takes `--json`.
 
+### `acetone tag [NAME [REFSPEC]] [-m <MESSAGE>] [--delete NAME]`
+
+With no argument, list the graph's tags (short names). With `NAME`, create
+an **annotated** tag — on the current head commit by default, or on
+`REFSPEC` (a branch or tag short name, full ref name or commit hash) — with
+`-m` for a message (default: the tag name). `--delete NAME` (`-d`) deletes
+a tag instead: ref removal only, the tagged commit stays reachable by hash.
+Takes `--json`.
+
+Tags are written to the graph's own namespace, so their short names resolve
+in `--at`/`AT` and `gc` and `migrate` manage them — in co-tenant mode a
+plain `git tag` would land in the code repository's namespace instead. The
+command is deliberately thin: signing, verification and the rest of git's
+tag porcelain remain git's job, at the same namespaced path (ADR-0059).
+
 ### `acetone checkout <BRANCH>`
 
 Switch the checked-out branch.

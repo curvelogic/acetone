@@ -48,13 +48,14 @@ pointing at a tag object, not a commit — and fsck peels it and audits the
 version underneath without complaint:
 
 ```console
-$ git tag -a audit-2026-07 -m "quarterly audit point"
+$ acetone tag audit-2026-07 -m "quarterly audit point"
+created tag "audit-2026-07" at 38c6730b2a1f09e6f2f8f35c2ea52a0e6f1d9c44
 $ acetone fsck
 fsck: clean
 ```
 
-(`query --at` peels annotated tags the same way — but, as you will see
-below, `migrate` does not yet.)
+(`query --at` peels annotated tags the same way, and `migrate` rewrites
+them — the whole tag lifecycle understands them.)
 
 Run fsck whenever you would run `git fsck`: after an interrupted operation,
 after moving or copying a repository, before relying on a backup, or simply
@@ -190,15 +191,22 @@ commit graph — preserving each commit's message, author and committer
 for every commit**. Sharing the result means a force-push. It exists for the
 standalone repository that *is* the graph — no code co-tenant, no fetched
 clones to diverge — and wants a single-format history, or wants to retune
-storage. It refuses a dirty or mid-merge workspace, and (a current
-limitation) a repository with annotated tag refs, since it cannot yet
-rewrite tag *objects* — delete or lighten them first:
+storage. It refuses a dirty or mid-merge workspace. Annotated tags come
+along faithfully — each tag object is rewritten preserving its name, tagger
+and message, pointing at the rewritten commit. The one tag migrate cannot
+carry is a **signed** one (made with `git tag -s`; `acetone tag` never
+signs): the rewritten bytes could never hold the original signature, and
+dropping it silently is forbidden, so a signed tag refuses the whole
+migration up front. Delete or re-tag it unsigned first:
 
 ```console
+$ git tag -s attested-2026-07 -m "signed audit point"
 $ acetone migrate
-error: rewriting history: ref "refs/tags/audit-2026-07" does not point at an acetone commit
-$ git tag -d audit-2026-07
-Deleted tag 'audit-2026-07' (was 38c6730)
+error: rewriting history: cannot rewrite signed tag "attested-2026-07": the rewritten tag could not carry the original signature
+$ git tag -d attested-2026-07
+Deleted tag 'attested-2026-07' (was 09b17f3)
+$ acetone tag attested-2026-07 -m "audit point, unsigned"
+created tag "attested-2026-07" at 38c6730b2a1f09e6f2f8f35c2ea52a0e6f1d9c44
 ```
 
 The transform it applies today is **re-chunking**: rebuilding every map under

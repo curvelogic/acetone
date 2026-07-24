@@ -556,6 +556,55 @@ impl GitStore {
         }))
     }
 
+    /// Write a fresh **annotated tag object**: `name` and `message` as
+    /// given, tagger stamped *now* with the supplied identity (the same
+    /// validation and clock as commit signatures), pointing at `target`,
+    /// whose kind is read from the store — so `target` must already exist
+    /// ([`StoreError::Corrupt`] otherwise, mirroring [`Self::rewrite_tag`]).
+    /// Object creation only: the caller writes the ref that makes the tag
+    /// reachable, so a failed ref step leaves nothing but a harmless
+    /// unreachable object. Acetone never *creates* signed tags (ADR-0059 —
+    /// `migrate` could not rewrite them; git is the escape hatch), so a
+    /// message carrying a signature block is refused
+    /// ([`StoreError::SignedTagCreation`]) rather than written as a lie.
+    pub fn create_tag(
+        &self,
+        name: &str,
+        target: &Hash,
+        message: &str,
+        tagger: &crate::store::Signature,
+    ) -> Result<Hash, StoreError> {
+        if message_has_signature_block(message) {
+            return Err(StoreError::SignedTagCreation {
+                name: name.to_owned(),
+            });
+        }
+        let target_header = self.find_header(target)?.ok_or_else(|| {
+            StoreError::corrupt("tag target", "target object is absent from the store")
+        })?;
+        let body = message.trim_end();
+        if body.is_empty() {
+            return Err(StoreError::Corrupt {
+                context: "tag message",
+                reason: "tag message must not be empty".into(),
+            });
+        }
+        let tag_object = gix::objs::Tag {
+            target: target.oid(),
+            target_kind: target_header.kind(),
+            name: name.into(),
+            tagger: Some(git_signature(tagger)?),
+            message: format!("{body}\n").into(),
+            pgp_signature: None,
+        };
+        let tag_id = self
+            .repo
+            .write_object(&tag_object)
+            .map_err(|e| StoreError::backend("writing tag", e))?
+            .detach();
+        Ok(Hash::from_oid(tag_id))
+    }
+
     /// Rewrite one annotated tag for a history migration (`acetone
     /// migrate`): write a **new** tag object that preserves `tag`'s name,
     /// tagger (identity **and** timestamp) and message verbatim but points

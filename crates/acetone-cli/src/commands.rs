@@ -49,6 +49,20 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             delete.as_deref(),
             json,
         ),
+        Command::Tag {
+            name,
+            refspec,
+            message,
+            delete,
+            json,
+        } => tag(
+            repo_path,
+            name.as_deref(),
+            refspec.as_deref(),
+            message.as_deref(),
+            delete.as_deref(),
+            json,
+        ),
         Command::Checkout { branch: name } => checkout(repo_path, &name),
         Command::Merge {
             refspec,
@@ -491,6 +505,59 @@ fn branch(
                 return Ok(());
             }
             outln!("created branch {name:?} at {}", target.to_hex());
+        }
+    }
+    Ok(())
+}
+
+fn tag(
+    repo_path: &Path,
+    name: Option<&str>,
+    refspec: Option<&str>,
+    message: Option<&str>,
+    delete: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let repo = open(repo_path)?;
+    if let Some(name) = delete {
+        // Ref removal only: the tagged commit stays in the store, reachable
+        // by hash (acetone gc never deletes).
+        let was = repo
+            .delete_tag(name)
+            .with_context(|| format!("deleting tag {name:?}"))?;
+        if json {
+            emit_json(&json!({ "deleted": name, "hash": was.to_hex() }));
+            return Ok(());
+        }
+        outln!("deleted tag {name:?} (was {})", was.to_hex());
+        return Ok(());
+    }
+    match name {
+        None => {
+            let tags = repo.tags()?;
+            if json {
+                let names: Vec<Json> = tags
+                    .iter()
+                    .map(|(short, _hash)| Json::String(short.clone()))
+                    .collect();
+                emit_json(&json!({ "tags": names }));
+                return Ok(());
+            }
+            for (short, _hash) in tags {
+                // Tag names are repository-controlled identifiers, like
+                // branch names; sanitise before the terminal.
+                outln!("{}", sanitise_identifier(&short));
+            }
+        }
+        Some(name) => {
+            let target = repo
+                .create_tag(name, refspec, message)
+                .with_context(|| format!("creating tag {name:?}"))?;
+            if json {
+                emit_json(&json!({ "created": name, "hash": target.to_hex() }));
+                return Ok(());
+            }
+            outln!("created tag {name:?} at {}", target.to_hex());
         }
     }
     Ok(())

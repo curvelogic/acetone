@@ -47,6 +47,7 @@ const SUBCOMMANDS: &[&str] = &[
     "commit",
     "log",
     "branch",
+    "tag",
     "checkout",
     "merge",
     "declare-label",

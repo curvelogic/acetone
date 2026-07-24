@@ -12,6 +12,7 @@ Commands:
   commit            Turn the workspace's staged changes into a commit
   log               Show commit history, newest first
   branch            List branches, create one, or delete one
+  tag               List tags, create one, or delete one
   checkout          Switch the checked-out branch
   diff              Show the graph-level difference between two versions
   merge             Merge another version into the current branch
@@ -48,7 +49,8 @@ Options:
           Print version
 
 Command groups:
-  Everyday      init, status, commit, log, branch, checkout, diff, merge, resolve
+  Everyday      init, status, commit, log, branch, tag, checkout, diff, merge,
+                resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate
@@ -58,7 +60,8 @@ Relationship to git (an acetone version IS a git commit):
   Use acetone, not git   commit, merge, resolve, checkout, declare-*, reindex,
                          import, export, fsck, gc, migrate — the git equivalents
                          would write commits acetone cannot read.
-  Either works           log, status, diff, branch — acetone's are graph-aware;
-                         plain git still works on the same repo.
+  Either works           log, status, diff, branch, tag — acetone's are
+                         graph-aware (and, co-tenant, namespace-aware); plain
+                         git still works on the same repo.
   Git only (transport)   clone, fetch, push, pull, remote — no acetone command;
                          any git remote is backup and transport.

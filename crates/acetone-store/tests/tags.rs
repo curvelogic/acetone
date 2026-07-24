@@ -5,7 +5,7 @@
 
 mod common;
 
-use acetone_store::{CommitStore, GitStore, Hash, NewCommit, RefStore, StoreError};
+use acetone_store::{CommitStore, GitStore, Hash, NewCommit, RefStore, Signature, StoreError};
 use common::{git, git_stdin, new_store, repo_path};
 
 /// One minimal acetone commit to hang tags off.
@@ -229,4 +229,71 @@ fn rewrite_tag_requires_the_new_target_to_exist() {
         Err(StoreError::Corrupt { .. }) => {}
         other => panic!("expected Corrupt for an absent target, got {other:?}"),
     }
+}
+
+#[test]
+fn create_tag_writes_an_annotated_tag_git_can_read() {
+    // ADR-0059 (acetone-ujsk): `create_tag` is the creation quarter of the
+    // tag module — a fresh annotated tag object real git verifies.
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    let c = commit(&store, "first");
+
+    let tag_id = store
+        .create_tag("v1", &c, "release one", &Signature::default())
+        .expect("create_tag");
+    assert_ne!(tag_id, c, "a fresh tag OBJECT, not the commit");
+
+    // Round-trips through our own reader…
+    let tag = store
+        .read_tag(&tag_id)
+        .expect("read_tag")
+        .expect("a tag object");
+    assert_eq!(tag.target, c);
+    assert_eq!(tag.name, "v1");
+    assert_eq!(tag.message.trim_end(), "release one");
+    assert!(!tag.signed);
+    let tagger = tag.tagger.expect("tagger recorded");
+    assert_eq!(tagger.name, "acetone");
+    assert_eq!(tagger.email, "acetone@acetone.invalid");
+
+    // …peels to the commit, and real git decodes and fscks it.
+    assert_eq!(store.peel_tag(&tag_id).expect("peel"), c);
+    store
+        .write_ref("refs/tags/v1", None, &tag_id)
+        .expect("write ref");
+    let shown = git(&repo, &["cat-file", "-p", &tag_id.to_hex()]);
+    assert!(shown.contains("tag v1"), "git decodes the object: {shown}");
+    assert!(shown.contains("release one"));
+    git(&repo, &["fsck", "--strict"]);
+}
+
+#[test]
+fn create_tag_refuses_an_absent_target_and_an_empty_message() {
+    let (_dir, store) = new_store();
+    let c = commit(&store, "first");
+
+    let absent = Hash::from_hex("0123456789abcdef0123456789abcdef01234567").expect("hex");
+    assert!(matches!(
+        store.create_tag("v1", &absent, "msg", &Signature::default()),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        store.create_tag("v1", &c, "  \n", &Signature::default()),
+        Err(StoreError::Corrupt { .. })
+    ));
+}
+
+#[test]
+fn create_tag_refuses_a_message_carrying_a_signature_block() {
+    // Acetone never *creates* signed tags (migrate could not rewrite them);
+    // a message that would make the object read as signed is refused, not
+    // written as a lie.
+    let (_dir, store) = new_store();
+    let c = commit(&store, "first");
+    let sneaky = "msg\n-----BEGIN PGP SIGNATURE-----\n\nAAAA\n-----END PGP SIGNATURE-----\n";
+    assert!(matches!(
+        store.create_tag("v1", &c, sneaky, &Signature::default()),
+        Err(StoreError::SignedTagCreation { name }) if name == "v1"
+    ));
 }

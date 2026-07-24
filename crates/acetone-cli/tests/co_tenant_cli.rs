@@ -171,3 +171,59 @@ fn init_co_tenant_rejects_a_legacy_standalone_workspace() {
         "co-tenant init must reject a repo carrying a legacy standalone workspace"
     );
 }
+
+#[test]
+fn tag_in_co_tenant_mode_lands_in_the_graph_namespace_and_resolves_by_short_name() {
+    // The scenario acetone-ujsk exists for: in co-tenant mode a plain
+    // `git tag v1` would land in the CODE repo's namespace, invisible to
+    // `--at v1`; `acetone tag v1` writes the namespaced path instead.
+    let (_dir, repo) = code_repo();
+    assert!(
+        acetone(&repo, &["init", "--co-tenant", "assets"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["declare-label", "Host", "--key", "name"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'web1'})"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "first"]).status.success());
+
+    let out = acetone(&repo, &["tag", "v1"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Physically namespaced; the code repo's own refs/tags is untouched.
+    let refs = stdout(&git(
+        &repo,
+        &["for-each-ref", "--format=%(refname)", "refs/tags"],
+    ));
+    assert!(
+        refs.contains("refs/tags/acetone/assets/v1"),
+        "tag not namespaced; refs:\n{refs}"
+    );
+    assert!(
+        !refs.contains("refs/tags/v1"),
+        "plain refs/tags/v1 must not exist; refs:\n{refs}"
+    );
+
+    // The short name time-travels; listing shows the short name only.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "--at",
+            "v1",
+            "MATCH (h:Host) RETURN count(h) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "n\n1", "{}", stderr(&out));
+    assert_eq!(stdout(&acetone(&repo, &["tag"])), "v1\n");
+}

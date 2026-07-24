@@ -136,6 +136,21 @@ pub enum StoreError {
         name: String,
     },
 
+    /// Creating a tag whose message carries a signature block is refused
+    /// ([`crate::GitStore::create_tag`], ADR-0059): acetone never creates
+    /// signed tags — `migrate` could not rewrite them — and writing an
+    /// object that merely *reads* as signed would be a lie. Sign with git
+    /// at the graph's tag path instead.
+    #[error(
+        "refusing to create tag {name:?}: its message carries a signature \
+         block, and acetone does not create signed tags — sign with git \
+         at the graph's tag path instead"
+    )]
+    SignedTagCreation {
+        /// The tag name as given.
+        name: String,
+    },
+
     /// An object was found but its contents do not decode as the structure
     /// acetone expects — a truncated commit, a commit tree without a
     /// manifest entry, and so on. Distinct from absence (`Ok(None)`).

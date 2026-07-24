@@ -494,6 +494,86 @@ impl Repository {
         Ok(target)
     }
 
+    /// All tags, as `(short name, ref target)` pairs in name order — the
+    /// mirror of [`Self::branches`]. The target is the ref's **raw** value:
+    /// for an annotated tag (what [`Self::create_tag`] writes) that is the
+    /// tag *object*, not the commit underneath — peel with
+    /// [`GitStore::peel_tag`] or resolve the short name via
+    /// [`Self::resolve_commit`] when the commit is wanted.
+    pub fn tags(&self) -> Result<Vec<(String, Hash)>, GraphError> {
+        Ok(self
+            .store
+            .list_refs(self.namespace.tag_prefix())?
+            .into_iter()
+            .map(|(name, hash)| {
+                let short = self.namespace.tag_name(&name).unwrap_or(&name).to_owned();
+                (short, hash)
+            })
+            .collect())
+    }
+
+    /// Create an **annotated** tag `name` on the commit `refspec` resolves
+    /// to (default: the current head commit), returning that commit. The
+    /// message defaults to the tag name. Thin by design (ADR-0059): the tag
+    /// is written at this graph's namespaced path
+    /// ([`GraphRefNamespace::tag_ref`]) so that short-name `--at`
+    /// resolution, `gc` ownership and `migrate` rewriting all manage it —
+    /// signing, verification and the rest of git's tag porcelain remain
+    /// git's job, at that same path. The tagger identity is the neutral
+    /// placeholder commits use (real identity is acetone-gid).
+    pub fn create_tag(
+        &self,
+        name: &str,
+        refspec: Option<&str>,
+        message: Option<&str>,
+    ) -> Result<Hash, GraphError> {
+        let full = self.namespace.tag_ref(name);
+        // Read the ref first: this validates the tag name *before* any
+        // object is written (a bad name fails here, leaving no debris) and
+        // fast-fails the common duplicate case. The compare-and-swap on the
+        // write below remains the authoritative guard.
+        if self.store.read_ref(&full)?.is_some() {
+            return Err(GraphError::TagExists {
+                name: name.to_owned(),
+            });
+        }
+        let target = match refspec {
+            Some(spec) => self.resolve_commit(spec)?,
+            None => self.head_commit()?.ok_or(GraphError::NoCurrentBranch)?,
+        };
+        let message = message.unwrap_or(name);
+        if message.trim().is_empty() {
+            return Err(GraphError::EmptyTagMessage);
+        }
+        let tag_id = self
+            .store
+            .create_tag(name, &target, message, &Signature::default())?;
+        match self.store.write_ref(&full, None, &tag_id) {
+            Ok(()) => Ok(target),
+            Err(StoreError::CasFailed { .. }) => Err(GraphError::TagExists {
+                name: name.to_owned(),
+            }),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Delete tag `name`, returning the ref's former target (for an
+    /// annotated tag, the tag object — exactly what `git tag -d` reports).
+    /// Ref plumbing only, like [`Self::delete_branch`]: no object is
+    /// removed, so the tagged commit stays reachable by hash. There is no
+    /// checked-out guard — tags are never checked out.
+    pub fn delete_tag(&self, name: &str) -> Result<Hash, GraphError> {
+        let full = self.namespace.tag_ref(name);
+        let target = self
+            .store
+            .read_ref(&full)?
+            .ok_or_else(|| GraphError::NoSuchTag {
+                name: name.to_owned(),
+            })?;
+        self.store.delete_ref(&full)?;
+        Ok(target)
+    }
+
     /// Check out branch `name`: point the checked-out ref at it and reset
     /// the workspace to its committed manifest. Refuses to discard
     /// uncommitted changes ([`GraphError::DirtyWorkspace`]) — precisely,
