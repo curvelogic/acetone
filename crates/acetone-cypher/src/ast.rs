@@ -401,6 +401,14 @@ pub enum Expr {
         pattern: Box<PathPattern>,
         span: Span,
     },
+    /// A label predicate in expression position: `n:Label1:Label2`
+    /// (openCypher; true when every named label holds — for a
+    /// relationship subject, when every name equals its type).
+    HasLabels {
+        subject: Box<Expr>,
+        labels: Vec<String>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -422,7 +430,8 @@ impl Expr {
             | Expr::Slice { span, .. }
             | Expr::Quantifier { span, .. }
             | Expr::Reduce { span, .. }
-            | Expr::PatternPredicate { span, .. } => *span,
+            | Expr::PatternPredicate { span, .. }
+            | Expr::HasLabels { span, .. } => *span,
         }
     }
 
@@ -446,7 +455,8 @@ impl Expr {
             | Expr::Slice { span, .. }
             | Expr::Quantifier { span, .. }
             | Expr::Reduce { span, .. }
-            | Expr::PatternPredicate { span, .. } => *span = new_span,
+            | Expr::PatternPredicate { span, .. }
+            | Expr::HasLabels { span, .. } => *span = new_span,
         }
     }
 
@@ -519,6 +529,7 @@ impl Expr {
                     out.extend(node.properties.iter());
                 }
             }
+            Expr::HasLabels { subject, .. } => out.push(&**subject),
         }
         out
     }
@@ -612,6 +623,7 @@ impl Expr {
                     out.extend(node.properties.take());
                 }
             }
+            Expr::HasLabels { subject, .. } => take_box(subject, out),
         }
     }
 }

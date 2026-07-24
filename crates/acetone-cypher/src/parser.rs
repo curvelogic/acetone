@@ -1271,6 +1271,24 @@ impl Parser<'_> {
             } else if self.at(&TokenKind::LBracket) {
                 self.bump();
                 expr = self.index_or_slice(expr)?;
+            } else if self.at(&TokenKind::Colon) {
+                // Label predicate in expression position (openCypher):
+                // `n:Label1:Label2` is a conjunction over the subject's
+                // labels. Unambiguous here — map-literal and pattern
+                // colons are consumed by their own parsers.
+                let mut labels = Vec::new();
+                let mut end = self.peek().span;
+                while self.eat(&TokenKind::Colon) {
+                    let (label, label_span) = self.any_name("a label name after ':'")?;
+                    labels.push(label);
+                    end = label_span;
+                }
+                let span = expr.span().to(end);
+                expr = Expr::HasLabels {
+                    subject: Box::new(expr),
+                    labels,
+                    span,
+                };
             } else if self.at(&TokenKind::LBrace) && matches!(expr, Expr::Variable { .. }) {
                 // `s{.name, .tier}` is an openCypher map projection. It is
                 // not supported, but without this arm the `{…}` block falls
@@ -1970,6 +1988,36 @@ mod tests {
         }
         // A trailing WHERE stays within the standalone call.
         parse_ok("CALL acetone.diff('a', 'b') YIELD * WHERE kind = 'added'");
+    }
+
+    #[test]
+    fn label_predicate_parses_in_expression_position() {
+        // `WHERE a:A:B` — postfix label conjunction (TCK Graph5 [3][4]).
+        let q = parse_ok("MATCH (a) WHERE a:A:B RETURN a");
+        let Clause::Match(m) = &q.clauses[0] else {
+            panic!("expected MATCH");
+        };
+        let Some(Expr::HasLabels {
+            subject, labels, ..
+        }) = &m.where_clause
+        else {
+            panic!("expected HasLabels, got {:?}", m.where_clause);
+        };
+        assert!(matches!(&**subject, Expr::Variable { name, .. } if name == "a"));
+        assert_eq!(labels, &vec!["A".to_string(), "B".to_string()]);
+
+        // Projection position, aliased and parenthesised (Graph5 [1],
+        // Return2), and mixed into a larger predicate (MatchWhere5).
+        parse_ok("MATCH (a) RETURN a, a:B AS result");
+        parse_ok("MATCH (n) RETURN (n:Foo)");
+        parse_ok("MATCH (i:TextNode) WHERE i.var > 'te' AND i:TextNode RETURN i");
+        // WITH ... WHERE (WithWhere5) and OPTIONAL MATCH WHERE (MatchWhere6).
+        parse_ok("MATCH (i) WITH i WHERE i.var > 'te' AND i:TextNode RETURN i");
+        parse_ok("MATCH (n) OPTIONAL MATCH (n)-[r]-(m) WHERE m:NonExistent RETURN r");
+        // A label test on a relationship variable (Graph5 [2] shape).
+        parse_ok("MATCH ()-[r]->() RETURN r, r:T2 AS result");
+        // Map literals are untouched: the colon there is a key separator.
+        parse_ok("RETURN {a: 1, b: 'x'} AS m");
     }
 
     #[test]

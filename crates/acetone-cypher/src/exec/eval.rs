@@ -215,6 +215,27 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             let value = eval(operand, row, ctx)?;
             Ok(Value::Bool(value.is_null() != *negated))
         }
+        BoundExpr::HasLabels {
+            subject,
+            labels,
+            span,
+        } => match eval(subject, row, ctx)? {
+            Value::Null => Ok(Value::Null),
+            Value::Node(node) => Ok(Value::Bool(
+                labels.iter().all(|label| node.labels.contains(label)),
+            )),
+            // A relationship's "labels" are its single type.
+            Value::Relationship(rel) => Ok(Value::Bool(
+                labels.iter().all(|label| *label == rel.rel_type),
+            )),
+            other => Err(ExecError::InvalidArgument {
+                message: format!(
+                    "the label predicate needs a node or relationship, got {}",
+                    other.type_name()
+                ),
+                span: *span,
+            }),
+        },
         BoundExpr::Function { def, args, span } => {
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
@@ -988,7 +1009,8 @@ impl BoundExpr {
             | BoundExpr::MapLiteral { span, .. }
             | BoundExpr::Index { span, .. }
             | BoundExpr::Slice { span, .. }
-            | BoundExpr::PatternPredicate { span, .. } => *span,
+            | BoundExpr::PatternPredicate { span, .. }
+            | BoundExpr::HasLabels { span, .. } => *span,
         }
     }
 }
