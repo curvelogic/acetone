@@ -123,7 +123,7 @@ Per unit of work (one bead, or a small coherent group claimed together — the g
 Review depth by change class:
 
 - **Code**: full adversarial review as above, always.
-- **Governing documents** (CLAUDE.md, `docs/acetone-01/02/03-*.md`, and executable configuration that runs on Greg's machine: `.beads/hooks/`, `.codex/`, `.claude/settings.json` — added at the Phase 0 boundary with Greg's approval): full adversarial review — never the lighter path — plus an ADR, listed prominently in the next phase report. Agents must never weaken the review gate or expand their own merge rights; such changes are proposed in the phase report and made only after Greg agrees.
+- **Governing documents** (CLAUDE.md, `docs/acetone-01/02/03-*.md`, and executable configuration that runs on Greg's machine: `.beads/hooks/`, `.beads/formulas/`, `.codex/`, `.claude/settings.json` — the first set added at the Phase 0 boundary, `.beads/formulas/` ratified at the 0.3.1 boundary, each with Greg's approval): full adversarial review — never the lighter path — plus an ADR, listed prominently in the next phase report. Agents must never weaken the review gate or expand their own merge rights; such changes are proposed in the phase report and made only after Greg agrees.
 - **Other docs** (notes, reports, ADR text): lighter single-pass review, still by a fresh subagent, checking factual accuracy and consistency with the design record.
 
 Subagent model tiers (ADR-0009, Greg-approved 2026-07-04): match the model tier of a dispatched subagent to the cost of an undetected error, not to the task's prestige. Tiers are relative to the strongest model the **session** has access to (never to a deliberately restricted per-dispatch set) — model names change; the tiers are the policy.
