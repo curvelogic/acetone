@@ -1071,6 +1071,31 @@ impl<'a> Binder<'a> {
                 labels: labels.clone(),
                 span: *span,
             }),
+            ast::Expr::PatternComprehension {
+                pattern,
+                where_clause,
+                map,
+                span,
+            } => {
+                // Fresh pattern variables (including the path variable)
+                // are visible to the WHERE and map expressions only;
+                // outer bindings referenced by name anchor the pattern.
+                // Restore the whole scope afterwards so nothing leaks.
+                let saved_scope = self.scope.clone();
+                let bound_pattern = self.path_pattern(pattern, true)?;
+                let bound_where = match where_clause {
+                    Some(expr) => Some(Box::new(self.expr(expr, ctx)?)),
+                    None => None,
+                };
+                let bound_map = Box::new(self.expr(map, ctx)?);
+                self.scope = saved_scope;
+                Ok(BoundExpr::PatternComprehension {
+                    pattern: Box::new(bound_pattern),
+                    where_clause: bound_where,
+                    map: bound_map,
+                    span: *span,
+                })
+            }
             ast::Expr::FunctionCall {
                 name,
                 distinct,
@@ -1393,6 +1418,20 @@ fn contains_aggregate(expr: &BoundExpr) -> bool {
                 stack.push(base);
                 stack.extend(from.iter().map(|b| &**b));
                 stack.extend(to.iter().map(|b| &**b));
+            }
+            BoundExpr::PatternComprehension {
+                pattern,
+                where_clause,
+                map,
+                ..
+            } => {
+                stack.extend(pattern.start.properties.iter());
+                for (rel, node) in &pattern.steps {
+                    stack.extend(rel.properties.iter());
+                    stack.extend(node.properties.iter());
+                }
+                stack.extend(where_clause.iter().map(|b| &**b));
+                stack.push(map);
             }
             BoundExpr::PatternPredicate { pattern, .. } => {
                 stack.extend(pattern.start.properties.iter());

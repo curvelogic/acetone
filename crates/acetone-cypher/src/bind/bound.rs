@@ -272,6 +272,16 @@ pub enum BoundExpr {
         labels: Vec<String>,
         span: Span,
     },
+    /// A pattern comprehension: enumerate the pattern's matches anchored
+    /// on the row's bound variables, filter, and collect the map
+    /// expression. Fresh pattern variables (and the path variable) are
+    /// comprehension-local.
+    PatternComprehension {
+        pattern: Box<BoundPathPattern>,
+        where_clause: Option<Box<BoundExpr>>,
+        map: Box<BoundExpr>,
+        span: Span,
+    },
     Function {
         def: &'static FunctionDef,
         args: Vec<BoundExpr>,

@@ -1043,6 +1043,70 @@ mod tests {
     }
 
     #[test]
+    fn pattern_comprehension_evaluates() {
+        let graph = host_graph();
+        // Degree counting through size() (TCK List6 shape).
+        let result = run_query(
+            "MATCH (n:Host) RETURN n.name, size([(n)-[:RUNS]->() | 1]) AS deg ORDER BY n.name",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 2);
+        assert!(matches!(&result.rows[0][1], Value::Int(1)));
+        assert!(matches!(&result.rows[1][1], Value::Int(1)));
+        // Fresh node variable projected through the map expression.
+        let result = run_query(
+            "MATCH (s:Software) RETURN [(s)<-[:RUNS]-(h) | h.name] AS names",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 1);
+        let Value::List(names) = &result.rows[0][0] else {
+            panic!("expected a list");
+        };
+        let mut names: Vec<&str> = names
+            .iter()
+            .map(|v| match v {
+                Value::String(s) => s.as_str(),
+                other => panic!("expected strings, got {other:?}"),
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["a", "b"]);
+        // WHERE filters inside the comprehension.
+        let result = run_query(
+            "MATCH (s:Software) RETURN size([(s)<-[:RUNS]-(h) WHERE h.name = 'a' | h]) AS n",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert!(matches!(&result.rows[0][0], Value::Int(1)));
+        // The path-variable form yields path values.
+        let result = run_query(
+            "MATCH (n:Host {name: 'a'}) RETURN [p = (n)-->() | p] AS ps",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        let Value::List(paths) = &result.rows[0][0] else {
+            panic!("expected a list");
+        };
+        assert_eq!(paths.len(), 1);
+        assert!(matches!(&paths[0], Value::Path(p) if p.rels.len() == 1));
+        // A null anchor matches nothing: empty list, not null.
+        let result = run_query(
+            "MATCH (n:Software) OPTIONAL MATCH (n)-[:NONE]->(m) \
+             RETURN [(m)-->(x) | x] AS xs",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert!(matches!(&result.rows[0][0], Value::List(l) if l.is_empty()));
+    }
+
+    #[test]
     fn label_predicate_evaluates_on_nodes_rels_and_null() {
         let graph = host_graph();
         // Node: `n:Web` is true only for the Host+Web node (label-set

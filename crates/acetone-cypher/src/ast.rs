@@ -409,6 +409,15 @@ pub enum Expr {
         labels: Vec<String>,
         span: Span,
     },
+    /// A pattern comprehension: `[ p = (a)-[r:T]->(b) WHERE pred | expr ]`.
+    /// The pattern's own `variable` field carries the optional path
+    /// variable; fresh pattern variables are local to the comprehension.
+    PatternComprehension {
+        pattern: Box<PathPattern>,
+        where_clause: Option<Box<Expr>>,
+        map: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -431,7 +440,8 @@ impl Expr {
             | Expr::Quantifier { span, .. }
             | Expr::Reduce { span, .. }
             | Expr::PatternPredicate { span, .. }
-            | Expr::HasLabels { span, .. } => *span,
+            | Expr::HasLabels { span, .. }
+            | Expr::PatternComprehension { span, .. } => *span,
         }
     }
 
@@ -456,7 +466,8 @@ impl Expr {
             | Expr::Quantifier { span, .. }
             | Expr::Reduce { span, .. }
             | Expr::PatternPredicate { span, .. }
-            | Expr::HasLabels { span, .. } => *span = new_span,
+            | Expr::HasLabels { span, .. }
+            | Expr::PatternComprehension { span, .. } => *span = new_span,
         }
     }
 
@@ -530,6 +541,20 @@ impl Expr {
                 }
             }
             Expr::HasLabels { subject, .. } => out.push(&**subject),
+            Expr::PatternComprehension {
+                pattern,
+                where_clause,
+                map,
+                ..
+            } => {
+                out.extend(pattern.start.properties.iter());
+                for (rel, node) in &pattern.steps {
+                    out.extend(rel.properties.iter());
+                    out.extend(node.properties.iter());
+                }
+                out.extend(where_clause.iter().map(|b| &**b));
+                out.push(&**map);
+            }
         }
         out
     }
@@ -624,6 +649,22 @@ impl Expr {
                 }
             }
             Expr::HasLabels { subject, .. } => take_box(subject, out),
+            Expr::PatternComprehension {
+                pattern,
+                where_clause,
+                map,
+                ..
+            } => {
+                out.extend(pattern.start.properties.take());
+                for (rel, node) in &mut pattern.steps {
+                    out.extend(rel.properties.take());
+                    out.extend(node.properties.take());
+                }
+                if let Some(boxed) = where_clause {
+                    take_box(boxed, out);
+                }
+                take_box(map, out);
+            }
         }
     }
 }

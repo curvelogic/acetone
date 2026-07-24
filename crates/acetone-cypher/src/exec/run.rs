@@ -1035,9 +1035,9 @@ fn resolve_at_ref(at: &AtRef, parameters: &BTreeMap<String, Value>) -> Result<St
 
 // --- MATCH ------------------------------------------------------------------
 
-struct MatchState {
-    row: Row,
-    used_rels: HashSet<EntityId>,
+pub(crate) struct MatchState {
+    pub(crate) row: Row,
+    pub(crate) used_rels: HashSet<EntityId>,
 }
 
 fn match_clause(
@@ -1110,7 +1110,7 @@ fn match_clause(
     Ok(out)
 }
 
-fn match_path(
+pub(crate) fn match_path(
     pattern: &BoundPathPattern,
     state: MatchState,
     ctx: &EvalCtx,
@@ -1687,6 +1687,16 @@ fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
             collect_aggregates(operand, out);
         }
         BoundExpr::HasLabels { subject, .. } => collect_aggregates(subject, out),
+        // Pattern property maps are NO_AGG-bound; where/map mirror
+        // ListComprehension's traversal.
+        BoundExpr::PatternComprehension {
+            where_clause, map, ..
+        } => {
+            if let Some(expr) = where_clause {
+                collect_aggregates(expr, out);
+            }
+            collect_aggregates(map, out);
+        }
         BoundExpr::Binary { lhs, rhs, .. } => {
             collect_aggregates(lhs, out);
             collect_aggregates(rhs, out);

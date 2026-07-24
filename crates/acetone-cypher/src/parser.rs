@@ -1640,6 +1640,35 @@ impl Parser<'_> {
                 span: open.span.to(close.span),
             });
         }
+        if self.bracket_starts_pattern_comprehension() {
+            // `[ p = (a)-[r:T]->(b) WHERE pred | expr ]` — the same
+            // node-shape + connector commitment as pattern predicates:
+            // a committed head that then fails to parse is a hard error.
+            let pattern = self.path_pattern()?;
+            if pattern.steps.is_empty() {
+                return Err(self.unexpected("a relationship pattern"));
+            }
+            let where_clause = if self.eat_kw("WHERE") {
+                Some(Box::new(self.expression()?))
+            } else {
+                None
+            };
+            self.expect(
+                &TokenKind::Pipe,
+                "'|' before the pattern comprehension's map expression",
+            )?;
+            let map = Box::new(self.expression()?);
+            let close = self.expect(
+                &TokenKind::RBracket,
+                "']' to close the pattern comprehension",
+            )?;
+            return Ok(Expr::PatternComprehension {
+                pattern: Box::new(pattern),
+                where_clause,
+                map,
+                span: open.span.to(close.span),
+            });
+        }
         let mut items = Vec::new();
         if !self.at(&TokenKind::RBracket) {
             loop {
@@ -1654,6 +1683,27 @@ impl Parser<'_> {
             items,
             span: open.span.to(close.span),
         })
+    }
+
+    /// With the cursor just past `[`: does a pattern comprehension head
+    /// follow — `(node)connector…` or `var = (node)connector…`? The same
+    /// linear-scan commitment discipline as
+    /// [`Self::paren_group_starts_pattern`].
+    fn bracket_starts_pattern_comprehension(&self) -> bool {
+        let open = if matches!(self.peek().kind, TokenKind::Ident { .. })
+            && self.peek_at(1).kind == TokenKind::Eq
+        {
+            2
+        } else {
+            0
+        };
+        if self.peek_at(open).kind != TokenKind::LParen {
+            return false;
+        }
+        let Some(close) = self.matching_close(open, &TokenKind::LParen, &TokenKind::RParen) else {
+            return false;
+        };
+        self.connector_follows(close) && self.node_shaped_interior_at(open, close)
     }
 
     fn map_literal(&mut self) -> Result<Expr, ParseError> {
@@ -1777,7 +1827,13 @@ impl Parser<'_> {
     /// like `(1+2)` cannot be a node, so a trailing `-`-shape after it is
     /// arithmetic, not a pattern.
     fn node_shaped_interior(&self, close: usize) -> bool {
-        let mut at = 1usize;
+        self.node_shaped_interior_at(0, close)
+    }
+
+    /// As [`Self::node_shaped_interior`], for a group opening at `open`
+    /// rather than at the cursor.
+    fn node_shaped_interior_at(&self, open: usize, close: usize) -> bool {
+        let mut at = open + 1;
         if matches!(self.peek_at(at).kind, TokenKind::Ident { .. }) {
             at += 1;
         }
@@ -1988,6 +2044,42 @@ mod tests {
         }
         // A trailing WHERE stays within the standalone call.
         parse_ok("CALL acetone.diff('a', 'b') YIELD * WHERE kind = 'added'");
+    }
+
+    #[test]
+    fn pattern_comprehension_parses() {
+        // Simple head, no bindings (TCK List6).
+        parse_ok("MATCH (n:X) RETURN size([(n)-->() | 1]) AS length");
+        parse_ok("MATCH (a:X) RETURN size([(a)-[:T|OTHER]->() | 1]) AS length");
+        // Fresh relationship/node variables and a WHERE filter (Pattern2).
+        parse_ok("MATCH (n) RETURN [(n)-[r:T]->(b) WHERE b.x > 1 | r.name] AS names");
+        // Path-variable form, shape-checked.
+        let q = parse_ok("MATCH (n) RETURN [p = (n)-->() | p] AS list");
+        let Clause::Return(ret) = &q.clauses[1] else {
+            panic!("expected RETURN");
+        };
+        let ProjectionItem::Expr { expr, .. } = &ret.items[0] else {
+            panic!("expected item");
+        };
+        let Expr::PatternComprehension { pattern, map, .. } = expr else {
+            panic!("expected PatternComprehension, got {expr:?}");
+        };
+        assert_eq!(pattern.variable.as_deref(), Some("p"));
+        assert_eq!(pattern.steps.len(), 1);
+        assert!(matches!(&**map, Expr::Variable { name, .. } if name == "p"));
+        // Var-length, WITH position, nesting (Pattern2 [9][8], List6 [7]).
+        parse_ok("MATCH (a:A), (b:B) RETURN [p = (a)-[*]->(b) | p] AS paths");
+        parse_ok("MATCH (n)-->(b) WITH [p = (n)-->() | p] AS ps, count(b) AS c RETURN ps, c");
+        parse_ok("MATCH p = (n:X)-->() RETURN n, [x IN nodes(p) | size([(x)-->(:Y) | 1])] AS list");
+        // The map expression is mandatory.
+        assert!(matches!(
+            parse_err("MATCH (n) RETURN [(n)-->()] AS l"),
+            ParseError::Unexpected { .. } | ParseError::QueryStructure { .. }
+        ));
+        // Ordinary lists and comprehensions are untouched.
+        parse_ok("RETURN [(1 + 2), 3] AS l");
+        parse_ok("RETURN [x IN [1, 2] | x] AS l");
+        parse_ok("RETURN [1, 2][0] AS first");
     }
 
     #[test]
