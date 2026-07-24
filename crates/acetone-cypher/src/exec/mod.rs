@@ -1043,6 +1043,42 @@ mod tests {
     }
 
     #[test]
+    fn chained_comparisons_evaluate_as_conjunctions() {
+        // Range semantics (TCK Comparison3): only the middle value is
+        // inside the open range.
+        let mut graph = MemoryGraph::new();
+        for num in [1i64, 2, 3] {
+            let mut props = BTreeMap::new();
+            props.insert("num".to_string(), Value::Int(num));
+            graph.add_node(["N"], props);
+        }
+        let result = run_query(
+            "MATCH (n) WHERE 1 < n.num < 3 RETURN n.num",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(&result.rows[0][0], Value::Int(2)));
+        let result = run_query(
+            "MATCH (n) WHERE 1 <= n.num <= 3 RETURN n.num",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("query");
+        assert_eq!(result.rows.len(), 3);
+        // Three-valued: a false conjunct wins over an unknown one.
+        assert!(matches!(single("RETURN 3 < 2 < null"), Value::Bool(false)));
+        assert!(single("RETURN 1 < 2 < null").is_null());
+        // Mixed operator chains (TCK Comparison4 shape).
+        assert!(matches!(single("RETURN 1 < 2 = 2 <> 3"), Value::Bool(true)));
+        assert!(matches!(
+            single("RETURN 1 < 2 = 3 <> 3"),
+            Value::Bool(false)
+        ));
+    }
+
+    #[test]
     fn pattern_comprehension_evaluates() {
         let graph = host_graph();
         // Degree counting through size() (TCK List6 shape).
