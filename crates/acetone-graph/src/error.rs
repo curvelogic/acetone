@@ -115,6 +115,20 @@ pub enum GraphError {
         /// Branch name.
         name: String,
     },
+    /// A tag that was expected to exist does not.
+    #[error("no such tag {name:?}")]
+    NoSuchTag {
+        /// Tag short name.
+        name: String,
+    },
+    /// A tag that was expected not to exist already does. Tags are
+    /// immutable pointers by design — move one by deleting and re-creating
+    /// it deliberately.
+    #[error("tag {name:?} already exists")]
+    TagExists {
+        /// Tag short name.
+        name: String,
+    },
     /// Deleting the checked-out branch is refused: it would leave the
     /// checked-out ref naming a branch that does not exist.
     #[error("cannot delete branch {name:?}: it is checked out — switch to another branch first")]

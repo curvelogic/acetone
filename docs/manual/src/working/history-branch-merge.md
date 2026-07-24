@@ -432,15 +432,16 @@ error: line 1, column 22: a refspec after AT must be a string literal or a param
 
 ### Tags
 
-Tags make natural time-travel anchors — "the state we audited in July". A
-tag's short name resolves bare, exactly like a branch name, and both kinds
-of git tag work: a **lightweight** tag (`git tag <name> <commit>`) points
-straight at the commit, and an **annotated** tag (`git tag -a`) points at a
-tag *object*, which acetone peels through to the commit underneath —
-nested annotated tags included:
+Tags make natural time-travel anchors — "the state we audited in July".
+`acetone tag` mirrors `acetone branch`: bare it lists, with a name it
+creates (an **annotated** tag, on the head commit unless you give a
+refspec, with `-m` for a message), and `--delete` removes the ref without
+touching any data. A tag's short name then resolves bare, exactly like a
+branch name:
 
 ```console
-$ git tag inventory-v1 4e04e05af4c92472342ade7ba874e9a2994d44cb
+$ acetone tag inventory-v1 4e04e05af4c92472342ade7ba874e9a2994d44cb -m "July audit"
+created tag "inventory-v1" at 4e04e05af4c92472342ade7ba874e9a2994d44cb
 $ acetone query --at inventory-v1 'MATCH (h:Host) RETURN count(h)'
 ┌──────────┐
 │ count(h) │
@@ -449,6 +450,25 @@ $ acetone query --at inventory-v1 'MATCH (h:Host) RETURN count(h)'
 └──────────┘
 1 row
 ```
+
+The command matters most in **co-tenant mode**, where the graph's tags live
+on their own namespace (`refs/tags/acetone/<graph>/…`): `acetone tag v1`
+writes there, so the short name resolves and `gc` and `migrate` manage the
+tag — whereas a plain `git tag v1` would land in the *code* repository's
+tag namespace, invisible to `--at v1` and foreign to the graph's
+maintenance commands. In a standalone repository the two namespaces
+coincide and `git tag` works just as well.
+
+`acetone tag` is deliberately thin — creation, listing, deletion, nothing
+more. For the rest of git's tag porcelain, drop to git at the graph's tag
+path (in standalone mode, just the tag name): signing (`git tag -s`),
+verification (`git tag -v`), forced moves. Both kinds of git-made tag
+resolve fine — a **lightweight** tag points straight at the commit, an
+**annotated** tag points at a tag *object* that acetone peels through to
+the commit underneath, nested annotated tags included. One caveat: signed
+tags cannot be rewritten by `acetone migrate` (the rewritten bytes would
+invalidate the signature), so a signed tag blocks history migration until
+you re-tag or delete it.
 
 Refspecs resolve in git's own order (the first match wins): an exact
 `refs/…` path, then `refs/tags/<name>`, then `refs/heads/<name>`, then a

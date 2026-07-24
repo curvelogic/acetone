@@ -3289,3 +3289,130 @@ fn branch_takes_a_start_point_and_supports_deletion() {
     let out = acetone(&repo, &["status"]);
     assert!(stdout(&out).contains(&format!("HEAD: {second}")));
 }
+
+#[test]
+fn tag_creates_lists_and_deletes_through_the_graph_namespace() {
+    // acetone-ujsk / ADR-0059: the thin native tag surface, mirroring the
+    // branch command — bare lists, NAME [REFSPEC] [-m] creates an annotated
+    // tag whose short name --at resolves, -d deletes.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "Host", "--key", "name"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'web1'})"])
+            .status
+            .success()
+    );
+    let first = commit_hex(&acetone(&repo, &["commit", "-m", "first"]));
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'web2'})"])
+            .status
+            .success()
+    );
+    let second = commit_hex(&acetone(&repo, &["commit", "-m", "second"]));
+
+    // Create at head (default target, default message).
+    let out = acetone(&repo, &["tag", "v2"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains(&format!("created tag \"v2\" at {second}")));
+
+    // Create at an explicit commit with a message; --json reports the
+    // TAGGED COMMIT (what --at resolves), not the tag object.
+    let out = acetone(
+        &repo,
+        &["tag", "v1", &first, "-m", "the state we audited", "--json"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        json_stdout(&out),
+        serde_json::json!({ "created": "v1", "hash": first })
+    );
+
+    // Short names time-travel through the annotated tag's peel.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "--at",
+            "v1",
+            "MATCH (h:Host) RETURN count(h) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(stdout(&out).trim(), "n\n1", "{}", stderr(&out));
+
+    // Bare `tag` lists short names in name order; --json mirrors it.
+    let out = acetone(&repo, &["tag"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "v1\nv2\n");
+    let out = acetone(&repo, &["tag", "--json"]);
+    assert_eq!(
+        json_stdout(&out),
+        serde_json::json!({ "tags": ["v1", "v2"] })
+    );
+
+    // Duplicate creation is refused and creates nothing.
+    let out = acetone(&repo, &["tag", "v1"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("tag \"v1\" already exists"),
+        "{}",
+        stderr(&out)
+    );
+
+    // An unresolvable target is a clear error, and creates nothing.
+    let out = acetone(&repo, &["tag", "ghost", "nonesuch"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("cannot resolve \"nonesuch\""),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(stdout(&acetone(&repo, &["tag"])), "v1\nv2\n");
+
+    // Delete: the ref goes, the commit stays reachable by hash.
+    let out = acetone(&repo, &["tag", "--delete", "v1"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("deleted tag \"v1\" (was "));
+    assert_eq!(stdout(&acetone(&repo, &["tag"])), "v2\n");
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "--at",
+            &first,
+            "MATCH (h:Host) RETURN count(h) AS n",
+            "--format",
+            "csv",
+        ],
+    );
+    assert_eq!(
+        stdout(&out).trim(),
+        "n\n1",
+        "deleted tag's commit still readable by hash"
+    );
+
+    // Deleting a tag that does not exist is a clear error.
+    let out = acetone(&repo, &["tag", "--delete", "nonesuch"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("no such tag \"nonesuch\""),
+        "{}",
+        stderr(&out)
+    );
+
+    // --delete conflicts with the positionals; -m requires a NAME
+    // (clap-level grammar).
+    assert!(
+        !acetone(&repo, &["tag", "extra", "--delete", "v2"])
+            .status
+            .success()
+    );
+    assert!(!acetone(&repo, &["tag", "-m", "msg"]).status.success());
+}

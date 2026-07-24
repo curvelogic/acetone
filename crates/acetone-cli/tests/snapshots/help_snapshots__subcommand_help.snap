@@ -88,6 +88,38 @@ Options:
       --json           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
   -h, --help           Print help
 
+========== acetone tag --help ==========
+List tags, create one, or delete one.
+
+Tags are written to this graph's own namespace, so their short names resolve in `--at`/`AT` and `gc` and `migrate` manage them — in co-tenant mode a plain `git tag` would land in the code repository's namespace instead. Creation writes an annotated tag. Everything else git's tag porcelain offers (signing, verification, forced moves) is deliberately git's job, at the same namespaced path — see the manual.
+
+Usage: acetone tag [OPTIONS] [NAME] [REFSPEC]
+
+Arguments:
+  [NAME]
+          Name of a new tag to create. Omit to list existing tags
+
+  [REFSPEC]
+          The commit to tag: a branch or tag short name, full ref name or commit hash (default: the current head commit)
+
+Options:
+  -m, --message <MESSAGE>
+          The tag message (default: the tag name)
+
+      --repo <REPO>
+          Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
+          
+          [default: .]
+
+  -d, --delete <NAME>
+          Delete tag NAME instead. Ref removal only — no commit or graph data is deleted, so the tagged commit stays reachable by hash
+
+      --json
+          Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
+
+  -h, --help
+          Print help (see a summary with '-h')
+
 ========== acetone checkout --help ==========
 Switch the checked-out branch
 

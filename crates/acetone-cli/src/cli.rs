@@ -11,7 +11,8 @@ use clap::{Parser, Subcommand};
 /// inline on each variant.
 const AFTER_HELP: &str = "\
 Command groups:
-  Everyday      init, status, commit, log, branch, checkout, diff, merge, resolve
+  Everyday      init, status, commit, log, branch, tag, checkout, diff, merge,
+                resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate
@@ -21,8 +22,9 @@ Relationship to git (an acetone version IS a git commit):
   Use acetone, not git   commit, merge, resolve, checkout, declare-*, reindex,
                          import, export, fsck, gc, migrate — the git equivalents
                          would write commits acetone cannot read.
-  Either works           log, status, diff, branch — acetone's are graph-aware;
-                         plain git still works on the same repo.
+  Either works           log, status, diff, branch, tag — acetone's are
+                         graph-aware (and, co-tenant, namespace-aware); plain
+                         git still works on the same repo.
   Git only (transport)   clone, fetch, push, pull, remote — no acetone command;
                          any git remote is backup and transport.";
 
@@ -130,6 +132,37 @@ pub enum Command {
             long = "delete",
             value_name = "NAME",
             conflicts_with_all = ["name", "refspec"]
+        )]
+        delete: Option<String>,
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List tags, create one, or delete one.
+    ///
+    /// Tags are written to this graph's own namespace, so their short names
+    /// resolve in `--at`/`AT` and `gc` and `migrate` manage them — in
+    /// co-tenant mode a plain `git tag` would land in the code repository's
+    /// namespace instead. Creation writes an annotated tag. Everything else
+    /// git's tag porcelain offers (signing, verification, forced moves) is
+    /// deliberately git's job, at the same namespaced path — see the manual.
+    Tag {
+        /// Name of a new tag to create. Omit to list existing tags.
+        name: Option<String>,
+        /// The commit to tag: a branch or tag short name, full ref name or
+        /// commit hash (default: the current head commit).
+        refspec: Option<String>,
+        /// The tag message (default: the tag name).
+        #[arg(short = 'm', long = "message", requires = "name")]
+        message: Option<String>,
+        /// Delete tag NAME instead. Ref removal only — no commit or graph
+        /// data is deleted, so the tagged commit stays reachable by hash.
+        #[arg(
+            short = 'd',
+            long = "delete",
+            value_name = "NAME",
+            conflicts_with_all = ["name", "refspec", "message"]
         )]
         delete: Option<String>,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
