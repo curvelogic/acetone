@@ -85,8 +85,10 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
         let bound = bind(cypher, &parsed, &catalogue, BindMode::Strict)?;
         let start = Instant::now();
         // At larger envelopes the heaviest joins can trip the *default*
-        // governor caps — report that honestly and keep going rather
-        // than aborting the remaining measurements.
+        // governor caps — report that honestly, then re-run unbounded so
+        // the latency evidence survives (the lab is exactly the trusted
+        // operator QueryLimits::unbounded documents). Any error OTHER
+        // than a resource cap is a genuine defect and fails the run.
         match execute(&bound, &graph, &params) {
             Ok(result) => {
                 let elapsed = start.elapsed();
@@ -96,13 +98,33 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
                     elapsed.as_secs_f64() * 1000.0
                 );
             }
-            Err(e) => {
-                println!("  {name:<48} governor-limited at this scale ({e})");
+            Err(acetone_cypher::exec::ExecError::ResourceExceeded { limit, .. }) => {
+                let start = Instant::now();
+                let result = acetone_cypher::exec::execute_with_limits(
+                    &bound,
+                    &graph,
+                    &params,
+                    &acetone_cypher::exec::QueryLimits::unbounded(),
+                )?;
+                let elapsed = start.elapsed();
+                println!(
+                    "  {name:<48} {:>7} rows   {:>8.2} ms  (trips the default {limit} cap; unbounded run)",
+                    result.rows.len(),
+                    elapsed.as_secs_f64() * 1000.0
+                );
             }
+            Err(e) => return Err(e.into()),
         }
     }
 
-    index_vs_scan_demo(&graph, &node_records, &edge_records, &schema, &params)?;
+    index_vs_scan_demo(
+        &graph,
+        &node_records,
+        &edge_records,
+        &schema,
+        &params,
+        shape.hosts,
+    )?;
     Ok(())
 }
 
@@ -122,6 +144,7 @@ fn index_vs_scan_demo(
     )],
     schema: &[acetone_model::schema::SchemaEntry],
     params: &BTreeMap<String, acetone_cypher::exec::Value>,
+    hosts: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use acetone_model::schema::SchemaEntry;
 
@@ -173,11 +196,14 @@ fn index_vs_scan_demo(
     // comparison must drop the schema entirely).
     // Case selection against the generator's distributions: `not_after`
     // is `i % 365`, so `< 30` selects ~8% of certificates (a selective
-    // range); `os` and `criticality` share modulus 5, so 'debian'
-    // (i%5==0) co-occurs only with criticality 0 — a populated composite
-    // bucket of ~a fifth of hosts; hostnames are `host-{i}` unpadded.
-    // An EMPTY composite bucket ('debian', 3) is measured too: proving
-    // absence without a scan is half the point of a seek.
+    // range); `os` (modulus 5) and `criticality` (modulus 7) are
+    // decorrelated, so a composite bucket holds ~1/35 of hosts. An
+    // EMPTY composite bucket is measured too: proving absence without a
+    // scan is half the point of a seek.
+    let keyseek_query = format!(
+        "MATCH (h:Host {{hostname: 'host-{}'}}) RETURN count(*) AS n",
+        hosts - 1
+    );
     let cases: [(&str, &str); 4] = [
         (
             "IndexRange (cert_not_after < 30)",
@@ -185,15 +211,24 @@ fn index_vs_scan_demo(
         ),
         (
             "Composite seek (populated bucket)",
+            // os uses modulus 5 and criticality modulus 7, so this
+            // bucket holds ~1/35 of hosts — genuinely narrower than
+            // the os prefix alone.
             "MATCH (h:Host {os: 'debian', criticality: 0}) RETURN count(*) AS n",
         ),
         (
             "Composite seek (empty bucket)",
-            "MATCH (h:Host {os: 'debian', criticality: 3}) RETURN count(*) AS n",
+            // i%5==0 and i%7==6 first coincide at i=20 — populated too
+            // at any real scale; use an out-of-range criticality for a
+            // structurally empty bucket instead.
+            "MATCH (h:Host {os: 'debian', criticality: 9}) RETURN count(*) AS n",
         ),
         (
             "KeySeek (Host primary key)",
-            "MATCH (h:Host {hostname: 'host-123456'}) RETURN count(*) AS n",
+            // Derived from the shape so the key EXISTS at every scale:
+            // a missing key makes the hinted side fall back to a scan
+            // and silently measures scan-vs-scan (PR #209 review).
+            &keyseek_query,
         ),
     ];
     println!("\nPhase 9 criterion-3 measurements (hinted vs scan):");
@@ -218,6 +253,9 @@ fn index_vs_scan_demo(
         };
         let scanned_result = execute(&scanned, scanned_graph, params)?;
         // Parity first: the acceleration must not change the answer.
+        // (Debug-format comparison assumes the single-row count(*) shape
+        // of these cases; a multi-row case would need order-insensitive
+        // comparison.)
         assert_eq!(
             format!("{:?}", hinted_result.rows),
             format!("{:?}", scanned_result.rows),
