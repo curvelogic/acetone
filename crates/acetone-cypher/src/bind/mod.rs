@@ -326,7 +326,8 @@ mod tests {
         assert_eq!(
             patterns[0].start.index_hint,
             Some(IndexHint::KeySeek {
-                label: "Host".into()
+                label: "Host".into(),
+                key: vec!["hostname".into()],
             })
         );
 
@@ -346,6 +347,59 @@ mod tests {
         // A computed value pins nothing.
         let bound = bind_strict("MATCH (a:Host) MATCH (h:Host {os: a.os}) RETURN h").unwrap();
         let BoundClause::Match { patterns, .. } = &bound.clauses[1] else {
+            panic!()
+        };
+        assert_eq!(patterns[0].start.index_hint, None);
+    }
+
+    #[test]
+    fn where_range_predicates_hint_an_index_range() {
+        use crate::bind::bound::RangeBound;
+        // `os >= 'a' AND os < 'x'` over the declared (Host, os) index.
+        let bound =
+            bind_strict("MATCH (h:Host) WHERE h.os >= 'a' AND h.os < 'x' RETURN h").unwrap();
+        let BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
+            panic!()
+        };
+        assert_eq!(
+            patterns[0].start.index_hint,
+            Some(IndexHint::IndexRange {
+                name: "host_os".into(),
+                label: "Host".into(),
+                property: "os".into(),
+                lower: Some((
+                    RangeBound::Literal(crate::ast::Literal::String("a".into())),
+                    true
+                )),
+                upper: Some((
+                    RangeBound::Literal(crate::ast::Literal::String("x".into())),
+                    false
+                )),
+            })
+        );
+        // The mirrored orientation flips the bound side; parameters count.
+        let bound = bind_strict("MATCH (h:Host) WHERE $min < h.os RETURN h").unwrap();
+        let BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
+            panic!()
+        };
+        assert_eq!(
+            patterns[0].start.index_hint,
+            Some(IndexHint::IndexRange {
+                name: "host_os".into(),
+                label: "Host".into(),
+                property: "os".into(),
+                lower: Some((RangeBound::Parameter("min".into()), false)),
+                upper: None,
+            })
+        );
+        // An unindexed property gains no hint; OR disqualifies.
+        let bound = bind_strict("MATCH (h:Host) WHERE h.hostname > 'a' RETURN h").unwrap();
+        let BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
+            panic!()
+        };
+        assert_eq!(patterns[0].start.index_hint, None);
+        let bound = bind_strict("MATCH (h:Host) WHERE h.os > 'a' OR h.os < 'x' RETURN h").unwrap();
+        let BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
             panic!()
         };
         assert_eq!(patterns[0].start.index_hint, None);

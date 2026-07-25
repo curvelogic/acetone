@@ -505,6 +505,13 @@ impl<'a> Binder<'a> {
             Some(expr) => Some(self.expr(expr, NO_AGG)?),
             None => None,
         };
+        // Range hints (acetone-6g5.3.3): a WHERE conjunct comparing an
+        // anchor variable's indexed property against a constant lets the
+        // executor range-scan the index instead of label-scanning. The
+        // WHERE still evaluates afterwards — the hint only prunes.
+        if let Some(pred) = &where_clause {
+            attach_range_hints(&mut patterns, pred, self.catalogue);
+        }
         Ok(BoundClause::Match {
             optional: m.optional,
             patterns,
@@ -1002,8 +1009,14 @@ impl<'a> Binder<'a> {
             .iter()
             .any(|p| self.catalogue.is_key_prefix(label, p))
         {
+            let key = self
+                .catalogue
+                .label(label)
+                .map(|def| def.key().to_vec())
+                .unwrap_or_default();
             return Some(IndexHint::KeySeek {
                 label: label.clone(),
+                key,
             });
         }
         for property in pinned {
@@ -1357,6 +1370,117 @@ impl<'a> Binder<'a> {
 
 /// Does the bound expression contain an aggregate at any depth? Iterative
 /// (explicit stack): the AST bound may be up to the parser's depth limit.
+/// Attach `IndexRange` hints (acetone-6g5.3.3): for each anchor pattern
+/// with a fresh single-labelled variable and no stronger hint, a WHERE
+/// conjunct `var.prop </<=/>/>= const` (either orientation) over a
+/// declared index on `(label, prop)` becomes a range hint. Bounds are
+/// constant-ish only (literals, parameters); the predicate itself still
+/// evaluates after matching, so the hint can only prune, never widen.
+fn attach_range_hints(
+    patterns: &mut [crate::bind::bound::BoundPathPattern],
+    pred: &BoundExpr,
+    catalogue: &Catalogue,
+) {
+    use std::collections::BTreeMap;
+    let mut bounds: RangeBounds = BTreeMap::new();
+    collect_range_bounds(pred, &mut bounds);
+    if bounds.is_empty() {
+        return;
+    }
+    for pattern in patterns {
+        let start = &mut pattern.start;
+        if start.index_hint.is_some() {
+            continue;
+        }
+        let Some(var) = start.var else { continue };
+        let [label] = start.labels.as_slice() else {
+            continue;
+        };
+        for ((bound_var, property), (lower, upper)) in &bounds {
+            if *bound_var != var.0 || (lower.is_none() && upper.is_none()) {
+                continue;
+            }
+            if let Some((name, _)) = catalogue.index_on(label.as_str(), property) {
+                start.index_hint = Some(IndexHint::IndexRange {
+                    name: name.to_string(),
+                    label: label.to_string(),
+                    property: property.clone(),
+                    lower: lower.clone(),
+                    upper: upper.clone(),
+                });
+                break;
+            }
+        }
+    }
+}
+
+/// Per-(variable, property) collected bounds: (lower, upper).
+type RangeBounds = std::collections::BTreeMap<
+    (u32, String),
+    (Option<(RangeBound, bool)>, Option<(RangeBound, bool)>),
+>;
+
+/// Walk a WHERE's AND-conjuncts collecting `var.prop op const` bounds.
+fn collect_range_bounds(expr: &BoundExpr, out: &mut RangeBounds) {
+    let as_prop = |e: &BoundExpr| -> Option<(u32, String)> {
+        let BoundExpr::Property { base, key, .. } = e else {
+            return None;
+        };
+        let BoundExpr::Variable { id, .. } = &**base else {
+            return None;
+        };
+        Some((id.0, key.clone()))
+    };
+    let as_const = |e: &BoundExpr| -> Option<RangeBound> {
+        match e {
+            BoundExpr::Literal { value, .. } => Some(RangeBound::Literal(value.clone())),
+            BoundExpr::Parameter { name, .. } => Some(RangeBound::Parameter(name.clone())),
+            _ => None,
+        }
+    };
+    match expr {
+        BoundExpr::Binary {
+            op: ast::BinaryOp::And,
+            lhs,
+            rhs,
+            ..
+        } => {
+            collect_range_bounds(lhs, out);
+            collect_range_bounds(rhs, out);
+        }
+        BoundExpr::Binary { op, lhs, rhs, .. } => {
+            // (is_lower_bound_for_prop, inclusive) per op with the
+            // property on the left; the mirrored orientation flips it.
+            let shape = match op {
+                ast::BinaryOp::Gt => Some((true, false)),
+                ast::BinaryOp::Ge => Some((true, true)),
+                ast::BinaryOp::Lt => Some((false, false)),
+                ast::BinaryOp::Le => Some((false, true)),
+                _ => None,
+            };
+            let Some((lower_side, inclusive)) = shape else {
+                return;
+            };
+            let (target, bound, is_lower) =
+                if let (Some(p), Some(c)) = (as_prop(lhs), as_const(rhs)) {
+                    (p, c, lower_side)
+                } else if let (Some(c), Some(p)) = (as_const(lhs), as_prop(rhs)) {
+                    (p, c, !lower_side)
+                } else {
+                    return;
+                };
+            let entry = out.entry(target).or_default();
+            let slot = if is_lower { &mut entry.0 } else { &mut entry.1 };
+            // First bound wins; further conjuncts still filter at WHERE
+            // evaluation, so ignoring them is correct, just unpruned.
+            if slot.is_none() {
+                *slot = Some((bound, inclusive));
+            }
+        }
+        _ => {}
+    }
+}
+
 fn contains_aggregate(expr: &BoundExpr) -> bool {
     let mut stack = vec![expr];
     while let Some(expr) = stack.pop() {

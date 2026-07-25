@@ -34,10 +34,15 @@ pub struct GraphSnapshot {
     /// `nodes` directly).
     by_label: HashMap<String, Vec<usize>>,
     /// Declared index name → encoded property value → node indices
-    /// (IndexSeek). Built for the schema's declared indexes, keyed by the
-    /// memcomparable value encoding so lookups match the stored `idx/<name>`
-    /// map's selection exactly (null/NaN-blind).
-    by_index: HashMap<String, HashMap<Vec<u8>, Vec<usize>>>,
+    /// (IndexSeek/IndexRange). Built for the schema's declared indexes,
+    /// keyed by the memcomparable value encoding so lookups match the
+    /// stored `idx/<name>` map's selection exactly (null/NaN-blind), and
+    /// ordered so byte-range scans are value-ordered (Invariant #2:
+    /// byte order == logical order within a type family).
+    by_index: HashMap<String, std::collections::BTreeMap<Vec<u8>, Vec<usize>>>,
+    /// `(label, encoded key tuple)` → node index (KeySeek point lookup);
+    /// populated only when the schema names the label's key.
+    by_key: HashMap<(String, Vec<u8>), usize>,
     /// Node id → indices into `rels` of edges leaving it (ExpandOut).
     out_edges: HashMap<EntityId, Vec<usize>>,
     /// Node id → indices into `rels` of edges entering it (ExpandIn).
@@ -124,7 +129,8 @@ impl GraphSnapshot {
         // (This matters for stored `Bytes`/temporal values, which the runtime
         // renders to a string; keying the raw typed value here would let a
         // string-pinned seek miss them.) null/NaN-blind.
-        let mut by_index: HashMap<String, HashMap<Vec<u8>, Vec<usize>>> = HashMap::new();
+        let mut by_index: HashMap<String, std::collections::BTreeMap<Vec<u8>, Vec<usize>>> =
+            HashMap::new();
         for (name, label, property) in index_defs {
             let map = by_index.entry(name.clone()).or_default();
             for (index, node) in node_values.iter().enumerate() {
@@ -134,12 +140,24 @@ impl GraphSnapshot {
             }
         }
 
+        // Primary-key point lookups (KeySeek): only labels whose key the
+        // schema names can be sought.
+        let mut by_key: HashMap<(String, Vec<u8>), usize> = HashMap::new();
+        for (index, (key, _)) in nodes.iter().enumerate() {
+            if key_names.contains_key(key.label())
+                && let Ok(encoded) = key.encode()
+            {
+                by_key.insert((key.label().to_owned(), encoded), index);
+            }
+        }
+
         GraphSnapshot {
             nodes: node_values,
             rels: rel_values,
             by_id,
             by_label,
             by_index,
+            by_key,
             out_edges,
             in_edges,
         }
@@ -413,6 +431,82 @@ impl GraphSource for GraphSnapshot {
         self.by_id.get(id).map(|&i| self.nodes[i].clone())
     }
 
+    fn node_by_key(&self, label: &str, key_values: &[Value]) -> Option<Option<NodeValue>> {
+        // Only schema-keyed labels are seekable; unknown labels fall back.
+        let model: Option<Vec<ModelValue>> = key_values.iter().map(model_value_of).collect();
+        let Some(model) = model else {
+            // A null/NaN/non-storable key value can never equal a stored
+            // key: definitively absent.
+            return Some(None);
+        };
+        let Ok(key) = acetone_model::graph_keys::NodeKey::new(label.to_owned(), model) else {
+            return Some(None);
+        };
+        let Ok(encoded) = key.encode() else {
+            return Some(None);
+        };
+        match self.by_key.get(&(label.to_owned(), encoded)) {
+            Some(&index) => Some(Some(self.nodes[index].clone())),
+            // Distinguish "cannot seek this label" from "sought, absent":
+            // if the schema named no key for the label, by_key holds no
+            // entries for it — fall back to a scan.
+            None => {
+                if self
+                    .by_key
+                    .keys()
+                    .any(|(seekable_label, _)| seekable_label == label)
+                {
+                    Some(None)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn nodes_by_index_range(
+        &self,
+        index_name: &str,
+        lower: Option<(&Value, bool)>,
+        upper: Option<(&Value, bool)>,
+    ) -> Option<Vec<NodeValue>> {
+        let map = self.by_index.get(index_name)?;
+        let ranges = range_families(lower, upper)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for (start, end) in ranges {
+            // An inverted range (`> 5 AND < 3`) selects nothing —
+            // BTreeMap::range would panic on it.
+            let start_bytes = match &start {
+                std::ops::Bound::Included(b) | std::ops::Bound::Excluded(b) => b.as_slice(),
+                std::ops::Bound::Unbounded => &[],
+            };
+            let end_bytes = match &end {
+                std::ops::Bound::Included(b) | std::ops::Bound::Excluded(b) => b.as_slice(),
+                std::ops::Bound::Unbounded => &[0xff],
+            };
+            if start_bytes > end_bytes {
+                continue;
+            }
+            if start_bytes == end_bytes
+                && matches!(
+                    (&start, &end),
+                    (std::ops::Bound::Excluded(_), _) | (_, std::ops::Bound::Excluded(_))
+                )
+            {
+                continue;
+            }
+            for (_, indices) in map.range((start, end)) {
+                for &i in indices {
+                    if seen.insert(i) {
+                        out.push(self.nodes[i].clone());
+                    }
+                }
+            }
+        }
+        Some(out)
+    }
+
     fn nodes_by_index(&self, index_name: &str, value: &Value) -> Option<Vec<NodeValue>> {
         // Unknown index → the caller falls back to a label scan.
         let map = self.by_index.get(index_name)?;
@@ -485,6 +579,196 @@ fn index_lookup_keys(value: &Value) -> Vec<Vec<u8>> {
         }
         other => encode_index_value(other).into_iter().collect(),
     }
+}
+
+/// The per-type-family byte ranges an index range scan must cover
+/// (memcomparable encoding: byte order == logical order *within* a type
+/// family; Int (0x04) and Float (0x05) are distinct families that both
+/// hold numbers, so a numeric bound spans two ranges — mirroring the
+/// equality seek's dual probe). `None` means the range cannot be served
+/// (precision hazard) — fall back to a scan. Over-selection is safe (the
+/// WHERE still filters); under-selection is a bug.
+#[allow(clippy::type_complexity)]
+fn range_families(
+    lower: Option<(&Value, bool)>,
+    upper: Option<(&Value, bool)>,
+) -> Option<Vec<(std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>)>> {
+    use std::ops::Bound;
+    let numeric = |v: &Value| matches!(v, Value::Int(_) | Value::Float(_));
+    let is_num_bound = |b: &Option<(&Value, bool)>| b.map(|(v, _)| numeric(v)).unwrap_or(true);
+    // A null/NaN endpoint compares as null/false against everything: the
+    // predicate can never hold, so select nothing.
+    let degenerate = |b: &Option<(&Value, bool)>| {
+        b.map(|(v, _)| matches!(v, Value::Null) || matches!(v, Value::Float(f) if f.is_nan()))
+            .unwrap_or(false)
+    };
+    if degenerate(&lower) || degenerate(&upper) {
+        return Some(Vec::new());
+    }
+    let fully_open = lower.is_none() && upper.is_none();
+    if fully_open {
+        // No bound at all — nothing to prune; let the caller scan.
+        return None;
+    }
+    if is_num_bound(&lower) && is_num_bound(&upper) && (lower.is_some() || upper.is_some()) {
+        // Either family hitting a precision hazard bails to a scan.
+        let int_range = int_family_range(lower, upper)?;
+        let float_range = float_family_range(lower, upper)?;
+        return Some([int_range, float_range].into_iter().flatten().collect());
+    }
+    // Non-numeric: both present bounds must share the encoded type family,
+    // else the comparison is null everywhere — select nothing.
+    let encode = |v: &Value| encode_index_value(v);
+    let family_of = |bytes: &[u8]| bytes.first().copied();
+    let lower_enc = match lower {
+        None => None,
+        Some((v, inc)) => match encode(v) {
+            Some(b) => Some((b, inc)),
+            None => return Some(Vec::new()),
+        },
+    };
+    let upper_enc = match upper {
+        None => None,
+        Some((v, inc)) => match encode(v) {
+            Some(b) => Some((b, inc)),
+            None => return Some(Vec::new()),
+        },
+    };
+    let family = match (&lower_enc, &upper_enc) {
+        (Some((l, _)), Some((u, _))) => {
+            if family_of(l) != family_of(u) {
+                return Some(Vec::new());
+            }
+            family_of(l)?
+        }
+        (Some((l, _)), None) => family_of(l)?,
+        (None, Some((u, _))) => family_of(u)?,
+        (None, None) => return None,
+    };
+    let start = match lower_enc {
+        Some((b, true)) => Bound::Included(b),
+        Some((b, false)) => Bound::Excluded(b),
+        None => Bound::Included(vec![family]),
+    };
+    let end = match upper_enc {
+        Some((b, true)) => Bound::Included(b),
+        Some((b, false)) => Bound::Excluded(b),
+        None => Bound::Excluded(vec![family + 1]),
+    };
+    Some(vec![(start, end)])
+}
+
+/// Integers exactly representable as f64 end here; beyond it the
+/// Int↔Float bound conversions lose precision, so range pruning bails.
+const F64_EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// The Int-family (tag 0x04) byte range for numeric bounds, or `None` on
+/// a precision hazard. The outer Option wraps a possibly-empty range.
+#[allow(clippy::type_complexity)]
+fn int_family_range(
+    lower: Option<(&Value, bool)>,
+    upper: Option<(&Value, bool)>,
+) -> Option<Option<(std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>)>> {
+    use std::ops::Bound;
+    let enc = |n: i64| encode_model_value(&ModelValue::Int(n));
+    let start = match lower {
+        None => Bound::Included(vec![0x04]),
+        Some((Value::Int(n), true)) => Bound::Included(enc(*n)?),
+        Some((Value::Int(n), false)) => Bound::Excluded(enc(*n)?),
+        Some((Value::Float(f), _)) if f.abs() >= F64_EXACT_INT_LIMIT => return None,
+        Some((Value::Float(f), inclusive)) => {
+            // The smallest int i with i > f (or i >= f when inclusive).
+            let i = if f.fract() == 0.0 {
+                let n = *f as i64;
+                if inclusive { n } else { n.checked_add(1)? }
+            } else {
+                f.ceil() as i64
+            };
+            Bound::Included(enc(i)?)
+        }
+        Some(_) => return None,
+    };
+    let end = match upper {
+        None => Bound::Excluded(vec![0x05]),
+        Some((Value::Int(n), true)) => Bound::Included(enc(*n)?),
+        Some((Value::Int(n), false)) => Bound::Excluded(enc(*n)?),
+        Some((Value::Float(f), _)) if f.abs() >= F64_EXACT_INT_LIMIT => return None,
+        Some((Value::Float(f), inclusive)) => {
+            // The largest int i with i < f (or i <= f when inclusive).
+            let i = if f.fract() == 0.0 {
+                let n = *f as i64;
+                if inclusive { n } else { n.checked_sub(1)? }
+            } else {
+                f.floor() as i64
+            };
+            Bound::Included(enc(i)?)
+        }
+        Some(_) => return None,
+    };
+    Some(Some((start, end)))
+}
+
+/// The Float-family (tag 0x05) byte range for numeric bounds, or `None`
+/// on a precision hazard. Zero bounds widen across the -0.0/+0.0
+/// total-order split (they are numerically equal but encode apart), so a
+/// `>= 0.0` range still selects stored `-0.0` values.
+#[allow(clippy::type_complexity)]
+fn float_family_range(
+    lower: Option<(&Value, bool)>,
+    upper: Option<(&Value, bool)>,
+) -> Option<Option<(std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>)>> {
+    use std::ops::Bound;
+    let as_f64 = |v: &Value| -> Option<f64> {
+        match v {
+            Value::Float(f) => Some(*f),
+            Value::Int(n) => {
+                if (n.unsigned_abs() as f64) >= F64_EXACT_INT_LIMIT {
+                    None
+                } else {
+                    Some(*n as f64)
+                }
+            }
+            _ => None,
+        }
+    };
+    let enc = |f: f64| encode_model_value(&ModelValue::Float(f));
+    let start = match lower {
+        None => Bound::Included(vec![0x05]),
+        Some((v, inclusive)) => {
+            let mut f = as_f64(v)?;
+            if f == 0.0 {
+                f = -0.0; // widen across the total-order zero split
+            }
+            if inclusive {
+                Bound::Included(enc(f)?)
+            } else if f == 0.0 {
+                // `> 0.0` must still exclude +0.0 AND -0.0 (equal), but
+                // the byte range from -0.0-exclusive would include +0.0.
+                // Start above +0.0 instead.
+                Bound::Excluded(enc(0.0)?)
+            } else {
+                Bound::Excluded(enc(f)?)
+            }
+        }
+    };
+    let end = match upper {
+        None => Bound::Excluded(vec![0x06]),
+        Some((v, inclusive)) => {
+            let mut f = as_f64(v)?;
+            if f == 0.0 {
+                f = 0.0_f64.copysign(1.0); // +0.0: widen upward
+            }
+            if inclusive {
+                Bound::Included(enc(f)?)
+            } else if f == 0.0 {
+                // `< 0.0` must exclude both zeros: end below -0.0.
+                Bound::Excluded(enc(-0.0)?)
+            } else {
+                Bound::Excluded(enc(f)?)
+            }
+        }
+    };
+    Some(Some((start, end)))
 }
 
 /// The memcomparable encoding of a runtime node's indexed property value, or
@@ -993,6 +1277,188 @@ mod tests {
             if let ExecValue::List(items) = value {
                 stack.extend(items);
             }
+        }
+    }
+    /// A snapshot with a declared schema: keyed Host nodes carrying an
+    /// indexed numeric `cores` (mixed Int/Float) and string `os`.
+    fn indexed_snapshot() -> GraphSnapshot {
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let mut nodes = Vec::new();
+        let values: [(&str, ModelValue); 6] = [
+            ("h1", ModelValue::Int(2)),
+            ("h2", ModelValue::Int(4)),
+            ("h3", ModelValue::Float(4.5)),
+            ("h4", ModelValue::Int(8)),
+            ("h5", ModelValue::Float(-0.0)),
+            ("h6", ModelValue::Int(0)),
+        ];
+        for (name, cores) in values {
+            let mut props = BTreeMap::new();
+            props.insert("cores".to_string(), cores);
+            props.insert("os".to_string(), ModelValue::String(format!("os-{name}")));
+            nodes.push((node_key("Host", name), NodeRecord::new([], props)));
+        }
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_cores".into(),
+                def: IndexDef::new("Host", vec!["cores".into()]).unwrap(),
+            },
+        ];
+        GraphSnapshot::from_records_with_schema(&nodes, &[], &schema)
+    }
+
+    fn range_names(
+        snapshot: &GraphSnapshot,
+        lower: Option<(&Value, bool)>,
+        upper: Option<(&Value, bool)>,
+    ) -> Vec<String> {
+        use crate::exec::source::GraphSource;
+        let mut names: Vec<String> = snapshot
+            .nodes_by_index_range("by_cores", lower, upper)
+            .expect("index exists")
+            .into_iter()
+            .filter_map(|n| match n.properties.get("hostname") {
+                Some(Value::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn index_range_spans_both_numeric_families() {
+        let snapshot = indexed_snapshot();
+        // (2, 8): excludes both endpoints, spans Int 4 and Float 4.5.
+        let lower = Value::Int(2);
+        let upper = Value::Int(8);
+        assert_eq!(
+            range_names(&snapshot, Some((&lower, false)), Some((&upper, false))),
+            vec!["h2", "h3"]
+        );
+        // >= 4.5 with a float bound: Int 8 must appear (cross-family).
+        let lower = Value::Float(4.5);
+        assert_eq!(
+            range_names(&snapshot, Some((&lower, true)), None),
+            vec!["h3", "h4"]
+        );
+        // <= 4 inclusive: h1, h2, h5(-0.0), h6(0).
+        let upper = Value::Int(4);
+        assert_eq!(
+            range_names(&snapshot, None, Some((&upper, true))),
+            vec!["h1", "h2", "h5", "h6"]
+        );
+    }
+
+    #[test]
+    fn index_range_handles_zero_and_degenerates() {
+        let snapshot = indexed_snapshot();
+        // >= 0 must select the stored -0.0 (numerically equal) and 0.
+        let zero = Value::Int(0);
+        assert_eq!(
+            range_names(&snapshot, Some((&zero, true)), None),
+            vec!["h1", "h2", "h3", "h4", "h5", "h6"]
+        );
+        // > 0 must exclude BOTH zeros.
+        assert_eq!(
+            range_names(&snapshot, Some((&zero, false)), None),
+            vec!["h1", "h2", "h3", "h4"]
+        );
+        let zero_f = Value::Float(0.0);
+        // < 0.0 excludes both zeros (nothing negative stored).
+        assert!(range_names(&snapshot, None, Some((&zero_f, false))).is_empty());
+        // Inverted range selects nothing (and must not panic).
+        let five = Value::Int(5);
+        let three = Value::Int(3);
+        assert!(range_names(&snapshot, Some((&five, false)), Some((&three, false))).is_empty());
+        // Null/NaN endpoints select nothing.
+        let null = Value::Null;
+        assert!(range_names(&snapshot, Some((&null, true)), None).is_empty());
+        let nan = Value::Float(f64::NAN);
+        assert!(range_names(&snapshot, None, Some((&nan, true))).is_empty());
+        // Mixed-family bounds (number vs string) select nothing.
+        let s = Value::String("a".into());
+        let one = Value::Int(1);
+        assert!(range_names(&snapshot, Some((&one, true)), Some((&s, true))).is_empty());
+    }
+
+    #[test]
+    fn key_seek_point_lookup_and_fallbacks() {
+        use crate::exec::source::GraphSource;
+        let snapshot = indexed_snapshot();
+        // Present key: exactly the node.
+        let found = snapshot
+            .node_by_key("Host", &[Value::String("h3".into())])
+            .expect("seekable")
+            .expect("present");
+        assert!(matches!(
+            found.properties.get("cores"),
+            Some(Value::Float(f)) if *f == 4.5
+        ));
+        // Absent key: definitively none (no scan fallback).
+        assert!(matches!(
+            snapshot.node_by_key("Host", &[Value::String("nope".into())]),
+            Some(None)
+        ));
+        // A label the schema gave no key: cannot seek, fall back.
+        assert!(snapshot.node_by_key("Software", &[Value::Int(1)]).is_none());
+        // A null key value can never match a stored key.
+        assert!(matches!(
+            snapshot.node_by_key("Host", &[Value::Null]),
+            Some(None)
+        ));
+    }
+
+    /// End-to-end parity: range- and key-hinted execution returns exactly
+    /// the rows a plain scan does — the hint only prunes anchors.
+    #[test]
+    fn hinted_execution_matches_scan_results() {
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let snapshot = indexed_snapshot();
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_cores".into(),
+                def: IndexDef::new("Host", vec!["cores".into()]).unwrap(),
+            },
+        ];
+        let with_index = Catalogue::from_entries(schema);
+        let queries = [
+            "MATCH (h:Host) WHERE h.cores > 2 AND h.cores <= 4.5 RETURN h.hostname ORDER BY h.hostname",
+            "MATCH (h:Host) WHERE h.cores >= 0 RETURN h.hostname ORDER BY h.hostname",
+            "MATCH (h:Host {hostname: 'h4'}) RETURN h.cores",
+            "MATCH (h:Host {hostname: 'absent'}) RETURN h.cores",
+        ];
+        for query in queries {
+            let parsed = crate::parse(query).unwrap();
+            let hinted = {
+                let bound =
+                    crate::bind::bind(query, &parsed, &with_index, crate::bind::BindMode::Strict)
+                        .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            let scanned = {
+                let bound = crate::bind::bind(
+                    query,
+                    &parsed,
+                    &Catalogue::empty(),
+                    crate::bind::BindMode::Lenient,
+                )
+                .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            assert_eq!(
+                format!("{:?}", hinted.rows),
+                format!("{:?}", scanned.rows),
+                "{query}"
+            );
         }
     }
 }

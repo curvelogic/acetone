@@ -209,14 +209,35 @@ pub struct BoundNodePattern {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IndexHint {
-    /// The pattern pins the leading key property of `label`.
-    KeySeek { label: String },
+    /// The pattern pins the leading key property of `label`. `key` is the
+    /// label's full declared key tuple, so the executor can point-look-up
+    /// the primary map when every key property is pinned
+    /// (acetone-6g5.3.3) and fall back to a scan otherwise.
+    KeySeek { label: String, key: Vec<String> },
     /// A declared index `name` on `(label, property)` covers an equality.
     IndexSeek {
         name: String,
         label: String,
         property: String,
     },
+    /// A declared index `name` on `(label, property)` covers WHERE-level
+    /// range predicate(s) on the anchor variable (acetone-6g5.3.3). Each
+    /// bound is `(endpoint, inclusive)`; `None` is an open end. The
+    /// WHERE still evaluates afterwards — the hint only prunes anchors.
+    IndexRange {
+        name: String,
+        label: String,
+        property: String,
+        lower: Option<(RangeBound, bool)>,
+        upper: Option<(RangeBound, bool)>,
+    },
+}
+
+/// A constant-ish range endpoint, resolvable without a row.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RangeBound {
+    Literal(Literal),
+    Parameter(String),
 }
 
 #[derive(Debug)]

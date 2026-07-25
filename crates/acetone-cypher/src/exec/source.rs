@@ -32,6 +32,32 @@ pub trait GraphSource {
         None
     }
 
+    /// Nodes a range predicate on the declared index `index_name` selects
+    /// (`IndexRange`, acetone-6g5.3.3): every indexed value inside the
+    /// bounds (each an optional `(value, inclusive)` pair; `None` = open
+    /// end). `None` means no such index — fall back to a label scan;
+    /// `Some` is a candidate superset the caller still filters, so
+    /// over-selection is safe and under-selection is a bug. Numeric
+    /// bounds select across the Int/Float families like the equality
+    /// seek. Indexes are null/NaN-blind. The default has no indexes.
+    fn nodes_by_index_range(
+        &self,
+        _index_name: &str,
+        _lower: Option<(&Value, bool)>,
+        _upper: Option<(&Value, bool)>,
+    ) -> Option<Vec<NodeValue>> {
+        None
+    }
+
+    /// A point lookup by primary key: the node of `label` whose declared
+    /// key tuple equals `key_values` (`KeySeek` execution,
+    /// acetone-6g5.3.3). `None` means this source cannot seek keys — fall
+    /// back to a label scan; `Some(None)` means it can and no such node
+    /// exists. The default cannot.
+    fn node_by_key(&self, _label: &str, _key_values: &[Value]) -> Option<Option<NodeValue>> {
+        None
+    }
+
     /// Relationships incident to `node` in `direction`, filtered to
     /// `types` when non-empty. Each result is (relationship, neighbour).
     fn expand(
