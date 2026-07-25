@@ -742,9 +742,22 @@ fn shared_edge_map_pair_across_versions_is_checked_once() {
         manifest.nodes = MapRoot::from_root(&nodes);
         manifest.edges_fwd = MapRoot::from_root(&fwd);
         let bytes = manifest.encode();
+        // Anchor every reachable chunk (these single-leaf maps have
+        // root == only chunk), so the fabricated history is complete
+        // under the anchor-completeness check (acetone-5a8).
+        let anchors: Vec<Hash> = [
+            &manifest.schema,
+            &manifest.nodes,
+            &manifest.edges_fwd,
+            &manifest.edges_rev,
+        ]
+        .into_iter()
+        .map(|root| root.hash)
+        .collect();
         let mut new = NewCommit::new(&bytes, "s", "asymmetric history");
         let parents: Vec<Hash> = parent.into_iter().collect();
         new.parents = &parents;
+        new.anchors = &anchors;
         parent = Some(store.create_commit(&new).expect("create commit"));
     }
     store
@@ -1077,4 +1090,58 @@ fn satisfied_constraints_yield_no_findings() {
     }
     let report = fsck::check(&repo).expect("fsck");
     assert!(report.is_clean(), "findings: {:?}", report.findings);
+}
+
+/// Anchor completeness (acetone-5a8): a commit whose chunks/ tree omits
+/// reachable chunks verifies clean structurally TODAY but would lose
+/// them to a foreign git gc — fsck must name it as an error, and a
+/// fully-anchored sibling must stay clean.
+#[test]
+fn unanchored_reachable_chunks_are_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    // A manifest with one extra node — its maps' chunks all exist in the
+    // store, but the fabricated commit anchors NOTHING.
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "unanchored").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+    let bytes = manifest.encode();
+    let bare = NewCommit::new(&bytes, "s", "no anchors");
+    let tip = store.create_commit(&bare).expect("create commit");
+    store
+        .write_ref("refs/heads/bare", None, &tip)
+        .expect("branch ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::AnchorIncomplete)
+        .collect();
+    assert_eq!(
+        incomplete.len(),
+        1,
+        "the bare commit must be named: {:?}",
+        report.findings
+    );
+    assert!(
+        incomplete[0].detail.contains("git gc"),
+        "the finding explains the hazard: {}",
+        incomplete[0].detail
+    );
+    assert!(report.has_errors(), "anchor incompleteness is an error");
 }

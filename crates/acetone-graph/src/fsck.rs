@@ -96,6 +96,11 @@ pub enum FindingKind {
     /// (referential integrity, ADR-0028 / Invariant #3). The write path now
     /// rejects this, but an older or foreign-written repository may carry one.
     DanglingEdge,
+    /// A commit's `.acetone/chunks/` anchor tree does not cover every
+    /// chunk its manifest reaches: the version verifies clean TODAY, but
+    /// a foreign `git gc` may prune the unanchored chunks later — the
+    /// clean-now-gone-later class (acetone-5a8).
+    AnchorIncomplete,
     /// Advisory: a reachable ref was found but there is nothing to verify
     /// behind it (a symbolic ref whose chain ends at an absent or unborn
     /// ref). The sin fsck must avoid is silence, so the ref is named rather
@@ -297,6 +302,10 @@ struct Verified {
     /// fixed per repository and do not affect the structural walk, so they
     /// are not part of the key.)
     roots: BTreeSet<RootKey>,
+    /// Chunk sets computed per manifest, keyed by the manifest's map-root
+    /// keys — manifests sharing identical roots share one computation
+    /// (multi-version histories re-verify cheaply).
+    chunk_sets: std::collections::BTreeMap<Vec<RootKey>, std::rc::Rc<BTreeSet<Hash>>>,
     /// Manifest blob hashes already fully checked. Sound to key on the blob
     /// hash alone: the manifest bytes fix every `(root hash, height)` pair
     /// it names. A shared *damaged* manifest is therefore attributed only to
@@ -530,6 +539,14 @@ fn check_commit_tips(
                         verified,
                         report,
                     );
+                    check_anchor_completeness(
+                        store,
+                        &origin,
+                        commit.id,
+                        &commit.manifest,
+                        verified,
+                        report,
+                    );
                     stack.extend(commit.parents.into_iter().map(|p| (p, false)));
                 }
                 Ok(None) => report.push(
@@ -568,6 +585,84 @@ fn check_commit_tips(
         }
     }
     Ok(())
+}
+
+/// Anchor completeness (acetone-5a8): every chunk a commit's manifest
+/// reaches must appear in the commit's `.acetone/chunks/` anchor tree —
+/// otherwise the version verifies clean today but a foreign `git gc`
+/// may prune the unanchored chunks later (the clean-now-gone-later
+/// class). Chunk sets are cached by the manifest's map-root keys, so a
+/// multi-version history sharing manifests re-verifies cheaply.
+fn check_anchor_completeness(
+    store: &GitStore,
+    origin: &Origin,
+    commit: Hash,
+    manifest_bytes: &[u8],
+    verified: &mut Verified,
+    report: &mut FsckReport,
+) {
+    // An undecodable manifest was already reported by `check_manifest`.
+    let Ok(manifest) = Manifest::decode(manifest_bytes) else {
+        return;
+    };
+    let mut root_keys: Vec<RootKey> = [
+        &manifest.schema,
+        &manifest.nodes,
+        &manifest.edges_fwd,
+        &manifest.edges_rev,
+    ]
+    .into_iter()
+    .chain(manifest.indexes.values())
+    .map(root_key)
+    .collect();
+    root_keys.sort();
+    let chunks = match verified.chunk_sets.get(&root_keys) {
+        Some(chunks) => std::rc::Rc::clone(chunks),
+        None => {
+            let set = match crate::repo::manifest_chunk_set(store, &manifest) {
+                Ok(set) => std::rc::Rc::new(set.into_iter().collect::<BTreeSet<Hash>>()),
+                Err(err) => {
+                    // A broken map was already reported by the manifest
+                    // walk; nothing further to attribute here.
+                    let _ = err;
+                    return;
+                }
+            };
+            verified
+                .chunk_sets
+                .insert(root_keys.clone(), std::rc::Rc::clone(&set));
+            set
+        }
+    };
+    let anchors = match store.commit_anchors(&commit) {
+        Ok(Some(anchors)) => anchors,
+        Ok(None) => BTreeSet::new(),
+        Err(err) => {
+            report.push(
+                FindingKind::AnchorIncomplete,
+                origin,
+                None,
+                format!("anchor tree is unreadable: {err}"),
+            );
+            return;
+        }
+    };
+    let missing: Vec<&Hash> = chunks.difference(&anchors).collect();
+    if missing.is_empty() {
+        return;
+    }
+    let sample: Vec<String> = missing.iter().take(3).map(|h| h.to_hex()).collect();
+    report.push(
+        FindingKind::AnchorIncomplete,
+        origin,
+        None,
+        format!(
+            "{} of {} reachable chunk(s) are not anchored in the commit's              chunks/ tree and would not survive a foreign git gc (e.g. {})",
+            missing.len(),
+            chunks.len(),
+            sample.join(", ")
+        ),
+    );
 }
 
 /// Decode one manifest (identified by its blob `hash`) and verify every map

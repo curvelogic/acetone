@@ -910,6 +910,69 @@ impl GitStore {
         Ok(object.detach().data)
     }
 
+    /// The chunk hashes a commit's `.acetone/chunks/` anchor tree lists —
+    /// the exact set a foreign `git gc` is guaranteed to retain for this
+    /// commit (fsck anchor-completeness, acetone-5a8). `Ok(None)` when
+    /// the commit tree has no `chunks/` entry (a commit anchoring
+    /// nothing — an empty graph — writes none).
+    pub fn commit_anchors(
+        &self,
+        id: &Hash,
+    ) -> Result<Option<std::collections::BTreeSet<Hash>>, StoreError> {
+        let what = "commit anchor tree";
+        let header = self
+            .find_header(id)?
+            .ok_or_else(|| StoreError::corrupt(what, "commit is absent from the store"))?;
+        let data = self.read_object_checked(id, &header, gix::object::Kind::Commit, what)?;
+        let commit = gix::objs::CommitRef::from_bytes(&data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
+        let tree_hash = Hash::from_oid(commit.tree());
+        let read_tree = |hash: &Hash| -> Result<Vec<u8>, StoreError> {
+            let header = self
+                .find_header(hash)?
+                .ok_or_else(|| StoreError::corrupt(what, "tree object is missing"))?;
+            self.read_object_checked(hash, &header, gix::object::Kind::Tree, what)
+        };
+        let root_data = read_tree(&tree_hash)?;
+        let root = gix::objs::TreeRef::from_bytes(&root_data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
+        let Some(acetone) = root
+            .entries
+            .iter()
+            .find(|entry| entry.filename == ACETONE_DIR)
+        else {
+            return Err(StoreError::corrupt(what, "no `.acetone` directory in tree"));
+        };
+        let acetone_hash = Hash::from_oid(acetone.oid.to_owned());
+        let acetone_data = read_tree(&acetone_hash)?;
+        let acetone_tree = gix::objs::TreeRef::from_bytes(&acetone_data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
+        let Some(chunks) = acetone_tree
+            .entries
+            .iter()
+            .find(|entry| entry.filename == ANCHORS_ENTRY)
+        else {
+            return Ok(None);
+        };
+        let chunks_hash = Hash::from_oid(chunks.oid.to_owned());
+        let chunks_data = read_tree(&chunks_hash)?;
+        let chunks_tree = gix::objs::TreeRef::from_bytes(&chunks_data, self.repo.object_hash())
+            .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
+        // Two-level sharding: each top entry is a shard tree whose blob
+        // entries' object ids ARE the anchored chunk hashes.
+        let mut anchors = std::collections::BTreeSet::new();
+        for shard in &chunks_tree.entries {
+            let shard_hash = Hash::from_oid(shard.oid.to_owned());
+            let shard_data = read_tree(&shard_hash)?;
+            let shard_tree = gix::objs::TreeRef::from_bytes(&shard_data, self.repo.object_hash())
+                .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
+            for entry in &shard_tree.entries {
+                anchors.insert(Hash::from_oid(entry.oid.to_owned()));
+            }
+        }
+        Ok(Some(anchors))
+    }
+
     /// Build the `chunks/` anchor tree for a commit: a two-level tree of
     /// `<hh>/<rest-of-hex>` entries referencing every anchored chunk blob
     /// (the pattern proven in the Phase 0 spike). Tree entries reference
