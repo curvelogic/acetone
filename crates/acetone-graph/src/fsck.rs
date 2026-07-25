@@ -432,7 +432,19 @@ fn check_workspaces(
         };
         match store.get(&manifest_hash) {
             Ok(Some(bytes)) => {
-                check_manifest(store, &origin, manifest_hash, &bytes, verified, report)
+                check_manifest(store, &origin, manifest_hash, &bytes, verified, report);
+                // The workspace-side clean-now-gone-later class
+                // (acetone-2ck.11): uncommitted chunks need the (huo)
+                // anchor tree to survive a foreign git gc, and a
+                // pre-huo bare-blob workspace anchors nothing.
+                check_anchor_completeness(
+                    store,
+                    &origin,
+                    AnchorSource::Workspace(ref_hash),
+                    &bytes,
+                    verified,
+                    report,
+                );
             }
             Ok(None) => report.push(
                 FindingKind::Manifest,
@@ -542,7 +554,7 @@ fn check_commit_tips(
                     check_anchor_completeness(
                         store,
                         &origin,
-                        commit.id,
+                        AnchorSource::Commit(commit.id),
                         &commit.manifest,
                         verified,
                         report,
@@ -593,10 +605,19 @@ fn check_commit_tips(
 /// may prune the unanchored chunks later (the clean-now-gone-later
 /// class). Chunk sets are cached by the manifest's map-root keys, so a
 /// multi-version history sharing manifests re-verifies cheaply.
+/// Where a version's anchor tree lives: a commit's `.acetone/chunks/`
+/// or a (huo) workspace tree's. A pre-huo workspace (bare manifest
+/// blob) reads as anchorless — the same clean-now-gone-later exposure,
+/// with a re-save as the fix (acetone-2ck.11).
+enum AnchorSource {
+    Commit(Hash),
+    Workspace(Hash),
+}
+
 fn check_anchor_completeness(
     store: &GitStore,
     origin: &Origin,
-    commit: Hash,
+    source: AnchorSource,
     manifest_bytes: &[u8],
     verified: &mut Verified,
     report: &mut FsckReport,
@@ -646,9 +667,16 @@ fn check_anchor_completeness(
             set
         }
     };
-    let anchors = match store.commit_anchors(&commit) {
-        Ok(Some(anchors)) => anchors,
-        Ok(None) => BTreeSet::new(),
+    let read = match &source {
+        AnchorSource::Commit(commit) => store.commit_anchors(commit),
+        AnchorSource::Workspace(ref_value) => store.workspace_anchors(ref_value),
+    };
+    let (anchors, bare_workspace) = match read {
+        Ok(Some(anchors)) => (anchors, false),
+        Ok(None) => (
+            BTreeSet::new(),
+            matches!(source, AnchorSource::Workspace(_)),
+        ),
         Err(err) => {
             report.push(
                 FindingKind::AnchorIncomplete,
@@ -664,6 +692,21 @@ fn check_anchor_completeness(
         return;
     }
     let sample: Vec<String> = missing.iter().take(3).map(|h| h.to_hex()).collect();
+    if bare_workspace {
+        report.push(
+            FindingKind::AnchorIncomplete,
+            origin,
+            None,
+            format!(
+                "workspace predates anchor trees (bare manifest blob, pre-huo): {} reachable \
+                 chunk(s) would not survive a foreign git gc (e.g. {}) — any acetone write \
+                 that saves the workspace upgrades it to an anchored tree",
+                missing.len(),
+                sample.join(", "),
+            ),
+        );
+        return;
+    }
     report.push(
         FindingKind::AnchorIncomplete,
         origin,

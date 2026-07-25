@@ -926,14 +926,47 @@ impl GitStore {
         let data = self.read_object_checked(id, &header, gix::object::Kind::Commit, what)?;
         let commit = gix::objs::CommitRef::from_bytes(&data, self.repo.object_hash())
             .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
-        let tree_hash = Hash::from_oid(commit.tree());
+        self.anchors_under_root_tree(&Hash::from_oid(commit.tree()), what)
+    }
+
+    /// The set of chunk hashes a WORKSPACE ref's anchor tree guarantees a
+    /// foreign `git gc` will retain (ADR-0044/huo — the workspace-side
+    /// mirror of [`Self::commit_anchors`], acetone-2ck.11). `Ok(None)`
+    /// for a pre-huo workspace: the ref names the manifest blob directly,
+    /// so nothing anchors its chunks.
+    pub fn workspace_anchors(
+        &self,
+        ref_value: &Hash,
+    ) -> Result<Option<std::collections::BTreeSet<Hash>>, StoreError> {
+        let what = "workspace anchor tree";
+        let header = self.find_header(ref_value)?.ok_or_else(|| {
+            StoreError::corrupt(what, "workspace object is absent from the store")
+        })?;
+        match header.kind() {
+            gix::object::Kind::Blob => Ok(None),
+            gix::object::Kind::Tree => self.anchors_under_root_tree(ref_value, what),
+            other => Err(StoreError::corrupt(
+                what,
+                format!("unexpected object kind {other:?}"),
+            )),
+        }
+    }
+
+    /// Read the `.acetone/chunks/` anchor set beneath a root tree — the
+    /// layout commits and (huo) workspace trees share. `Ok(None)` when the
+    /// `.acetone` directory has no `chunks/` entry.
+    fn anchors_under_root_tree(
+        &self,
+        tree_hash: &Hash,
+        what: &'static str,
+    ) -> Result<Option<std::collections::BTreeSet<Hash>>, StoreError> {
         let read_tree = |hash: &Hash| -> Result<Vec<u8>, StoreError> {
             let header = self
                 .find_header(hash)?
                 .ok_or_else(|| StoreError::corrupt(what, "tree object is missing"))?;
             self.read_object_checked(hash, &header, gix::object::Kind::Tree, what)
         };
-        let root_data = read_tree(&tree_hash)?;
+        let root_data = read_tree(tree_hash)?;
         let root = gix::objs::TreeRef::from_bytes(&root_data, self.repo.object_hash())
             .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
         let Some(acetone) = root

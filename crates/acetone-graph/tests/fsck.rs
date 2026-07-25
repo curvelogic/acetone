@@ -24,6 +24,40 @@ fn node(label: &str, key: &str) -> NodeKey {
     NodeKey::new(label, vec![Value::String(key.to_owned())]).expect("valid")
 }
 
+/// Write `manifest` behind `refname` the way a real save does: as a (huo)
+/// workspace TREE anchoring every reachable chunk — so fsck's workspace
+/// anchor-completeness check (acetone-2ck.11) sees a healthy workspace.
+fn write_anchored_workspace(
+    repo: &Repository,
+    manifest: &acetone_model::manifest::Manifest,
+    refname: &str,
+) {
+    let store = repo.store();
+    let params = manifest.chunk_params;
+    let mut anchors: Vec<Hash> = Vec::new();
+    let roots = [
+        &manifest.schema,
+        &manifest.nodes,
+        &manifest.edges_fwd,
+        &manifest.edges_rev,
+    ]
+    .into_iter()
+    .chain(manifest.indexes.values())
+    .chain(manifest.conflicts.iter());
+    for root in roots {
+        let root = root.to_root(params).expect("root");
+        for chunk in reachable_chunks(store, &root).expect("reachable") {
+            anchors.push(chunk);
+        }
+    }
+    anchors.sort();
+    anchors.dedup();
+    let tree = store
+        .write_workspace_tree(&manifest.encode(), &anchors)
+        .expect("workspace tree");
+    store.write_ref(refname, None, &tree).expect("ref");
+}
+
 /// Insert `n` nodes and commit, so the `nodes` map is a genuine multi-level
 /// tree with interior nodes and leaves to damage.
 fn commit_many_nodes(repo: &Repository, n: usize) {
@@ -325,10 +359,7 @@ fn asymmetric_edge_maps_are_an_advisory_not_an_error() {
     let mut manifest = base.clone();
     manifest.edges_fwd = MapRoot::from_root(&fwd);
     manifest.nodes = MapRoot::from_root(&nodes);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/asym", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/asym");
 
     let report = fsck::check(&repo).expect("fsck");
     let advisories: Vec<_> = report.advisories().collect();
@@ -378,10 +409,7 @@ fn undecodable_edge_entries_surface_as_advisory_not_silence() {
     .expect("apply_batch");
     let mut manifest = base.clone();
     manifest.edges_fwd = MapRoot::from_root(&fwd);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/badedge", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/badedge");
 
     let report = fsck::check(&repo).expect("fsck");
     assert!(
@@ -465,10 +493,7 @@ fn reverse_only_edge_is_a_missing_forward_advisory() {
     .expect("apply_batch");
     let mut manifest = base.clone();
     manifest.edges_rev = MapRoot::from_root(&rev);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/revonly", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/revonly");
 
     let report = fsck::check(&repo).expect("fsck");
     assert!(
@@ -1208,4 +1233,56 @@ fn conflicts_map_participates_in_anchor_completeness() {
         matches!(&incomplete[0].origin, fsck::Origin::Commit { commit, .. } if *commit == tip),
         "the finding names the conflicted commit"
     );
+}
+
+/// acetone-2ck.11: a pre-huo workspace (ref naming the manifest blob
+/// directly) anchors nothing, so its reachable chunks would die to a
+/// foreign git gc — fsck names the exposure and the upgrade path, while
+/// a real (anchored-tree) workspace stays clean, as the whole suite
+/// pins.
+#[test]
+fn bare_blob_workspace_is_an_anchor_incomplete_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "legacy").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+    // Pre-huo style: the ref names the manifest blob itself.
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/legacy", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| {
+            f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/legacy")
+        })
+        .collect();
+    assert_eq!(incomplete.len(), 1, "{:?}", report.findings);
+    assert!(
+        incomplete[0].detail.contains("pre-huo")
+            && incomplete[0].detail.contains("saves the workspace"),
+        "names the class and the upgrade: {}",
+        incomplete[0].detail
+    );
+    assert!(report.has_errors());
 }
