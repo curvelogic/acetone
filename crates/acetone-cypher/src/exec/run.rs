@@ -1756,7 +1756,11 @@ fn project(
     // WITH ... WHERE filters in the union scope, LAST — openCypher's
     // sub-clause order is ORDER BY -> SKIP -> LIMIT -> WHERE, i.e. the
     // predicate sees the truncated result (acetone-2ck.9; previously it
-    // ran before SKIP/LIMIT, a recorded divergence).
+    // ran before SKIP/LIMIT, a recorded divergence). Under DISTINCT the
+    // predicate therefore sees first-seen representative rows only —
+    // visible solely for pre-scope variables the binder over-accepts in
+    // this position (conceded limit, acetone-1qj; real openCypher
+    // rejects those queries outright).
     if is_with && let Some(predicate) = &projection.where_clause {
         let mut kept = Vec::new();
         for row in merged {
