@@ -548,5 +548,8 @@ Options:
   -m, --message <MESSAGE>
           Commit message (default synthesised from the source and counts)
 
+      --batch-size <BATCH_SIZE>
+          Records staged per transaction batch (memory tuning, ADR-0062); the final graph is batch-size independent
+
   -h, --help
           Print help (see a summary with '-h')
