@@ -466,6 +466,12 @@ impl GraphSource for GraphSnapshot {
         // (numeric cross-typing via the same alternatives the equality
         // index uses), and treat a complete miss as "cannot serve" so
         // the caller scans — never a definitive absence.
+        // Any component whose probe set may be incomplete (integral float
+        // >= 2^53: non-unique i64 preimage) forces a scan — the same bail
+        // the equality index takes (PR #206 review NEW-1).
+        if key_values.iter().any(probe_set_incomplete) {
+            return None;
+        }
         let per_component: Vec<Vec<Vec<u8>>> = key_values.iter().map(index_lookup_keys).collect();
         if per_component
             .iter()
@@ -573,18 +579,9 @@ impl GraphSource for GraphSnapshot {
         // cross-type rule (`[1] = [1.0]`), which an exact-byte bucket cannot
         // serve without enumerating 2^k element-type combinations. Fall back to
         // a scan for a list pin (`None`) — correct, just not accelerated.
-        if matches!(value, Value::List(_)) {
-            return None;
-        }
-        // A float pin that is an integer at or beyond 2^53 has a non-unique
-        // integer preimage — many i64s round to the same f64 — so probing the
-        // single `f as i64` would miss the others and under-select. Below 2^53
-        // every integer is exactly representable, so the preimage is unique and
-        // the Int/Float probe below is exact; at/above it, fall back to a scan.
-        if let Value::Float(f) = value
-            && f.fract() == 0.0
-            && f.abs() >= 9_007_199_254_740_992.0
-        {
+        // Likewise an integral float pin at/beyond 2^53: its i64 preimage
+        // is non-unique, so the probe set would under-select.
+        if probe_set_incomplete(value) {
             return None;
         }
         // The candidate byte keys whose stored values could equal `value` under
@@ -604,6 +601,22 @@ impl GraphSource for GraphSnapshot {
             }
         }
         Some(out)
+    }
+}
+
+/// Whether `index_lookup_keys`' probe set for `value` may be INCOMPLETE
+/// under openCypher equality — a float pin that is an integer at or
+/// beyond 2^53 has a non-unique i64 preimage (many integers round to the
+/// same f64 under `eq3`'s lossy comparison), so probing the single
+/// `f as i64` would under-select. Every seek caller must bail to a scan
+/// on this condition; sharing it here keeps the callers from diverging
+/// (PR #206 review NEW-1). Also true for list pins, whose element-wise
+/// cross-typing an exact-byte bucket cannot serve.
+fn probe_set_incomplete(value: &Value) -> bool {
+    match value {
+        Value::List(_) => true,
+        Value::Float(f) => f.fract() == 0.0 && f.abs() >= F64_EXACT_INT_LIMIT,
+        _ => false,
     }
 }
 
@@ -1531,6 +1544,60 @@ mod tests {
                 "{query}"
             );
         }
+    }
+
+    /// The precision edge (PR #206 review NEW-1): an integral float pin
+    /// at/beyond 2^53 has a non-unique i64 preimage, so the key seek must
+    /// bail to a scan — and end-to-end results must match the scan.
+    #[test]
+    fn key_seek_bails_at_the_float_precision_edge() {
+        use crate::exec::source::GraphSource;
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+        const EDGE: i64 = 9_007_199_254_740_992; // 2^53
+        let nodes = vec![
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(EDGE)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(EDGE + 1)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+        ];
+        let schema = vec![SchemaEntry::Label {
+            name: "Item".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        // The float pin cannot be served: both stored Int keys are
+        // lossy-equal to it. Bail (scan), never a partial candidate set.
+        assert!(
+            snapshot
+                .nodes_by_key("Item", &[Value::Float(EDGE as f64)])
+                .is_none()
+        );
+        // End to end, hinted equals scanned.
+        let with_schema = Catalogue::from_entries(schema);
+        let query = "MATCH (i:Item {id: 9007199254740992.0}) RETURN i.id ORDER BY i.id";
+        let parsed = crate::parse(query).unwrap();
+        let hinted = {
+            let bound =
+                crate::bind::bind(query, &parsed, &with_schema, crate::bind::BindMode::Strict)
+                    .unwrap();
+            execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+        };
+        let scanned = {
+            let bound = crate::bind::bind(
+                query,
+                &parsed,
+                &Catalogue::empty(),
+                crate::bind::BindMode::Lenient,
+            )
+            .unwrap();
+            execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+        };
+        assert_eq!(hinted.rows.len(), 2, "both lossy-equal keys match");
+        assert_eq!(format!("{:?}", hinted.rows), format!("{:?}", scanned.rows));
     }
 
     /// Numeric cross-typing: a pin of either numeric type must reach keys
