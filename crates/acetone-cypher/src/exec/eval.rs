@@ -3,8 +3,7 @@
 //! Aggregate operator; here they read from a pre-computed slot sequence
 //! in deterministic traversal order.
 
-use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::QuantifierKind;
 use crate::ast::{BinaryOp, Literal, UnaryOp};
@@ -141,7 +140,14 @@ pub struct EvalCtx<'a> {
     pub governor: &'a super::governor::Governor,
     /// Pre-computed aggregate results, consumed in traversal order by
     /// `BoundExpr::Aggregate` nodes (set by the Aggregate operator).
-    pub aggregates: Option<(&'a [Value], Cell<usize>)>,
+    /// Accumulated aggregate results, keyed by the identity of the
+    /// `Aggregate` node in the projection's expression tree. Identity
+    /// (not traversal order) is what makes evaluation robust to
+    /// branches `eval` skips — an untaken CASE arm simply never looks
+    /// its aggregate up, where a sequential cursor would desync and
+    /// hand a downstream aggregate the skipped one's value
+    /// (acetone-2ck.8).
+    pub aggregates: Option<&'a HashMap<usize, Value>>,
 }
 
 impl<'a> EvalCtx<'a> {
@@ -159,6 +165,13 @@ impl<'a> EvalCtx<'a> {
     }
 }
 
+/// The identity of an expression node within its (owned, un-moved)
+/// bound tree — the address is stable between aggregate collection and
+/// evaluation of the same projection item, and distinct even for
+/// syntactically identical aggregates (`min(x) + min(x)`).
+pub(crate) fn expr_identity(expr: &BoundExpr) -> usize {
+    expr as *const BoundExpr as usize
+}
 pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecError> {
     match expr {
         BoundExpr::Literal { value, span: _ } => Ok(match value {
@@ -247,18 +260,19 @@ pub fn eval(expr: &BoundExpr, row: &Row, ctx: &EvalCtx) -> Result<Value, ExecErr
             crate::exec::functions::call(def.name, values, *span, ctx.graph, ctx.governor)
         }
         BoundExpr::Aggregate { span, .. } => {
-            let Some((values, cursor)) = &ctx.aggregates else {
+            let Some(slots) = &ctx.aggregates else {
                 return Err(ExecError::Unsupported {
                     feature: "aggregate outside projection",
                     span: *span,
                 });
             };
-            let index = cursor.get();
-            cursor.set(index + 1);
-            values.get(index).cloned().ok_or(ExecError::Unsupported {
-                feature: "aggregate slot mismatch",
-                span: *span,
-            })
+            slots
+                .get(&expr_identity(expr))
+                .cloned()
+                .ok_or(ExecError::Unsupported {
+                    feature: "aggregate slot mismatch",
+                    span: *span,
+                })
         }
         BoundExpr::Case {
             operand,

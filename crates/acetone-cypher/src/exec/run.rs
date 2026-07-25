@@ -11,7 +11,6 @@
 //! at most once per MATCH clause (across all its comma patterns and
 //! within var-length expansions).
 
-use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::{AtRef, Direction};
@@ -1825,15 +1824,18 @@ fn eval_with_group(
 ) -> Result<Value, ExecError> {
     let mut aggregates = Vec::new();
     collect_aggregates(expr, &mut aggregates);
-    let mut slots = Vec::with_capacity(aggregates.len());
+    let mut slots = std::collections::HashMap::with_capacity(aggregates.len());
     for aggregate in aggregates {
-        slots.push(accumulate(aggregate, group, ctx)?);
+        slots.insert(
+            crate::exec::eval::expr_identity(aggregate),
+            accumulate(aggregate, group, ctx)?,
+        );
     }
     let inner = EvalCtx {
         graph: ctx.graph,
         parameters: ctx.parameters,
         governor: ctx.governor,
-        aggregates: Some((&slots, Cell::new(0))),
+        aggregates: Some(&slots),
     };
     eval(expr, representative, &inner)
 }

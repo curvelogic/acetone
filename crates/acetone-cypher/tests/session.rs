@@ -603,3 +603,74 @@ fn in_statement_claims_use_opencypher_value_equality() {
             .unwrap_or_else(|e| panic!("NaN never collides (with_index={with_index}): {e}"));
     }
 }
+
+/// acetone-2ck.8: aggregate slots are keyed by expression identity, so a
+/// CASE branch `eval` skips can never desync a downstream aggregate onto
+/// the skipped one's value (the old cursor-sequential slots returned
+/// min's value for max here).
+#[test]
+fn aggregate_in_a_skipped_case_branch_does_not_desync_slots() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "Num".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        for (id, v) in [(1, 3), (2, 7), (3, 5)] {
+            txn.put_node(
+                &NodeKey::new("Num", vec![MV::Int(id)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("num".to_owned(), MV::Int(v))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let session = Session::new(&repo);
+    let read = |q: &str| match session.run(q).expect("query") {
+        Outcome::Read(result) => match &result.rows[0][0] {
+            RtValue::Int(i) => *i,
+            other => panic!("integer expected, got {other:?}"),
+        },
+        Outcome::Write(_) => panic!("read expected"),
+    };
+
+    // The original repro: the untaken WHEN holds min; the addend is max.
+    assert_eq!(
+        read("MATCH (n:Num) RETURN CASE WHEN false THEN min(n.num) ELSE 0 END + max(n.num)"),
+        7,
+        "downstream aggregate must not consume the skipped branch's slot"
+    );
+    // Taken branch still works.
+    assert_eq!(
+        read("MATCH (n:Num) RETURN CASE WHEN true THEN min(n.num) ELSE 0 END + max(n.num)"),
+        10
+    );
+    // Nested CASE with the inner one skipped.
+    assert_eq!(
+        read(
+            "MATCH (n:Num) RETURN CASE WHEN true THEN \
+             CASE WHEN false THEN sum(n.num) ELSE min(n.num) END \
+             ELSE avg(n.num) END + max(n.num)"
+        ),
+        10
+    );
+    // Chain-duplicated aggregates: identical text, distinct nodes, one
+    // in a skipped branch.
+    assert_eq!(
+        read(
+            "MATCH (n:Num) RETURN \
+             CASE WHEN false THEN min(n.num) ELSE min(n.num) END + min(n.num) + max(n.num)"
+        ),
+        13
+    );
+    // Simple-form CASE (operand match) skipping candidates.
+    assert_eq!(
+        read(
+            "MATCH (n:Num) RETURN CASE 2 WHEN 1 THEN min(n.num) WHEN 2 THEN max(n.num) \
+             ELSE sum(n.num) END"
+        ),
+        7
+    );
+}
