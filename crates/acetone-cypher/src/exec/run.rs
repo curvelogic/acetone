@@ -1693,17 +1693,6 @@ fn project(
         }
     }
 
-    // WITH ... WHERE filters in the union scope.
-    if is_with && let Some(predicate) = &projection.where_clause {
-        let mut kept = Vec::new();
-        for row in merged {
-            if truth(&eval(predicate, &row, ctx)?, predicate.span())? == Some(true) {
-                kept.push(row);
-            }
-        }
-        merged = kept;
-    }
-
     // DISTINCT over the projected values. Dedup in O(n) via a canonical hash
     // key (consistent with `equivalent`) rather than an O(n²) linear scan, so
     // the governor's per-kept-row charge actually bounds the work — a linear
@@ -1764,29 +1753,39 @@ fn project(
         merged.truncate(count);
     }
 
+    // WITH ... WHERE filters in the union scope, LAST — openCypher's
+    // sub-clause order is ORDER BY -> SKIP -> LIMIT -> WHERE, i.e. the
+    // predicate sees the truncated result (acetone-2ck.9; previously it
+    // ran before SKIP/LIMIT, a recorded divergence).
+    if is_with && let Some(predicate) = &projection.where_clause {
+        let mut kept = Vec::new();
+        for row in merged {
+            if truth(&eval(predicate, &row, ctx)?, predicate.span())? == Some(true) {
+                kept.push(row);
+            }
+        }
+        merged = kept;
+    }
+
     Ok((columns, merged))
 }
 
 /// The row bound a following `WITH` imposes on an UNWIND's
 /// materialisation: `WITH <per-row items> [SKIP s] LIMIT k` with no
-/// DISTINCT, no ORDER BY, no aggregation and no WHERE consumes at most
-/// `s + k` input rows. A WHERE disables the cap: `project()` filters
-/// *before* SKIP/LIMIT (a recorded divergence from openCypher's
-/// WHERE-last order, acetone-2ck.9), and under that order the LIMIT may
-/// need arbitrarily many input rows. `None` when the next clause
-/// imposes no bound (sorting, de-duplication and aggregation genuinely
-/// need the full expansion). Note the cap also stops evaluating later
-/// input rows entirely, so an error one of them would have raised never
-/// surfaces — lazy-engine behaviour, but adjacency-dependent here.
+/// DISTINCT, no ORDER BY and no aggregation consumes at most `s + k`
+/// input rows. A WHERE no longer disables the cap: since acetone-2ck.9
+/// `project()` filters AFTER SKIP/LIMIT (openCypher's WHERE-last
+/// order), so the truncation point depends only on `s + k` regardless
+/// of the predicate. `None` when the next clause imposes no bound
+/// (sorting, de-duplication and aggregation genuinely need the full
+/// expansion). Note the cap also stops evaluating later input rows
+/// entirely, so an error one of them would have raised never surfaces —
+/// lazy-engine behaviour, but adjacency-dependent here.
 fn unwind_row_cap(next: Option<&BoundClause>, ctx: &EvalCtx) -> Result<Option<usize>, ExecError> {
     let Some(BoundClause::With(projection)) = next else {
         return Ok(None);
     };
-    if projection.distinct
-        || projection.aggregating
-        || !projection.order_by.is_empty()
-        || projection.where_clause.is_some()
-    {
+    if projection.distinct || projection.aggregating || !projection.order_by.is_empty() {
         return Ok(None);
     }
     let Some(limit) = &projection.limit else {
