@@ -17,15 +17,15 @@
 //!
 //! The transaction stages every put/delete and advances the workspace
 //! atomically on `save`/`commit`, maintaining `edges_rev` by construction
-//! (spec §3.3). Constraints (spec §2, acetone-mex.3) are checked here
-//! against the workspace before the transaction: mandatory single-keyed
-//! identity, key immutability, CREATE-of-an-existing-key, existence and
-//! UNIQUE. UNIQUE is a base scan (excluding same-transaction deletions) for
-//! now: it catches a new value colliding with committed data, but NOT two
-//! *new* nodes that collide within one statement — so an unindexed UNIQUE
-//! can still admit a violating graph until index-backed enforcement lands
-//! (Phase 5, acetone-ryg). Same-transaction deletions are subtracted so the
-//! delete-plus-create rekey path is not falsely rejected.
+//! (spec §3.3). Constraints (spec §2, acetone-mex.3/acetone-ryg) are
+//! checked here against the workspace before the transaction: mandatory
+//! single-keyed identity, key immutability, CREATE-of-an-existing-key,
+//! existence and UNIQUE. UNIQUE covers both the stored state (via a
+//! declared single-property index probe when one exists, a label scan
+//! otherwise) and the statement itself (two new claimants of one value
+//! collide). Records the statement supersedes or deletes are subtracted
+//! from the stored check, so value moves and the delete-plus-create
+//! rekey path are not falsely rejected.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -183,10 +183,18 @@ pub fn persist_changes(
                 key: format_key_tuple(key.key()),
             });
         }
-        check_constraints(node, &key, catalogue, base, &deleted_keys)?;
-
         entity_to_key.insert(node.id.clone(), key.clone());
         node_records.push((key, record));
+    }
+
+    // Constraint checks run once every upserted key is known, so the
+    // stored-state check can skip records this statement supersedes (a
+    // unique value freed by a SET is claimable in the same statement)
+    // and the in-statement claims can catch two NEW nodes colliding
+    // (acetone-ryg).
+    let mut checker = UniqueChecker::new(catalogue, base, &written_keys, &deleted_keys);
+    for (node, (key, _)) in changes.upserted_nodes.iter().zip(&node_records) {
+        checker.check(node, key)?;
     }
 
     // Stage deletions BEFORE upserts, so a delete-plus-create of the same
@@ -343,64 +351,156 @@ fn node_key_and_record(
     Ok((node_key, NodeRecord::new(secondary, properties)))
 }
 
-/// Enforce the schema's existence and UNIQUE constraints (spec §2) for one
-/// upserted node against the workspace `base`. UNIQUE is a base scan here —
-/// index-backed enforcement (and catching two *new* nodes that collide in
-/// one statement) arrives with the secondary indexes of Phase 5.
-fn check_constraints(
-    node: &NodeValue,
-    key: &NodeKey,
-    catalogue: &Catalogue,
-    base: &Snapshot<'_>,
-    deleted_keys: &HashSet<Vec<u8>>,
-) -> Result<(), PersistError> {
-    let Some(def) = catalogue.label(key.label()) else {
-        return Ok(());
-    };
+/// Existence and UNIQUE enforcement for one statement's upserts
+/// (acetone-ryg). Existence is per record. UNIQUE checks two layers:
+/// the *statement* claims (two upserts colliding on a value — neither
+/// in the base yet) and the *stored* state, where nodes deleted or
+/// upserted by this statement are skipped (their old records are
+/// superseded). The stored probe uses a declared single-property index
+/// over `(label, property)` when one exists — O(log n) via the stored
+/// `idx/` map instead of the O(nodes) label scan — falling back to the
+/// scan otherwise. Uniqueness is type-exact (`ModelValue` equality:
+/// `1` and `1.0` do not collide), so the index probe uses exactly the
+/// value's own encoding, mirroring the scan's `==`.
+struct UniqueChecker<'a> {
+    catalogue: &'a Catalogue,
+    base: &'a Snapshot<'a>,
+    written_keys: &'a HashSet<Vec<u8>>,
+    deleted_keys: &'a HashSet<Vec<u8>>,
+    /// `(label, property, canonical value encoding)` claimed so far this
+    /// statement.
+    statement_claims: HashSet<(String, String, Vec<u8>)>,
+}
 
-    for property in def.exists() {
-        if !node.properties.contains_key(property) {
-            return Err(PersistError::MissingRequired {
-                label: key.label().to_string(),
-                key: format_key_tuple(key.key()),
-                property: property.clone(),
-            });
+impl<'a> UniqueChecker<'a> {
+    fn new(
+        catalogue: &'a Catalogue,
+        base: &'a Snapshot<'a>,
+        written_keys: &'a HashSet<Vec<u8>>,
+        deleted_keys: &'a HashSet<Vec<u8>>,
+    ) -> Self {
+        UniqueChecker {
+            catalogue,
+            base,
+            written_keys,
+            deleted_keys,
+            statement_claims: HashSet::new(),
         }
     }
 
-    let wanted: Vec<(&str, ModelValue)> = def
-        .unique()
-        .iter()
-        .filter_map(|property| {
-            node.properties
-                .get(property)
-                .map(|value| convert_value(value).map(|v| (property.as_str(), v)))
-        })
-        .collect::<Result<_, _>>()?;
-    if wanted.is_empty() {
-        return Ok(());
-    }
-    let this_key = key.encode()?;
-    for (other_key, other_record) in base.nodes()? {
-        let other_encoded = other_key.encode()?;
-        // Skip the node itself and any node being deleted in this
-        // transaction (its unique value is freed).
-        if other_key.label() != key.label()
-            || other_encoded == this_key
-            || deleted_keys.contains(&other_encoded)
-        {
-            continue;
+    fn check(&mut self, node: &NodeValue, key: &NodeKey) -> Result<(), PersistError> {
+        let Some(def) = self.catalogue.label(key.label()) else {
+            return Ok(());
+        };
+        for property in def.exists() {
+            if !node.properties.contains_key(property) {
+                return Err(PersistError::MissingRequired {
+                    label: key.label().to_string(),
+                    key: format_key_tuple(key.key()),
+                    property: property.clone(),
+                });
+            }
         }
+        let wanted: Vec<(&str, ModelValue)> = def
+            .unique()
+            .iter()
+            .filter_map(|property| {
+                node.properties
+                    .get(property)
+                    .map(|value| convert_value(value).map(|v| (property.as_str(), v)))
+            })
+            .collect::<Result<_, _>>()?;
+        if wanted.is_empty() {
+            return Ok(());
+        }
+        let this_key = key.encode()?;
         for (property, value) in &wanted {
-            if other_record.properties().get(*property) == Some(value) {
+            // In-statement claims: a value only ever admits one claimant
+            // per statement. The claim key is the memcomparable KEY
+            // encoding, not the canonical CBOR value encoding: the key
+            // encoding normalises signed zeros (-0.0 == 0.0 in
+            // openCypher, nested included) and rejects NaN — exactly the
+            // extensional equality the stored paths enforce (derived
+            // PartialEq treats -0.0 == 0.0; the idx/ map normalises
+            // zeros per ADR-0004; NaN equals nothing and claims
+            // nothing). Using CBOR here admitted a signed-zero breach
+            // and falsely rejected NaN pairs (PR #208 review).
+            if let Ok(value_enc) = acetone_model::keys::encode_key(std::slice::from_ref(value)) {
+                let claim = (key.label().to_owned(), (*property).to_owned(), value_enc);
+                if !self.statement_claims.insert(claim) {
+                    return Err(PersistError::UniqueViolation {
+                        label: key.label().to_string(),
+                        property: (*property).to_string(),
+                    });
+                }
+            }
+            // Stored state, skipping superseded and deleted records.
+            let colliding = match self.indexed_collisions(key.label(), property, value)? {
+                Some(keys) => keys,
+                None => self.scanned_collisions(key.label(), property, value)?,
+            };
+            for other in colliding {
+                let other_encoded = other.encode()?;
+                if other_encoded == this_key
+                    || self.deleted_keys.contains(&other_encoded)
+                    || self.written_keys.contains(&other_encoded)
+                {
+                    continue;
+                }
                 return Err(PersistError::UniqueViolation {
                     label: key.label().to_string(),
                     property: (*property).to_string(),
                 });
             }
         }
+        Ok(())
     }
-    Ok(())
+
+    /// Probe a declared single-property index for stored nodes carrying
+    /// exactly `value` — `None` when no such index exists (scan instead).
+    /// The probe trusts the derived `idx/` map exactly as the query path
+    /// does (Invariant #5: reproducible, fsck-verified).
+    fn indexed_collisions(
+        &self,
+        label: &str,
+        property: &str,
+        value: &ModelValue,
+    ) -> Result<Option<Vec<NodeKey>>, PersistError> {
+        let Some((name, def)) = self.catalogue.index_on(label, property) else {
+            return Ok(None);
+        };
+        let Ok(prefix) = acetone_model::graph_keys::index_value_prefix(
+            label,
+            def.properties(),
+            std::slice::from_ref(value),
+        ) else {
+            // Unencodable value: indexes nothing, collides with nothing.
+            return Ok(Some(Vec::new()));
+        };
+        match self.base.index_scan(name, &prefix)? {
+            // Declared but missing index map: fall back to the scan.
+            None => Ok(None),
+            Some(keys) => Ok(Some(keys)),
+        }
+    }
+
+    /// The label-scan fallback: every stored node of `label` whose
+    /// `property` equals `value` (type-exact).
+    fn scanned_collisions(
+        &self,
+        label: &str,
+        property: &str,
+        value: &ModelValue,
+    ) -> Result<Vec<NodeKey>, PersistError> {
+        let mut out = Vec::new();
+        for (other_key, other_record) in self.base.nodes()? {
+            if other_key.label() == label && other_record.properties().get(property) == Some(value)
+            {
+                out.push(other_key);
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Build an edge key from a relationship, resolving its endpoints to node
