@@ -423,3 +423,71 @@ fn gc_keeps_a_worktree_that_appears_in_the_residual_window() {
         report.findings
     );
 }
+
+#[test]
+fn gc_from_a_linked_worktree_packs_the_main_worktrees_state() {
+    // PR #212 review Minor 3: the main worktree's private refs are
+    // invisible from a linked worktree's ref store, so gc run FROM the
+    // linked side must collect them explicitly (and does so through the
+    // store's reduced-trust open, ADR-0034). Load-bearing assertion:
+    // the main worktree's dirty workspace root chunk enters the pack.
+    let dir = tempfile::tempdir().expect("tmp");
+    let main_git = dir.path().join("graph.git");
+    let repo = Repository::init(&main_git, InitOptions::default()).expect("init");
+    let base = {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.commit("seed", &[], None).expect("commit")
+    };
+    // Dirty workspace in the MAIN worktree.
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        for i in 0..40 {
+            let key = NodeKey::new("N", vec![Value::Int(i)]).expect("k");
+            tx.put_node(
+                &key,
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+            )
+            .expect("n");
+        }
+        tx.save().expect("save");
+    }
+    let wt = dir.path().join("wt-runner");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(base.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success(), "git worktree add failed");
+
+    let wt_repo = Repository::open(&wt).expect("open worktree");
+    wt_repo.gc().expect("gc from the linked worktree");
+
+    let snapshot = repo.workspace_snapshot().expect("snap");
+    assert_eq!(
+        snapshot.nodes().expect("nodes").len(),
+        40,
+        "main worktree state lost by gc run from a linked worktree"
+    );
+    let nodes_root = repo
+        .workspace_manifest()
+        .expect("manifest")
+        .nodes
+        .hash
+        .to_hex();
+    let loose = main_git
+        .join("objects")
+        .join(&nodes_root[..2])
+        .join(&nodes_root[2..]);
+    assert!(
+        !loose.exists(),
+        "main workspace root chunk still loose — never packed by the linked-worktree gc"
+    );
+}

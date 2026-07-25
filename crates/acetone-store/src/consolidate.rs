@@ -365,7 +365,9 @@ impl GitStore {
         if self.repo().common_dir() != self.repo().git_dir() {
             // Running from a linked worktree: the main worktree's private
             // refs live in the common dir's own ref store.
-            let main = gix::open(self.repo().common_dir())
+            // Same reduced-trust posture as every other open this store
+            // performs (ADR-0034) — never ambient-config Full trust.
+            let main = gix::open_opts(self.repo().common_dir(), Self::isolated_open_options())
                 .map_err(|e| StoreError::backend("opening main worktree for consolidation", e))?;
             collect(main)?;
         }
