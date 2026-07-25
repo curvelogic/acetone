@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek};
 use std::path::Path;
 
 use acetone_core::graph::import::{
@@ -94,17 +94,22 @@ enum ExtractorState {
 }
 
 impl FileExtractor {
-    fn open(format: Format, source: &Path, mapping: Mapping) -> Result<FileExtractor> {
-        let open = || -> Result<BufReader<File>> {
-            let file = File::open(source)
-                .with_context(|| format!("opening import source {}", source.display()))?;
-            Ok(BufReader::new(file))
-        };
+    /// Build the extractor over an already-open, rewound file handle —
+    /// the *same* handle the provenance hash just read, so the hash and
+    /// the parse cannot disagree about which file they describe even if
+    /// the path is swapped between the two passes (ADR-0062).
+    fn from_file(
+        format: Format,
+        file: File,
+        source: &Path,
+        mapping: Mapping,
+    ) -> Result<FileExtractor> {
+        let reader = BufReader::new(file);
         let state = match format {
             Format::Csv => {
                 let mut reader = csv::ReaderBuilder::new()
                     .has_headers(true)
-                    .from_reader(open()?);
+                    .from_reader(reader);
                 let headers = reader
                     .headers()
                     .map_err(|e| anyhow::anyhow!("reading CSV header: {e}"))?
@@ -115,12 +120,13 @@ impl FileExtractor {
                 }
             }
             Format::Ndjson => ExtractorState::Ndjson {
-                lines: open()?.lines(),
+                lines: reader.lines(),
                 line_no: 0,
             },
             Format::Json => {
                 let mut bytes = Vec::new();
-                open()?
+                let mut reader = reader;
+                reader
                     .read_to_end(&mut bytes)
                     .with_context(|| format!("reading import source {}", source.display()))?;
                 ExtractorState::Json {
@@ -322,14 +328,11 @@ fn take_endpoint(row: &mut Row, spec: &EndpointSpec) -> Result<EndpointRef, Impo
 /// hashing a source larger than memory stays O(1) resident (ADR-0062);
 /// the source is read twice — once to hash, once to parse — which keeps
 /// the provenance trailers validated before anything stages.
-fn source_hash(source: &Path) -> Result<String> {
-    let file = File::open(source)
-        .with_context(|| format!("opening import source {}", source.display()))?;
-    let mut reader = BufReader::new(file);
+fn source_hash(file: &mut File, source: &Path) -> Result<String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 65536];
     loop {
-        let n = reader
+        let n = file
             .read(&mut buffer)
             .with_context(|| format!("reading import source {}", source.display()))?;
         if n == 0 {
@@ -337,6 +340,8 @@ fn source_hash(source: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..n]);
     }
+    file.seek(std::io::SeekFrom::Start(0))
+        .with_context(|| format!("rewinding import source {}", source.display()))?;
     let digest = hasher.finalize();
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
@@ -358,12 +363,15 @@ pub fn run(
     disc: Option<&str>,
     branch: Option<&str>,
     message: Option<&str>,
+    batch_size: Option<usize>,
 ) -> Result<()> {
     let format = Format::parse(format)?;
     let mapping = build_mapping(label, edge, from, to, disc)?;
 
-    let hash = source_hash(source)?;
-    let mut extractor = FileExtractor::open(format, source, mapping)?;
+    let mut file = File::open(source)
+        .with_context(|| format!("opening import source {}", source.display()))?;
+    let hash = source_hash(&mut file, source)?;
+    let mut extractor = FileExtractor::from_file(format, file, source, mapping)?;
 
     let repo = crate::commands::open(repo_path)?;
     let opts = ImportOptions {
@@ -375,7 +383,7 @@ pub fn run(
             source_hash: hash,
         },
         author: None,
-        batch_size: None,
+        batch_size,
     };
 
     let outcome = acetone_core::graph::import(&repo, &mut extractor, opts).context("importing")?;
@@ -445,7 +453,8 @@ mod tests {
     fn rows_via(format: Format, contents: &[u8]) -> Vec<Row> {
         let (_dir, path) = temp_source(contents);
         let mapping = Mapping::Node { label: "N".into() };
-        let mut extractor = FileExtractor::open(format, &path, mapping).expect("open");
+        let file = File::open(&path).expect("open");
+        let mut extractor = FileExtractor::from_file(format, file, &path, mapping).expect("open");
         let mut rows = Vec::new();
         while let Some(record) = extractor.next_record().expect("record") {
             match record {
@@ -461,9 +470,16 @@ mod tests {
         let (_d1, p1) = temp_source(b"name,cores\nweb1,8\n");
         let (_d2, p2) = temp_source(b"name,cores\nweb1,8\n");
         let (_d3, p3) = temp_source(b"name,cores\nweb1,9\n");
-        let a = source_hash(&p1).expect("hash");
-        let b = source_hash(&p2).expect("hash");
-        let c = source_hash(&p3).expect("hash");
+        let hash_of = |path: &std::path::Path| {
+            let mut file = File::open(path).expect("open");
+            let hash = source_hash(&mut file, path).expect("hash");
+            // The pass leaves the handle rewound for the parse pass.
+            assert_eq!(file.stream_position().expect("pos"), 0);
+            hash
+        };
+        let a = hash_of(&p1);
+        let b = hash_of(&p2);
+        let c = hash_of(&p3);
         assert_eq!(a, b);
         assert_ne!(a, c);
         // SHA-256 hex is 64 characters.

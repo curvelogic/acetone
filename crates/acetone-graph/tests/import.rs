@@ -1025,3 +1025,117 @@ fn mid_stream_failure_resets_the_workspace() {
     assert!(!repo.is_dirty().expect("dirty"));
     assert_eq!(repo.head_commit().expect("head"), head);
 }
+
+/// An import that *shrinks* a pre-existing UNIQUE breach (replacing one
+/// colliding node's value) must succeed: the residual breach involves no
+/// imported record and stays fsck's business (PR #205 review finding 3).
+#[test]
+fn import_shrinking_a_pre_existing_breach_succeeds() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_service(&repo);
+    // Plant a 3-owner breach on ip="X" via the raw transaction API.
+    {
+        let mut tx = repo.begin_write().expect("begin");
+        for name in ["a", "b", "c"] {
+            let key = NodeKey::new("Service", vec![Value::String(name.into())]).expect("k");
+            let props = BTreeMap::from([
+                ("tier".to_owned(), Value::String("gold".into())),
+                ("ip".to_owned(), Value::String("X".into())),
+            ]);
+            tx.put_node(&key, &acetone_model::records::NodeRecord::new([], props))
+                .expect("node");
+        }
+        tx.commit("legacy damage", &[], None).expect("commit");
+    }
+
+    // Re-import `a` with a fresh ip: the breach shrinks to {b, c}, no
+    // imported record collides — the import must commit.
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Service",
+            &[
+                ("name", Value::String("a".into())),
+                ("tier", Value::String("gold".into())),
+                ("ip", Value::String("Y".into())),
+            ],
+        )],
+    };
+    let outcome = import(&repo, &mut mock, opts(None)).expect("shrinking import");
+    assert!(matches!(outcome, ImportOutcome::Committed { .. }));
+
+    // But joining the breach still fails, naming the imported key.
+    let mut mock = Mock {
+        name: "csv".into(),
+        records: vec![node_record(
+            "Service",
+            &[
+                ("name", Value::String("d".into())),
+                ("tier", Value::String("gold".into())),
+                ("ip", Value::String("X".into())),
+            ],
+        )],
+    };
+    match import(&repo, &mut mock, opts(None)) {
+        Err(GraphError::Import(ImportError::Constraints(v))) => {
+            let msg = v.to_string();
+            assert!(msg.contains("\"d\""), "{msg}");
+        }
+        other => panic!("expected Constraints error, got {other:?}"),
+    }
+}
+
+/// The library-convenience `VecExtractor` drives a whole import.
+#[test]
+fn vec_extractor_imports() {
+    use acetone_graph::import::VecExtractor;
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host(&repo);
+    let mut extractor = VecExtractor::new(
+        "vec",
+        vec![node_record(
+            "Host",
+            &[("name", Value::String("web1".into()))],
+        )],
+    );
+    let outcome = import(&repo, &mut extractor, opts(None)).expect("import");
+    assert!(matches!(outcome, ImportOutcome::Committed { nodes: 1, .. }));
+}
+
+/// A failed `--branch` import removes the side branch it created.
+#[test]
+fn failed_branch_import_removes_created_branch() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    declare_host(&repo);
+    let head = repo.head_commit().expect("head");
+
+    let mut failing = FailAfter {
+        records: vec![node_record(
+            "Host",
+            &[("name", Value::String("h00".into()))],
+        )],
+    };
+    let options = ImportOptions {
+        branch: Some("ingest".into()),
+        batch_size: Some(1),
+        ..opts(None)
+    };
+    assert!(import(&repo, &mut failing, options).is_err());
+    assert_eq!(
+        repo.current_branch().expect("branch"),
+        Some("refs/heads/main".into())
+    );
+    assert!(!repo.is_dirty().expect("dirty"));
+    assert_eq!(repo.head_commit().expect("head"), head);
+    assert!(
+        !repo
+            .branches()
+            .expect("branches")
+            .iter()
+            .any(|(name, _)| name == "ingest"),
+        "side branch must be cleaned up"
+    );
+}

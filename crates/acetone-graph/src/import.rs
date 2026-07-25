@@ -230,17 +230,23 @@ pub fn run(
                 ))
                 .into());
             }
-            switch_to_branch(repo, branch)?;
+            let created = switch_to_branch(repo, branch)?;
             let result = import_into_workspace(repo, extractor, &opts, &trailers);
-            // Return to the original branch. Provenance trailers were validated
-            // up front, so the realistic post-save failure is gone and the
-            // workspace is clean in every ordinary terminal state (no-op ⇒
-            // matches HEAD; committed ⇒ matches the new HEAD; error before
-            // save ⇒ untouched); the checkout back then succeeds. A residual
-            // *exceptional* store failure after save could still leave the
-            // workspace advanced, in which case the restore's own error is
-            // surfaced rather than swallowed.
+            // Return to the original branch. Mid-stream failures reset
+            // the workspace (import_into_workspace), so it is clean in
+            // every ordinary terminal state (no-op ⇒ matches HEAD;
+            // committed ⇒ matches the new HEAD; error ⇒ reset); the
+            // checkout back then succeeds. A residual *exceptional*
+            // store failure could still leave the workspace advanced, in
+            // which case the restore's own error is surfaced rather than
+            // swallowed.
             let restored = repo.checkout_branch(&original);
+            // A failed import commits nothing, so a side branch this run
+            // created is an empty artefact — remove it rather than leave
+            // residue (best-effort; the import error still wins).
+            if created && result.is_err() && restored.is_ok() {
+                let _ = repo.delete_branch(branch);
+            }
             match (result, restored) {
                 // Import error takes precedence over any restore error.
                 (Err(e), _) => Err(e),
@@ -265,13 +271,17 @@ fn provenance_trailers(provenance: &Provenance) -> Vec<(String, String)> {
 }
 
 /// Create `branch` (or check it out if it exists) and switch to it.
-fn switch_to_branch(repo: &Repository, branch: &str) -> Result<(), GraphError> {
-    match repo.create_branch(branch, None) {
-        Ok(_) => {}
-        Err(GraphError::BranchExists { .. }) => {}
+/// Returns whether this call created the branch, so a failed import can
+/// remove a side branch it conjured (streaming interleaves extraction
+/// with staging, so a parse failure no longer precedes branch creation).
+fn switch_to_branch(repo: &Repository, branch: &str) -> Result<bool, GraphError> {
+    let created = match repo.create_branch(branch, None) {
+        Ok(_) => true,
+        Err(GraphError::BranchExists { .. }) => false,
         Err(e) => return Err(e),
-    }
-    repo.checkout_branch(branch)
+    };
+    repo.checkout_branch(branch)?;
+    Ok(created)
 }
 
 /// Stream the source into the workspace in batches, then commit unless
@@ -409,19 +419,29 @@ fn stream_batches(
 /// unclaiming. Memory is O(claimed unique values), inherent without a
 /// persistent index (index-backed UNIQUE is acetone-ryg); with no UNIQUE
 /// constraints declared the tracker holds nothing.
-/// A UNIQUE claim's identity: `(label, property, value encoding)`.
-type ClaimTriple = (String, String, Vec<u8>);
-
+/// Streaming constraint enforcement (ADR-0062). Existence (`REQUIRE`) is
+/// per record. UNIQUE claims are tracked compactly: `(label, property)`
+/// pairs are interned to a small id, each distinct claimed value's
+/// canonical encoding is stored once under a claim id, and owners carry
+/// an *imported* flag so violations are reported only when an imported
+/// record is among the colliding owners — pre-existing breaches the
+/// import does not touch (or actively shrinks) stay fsck's business,
+/// matching the old final-state focus semantics. Seeding streams the
+/// workspace node map lazily, decoding only keys until a
+/// unique-constrained label is met. Memory is O(nodes of
+/// unique-constrained labels), inherent without a persistent index
+/// (index-backed UNIQUE is acetone-ryg); with no UNIQUE constraints
+/// declared the tracker holds nothing.
 struct UniqueTracker {
-    /// Claim → owner key encodings.
-    claims: BTreeMap<ClaimTriple, std::collections::BTreeSet<Vec<u8>>>,
-    /// key encoding → the claim triples it currently owns, for unclaiming
-    /// when a later record replaces the key.
-    by_key: BTreeMap<Vec<u8>, Vec<ClaimTriple>>,
-    /// Representative value per claim triple, for violation reporting.
-    values: BTreeMap<ClaimTriple, Value>,
-    /// Key decode per owner encoding, for violation reporting.
-    keys: BTreeMap<Vec<u8>, NodeKey>,
+    /// Interned `(label, property)` pairs; ids index this list.
+    pairs: Vec<(String, String)>,
+    pair_ids: BTreeMap<(String, String), u16>,
+    /// `(pair id, value encoding)` -> claim id.
+    claim_ids: BTreeMap<(u16, Vec<u8>), u32>,
+    /// Claim id -> owner key encodings, each flagged *imported*.
+    owners: Vec<BTreeMap<Vec<u8>, bool>>,
+    /// Owner key encoding -> the claim ids it currently holds.
+    by_key: BTreeMap<Vec<u8>, Vec<u32>>,
     active: bool,
 }
 
@@ -431,74 +451,105 @@ impl UniqueTracker {
         labels: &BTreeMap<String, LabelDef>,
     ) -> Result<UniqueTracker, GraphError> {
         let mut tracker = UniqueTracker {
-            claims: BTreeMap::new(),
+            pairs: Vec::new(),
+            pair_ids: BTreeMap::new(),
+            claim_ids: BTreeMap::new(),
+            owners: Vec::new(),
             by_key: BTreeMap::new(),
-            values: BTreeMap::new(),
-            keys: BTreeMap::new(),
             active: labels.values().any(|def| !def.unique().is_empty()),
         };
         if !tracker.active {
             return Ok(tracker);
         }
+        // One lazy pass over the node map: keys decode first, and only a
+        // unique-constrained label's records are decoded at all.
         let snapshot = repo.workspace_snapshot()?;
-        for (key, record) in snapshot.nodes()? {
-            tracker.claim(labels, &key, &record)?;
+        for item in snapshot.scan_nodes()? {
+            let (key_bytes, value_bytes) = item?;
+            let key = NodeKey::decode(&key_bytes)?;
+            let Some(def) = labels.get(key.label()) else {
+                continue;
+            };
+            if def.unique().is_empty() {
+                continue;
+            }
+            let record = NodeRecord::decode(&value_bytes)?;
+            tracker.claim(labels, &key, &record, false)?;
         }
         Ok(tracker)
     }
 
+    fn pair_id(&mut self, label: &str, property: &str) -> u16 {
+        if let Some(id) = self.pair_ids.get(&(label.to_owned(), property.to_owned())) {
+            return *id;
+        }
+        let id = u16::try_from(self.pairs.len()).expect("fewer than 65536 unique constraints");
+        self.pairs.push((label.to_owned(), property.to_owned()));
+        self.pair_ids
+            .insert((label.to_owned(), property.to_owned()), id);
+        id
+    }
+
+    fn claim_id(&mut self, pair: u16, value_enc: Vec<u8>) -> u32 {
+        if let Some(id) = self.claim_ids.get(&(pair, value_enc.clone())) {
+            return *id;
+        }
+        let id = u32::try_from(self.owners.len()).expect("claim ids fit u32");
+        self.claim_ids.insert((pair, value_enc), id);
+        self.owners.push(BTreeMap::new());
+        id
+    }
+
     /// Register `(key, record)`'s unique-property claims, unclaiming
-    /// whatever the key held before (replace semantics).
+    /// whatever the key held before (replace semantics). Returns the
+    /// claim ids this call touched.
     fn claim(
         &mut self,
         labels: &BTreeMap<String, LabelDef>,
         key: &NodeKey,
         record: &NodeRecord,
-    ) -> Result<Vec<ClaimTriple>, GraphError> {
+        imported: bool,
+    ) -> Result<Vec<u32>, GraphError> {
         let Some(def) = labels.get(key.label()) else {
             return Ok(Vec::new());
         };
-        let mut touched = Vec::new();
         if def.unique().is_empty() {
-            return Ok(touched);
+            return Ok(Vec::new());
         }
         let encoded = key.encode()?;
+        let mut touched = Vec::new();
         if let Some(previous) = self.by_key.remove(&encoded) {
-            for triple in previous {
-                if let Some(owners) = self.claims.get_mut(&triple) {
-                    owners.remove(&encoded);
-                    touched.push(triple);
-                }
+            for claim in previous {
+                self.owners[claim as usize].remove(&encoded);
+                touched.push(claim);
             }
         }
-        let mut owned = Vec::new();
+        let mut held = Vec::new();
         for property in def.unique() {
             if let Some(value) = record.properties().get(property) {
                 let value_enc = acetone_model::values::encode_value(value)
                     .map_err(acetone_model::records::RecordEncodeError::from)?;
-                let triple = (key.label().to_owned(), property.clone(), value_enc);
-                self.claims
-                    .entry(triple.clone())
-                    .or_default()
-                    .insert(encoded.clone());
-                self.values.insert(triple.clone(), value.clone());
-                touched.push(triple.clone());
-                owned.push(triple);
+                let pair = self.pair_id(key.label(), property);
+                let claim = self.claim_id(pair, value_enc);
+                self.owners[claim as usize].insert(encoded.clone(), imported);
+                touched.push(claim);
+                held.push(claim);
             }
         }
-        self.keys.insert(encoded.clone(), key.clone());
-        self.by_key.insert(encoded, owned);
+        self.by_key.insert(encoded, held);
         Ok(touched)
     }
 
     /// Apply one batch's node puts and report the violations they cause:
-    /// missing required properties, and UNIQUE claim groups that end the
-    /// batch with two or more owners. The last record for a key wins
-    /// *before* the checks (`put_node` replace semantics), and checks run
-    /// in encoded-key order so violation reports are deterministic —
-    /// both matching the former whole-source final-state check. (Across
-    /// batches the supersede window has passed: a violating record only
-    /// corrected in a later batch errors under streaming — ADR-0062.)
+    /// missing required properties, and UNIQUE claims that end the batch
+    /// with two or more owners *at least one of which is imported* — an
+    /// unclaim that merely shrinks a pre-existing breach reports
+    /// nothing. The last record for a key wins *before* the checks
+    /// (`put_node` replace semantics), and checks run in encoded-key
+    /// order so violation reports are deterministic — both matching the
+    /// former whole-source final-state check. (Across batches the
+    /// supersede window has passed: a violating record only corrected in
+    /// a later batch errors under streaming — ADR-0062.)
     fn apply_batch(
         &mut self,
         labels: &BTreeMap<String, LabelDef>,
@@ -509,8 +560,7 @@ impl UniqueTracker {
             surviving.insert(put.0.encode()?, put);
         }
         let mut violations = Vec::new();
-        let mut touched: std::collections::BTreeSet<ClaimTriple> =
-            std::collections::BTreeSet::new();
+        let mut touched: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         for (key, record) in surviving.values() {
             // Existence: a required property must be a key property or
             // present in the record.
@@ -527,25 +577,34 @@ impl UniqueTracker {
                 }
             }
             if self.active {
-                touched.extend(self.claim(labels, key, record)?);
+                touched.extend(self.claim(labels, key, record, true)?);
             }
         }
-        for triple in touched {
-            let Some(owners) = self.claims.get(&triple) else {
-                continue;
-            };
-            if owners.len() < 2 {
+        for claim in touched {
+            let owners = &self.owners[claim as usize];
+            if owners.len() < 2 || !owners.values().any(|imported| *imported) {
                 continue;
             }
-            let (label, property, _) = &triple;
+            // Reconstruct the report from the interned claim: the pair
+            // names, the value (decoded from its canonical encoding), and
+            // the owner keys (decoded from their encodings).
+            let ((pair, value_enc), _) = self
+                .claim_ids
+                .iter()
+                .find(|(_, id)| **id == claim)
+                .expect("touched claim is interned");
+            let (label, property) = &self.pairs[*pair as usize];
+            let value = acetone_model::values::decode_value(value_enc)
+                .map_err(|e| GraphError::Import(ImportError::Mapping(e.to_string())))?;
+            let mut nodes = Vec::new();
+            for encoded in owners.keys() {
+                nodes.push(NodeKey::decode(encoded)?);
+            }
             violations.push(crate::constraints::ConstraintViolation::Unique {
                 label: label.clone(),
                 property: property.clone(),
-                value: self.values.get(&triple).cloned().unwrap_or(Value::Null),
-                nodes: owners
-                    .iter()
-                    .filter_map(|encoded| self.keys.get(encoded).cloned())
-                    .collect(),
+                value,
+                nodes,
             });
         }
         Ok(violations)

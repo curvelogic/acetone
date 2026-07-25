@@ -145,6 +145,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             disc,
             branch,
             message,
+            batch_size,
         } => crate::import::run(
             repo_path,
             &format,
@@ -156,6 +157,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             disc.as_deref(),
             branch.as_deref(),
             message.as_deref(),
+            batch_size,
         ),
     }
 }

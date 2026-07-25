@@ -343,6 +343,10 @@ pub enum Command {
         /// Commit message (default synthesised from the source and counts).
         #[arg(short = 'm', long)]
         message: Option<String>,
+        /// Records staged per transaction batch (memory tuning,
+        /// ADR-0062); the final graph is batch-size independent.
+        #[arg(long)]
+        batch_size: Option<usize>,
     },
     /// Export a graph version as per-label and per-type tables.
     ///

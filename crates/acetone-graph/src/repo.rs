@@ -915,10 +915,12 @@ impl Repository {
 
     /// Reset the workspace to its committed state, discarding staged but
     /// uncommitted changes: the current branch tip's manifest, or the
-    /// init blank for an unborn branch. The primitive `abort_merge`
-    /// uses, exposed for callers that must clean up after a partial
-    /// batched operation (streaming import, ADR-0062) — and the
-    /// substrate for a future workspace-discard command (acetone-omk).
+    /// init blank for an unborn branch. An `abort_merge`-style reset for
+    /// callers that must clean up after a partial batched operation
+    /// (streaming import, ADR-0062), and the substrate for a future
+    /// workspace-discard command (acetone-omk). Unlike `abort_merge` it
+    /// leaves `MERGE_HEAD` untouched — a caller mid-merge should abort
+    /// the merge instead.
     pub fn reset_workspace_to_head(&self) -> Result<(), GraphError> {
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         let manifest = match self.head_commit()? {
@@ -2707,6 +2709,19 @@ impl<'s> Snapshot<'s> {
             None => Ok(None),
             Some(bytes) => Ok(Some(NodeRecord::decode(&bytes)?)),
         }
+    }
+
+    /// Stream the raw node-map entries in key order without decoding —
+    /// callers decode lazily (e.g. the streaming UNIQUE seed skips
+    /// non-unique labels before touching record bytes, ADR-0062).
+    pub fn scan_nodes(
+        &self,
+    ) -> Result<
+        impl Iterator<Item = Result<(acetone_prolly::Bytes, acetone_prolly::Bytes), GraphError>> + '_,
+        GraphError,
+    > {
+        let root = self.root(&self.manifest.nodes)?;
+        Ok(acetone_prolly::scan(self.store, &root, ..)?.map(|item| item.map_err(GraphError::from)))
     }
 
     /// All nodes, in key order.
