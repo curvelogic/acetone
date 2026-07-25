@@ -1200,11 +1200,7 @@ fn seek_anchor(
                     None => return Ok(None),
                 }
             }
-            match ctx.graph.node_by_key(label, &key_values) {
-                None => Ok(None),
-                Some(None) => Ok(Some(Vec::new())),
-                Some(Some(node)) => Ok(Some(vec![node])),
-            }
+            Ok(ctx.graph.nodes_by_key(label, &key_values))
         }
         Some(IndexHint::KeySeek { .. }) => Ok(None),
         Some(IndexHint::IndexSeek { name, property, .. }) => {
@@ -1217,10 +1213,14 @@ fn seek_anchor(
             let Some(value) = map.get(property) else {
                 return Ok(None);
             };
-            Ok(ctx.graph.nodes_by_index(name, value))
+            Ok(ctx.graph.nodes_by_index(name, property, value))
         }
         Some(IndexHint::IndexRange {
-            name, lower, upper, ..
+            name,
+            property,
+            lower,
+            upper,
+            ..
         }) => {
             let resolve = |bound: &Option<(RangeBound, bool)>| -> Option<(Value, bool)> {
                 match bound {
@@ -1253,6 +1253,7 @@ fn seek_anchor(
             }
             Ok(ctx.graph.nodes_by_index_range(
                 name,
+                property,
                 lower.as_ref().map(|(v, i)| (v, *i)),
                 upper.as_ref().map(|(v, i)| (v, *i)),
             ))

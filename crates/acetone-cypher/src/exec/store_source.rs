@@ -191,8 +191,19 @@ impl GraphSource for StoreBackedSource<'_> {
         }
     }
 
-    fn nodes_by_index(&self, index_name: &str, value: &Value) -> Option<Vec<NodeValue>> {
+    fn nodes_by_index(
+        &self,
+        index_name: &str,
+        property: &str,
+        value: &Value,
+    ) -> Option<Vec<NodeValue>> {
         let info = self.indexes.get(index_name)?;
+        // The hint may have been bound against another version's catalogue
+        // (AT clauses); a same-named index over a different property must
+        // not serve it (PR #206 review finding 4).
+        if info.property != property {
+            return None;
+        }
         let probes = self.probe_values(info, value)?;
         let properties = std::slice::from_ref(&info.property);
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();

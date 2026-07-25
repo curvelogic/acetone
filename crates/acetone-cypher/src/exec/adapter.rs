@@ -40,9 +40,18 @@ pub struct GraphSnapshot {
     /// ordered so byte-range scans are value-ordered (Invariant #2:
     /// byte order == logical order within a type family).
     by_index: HashMap<String, std::collections::BTreeMap<Vec<u8>, Vec<usize>>>,
-    /// `(label, encoded key tuple)` → node index (KeySeek point lookup);
-    /// populated only when the schema names the label's key.
-    by_key: HashMap<(String, Vec<u8>), usize>,
+    /// `(label, runtime-faithful encoded key tuple)` → node indices
+    /// (KeySeek). Keyed by the concatenated per-component encoding of the
+    /// node's *runtime* key values — the same representation
+    /// `node_satisfies` filters — so a seek and the filter agree on
+    /// equality. Values are vectors: numeric cross-typing means distinct
+    /// stored keys (`Int(1)`, `Float(1.0)`) can collide under runtime
+    /// equality probes. Populated only when the schema names the label's
+    /// key.
+    by_key: HashMap<(String, Vec<u8>), Vec<usize>>,
+    /// Index name → indexed property, for validating hints bound against
+    /// a different version's catalogue (PR #206 review finding 4).
+    index_properties: HashMap<String, String>,
     /// Node id → indices into `rels` of edges leaving it (ExpandOut).
     out_edges: HashMap<EntityId, Vec<usize>>,
     /// Node id → indices into `rels` of edges entering it (ExpandIn).
@@ -140,16 +149,35 @@ impl GraphSnapshot {
             }
         }
 
-        // Primary-key point lookups (KeySeek): only labels whose key the
-        // schema names can be sought.
-        let mut by_key: HashMap<(String, Vec<u8>), usize> = HashMap::new();
+        // Primary-key seeks (KeySeek): only labels whose key the schema
+        // names. Keys encode from the node's RUNTIME key values (the
+        // re-exposed properties), per-component and concatenated — the
+        // per-value encoding is self-delimiting, so concatenation equals
+        // the tuple encoding — matching what probes can compute from a
+        // pattern's pinned values.
+        let mut by_key: HashMap<(String, Vec<u8>), Vec<usize>> = HashMap::new();
         for (index, (key, _)) in nodes.iter().enumerate() {
-            if key_names.contains_key(key.label())
-                && let Ok(encoded) = key.encode()
-            {
-                by_key.insert((key.label().to_owned(), encoded), index);
+            let Some(names) = key_names.get(key.label()) else {
+                continue;
+            };
+            let node = &node_values[index];
+            let encoded: Option<Vec<u8>> = names
+                .iter()
+                .map(|name| node.properties.get(name).and_then(encode_index_value))
+                .collect::<Option<Vec<Vec<u8>>>>()
+                .map(|parts| parts.concat());
+            if let Some(encoded) = encoded {
+                by_key
+                    .entry((key.label().to_owned(), encoded))
+                    .or_default()
+                    .push(index);
             }
         }
+
+        let index_properties: HashMap<String, String> = index_defs
+            .iter()
+            .map(|(name, _, property)| (name.clone(), property.clone()))
+            .collect();
 
         GraphSnapshot {
             nodes: node_values,
@@ -158,6 +186,7 @@ impl GraphSnapshot {
             by_label,
             by_index,
             by_key,
+            index_properties,
             out_edges,
             in_edges,
         }
@@ -431,45 +460,65 @@ impl GraphSource for GraphSnapshot {
         self.by_id.get(id).map(|&i| self.nodes[i].clone())
     }
 
-    fn node_by_key(&self, label: &str, key_values: &[Value]) -> Option<Option<NodeValue>> {
-        // Only schema-keyed labels are seekable; unknown labels fall back.
-        let model: Option<Vec<ModelValue>> = key_values.iter().map(model_value_of).collect();
-        let Some(model) = model else {
-            // A null/NaN/non-storable key value can never equal a stored
-            // key: definitively absent.
-            return Some(None);
-        };
-        let Ok(key) = acetone_model::graph_keys::NodeKey::new(label.to_owned(), model) else {
-            return Some(None);
-        };
-        let Ok(encoded) = key.encode() else {
-            return Some(None);
-        };
-        match self.by_key.get(&(label.to_owned(), encoded)) {
-            Some(&index) => Some(Some(self.nodes[index].clone())),
-            // Distinguish "cannot seek this label" from "sought, absent":
-            // if the schema named no key for the label, by_key holds no
-            // entries for it — fall back to a scan.
-            None => {
-                if self
-                    .by_key
-                    .keys()
-                    .any(|(seekable_label, _)| seekable_label == label)
-                {
-                    Some(None)
-                } else {
-                    None
+    fn nodes_by_key(&self, label: &str, key_values: &[Value]) -> Option<Vec<NodeValue>> {
+        // Candidate-superset semantics (PR #206 review finding 1): probe
+        // every per-component encoding the pin could equal at runtime
+        // (numeric cross-typing via the same alternatives the equality
+        // index uses), and treat a complete miss as "cannot serve" so
+        // the caller scans — never a definitive absence.
+        let per_component: Vec<Vec<Vec<u8>>> = key_values.iter().map(index_lookup_keys).collect();
+        if per_component
+            .iter()
+            .any(|alternatives| alternatives.is_empty())
+        {
+            // A null/NaN/unstorable component has no encodings; let the
+            // scan decide (openCypher: it will match nothing anyway).
+            return None;
+        }
+        // Bounded cartesian product over the alternatives (<= 2 per
+        // numeric component); a pathological blow-up falls back to a scan.
+        let combinations: usize = per_component.iter().map(Vec::len).product();
+        if combinations > 16 {
+            return None;
+        }
+        let mut probes: Vec<Vec<u8>> = vec![Vec::new()];
+        for alternatives in &per_component {
+            let mut next = Vec::with_capacity(probes.len() * alternatives.len());
+            for prefix in &probes {
+                for alt in alternatives {
+                    let mut bytes = prefix.clone();
+                    bytes.extend_from_slice(alt);
+                    next.push(bytes);
+                }
+            }
+            probes = next;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        let mut hit = false;
+        for probe in probes {
+            if let Some(indices) = self.by_key.get(&(label.to_owned(), probe)) {
+                hit = true;
+                for &i in indices {
+                    if seen.insert(i) {
+                        out.push(self.nodes[i].clone());
+                    }
                 }
             }
         }
+        if hit { Some(out) } else { None }
     }
 
     fn nodes_by_index_range(
         &self,
         index_name: &str,
+        property: &str,
         lower: Option<(&Value, bool)>,
         upper: Option<(&Value, bool)>,
     ) -> Option<Vec<NodeValue>> {
+        if self.index_properties.get(index_name).map(String::as_str) != Some(property) {
+            return None;
+        }
         let map = self.by_index.get(index_name)?;
         let ranges = range_families(lower, upper)?;
         let mut seen = std::collections::HashSet::new();
@@ -507,8 +556,18 @@ impl GraphSource for GraphSnapshot {
         Some(out)
     }
 
-    fn nodes_by_index(&self, index_name: &str, value: &Value) -> Option<Vec<NodeValue>> {
-        // Unknown index → the caller falls back to a label scan.
+    fn nodes_by_index(
+        &self,
+        index_name: &str,
+        property: &str,
+        value: &Value,
+    ) -> Option<Vec<NodeValue>> {
+        // Unknown index → the caller falls back to a label scan. A hint
+        // bound against another version's catalogue must not be served by
+        // a same-named index over a different property (finding 4).
+        if self.index_properties.get(index_name).map(String::as_str) != Some(property) {
+            return None;
+        }
         let map = self.by_index.get(index_name)?;
         // A list value's equality recurses element-wise with the same Int/Float
         // cross-type rule (`[1] = [1.0]`), which an exact-byte bucket cannot
@@ -1318,7 +1377,7 @@ mod tests {
     ) -> Vec<String> {
         use crate::exec::source::GraphSource;
         let mut names: Vec<String> = snapshot
-            .nodes_by_index_range("by_cores", lower, upper)
+            .nodes_by_index_range("by_cores", "cores", lower, upper)
             .expect("index exists")
             .into_iter()
             .filter_map(|n| match n.properties.get("hostname") {
@@ -1387,30 +1446,134 @@ mod tests {
     }
 
     #[test]
-    fn key_seek_point_lookup_and_fallbacks() {
+    fn key_seek_candidates_and_fallbacks() {
         use crate::exec::source::GraphSource;
         let snapshot = indexed_snapshot();
         // Present key: exactly the node.
         let found = snapshot
-            .node_by_key("Host", &[Value::String("h3".into())])
-            .expect("seekable")
-            .expect("present");
+            .nodes_by_key("Host", &[Value::String("h3".into())])
+            .expect("seekable");
+        assert_eq!(found.len(), 1);
         assert!(matches!(
-            found.properties.get("cores"),
+            found[0].properties.get("cores"),
             Some(Value::Float(f)) if *f == 4.5
         ));
-        // Absent key: definitively none (no scan fallback).
-        assert!(matches!(
-            snapshot.node_by_key("Host", &[Value::String("nope".into())]),
-            Some(None)
-        ));
+        // A miss is NEVER a definitive absence — the caller scans
+        // (PR #206 review finding 1).
+        assert!(
+            snapshot
+                .nodes_by_key("Host", &[Value::String("nope".into())])
+                .is_none()
+        );
         // A label the schema gave no key: cannot seek, fall back.
-        assert!(snapshot.node_by_key("Software", &[Value::Int(1)]).is_none());
-        // A null key value can never match a stored key.
-        assert!(matches!(
-            snapshot.node_by_key("Host", &[Value::Null]),
-            Some(None)
-        ));
+        assert!(
+            snapshot
+                .nodes_by_key("Software", &[Value::Int(1)])
+                .is_none()
+        );
+        // A null key value has no encoding: scan decides.
+        assert!(snapshot.nodes_by_key("Host", &[Value::Null]).is_none());
+    }
+
+    /// Cross-type key pins through full execution: hinted results must
+    /// equal scanned results for `{id: 1.0}` vs a stored `Int(1)` key and
+    /// vice versa — the exact row-drops of PR #206 review finding 1.
+    #[test]
+    fn cross_type_key_pins_match_scan_end_to_end() {
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+        let nodes = vec![
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(1)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(2.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(-0.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+        ];
+        let schema = vec![SchemaEntry::Label {
+            name: "Item".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        let with_schema = Catalogue::from_entries(schema);
+        for query in [
+            "MATCH (i:Item {id: 1.0}) RETURN i.id",
+            "MATCH (i:Item {id: 1}) RETURN i.id",
+            "MATCH (i:Item {id: 2}) RETURN i.id",
+            "MATCH (i:Item {id: 0}) RETURN i.id",
+            "MATCH (i:Item {id: 'absent'}) RETURN i.id",
+        ] {
+            let parsed = crate::parse(query).unwrap();
+            let hinted = {
+                let bound =
+                    crate::bind::bind(query, &parsed, &with_schema, crate::bind::BindMode::Strict)
+                        .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            let scanned = {
+                let bound = crate::bind::bind(
+                    query,
+                    &parsed,
+                    &Catalogue::empty(),
+                    crate::bind::BindMode::Lenient,
+                )
+                .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            assert_eq!(
+                format!("{:?}", hinted.rows),
+                format!("{:?}", scanned.rows),
+                "{query}"
+            );
+        }
+    }
+
+    /// Numeric cross-typing: a pin of either numeric type must reach keys
+    /// stored under both families — `{id: 1.0}` matches a key `Int(1)`,
+    /// and a pin `{id: 1}` returns BOTH a key `Int(1)` and a distinct
+    /// node keyed `Float(1.0)` (PR #206 review finding 1).
+    #[test]
+    fn key_seek_probes_numeric_cross_types() {
+        use crate::exec::source::GraphSource;
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+        let nodes = vec![
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(1)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(1.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(-0.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+        ];
+        let schema = vec![SchemaEntry::Label {
+            name: "Item".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        // Either numeric pin reaches both same-value keys.
+        let candidates = snapshot
+            .nodes_by_key("Item", &[Value::Float(1.0)])
+            .expect("hit");
+        assert_eq!(candidates.len(), 2);
+        let candidates = snapshot
+            .nodes_by_key("Item", &[Value::Int(1)])
+            .expect("hit");
+        assert_eq!(candidates.len(), 2);
+        // A zero pin reaches the -0.0 key (numerically equal).
+        let candidates = snapshot
+            .nodes_by_key("Item", &[Value::Int(0)])
+            .expect("hit");
+        assert_eq!(candidates.len(), 1);
     }
 
     /// End-to-end parity: range- and key-hinted execution returns exactly
@@ -1436,6 +1599,8 @@ mod tests {
             "MATCH (h:Host {hostname: 'h4'}) RETURN h.cores",
             "MATCH (h:Host {hostname: 'absent'}) RETURN h.cores",
         ];
+        // With MutableGraph forwarding the seeks (PR #206 review finding
+        // 2), this parity harness genuinely drives the hinted paths.
         for query in queries {
             let parsed = crate::parse(query).unwrap();
             let hinted = {

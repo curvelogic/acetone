@@ -1005,19 +1005,17 @@ impl<'a> Binder<'a> {
         if pinned.is_empty() {
             return None;
         }
-        if pinned
-            .iter()
-            .any(|p| self.catalogue.is_key_prefix(label, p))
-        {
-            let key = self
-                .catalogue
-                .label(label)
-                .map(|def| def.key().to_vec())
-                .unwrap_or_default();
-            return Some(IndexHint::KeySeek {
-                label: label.clone(),
-                key,
-            });
+        // KeySeek only when EVERY key property is pinned: a partial
+        // prefix cannot point-look-up, and hinting it would displace a
+        // usable IndexSeek/IndexRange (PR #206 review finding 6).
+        if let Some(def) = self.catalogue.label(label) {
+            let key = def.key();
+            if !key.is_empty() && key.iter().all(|k| pinned.iter().any(|p| p == k)) {
+                return Some(IndexHint::KeySeek {
+                    label: label.clone(),
+                    key: key.to_vec(),
+                });
+            }
         }
         for property in pinned {
             if let Some((name, _)) = self.catalogue.index_on(label, property) {
