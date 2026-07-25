@@ -742,9 +742,22 @@ fn shared_edge_map_pair_across_versions_is_checked_once() {
         manifest.nodes = MapRoot::from_root(&nodes);
         manifest.edges_fwd = MapRoot::from_root(&fwd);
         let bytes = manifest.encode();
+        // Anchor every reachable chunk (these single-leaf maps have
+        // root == only chunk), so the fabricated history is complete
+        // under the anchor-completeness check (acetone-5a8).
+        let anchors: Vec<Hash> = [
+            &manifest.schema,
+            &manifest.nodes,
+            &manifest.edges_fwd,
+            &manifest.edges_rev,
+        ]
+        .into_iter()
+        .map(|root| root.hash)
+        .collect();
         let mut new = NewCommit::new(&bytes, "s", "asymmetric history");
         let parents: Vec<Hash> = parent.into_iter().collect();
         new.parents = &parents;
+        new.anchors = &anchors;
         parent = Some(store.create_commit(&new).expect("create commit"));
     }
     store
@@ -1077,4 +1090,122 @@ fn satisfied_constraints_yield_no_findings() {
     }
     let report = fsck::check(&repo).expect("fsck");
     assert!(report.is_clean(), "findings: {:?}", report.findings);
+}
+
+/// Anchor completeness (acetone-5a8): a commit whose chunks/ tree omits
+/// reachable chunks verifies clean structurally TODAY but would lose
+/// them to a foreign git gc — fsck must name it as an error, and a
+/// fully-anchored sibling must stay clean.
+#[test]
+fn unanchored_reachable_chunks_are_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    // A manifest with one extra node — its maps' chunks all exist in the
+    // store, but the fabricated commit anchors NOTHING.
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "unanchored").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+    let bytes = manifest.encode();
+    let bare = NewCommit::new(&bytes, "s", "no anchors");
+    let tip = store.create_commit(&bare).expect("create commit");
+    store
+        .write_ref("refs/heads/bare", None, &tip)
+        .expect("branch ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::AnchorIncomplete)
+        .collect();
+    assert_eq!(
+        incomplete.len(),
+        1,
+        "the bare commit must be named: {:?}",
+        report.findings
+    );
+    assert!(
+        incomplete[0].detail.contains("git gc"),
+        "the finding explains the hazard: {}",
+        incomplete[0].detail
+    );
+    assert!(report.has_errors(), "anchor incompleteness is an error");
+}
+
+/// The chunk-set cache must key on EVERY map the chunk set covers —
+/// conflicts included: two manifests differing only in their conflicts
+/// map must not share a cached set (PR #211 review Major, both
+/// polarities: a shared entry either hid an unanchored conflicts chunk
+/// or flagged a complete commit).
+#[test]
+fn conflicts_map_participates_in_anchor_completeness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    // A conflicts map with one entry (fabricated: any key/value works
+    // for reachability purposes).
+    let conflicts = apply_batch(
+        store,
+        &empty(store, params).expect("empty"),
+        vec![BatchOp::Put(b"conflict-key".to_vec(), b"payload".to_vec())],
+    )
+    .expect("apply_batch");
+
+    let plain_bytes = base.encode();
+    let mut with_conflicts = base.clone();
+    with_conflicts.conflicts = Some(MapRoot::from_root(&conflicts));
+    let conflicted_bytes = with_conflicts.encode();
+
+    // Both commits anchor the BASE maps' chunks; neither anchors the
+    // conflicts chunk. Walk order: plain first (the poisoning order for
+    // the false-negative polarity).
+    let anchors: Vec<Hash> = [&base.schema, &base.nodes, &base.edges_fwd, &base.edges_rev]
+        .into_iter()
+        .map(|root| root.hash)
+        .collect();
+    let mut plain = NewCommit::new(&plain_bytes, "s", "plain");
+    plain.anchors = &anchors;
+    let plain_tip = store.create_commit(&plain).expect("create commit");
+    let mut conflicted = NewCommit::new(&conflicted_bytes, "s", "conflicted");
+    let parents = vec![plain_tip];
+    conflicted.parents = &parents;
+    conflicted.anchors = &anchors; // conflicts chunk NOT anchored
+    let tip = store.create_commit(&conflicted).expect("create commit");
+    store
+        .write_ref("refs/heads/conflicted", None, &tip)
+        .expect("branch ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::AnchorIncomplete)
+        .collect();
+    assert_eq!(
+        incomplete.len(),
+        1,
+        "exactly the conflicts-carrying commit is incomplete: {:?}",
+        report.findings
+    );
+    assert!(
+        matches!(&incomplete[0].origin, fsck::Origin::Commit { commit, .. } if *commit == tip),
+        "the finding names the conflicted commit"
+    );
 }
