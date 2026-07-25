@@ -1271,29 +1271,31 @@ impl Repository {
         self.gc_with_hooks(|| {}, || {})
     }
 
-    /// [`gc`](Self::gc)'s body, with two test seams for the worktree TOCTOU
-    /// (acetone-dfh): `after_lock` runs once the write lock is held, *before*
-    /// the under-lock linked-worktree re-check; `after_recheck` runs after the
-    /// re-check passed — the residual window before the sweep. Production
-    /// callers go through `gc`, which passes no-ops; the hooks let tests
-    /// interleave a `git worktree add` deterministically at each point.
+    /// [`gc`](Self::gc)'s body, with two test seams (acetone-dfh):
+    /// `after_lock` runs once the write lock is held, `after_recheck`
+    /// just before the anchor sweep and consolidation — the residual
+    /// window in which tests interleave a `git worktree add`
+    /// deterministically. Production callers go through `gc`, which
+    /// passes no-ops.
     #[doc(hidden)]
     pub fn gc_with_hooks(
         &self,
         after_lock: impl FnOnce(),
         after_recheck: impl FnOnce(),
     ) -> Result<ConsolidateStats, GraphError> {
-        // gc is worktree-aware (acetone-6g5.10): consolidation's
-        // reachability walk enumerates every linked worktree's private
-        // refs (`refs/worktree/*` under `<common>/worktrees/<id>/`) as
-        // pack roots, in addition to ADR-0044's common-dir workspace
-        // anchors — so linked-worktree uncommitted state and in-progress
-        // merges are packed, not pruned, and the old blanket refusal
-        // (GcWithLinkedWorktrees) is gone. A worktree added *during* gc
-        // still loses nothing: pruning only ever removes a loose copy of
-        // an object already durably packed, and chunks a late worktree
-        // writes are new loose objects outside the packed set
-        // (acetone-dfh's residual analysis, unchanged).
+        // gc is worktree-aware (acetone-6g5.10): consolidation
+        // enumerates every other worktree's private refs and HEAD
+        // (`refs/worktree/*` under `<common>/worktrees/<id>/`, plus the
+        // main worktree's when run from a linked one) and classifies
+        // them by ownership — the graph's own become pack roots, foreign
+        // ones join ADR-0051's prune guard — so the old blanket refusal
+        // (GcWithLinkedWorktrees) is gone. The enumeration is a
+        // completeness improvement, not the safety floor: the floor is
+        // that pruning only ever removes loose copies of objects in the
+        // freshly installed pack, so any root it misses (`refs/bisect/*`,
+        // a worktree added mid-gc, chunks a late save writes) keeps its
+        // objects loose and untouched — acetone-dfh's residual analysis,
+        // pinned by the gc tripwire test.
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         after_lock();
         after_recheck();

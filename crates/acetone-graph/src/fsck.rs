@@ -895,9 +895,11 @@ fn check_canonical(
     // Stream the rebuild in bounded batches folded over the growing
     // tree (acetone-6g5.10): history independence (Invariant #1)
     // guarantees the folded root equals the one-shot build, so the
-    // check's verdict is unchanged while resident memory drops from
-    // O(map) to O(batch + tree cache) — the property that keeps fsck
-    // usable on large or hostile maps.
+    // check's verdict is unchanged while THIS pass's resident memory
+    // drops from O(map) to O(batch + tree cache). (Other fsck passes
+    // still hold O(map) state; peak RSS is bounded by them, not here.
+    // A mid-scan read error abandons the partial rebuild — its already-
+    // written chunks are harmless unreachable loose objects.)
     const REBUILD_BATCH: usize = 8192;
     let Ok(empty_root) = empty(store, params) else {
         return;

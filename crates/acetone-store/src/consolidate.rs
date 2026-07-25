@@ -292,34 +292,42 @@ impl GitStore {
             }
         }
         // `references().all()` sees only THIS worktree's private refs
-        // (`refs/worktree/*`); every OTHER linked worktree's private
-        // refs — its uncommitted workspace tree and any merge state —
-        // live under `<common>/worktrees/<id>/refs/worktree/` and would
-        // be invisible here, letting gc prune live state (acetone-6g5.10;
-        // ADR-0044's common-dir anchors cover the workspace tree, this
-        // covers the rest and is the belt to that braces). Every linked
-        // worktree's private refs join the PACK roots: they are graph
-        // state by definition.
-        for oid in self.linked_worktree_private_roots()? {
-            pack_roots.push(oid);
+        // (`refs/worktree/*`) and HEAD; every OTHER worktree's — its
+        // uncommitted graph workspace, merge state, or a detached HEAD —
+        // is invisible here (acetone-6g5.10). Enumerate them and classify
+        // each by NAME through the same predicate as common refs, so a
+        // co-tenant code worktree's private state lands in the prune
+        // GUARD (preserved in place, never drawn into the graph's pack —
+        // ADR-0051 reading B) while the graph's own worktree refs are
+        // packed. Per-worktree state this does NOT enumerate (e.g.
+        // `refs/bisect/*` during a code bisect) is still never lost:
+        // pruning only ever removes loose copies of objects in the
+        // freshly installed pack, so un-enumerated roots keep their
+        // objects loose and untouched — the invariant `prune_loose`
+        // maintains and the `gc_never_deletes…` tripwire test pins.
+        for (name, oid) in self.other_worktree_private_roots()? {
+            if is_graph_ref(&name) {
+                pack_roots.push(oid);
+            } else {
+                guard_roots.push(oid);
+            }
         }
         Ok((pack_roots, guard_roots))
     }
 
-    /// Resolve every linked worktree's `refs/worktree/*` targets by
-    /// opening each worktree's repository view. A worktree that cannot
-    /// be opened is an error — skipping it would silently expose its
-    /// uncommitted state to pruning.
-    fn linked_worktree_private_roots(&self) -> Result<Vec<ObjectId>, StoreError> {
+    /// Resolve every OTHER worktree's private roots — `refs/worktree/*`
+    /// and `HEAD` (a detached HEAD is a real root git itself treats as
+    /// reachable) — by opening each worktree's repository view: every
+    /// linked worktree, plus the MAIN worktree when consolidation runs
+    /// from a linked one (its private refs are equally invisible from
+    /// here). Returned as `(name, target)` pairs so the caller can
+    /// classify ownership by ref name. A worktree gix lists but cannot
+    /// open is an error — skipping it would silently expose its state
+    /// to pruning; a half-created metadata directory gix does not list
+    /// yet has no refs to lose (and its objects stay loose regardless).
+    fn other_worktree_private_roots(&self) -> Result<Vec<(String, ObjectId)>, StoreError> {
         let mut roots = Vec::new();
-        let worktrees = self
-            .repo()
-            .worktrees()
-            .map_err(|e| StoreError::backend("listing worktrees for consolidation", e))?;
-        for proxy in worktrees {
-            let wt_repo = proxy
-                .into_repo_with_possibly_inaccessible_worktree()
-                .map_err(|e| StoreError::backend("opening worktree for consolidation", e))?;
+        let mut collect = |wt_repo: gix::Repository| -> Result<(), StoreError> {
             let references = wt_repo
                 .references()
                 .map_err(|e| StoreError::backend("listing worktree refs", e))?;
@@ -329,10 +337,37 @@ impl GitStore {
             for reference in private {
                 let mut reference =
                     reference.map_err(|e| StoreError::corrupt("worktree ref", e.to_string()))?;
+                let name = reference.name().as_bstr().to_string();
                 if let Ok(id) = reference.follow_to_object() {
-                    roots.push(id.detach());
+                    roots.push((name, id.detach()));
                 }
             }
+            // The worktree's HEAD: `head_id` resolves through a symref to
+            // the branch tip (already classified via the common refs) and
+            // yields the bare commit when detached; an unborn HEAD has no
+            // object and is skipped.
+            if let Ok(id) = wt_repo.head_id() {
+                roots.push(("HEAD".to_owned(), id.detach()));
+            }
+            Ok(())
+        };
+        for proxy in self
+            .repo()
+            .worktrees()
+            .map_err(|e| StoreError::backend("listing worktrees for consolidation", e))?
+        {
+            collect(
+                proxy
+                    .into_repo_with_possibly_inaccessible_worktree()
+                    .map_err(|e| StoreError::backend("opening worktree for consolidation", e))?,
+            )?;
+        }
+        if self.repo().common_dir() != self.repo().git_dir() {
+            // Running from a linked worktree: the main worktree's private
+            // refs live in the common dir's own ref store.
+            let main = gix::open(self.repo().common_dir())
+                .map_err(|e| StoreError::backend("opening main worktree for consolidation", e))?;
+            collect(main)?;
         }
         Ok(roots)
     }

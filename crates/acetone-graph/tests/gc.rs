@@ -9,7 +9,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::NodeKey;
 use acetone_model::records::NodeRecord;
 use acetone_model::schema::{LabelDef, SchemaEntry};
-use acetone_store::RefStore;
+use acetone_store::{CommitStore, RefStore};
 use std::collections::BTreeMap;
 
 fn init_repo(dir: &Path) -> Repository {
@@ -264,6 +264,65 @@ fn gc_packs_worktree_state_even_without_its_durability_anchor() {
         snapshot.nodes().expect("nodes").len(),
         60,
         "the enumerated private refs alone must keep the state alive"
+    );
+    // Survival alone would also hold for an object gc never saw (loose
+    // copies of unpacked objects are not pruned); the enumeration is
+    // only proven load-bearing if the workspace actually entered the
+    // pack — i.e. its nodes-root chunk's loose copy was pruned.
+    let nodes_root = wt_repo
+        .workspace_manifest()
+        .expect("manifest")
+        .nodes
+        .hash
+        .to_hex();
+    let loose = main_git
+        .join("objects")
+        .join(&nodes_root[..2])
+        .join(&nodes_root[2..]);
+    assert!(
+        !loose.exists(),
+        "workspace root chunk still loose — it was never packed, so the \
+         enumeration did not protect it"
+    );
+}
+
+#[test]
+fn gc_never_deletes_the_last_copy_of_unenumerated_objects() {
+    // The tripwire for gc's real safety floor (PR #212 review): pruning
+    // removes only loose copies of objects in the freshly installed
+    // pack, so a root the enumeration MISSES — here a linked worktree's
+    // detached HEAD at a commit no ref references... is itself now
+    // enumerated (worktree HEADs are roots), so go one step further and
+    // fabricate an acetone commit referenced by NOTHING at all. Its
+    // objects must still be present after gc. If this test ever fails,
+    // someone added "prune unreachable loose objects" and every
+    // un-enumerated per-worktree state class (refs/bisect/*, mid-gc
+    // worktree adds) became silent data loss.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    let base = {
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.commit("seed", &[], None).expect("commit")
+    };
+    // An orphan commit: created directly in the store, referenced by no
+    // ref, no worktree, no anchor.
+    let manifest = repo.workspace_manifest().expect("manifest");
+    let bytes = manifest.encode();
+    let mut orphan = acetone_store::NewCommit::new(&bytes, "s", "orphan");
+    let parents = vec![base];
+    orphan.parents = &parents;
+    let tip = repo.store().create_commit(&orphan).expect("create commit");
+
+    repo.gc().expect("gc");
+    assert!(
+        matches!(repo.store().read_commit(&tip), Ok(Some(_))),
+        "gc deleted the last copy of an object it never enumerated — \
+         the prune-only-packed invariant is broken"
     );
 }
 
