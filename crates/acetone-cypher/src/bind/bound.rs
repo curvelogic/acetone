@@ -50,6 +50,9 @@ pub struct BoundQuery {
     pub clauses: Vec<BoundClause>,
     /// All bindings, indexed by VarId.
     pub variables: Vec<VarBinding>,
+    /// Expression-position labels (`n:Label`) absent from a non-empty
+    /// catalogue — advisory material, never an error (acetone-2ck.3).
+    pub undeclared_expr_labels: Vec<String>,
 }
 
 #[derive(Debug)]

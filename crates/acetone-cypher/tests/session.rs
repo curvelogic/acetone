@@ -674,3 +674,114 @@ fn aggregate_in_a_skipped_case_branch_does_not_desync_slots() {
         7
     );
 }
+
+/// acetone-2ck.3: `WHERE n:Undeclared` must stay false/null per the TCK
+/// (never an error), but in a schema-backed session a typo'd label in
+/// expression position now carries an advisory instead of silently
+/// filtering everything.
+#[test]
+fn undeclared_expression_label_carries_an_advisory() {
+    let (_dir, repo) = repo();
+    seed(&repo);
+    let session = Session::new(&repo);
+    let run = |q: &str| match session.run(q).expect("query") {
+        Outcome::Read(result) => result,
+        Outcome::Write(_) => panic!("read expected"),
+    };
+
+    // Typo'd label in expression position: zero rows, one advisory.
+    let result = run("MATCH (h:Host) WHERE h:Hots RETURN h.name");
+    assert!(result.rows.is_empty(), "predicate is false for every node");
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+    assert!(
+        result.advisories[0].contains("\"Hots\"") && result.advisories[0].contains("typo"),
+        "names the label: {}",
+        result.advisories[0]
+    );
+
+    // A declared label in the same position: no advisory.
+    let result = run("MATCH (h:Host) WHERE h:Host RETURN h.name");
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.advisories.is_empty(), "{:?}", result.advisories);
+
+    // Expression positions beyond WHERE are covered too (the binder
+    // sees them all): CASE.
+    let result = run("MATCH (h:Host) RETURN CASE WHEN h:Hsot THEN 1 ELSE 0 END");
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+
+    // The message claims only non-declaration — pre-schema nodes may
+    // carry labels the catalogue never saw, so it must not assert the
+    // predicate matches nothing (PR #216 review).
+    assert!(
+        !result.advisories[0].contains("false for every"),
+        "no matches-nothing overclaim: {}",
+        result.advisories[0]
+    );
+    assert!(
+        !result.advisories[0].contains("  "),
+        "no literal whitespace runs: {}",
+        result.advisories[0]
+    );
+
+    // Writes carry the advisory too: a typo'd guard silently no-ops
+    // otherwise (PR #216 review).
+    let result = match session
+        .run("MATCH (h:Host) WHERE h:Hots SET h.flag = 1")
+        .expect("write")
+    {
+        Outcome::Write(result) => result,
+        Outcome::Read(_) => panic!("SET is a write"),
+    };
+    assert_eq!(result.stats.properties_set, 0);
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+}
+
+/// A declared REL TYPE tested in expression position (`r:LINKS` is a
+/// rel-type test at eval time) must not draw the undeclared-label
+/// advisory (PR #216 review Major 1).
+#[test]
+fn declared_rel_type_in_expression_position_is_not_advised() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "Host".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::RelType {
+            name: "LINKS".into(),
+            def: acetone_model::schema::RelTypeDef::new(None, BTreeMap::new(), []).expect("rel"),
+        })
+        .expect("schema");
+        for id in [1, 2] {
+            txn.put_node(
+                &NodeKey::new("Host", vec![MV::Int(id)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::new()),
+            )
+            .expect("node");
+        }
+        txn.put_edge(
+            &acetone_model::graph_keys::EdgeKey::new(
+                NodeKey::new("Host", vec![MV::Int(1)]).expect("key"),
+                "LINKS",
+                NodeKey::new("Host", vec![MV::Int(2)]).expect("key"),
+                MV::Null,
+            )
+            .expect("edge key"),
+            &acetone_model::records::EdgeRecord::new(BTreeMap::new()),
+        )
+        .expect("edge");
+        txn.save().expect("save");
+    }
+    let session = Session::new(&repo);
+    let result = match session
+        .run("MATCH (a:Host)-[r]->(b:Host) WHERE r:LINKS RETURN a.id")
+        .expect("query")
+    {
+        Outcome::Read(result) => result,
+        Outcome::Write(_) => panic!("read expected"),
+    };
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.advisories.is_empty(), "{:?}", result.advisories);
+}

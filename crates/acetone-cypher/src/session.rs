@@ -203,6 +203,9 @@ impl<'r> Session<'r> {
             return Err(QueryError::Graph(error));
         }
         result.advisories = undeclared_label_advisories(parsed, &catalogue, &result, &base);
+        result
+            .advisories
+            .extend(expression_label_advisories(&bound));
         Ok(result)
     }
 
@@ -225,9 +228,16 @@ impl<'r> Session<'r> {
             repo: self.repo,
             base,
         };
-        let (result, changes) = execute_write_with_limits(&bound, &resolver, parameters, limits)?;
+        let (mut result, changes) =
+            execute_write_with_limits(&bound, &resolver, parameters, limits)?;
         crate::persist::persist_changes(&changes, &mut txn, &catalogue, &snapshot)?;
         txn.save()?;
+        // A typo'd label guard on a write silently no-ops (or, negated,
+        // hits everything) — the advisory matters at least as much here
+        // as on reads.
+        result
+            .advisories
+            .extend(expression_label_advisories(&bound));
         Ok(result)
     }
 }
@@ -290,6 +300,38 @@ fn undeclared_label_advisories(
         "note: {plural} {names} not declared and matched no nodes in this schema-free \
          repository — 0 rows. Declare a label with `acetone declare-label <label> \
          --key <property>`, or check for a typo."
+    )]
+}
+
+/// Advisory for expression-position label predicates (`n:Label`) naming
+/// labels the schema does not declare (acetone-2ck.3). TCK semantics
+/// require them to evaluate false/null — never an error — so a typo'd
+/// label silently filters everything; in a schema-backed session that
+/// deserves a signal. Collected at bind time (the binder sees every
+/// expression position: WHERE, CASE, comprehensions), and only when the
+/// catalogue is non-empty, so Lenient/TCK sessions are unaffected.
+fn expression_label_advisories(bound: &crate::bind::bound::BoundQuery) -> Vec<String> {
+    if bound.undeclared_expr_labels.is_empty() {
+        return Vec::new();
+    }
+    let names = bound
+        .undeclared_expr_labels
+        .iter()
+        .map(|l| format!("{l:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let plural = if bound.undeclared_expr_labels.len() == 1 {
+        "label"
+    } else {
+        "labels"
+    };
+    // Claim only what binding knows: non-declaration. Nodes may carry
+    // pre-schema labels the catalogue never saw, so "matches nothing"
+    // would be a guess the sibling advisory above goes to the graph to
+    // verify (and this one deliberately does not).
+    vec![format!(
+        "note: {plural} {names} in a label predicate not declared in this \
+         repository's schema — check for a typo, or declare the label."
     )]
 }
 
