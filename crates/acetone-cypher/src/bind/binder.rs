@@ -1087,9 +1087,14 @@ impl<'a> Binder<'a> {
                 labels,
                 span,
             } => {
-                if !self.catalogue.is_empty() {
+                if self.mode == BindMode::Strict && !self.catalogue.is_empty() {
                     for label in labels {
-                        if self.catalogue.label(label).is_none() {
+                        // `x:NAME` on a relationship subject is a rel-type
+                        // test at eval time, so a declared rel type is not
+                        // suspicious in this position.
+                        if self.catalogue.label(label).is_none()
+                            && self.catalogue.rel_type(label).is_none()
+                        {
                             self.undeclared_expr_labels.push(label.clone());
                         }
                     }

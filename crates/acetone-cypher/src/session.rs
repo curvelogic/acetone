@@ -228,9 +228,16 @@ impl<'r> Session<'r> {
             repo: self.repo,
             base,
         };
-        let (result, changes) = execute_write_with_limits(&bound, &resolver, parameters, limits)?;
+        let (mut result, changes) =
+            execute_write_with_limits(&bound, &resolver, parameters, limits)?;
         crate::persist::persist_changes(&changes, &mut txn, &catalogue, &snapshot)?;
         txn.save()?;
+        // A typo'd label guard on a write silently no-ops (or, negated,
+        // hits everything) — the advisory matters at least as much here
+        // as on reads.
+        result
+            .advisories
+            .extend(expression_label_advisories(&bound));
         Ok(result)
     }
 }
@@ -318,8 +325,13 @@ fn expression_label_advisories(bound: &crate::bind::bound::BoundQuery) -> Vec<St
     } else {
         "labels"
     };
+    // Claim only what binding knows: non-declaration. Nodes may carry
+    // pre-schema labels the catalogue never saw, so "matches nothing"
+    // would be a guess the sibling advisory above goes to the graph to
+    // verify (and this one deliberately does not).
     vec![format!(
-        "note: {plural} {names} in a label predicate not declared in this repository's          schema — the predicate is false for every node. Declare the label or check          for a typo."
+        "note: {plural} {names} in a label predicate not declared in this \
+         repository's schema — check for a typo, or declare the label."
     )]
 }
 

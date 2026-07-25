@@ -65,6 +65,11 @@ pub fn run(
             // One-shot command: never cap (a scripted `query --format table`
             // piped to a file must get every row).
             render(&result, format, None);
+            // Advisories travel with versioned reads too (PR #216 review;
+            // previously dropped only on this path).
+            for note in &result.advisories {
+                errln!("{}", sanitise_line(note));
+            }
         }
         None => {
             let outcome = session
