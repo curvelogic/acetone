@@ -156,6 +156,29 @@ mod tests {
     }
 
     #[test]
+    fn aggregates_in_iteration_bodies_are_invalid() {
+        // acetone-2ck.7 (TCK List12[7]): comprehension where/map,
+        // quantifier predicates and reduce bodies run per element,
+        // outside grouping — an aggregate there is InvalidAggregation.
+        for query in [
+            "MATCH (n) RETURN [x IN [1, 2] | count(x)]",
+            "MATCH (n) RETURN [x IN [1, 2] WHERE x > count(n) | x]",
+            "MATCH (n) RETURN all(x IN [1, 2] WHERE x >= min(n.num))",
+            "MATCH (n) RETURN reduce(a = 0, x IN [1, 2] | a + max(n.num))",
+        ] {
+            let err = bind_lenient(query).unwrap_err();
+            assert!(
+                matches!(err, BindError::InvalidAggregation { .. }),
+                "{query}: {err:?}"
+            );
+        }
+        // The list operand and reduce's init stay in the surrounding
+        // context: aggregating INTO them is legal.
+        assert!(bind_lenient("MATCH (n) RETURN [x IN collect(n) | x]").is_ok());
+        assert!(bind_lenient("MATCH (n) RETURN reduce(a = count(n), x IN [1] | a)").is_ok());
+    }
+
+    #[test]
     fn grouping_keys_are_recorded() {
         let bound = bind_lenient("MATCH (n) RETURN n.dept AS d, count(n) AS c").unwrap();
         let BoundClause::Return(p) = &bound.clauses[1] else {

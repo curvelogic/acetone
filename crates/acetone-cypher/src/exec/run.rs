@@ -1841,9 +1841,12 @@ fn eval_with_group(
 }
 
 /// Enumerate every Aggregate node in the expression for accumulation.
-/// Order is irrelevant — evaluation looks slots up by node identity, and
-/// may skip (untaken CASE arms) or revisit (comprehension bodies) nodes.
-/// Aggregate arguments cannot contain aggregates (binder-enforced), so no
+/// Order is irrelevant — evaluation looks slots up by node identity and
+/// may skip nodes (untaken CASE arms). Iteration bodies are NO_AGG-bound
+/// (acetone-2ck.7), so recursion into them finds nothing today; it is
+/// kept as defence in depth — a binder regression would then still
+/// accumulate and resolve correctly rather than miss the slot. Aggregate
+/// arguments cannot contain aggregates (binder-enforced), so no
 /// recursion into them.
 fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
     match expr {

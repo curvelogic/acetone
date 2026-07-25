@@ -1161,12 +1161,17 @@ impl<'a> Binder<'a> {
                 // for the where/map sub-expressions.
                 let shadowed = self.scope.get(variable).copied();
                 let id = self.declare(variable, EntityKind::Value, vec![]);
+                // The where/map bodies run per element, outside any
+                // grouping, so an aggregate inside them is openCypher
+                // InvalidAggregation (acetone-2ck.7) — the list operand
+                // above stays in the surrounding context (aggregating
+                // over the group INTO the list is legal).
                 let where_clause = match where_clause {
-                    Some(expr) => Some(Box::new(self.expr(expr, ctx)?)),
+                    Some(expr) => Some(Box::new(self.expr(expr, NO_AGG)?)),
                     None => None,
                 };
                 let map = match map {
-                    Some(expr) => Some(Box::new(self.expr(expr, ctx)?)),
+                    Some(expr) => Some(Box::new(self.expr(expr, NO_AGG)?)),
                     None => None,
                 };
                 match shadowed {
@@ -1195,7 +1200,9 @@ impl<'a> Binder<'a> {
                 let list = Box::new(self.expr(list, ctx)?);
                 let shadowed = self.scope.get(variable).copied();
                 let id = self.declare(variable, EntityKind::Value, vec![]);
-                let predicate = Box::new(self.expr(predicate, ctx)?);
+                // Per-element predicate: aggregates are
+                // InvalidAggregation here (acetone-2ck.7).
+                let predicate = Box::new(self.expr(predicate, NO_AGG)?);
                 self.restore(variable, shadowed);
                 Ok(BoundExpr::Quantifier {
                     kind: *kind,
@@ -1220,7 +1227,10 @@ impl<'a> Binder<'a> {
                 let acc_id = self.declare(accumulator, EntityKind::Value, vec![]);
                 let shadowed_var = self.scope.get(variable).copied();
                 let var_id = self.declare(variable, EntityKind::Value, vec![]);
-                let body = Box::new(self.expr(expr, ctx)?);
+                // Per-element body: aggregates are InvalidAggregation
+                // here (acetone-2ck.7); init and list stay in the
+                // surrounding context.
+                let body = Box::new(self.expr(expr, NO_AGG)?);
                 self.restore(variable, shadowed_var);
                 self.restore(accumulator, shadowed_acc);
                 Ok(BoundExpr::Reduce {
