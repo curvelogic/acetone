@@ -462,3 +462,108 @@ fn call_acetone_blame_runs_through_the_session_procedures() {
         "acetone.blame should name the commit that last touched Host/1, got {commits:?}"
     );
 }
+
+// --- Index-backed UNIQUE + in-statement uniqueness (acetone-ryg) ------------
+
+/// Declare `Service { name (key), unique ip }`, optionally with a
+/// declared index over `ip`.
+fn declare_service(repo: &Repository, with_index: bool) {
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Service".into(),
+        def: LabelDef::new(vec!["name".into()], BTreeMap::new(), [], ["ip".to_owned()])
+            .expect("label"),
+    })
+    .expect("schema");
+    if with_index {
+        txn.put_schema(&SchemaEntry::Index {
+            name: "service_ip".into(),
+            def: acetone_model::schema::IndexDef::new("Service", vec!["ip".into()]).expect("idx"),
+        })
+        .expect("index");
+    }
+    txn.save().expect("save");
+}
+
+/// Two NEW nodes colliding on a unique value within ONE statement must be
+/// rejected — neither is in the base, so only an in-statement check can
+/// catch it (acetone-ryg).
+#[test]
+fn in_statement_unique_collision_is_rejected() {
+    for with_index in [false, true] {
+        let (_d, repo) = repo();
+        declare_service(&repo, with_index);
+        let session = Session::new(&repo);
+        let err = session
+            .run("CREATE (:Service {name: 'a', ip: 'X'}), (:Service {name: 'b', ip: 'X'})")
+            .expect_err("in-statement collision must be rejected");
+        assert!(
+            err.to_string().contains("ip"),
+            "with_index={with_index}: {err}"
+        );
+        // Nothing persisted.
+        let outcome = session
+            .run("MATCH (s:Service) RETURN count(s)")
+            .expect("count");
+        match outcome {
+            Outcome::Read(result) => {
+                assert!(matches!(&result.rows[0][0], RtValue::Int(0)));
+            }
+            Outcome::Write(_) => panic!("read"),
+        }
+    }
+}
+
+/// A unique value freed by a SET in the same statement may be claimed by
+/// a new node: the old owner's superseded record must not count as a
+/// live collision (acetone-ryg).
+#[test]
+fn in_statement_value_move_is_accepted() {
+    for with_index in [false, true] {
+        let (_d, repo) = repo();
+        declare_service(&repo, with_index);
+        let session = Session::new(&repo);
+        session
+            .run("CREATE (:Service {name: 'a', ip: 'X'})")
+            .expect("seed");
+        session
+            .run(
+                "MATCH (a:Service {name: 'a'}) SET a.ip = 'Y' \
+                 CREATE (:Service {name: 'b', ip: 'X'})",
+            )
+            .unwrap_or_else(|e| {
+                panic!("value move must be accepted (with_index={with_index}): {e}")
+            });
+    }
+}
+
+/// A genuine collision against a stored node is rejected identically with
+/// and without a declared index backing the check (semantic parity).
+#[test]
+fn stored_unique_collision_parity_with_and_without_index() {
+    for with_index in [false, true] {
+        let (_d, repo) = repo();
+        declare_service(&repo, with_index);
+        let session = Session::new(&repo);
+        session
+            .run("CREATE (:Service {name: 'a', ip: 'X'})")
+            .expect("seed");
+        let err = session
+            .run("CREATE (:Service {name: 'b', ip: 'X'})")
+            .expect_err("stored collision must be rejected");
+        assert!(
+            err.to_string().contains("ip"),
+            "with_index={with_index}: {err}"
+        );
+        // Type-exact uniqueness: Int(1) and Float(1.0) do not collide
+        // (mirrors the ModelValue equality the scan used).
+        session
+            .run("CREATE (:Service {name: 'c', ip: 1})")
+            .expect("int");
+        session
+            .run("CREATE (:Service {name: 'd', ip: 1.0})")
+            .unwrap_or_else(|e| {
+                panic!("cross-type is not a UNIQUE collision (with_index={with_index}): {e}")
+            });
+    }
+}
