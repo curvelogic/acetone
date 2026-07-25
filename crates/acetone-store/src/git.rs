@@ -154,6 +154,19 @@ impl std::fmt::Debug for GitStore {
     }
 }
 
+/// What a workspace ref's object offers as gc anchors (acetone-2ck.11).
+#[derive(Debug)]
+pub enum WorkspaceAnchors {
+    /// Pre-huo: the ref names the manifest blob directly — nothing
+    /// anchors its chunks.
+    PreHuoBlob,
+    /// A workspace tree whose `.acetone` has no `chunks/` entry —
+    /// nonconforming (real writers always anchor), anchoring nothing.
+    TreeUnanchored,
+    /// A conforming workspace tree and the chunk set it anchors.
+    Anchored(std::collections::BTreeSet<Hash>),
+}
+
 impl GitStore {
     /// Initialise a new bare git repository at `path` and open it as a
     /// store with default options.
@@ -929,22 +942,22 @@ impl GitStore {
         self.anchors_under_root_tree(&Hash::from_oid(commit.tree()), what)
     }
 
-    /// The set of chunk hashes a WORKSPACE ref's anchor tree guarantees a
-    /// foreign `git gc` will retain (ADR-0044/huo — the workspace-side
-    /// mirror of [`Self::commit_anchors`], acetone-2ck.11). `Ok(None)`
-    /// for a pre-huo workspace: the ref names the manifest blob directly,
-    /// so nothing anchors its chunks.
-    pub fn workspace_anchors(
-        &self,
-        ref_value: &Hash,
-    ) -> Result<Option<std::collections::BTreeSet<Hash>>, StoreError> {
+    /// The anchor shape behind a WORKSPACE ref (ADR-0044/huo — the
+    /// workspace-side mirror of [`Self::commit_anchors`], acetone-2ck.11).
+    /// The shape is reported, not collapsed: a pre-huo bare blob and a
+    /// (nonconforming) tree without a `chunks/` entry are different
+    /// failure classes with different remedies.
+    pub fn workspace_anchors(&self, ref_value: &Hash) -> Result<WorkspaceAnchors, StoreError> {
         let what = "workspace anchor tree";
         let header = self.find_header(ref_value)?.ok_or_else(|| {
             StoreError::corrupt(what, "workspace object is absent from the store")
         })?;
         match header.kind() {
-            gix::object::Kind::Blob => Ok(None),
-            gix::object::Kind::Tree => self.anchors_under_root_tree(ref_value, what),
+            gix::object::Kind::Blob => Ok(WorkspaceAnchors::PreHuoBlob),
+            gix::object::Kind::Tree => match self.anchors_under_root_tree(ref_value, what)? {
+                Some(anchors) => Ok(WorkspaceAnchors::Anchored(anchors)),
+                None => Ok(WorkspaceAnchors::TreeUnanchored),
+            },
             other => Err(StoreError::corrupt(
                 what,
                 format!("unexpected object kind {other:?}"),

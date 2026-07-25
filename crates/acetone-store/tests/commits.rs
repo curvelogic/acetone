@@ -596,3 +596,36 @@ fn peel_tag_follows_annotated_tags_to_the_commit() {
     let absent = Hash::from_hex("0123456789abcdef0123456789abcdef01234567").expect("hash");
     assert_eq!(store.peel_tag(&absent).expect("peel absent"), absent);
 }
+
+/// acetone-2ck.11: `workspace_anchors` reports the anchor SHAPE — and an
+/// object that is neither blob nor tree (here a commit) is corrupt, never
+/// silently anchorless.
+#[test]
+fn workspace_anchors_distinguishes_shapes_and_rejects_commits() {
+    use acetone_store::WorkspaceAnchors;
+    let (_dir, store) = new_store();
+    let manifest = b"not really a manifest, shape is what matters";
+    // Bare blob: pre-huo.
+    let blob = store.put(manifest).expect("put");
+    assert!(matches!(
+        store.workspace_anchors(&blob).expect("blob shape"),
+        WorkspaceAnchors::PreHuoBlob
+    ));
+    // Anchored tree: the huo shape, carrying its chunk set.
+    let anchors = vec![blob];
+    let tree = store
+        .write_workspace_tree(manifest, &anchors)
+        .expect("workspace tree");
+    match store.workspace_anchors(&tree).expect("tree shape") {
+        WorkspaceAnchors::Anchored(set) => {
+            assert!(set.contains(&blob), "anchored set names the chunk")
+        }
+        other => panic!("expected Anchored, got {other:?}"),
+    }
+    // A commit object behind a workspace ref is corrupt — loud, not
+    // silently anchorless.
+    let commit = store
+        .create_commit(&NewCommit::new(manifest, "s", "not a workspace"))
+        .expect("commit");
+    assert!(store.workspace_anchors(&commit).is_err());
+}

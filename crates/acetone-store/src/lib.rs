@@ -78,7 +78,7 @@ pub use consolidate::{ConsolidateOptions, ConsolidateStats};
 pub use error::StoreError;
 pub use git::{
     DEFAULT_MAX_CHUNK_SIZE, GitStore, GitStoreOptions, MAX_SYMREF_DEPTH, MAX_TAG_PEEL_DEPTH,
-    ObjectFormat, validate_trailer,
+    ObjectFormat, WorkspaceAnchors, validate_trailer,
 };
 pub use hash::Hash;
 pub use store::{

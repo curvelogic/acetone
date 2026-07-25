@@ -200,6 +200,9 @@ fn logically_corrupt_chunk_spliced_into_manifest_is_corrupt() {
         height: 1,
     };
     let blob = store.put(&manifest.encode()).expect("put manifest");
+    // Deliberately bare-blob: its damaged nodes chunk makes the reachable set uncomputable,
+    // so this fixture cannot be anchored; the anchor check reports an
+    // Unverified advisory for it, which the assertions tolerate.
     store
         .write_ref("refs/acetone/workspaces/logical", None, &blob)
         .expect("ref");
@@ -900,10 +903,7 @@ fn non_canonical_map_is_a_history_independence_error() {
     // (default) chunk parameters, and expose it as a workspace.
     let mut manifest = base.clone();
     manifest.nodes = MapRoot::from_root(&alt_root);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/noncanon", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/noncanon");
 
     let report = fsck::check(&repo).expect("fsck");
     assert!(
@@ -951,7 +951,7 @@ fn a_dangling_edge_is_a_referential_integrity_error() {
         )],
     )
     .expect("apply_batch fwd");
-    // Mirror into edges_rev so the only finding is the dangling edge, not an
+    // Mirror into edges_rev so the only EDGE finding is the dangling edge, not an
     // asymmetry advisory.
     let rev = apply_batch(
         store,
@@ -964,10 +964,7 @@ fn a_dangling_edge_is_a_referential_integrity_error() {
     manifest.nodes = MapRoot::from_root(&nodes);
     manifest.edges_fwd = MapRoot::from_root(&fwd);
     manifest.edges_rev = MapRoot::from_root(&rev);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/dangling", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/dangling");
 
     let report = fsck::check(&repo).expect("fsck");
     let danglers: Vec<_> = report
@@ -1235,13 +1232,15 @@ fn conflicts_map_participates_in_anchor_completeness() {
     );
 }
 
-/// acetone-2ck.11: a pre-huo workspace (ref naming the manifest blob
-/// directly) anchors nothing, so its reachable chunks would die to a
-/// foreign git gc — fsck names the exposure and the upgrade path, while
-/// a real (anchored-tree) workspace stays clean, as the whole suite
-/// pins.
+/// acetone-2ck.11 (+ PR #217 review): the workspace side of the
+/// clean-now-gone-later class asks "is anything actually exposed?", not
+/// "does this ref anchor?". A superseded legacy shared ref (bare blob,
+/// pre-ADR-0014, never rewritten by any writer) is an error only when
+/// its chunks are covered by NO worktree's anchors — with a remedy that
+/// works (re-save + delete the superseded ref) — and goes clean once a
+/// worktree anchor tree covers the same set.
 #[test]
-fn bare_blob_workspace_is_an_anchor_incomplete_error() {
+fn legacy_shared_workspace_exposure_and_coverage() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
     let store = repo.store();
@@ -1261,7 +1260,7 @@ fn bare_blob_workspace_is_an_anchor_incomplete_error() {
     .expect("apply_batch");
     let mut manifest = base.clone();
     manifest.nodes = MapRoot::from_root(&nodes);
-    // Pre-huo style: the ref names the manifest blob itself.
+    // Pre-ADR-0014 style: a shared ref naming the manifest blob itself.
     let blob = store.put(&manifest.encode()).expect("put manifest");
     store
         .write_ref("refs/acetone/workspaces/legacy", None, &blob)
@@ -1279,10 +1278,68 @@ fn bare_blob_workspace_is_an_anchor_incomplete_error() {
         .collect();
     assert_eq!(incomplete.len(), 1, "{:?}", report.findings);
     assert!(
-        incomplete[0].detail.contains("pre-huo")
-            && incomplete[0].detail.contains("saves the workspace"),
-        "names the class and the upgrade: {}",
+        incomplete[0].detail.contains("superseded")
+            && incomplete[0].detail.contains("delete the superseded ref"),
+        "names the class and a remedy that works: {}",
         incomplete[0].detail
     );
     assert!(report.has_errors());
+
+    // Coverage: anchor the same manifest under a worktree-anchor ref —
+    // exactly what a shadowing worktree's save maintains — and the
+    // legacy ref's exposure disappears (its chunks WOULD survive gc).
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/wt-cover");
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete),
+        "covered legacy ref must not be an exposure: {:?}",
+        report.findings
+    );
+}
+
+/// The per-worktree workspace ref in pre-huo shape (bare blob) gets the
+/// re-save remedy — which genuinely works for this ref, as the PR #217
+/// reviewer probed.
+#[test]
+fn pre_huo_worktree_workspace_is_an_anchor_incomplete_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "prehuo").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .overwrite_ref("refs/worktree/acetone/workspace", &blob)
+        .expect("overwrite");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::AnchorIncomplete)
+        .collect();
+    assert_eq!(incomplete.len(), 1, "{:?}", report.findings);
+    assert!(
+        incomplete[0].detail.contains("pre-huo")
+            && incomplete[0].detail.contains("saves the workspace"),
+        "names the class and the working remedy: {}",
+        incomplete[0].detail
+    );
 }
