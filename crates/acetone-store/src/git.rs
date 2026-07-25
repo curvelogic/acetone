@@ -967,6 +967,17 @@ impl GitStore {
             let shard_tree = gix::objs::TreeRef::from_bytes(&shard_data, self.repo.object_hash())
                 .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
             for entry in &shard_tree.entries {
+                // The two-level blobs-only layout the write side enforces
+                // is normative on read too: a non-blob leaf (e.g. a chunk
+                // nested one level deeper) is a nonconforming tree whose
+                // retention set this reader cannot describe — refuse
+                // loudly rather than count a tree oid as a chunk.
+                if !entry.mode.is_blob() {
+                    return Err(StoreError::corrupt(
+                        what,
+                        "anchor shard contains a non-blob entry (two-level blobs-only layout is normative)",
+                    ));
+                }
                 anchors.insert(Hash::from_oid(entry.oid.to_owned()));
             }
         }

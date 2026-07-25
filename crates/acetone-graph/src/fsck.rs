@@ -605,6 +605,10 @@ fn check_anchor_completeness(
     let Ok(manifest) = Manifest::decode(manifest_bytes) else {
         return;
     };
+    // The key must cover EVERY map manifest_chunk_set walks — the
+    // conflicts map included (a foreign-written commit may carry one;
+    // omitting it let manifests differing only in conflicts share a
+    // cached chunk set, poisoning both polarities — PR #211 review).
     let mut root_keys: Vec<RootKey> = [
         &manifest.schema,
         &manifest.nodes,
@@ -613,6 +617,7 @@ fn check_anchor_completeness(
     ]
     .into_iter()
     .chain(manifest.indexes.values())
+    .chain(manifest.conflicts.iter())
     .map(root_key)
     .collect();
     root_keys.sort();
@@ -622,9 +627,16 @@ fn check_anchor_completeness(
             let set = match crate::repo::manifest_chunk_set(store, &manifest) {
                 Ok(set) => std::rc::Rc::new(set.into_iter().collect::<BTreeSet<Hash>>()),
                 Err(err) => {
-                    // A broken map was already reported by the manifest
-                    // walk; nothing further to attribute here.
-                    let _ = err;
+                    // The manifest walk reports every stable failure
+                    // class; this arm is reachable only on a mid-run
+                    // store change (e.g. concurrent gc). fsck must not
+                    // stay silent either way (PR #211 review).
+                    report.push(
+                        FindingKind::Unverified,
+                        origin,
+                        None,
+                        format!("anchor completeness could not be computed: {err}"),
+                    );
                     return;
                 }
             };
@@ -657,7 +669,7 @@ fn check_anchor_completeness(
         origin,
         None,
         format!(
-            "{} of {} reachable chunk(s) are not anchored in the commit's              chunks/ tree and would not survive a foreign git gc (e.g. {})",
+            "{} of {} reachable chunk(s) are not anchored in the commit's chunks/ tree and would not survive a foreign git gc (e.g. {})",
             missing.len(),
             chunks.len(),
             sample.join(", ")

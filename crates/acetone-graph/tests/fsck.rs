@@ -1145,3 +1145,67 @@ fn unanchored_reachable_chunks_are_an_error() {
     );
     assert!(report.has_errors(), "anchor incompleteness is an error");
 }
+
+/// The chunk-set cache must key on EVERY map the chunk set covers —
+/// conflicts included: two manifests differing only in their conflicts
+/// map must not share a cached set (PR #211 review Major, both
+/// polarities: a shared entry either hid an unanchored conflicts chunk
+/// or flagged a complete commit).
+#[test]
+fn conflicts_map_participates_in_anchor_completeness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    // A conflicts map with one entry (fabricated: any key/value works
+    // for reachability purposes).
+    let conflicts = apply_batch(
+        store,
+        &empty(store, params).expect("empty"),
+        vec![BatchOp::Put(b"conflict-key".to_vec(), b"payload".to_vec())],
+    )
+    .expect("apply_batch");
+
+    let plain_bytes = base.encode();
+    let mut with_conflicts = base.clone();
+    with_conflicts.conflicts = Some(MapRoot::from_root(&conflicts));
+    let conflicted_bytes = with_conflicts.encode();
+
+    // Both commits anchor the BASE maps' chunks; neither anchors the
+    // conflicts chunk. Walk order: plain first (the poisoning order for
+    // the false-negative polarity).
+    let anchors: Vec<Hash> = [&base.schema, &base.nodes, &base.edges_fwd, &base.edges_rev]
+        .into_iter()
+        .map(|root| root.hash)
+        .collect();
+    let mut plain = NewCommit::new(&plain_bytes, "s", "plain");
+    plain.anchors = &anchors;
+    let plain_tip = store.create_commit(&plain).expect("create commit");
+    let mut conflicted = NewCommit::new(&conflicted_bytes, "s", "conflicted");
+    let parents = vec![plain_tip];
+    conflicted.parents = &parents;
+    conflicted.anchors = &anchors; // conflicts chunk NOT anchored
+    let tip = store.create_commit(&conflicted).expect("create commit");
+    store
+        .write_ref("refs/heads/conflicted", None, &tip)
+        .expect("branch ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::AnchorIncomplete)
+        .collect();
+    assert_eq!(
+        incomplete.len(),
+        1,
+        "exactly the conflicts-carrying commit is incomplete: {:?}",
+        report.findings
+    );
+    assert!(
+        matches!(&incomplete[0].origin, fsck::Origin::Commit { commit, .. } if *commit == tip),
+        "the finding names the conflicted commit"
+    );
+}
