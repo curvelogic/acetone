@@ -451,3 +451,54 @@ fn merging_into_a_non_main_branch_advances_only_that_branch() {
         manifest_bytes(&orepo, &oracle.to_hex())
     );
 }
+
+// --- merge_base at scale (acetone-vgt) ---------------------------------------
+
+/// A deep shared chain with branch tips: the common-ancestor set is the
+/// whole chain, which the old per-pair `is_ancestor` cross-check made
+/// ~quadratic. The rewritten paint-down computes the same base in two
+/// linear walks — this pins correctness on the shape that motivated the
+/// rewrite, and its runtime is the sub-quadratic evidence (a 300-deep
+/// chain has 90,000 candidate pairs; the old code walked each).
+#[test]
+fn deep_chain_merge_base_is_the_fork_point() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    // A 300-commit shared chain on main (values vary; one node rewritten).
+    let mut fork = None;
+    for i in 0..300 {
+        fork = Some(commit_node(&repo, 1, i, &format!("chain {i}")));
+    }
+    let fork = fork.expect("chain built");
+    // Two branches, one commit each.
+    repo.create_branch("left", None).expect("branch");
+    repo.create_branch("right", None).expect("branch");
+    repo.checkout_branch("left").expect("checkout");
+    let left = commit_node(&repo, 2, 1, "left tip");
+    repo.checkout_branch("right").expect("checkout");
+    let right = commit_node(&repo, 3, 1, "right tip");
+
+    let started = std::time::Instant::now();
+    let base = repo.merge_base(&left, &right).expect("merge base");
+    let elapsed = started.elapsed();
+    assert_eq!(base, Some(fork), "the fork point is the unique base");
+    // Generous CI bound: two linear walks over 302 commits are
+    // milliseconds; the old quadratic cross-check took tens of seconds
+    // on this shape.
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "merge_base must stay sub-quadratic on deep chains ({elapsed:?})"
+    );
+
+    // Reflexive and ancestor cases still behave.
+    assert_eq!(
+        repo.merge_base(&left, &left).expect("self"),
+        Some(left),
+        "reflexive: a commit is its own base"
+    );
+    assert_eq!(
+        repo.merge_base(&fork, &left).expect("ancestor"),
+        Some(fork),
+        "an ancestor is the base against its descendant"
+    );
+}
