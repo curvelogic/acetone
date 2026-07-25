@@ -43,13 +43,16 @@ use crate::exec::adapter::{node_value, rel_value};
 use crate::exec::source::GraphSource;
 use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
-/// A single-property declared index the store-backed seek can serve.
+/// A declared index the store-backed seek can serve (single or
+/// composite — ADR-0027, acetone-0c7).
 struct IndexInfo {
     label: String,
-    property: String,
-    /// The property's declared type, if the schema types it — the discriminator
-    /// for whether a string pin is safe to seek (see the module docs).
-    property_type: Option<PropertyType>,
+    /// The indexed properties, in declared order.
+    properties: Vec<String>,
+    /// Each property's declared type, if the schema types it — the
+    /// discriminator for whether a string pin is safe to seek (see the
+    /// module docs), per component.
+    property_types: Vec<Option<PropertyType>>,
 }
 
 /// A [`GraphSource`] that reads lazily from a stored [`Snapshot`].
@@ -78,22 +81,24 @@ impl<'s> StoreBackedSource<'s> {
         let mut indexes: HashMap<String, IndexInfo> = HashMap::new();
         for entry in schema {
             if let SchemaEntry::Index { name, def } = entry {
-                // Only single-property indexes drive the seek (ADR-0022);
-                // composite indexes scan-and-filter.
-                if let [property] = def.properties() {
-                    let property_type = label_types
-                        .get(def.label())
-                        .and_then(|types| types.get(property))
-                        .copied();
-                    indexes.insert(
-                        name.clone(),
-                        IndexInfo {
-                            label: def.label().to_owned(),
-                            property: property.clone(),
-                            property_type,
-                        },
-                    );
-                }
+                let property_types = def
+                    .properties()
+                    .iter()
+                    .map(|property| {
+                        label_types
+                            .get(def.label())
+                            .and_then(|types| types.get(property))
+                            .copied()
+                    })
+                    .collect();
+                indexes.insert(
+                    name.clone(),
+                    IndexInfo {
+                        label: def.label().to_owned(),
+                        properties: def.properties().to_vec(),
+                        property_types,
+                    },
+                );
             }
         }
         StoreBackedSource {
@@ -136,7 +141,13 @@ impl<'s> StoreBackedSource<'s> {
 
     /// The candidate raw model values whose stored index key a pin could equal,
     /// or `None` to fall back to a scan (the pin cannot be served exactly).
-    fn probe_values(&self, info: &IndexInfo, value: &Value) -> Option<Vec<ModelValue>> {
+    /// Probe alternatives for the `component`-th indexed property.
+    fn probe_value(
+        &self,
+        info: &IndexInfo,
+        component: usize,
+        value: &Value,
+    ) -> Option<Vec<ModelValue>> {
         match value {
             // A null or NaN pin selects nothing (indexes are null/NaN-blind).
             Value::Null => Some(Vec::new()),
@@ -165,7 +176,7 @@ impl<'s> StoreBackedSource<'s> {
             // A string pin could equal a Bytes/temporal value's rendering, which
             // is keyed raw — so a raw probe would miss it. Safe only when the
             // property's declared type rules out a deferred value.
-            Value::String(s) => match info.property_type {
+            Value::String(s) => match info.property_types.get(component).copied().flatten() {
                 Some(PropertyType::String)
                 | Some(PropertyType::Int)
                 | Some(PropertyType::Float)
@@ -194,28 +205,53 @@ impl GraphSource for StoreBackedSource<'_> {
     fn nodes_by_index(
         &self,
         index_name: &str,
-        property: &str,
-        value: &Value,
+        properties: &[String],
+        values: &[&Value],
     ) -> Option<Vec<NodeValue>> {
         let info = self.indexes.get(index_name)?;
         // The hint may have been bound against another version's catalogue
-        // (AT clauses); a same-named index over a different property must
-        // not serve it (PR #206 review finding 4).
-        if info.property != property {
+        // (AT clauses); a same-named index over different properties must
+        // not serve it (PR #206 review finding 4), and the value tuple
+        // must match the declared arity.
+        if info.properties.as_slice() != properties || values.len() != properties.len() {
             return None;
         }
-        let probes = self.probe_values(info, value)?;
-        let properties = std::slice::from_ref(&info.property);
+        // Per-component probe alternatives, then their bounded cartesian:
+        // a composite entry's key is the ordered value tuple (ADR-0027).
+        let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(values.len());
+        for (component, value) in values.iter().enumerate() {
+            let probes = self.probe_value(info, component, value)?;
+            if probes.is_empty() {
+                // A null/NaN component matches nothing (null-blind index).
+                return Some(Vec::new());
+            }
+            per_component.push(probes);
+        }
+        let combinations: usize = per_component.iter().map(Vec::len).product();
+        if combinations > 16 {
+            return None;
+        }
+        let mut tuples: Vec<Vec<ModelValue>> = vec![Vec::new()];
+        for alternatives in &per_component {
+            let mut next = Vec::with_capacity(tuples.len() * alternatives.len());
+            for prefix in &tuples {
+                for alt in alternatives {
+                    let mut tuple = prefix.clone();
+                    tuple.push(alt.clone());
+                    next.push(tuple);
+                }
+            }
+            tuples = next;
+        }
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
         let mut out = Vec::new();
-        for model in probes {
-            let prefix =
-                match index_value_prefix(&info.label, properties, std::slice::from_ref(&model)) {
-                    Ok(prefix) => prefix,
-                    // A value that cannot encode (e.g. a NaN nested somewhere)
-                    // contributes no entries — it indexes nothing.
-                    Err(_) => continue,
-                };
+        for tuple in tuples {
+            let prefix = match index_value_prefix(&info.label, properties, &tuple) {
+                Ok(prefix) => prefix,
+                // A value that cannot encode (e.g. a NaN nested somewhere)
+                // contributes no entries — it indexes nothing.
+                Err(_) => continue,
+            };
             match self.snapshot.index_scan(index_name, &prefix) {
                 // Index map absent though the schema declares it: fall back.
                 Ok(None) => return None,

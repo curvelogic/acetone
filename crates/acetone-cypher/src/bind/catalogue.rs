@@ -85,6 +85,24 @@ impl Catalogue {
     /// scan-and-filter, which is correct but unaccelerated (the seek
     /// acceleration is a tracked follow-up); they are still maintained and
     /// `fsck`-verified.
+    /// The declared index best serving an equality seek over `pinned`
+    /// properties of `label`: every indexed property must be pinned; the
+    /// longest (most selective) property list wins ties (acetone-0c7).
+    pub fn seek_index_on(&self, label: &str, pinned: &[&str]) -> Option<(&str, &IndexDef)> {
+        self.indexes
+            .iter()
+            .filter(|(_, def)| {
+                def.label() == label
+                    && !def.properties().is_empty()
+                    && def
+                        .properties()
+                        .iter()
+                        .all(|p| pinned.iter().any(|pin| pin == p))
+            })
+            .max_by_key(|(_, def)| def.properties().len())
+            .map(|(name, def)| (name.as_str(), def))
+    }
+
     pub fn index_on(&self, label: &str, property: &str) -> Option<(&str, &IndexDef)> {
         self.indexes
             .iter()

@@ -1203,17 +1203,24 @@ fn seek_anchor(
             Ok(ctx.graph.nodes_by_key(label, &key_values))
         }
         Some(IndexHint::KeySeek { .. }) => Ok(None),
-        Some(IndexHint::IndexSeek { name, property, .. }) => {
+        Some(IndexHint::IndexSeek {
+            name, properties, ..
+        }) => {
             let Some(props) = &pattern.properties else {
                 return Ok(None);
             };
             let Value::Map(map) = eval(props, row, ctx)? else {
                 return Ok(None);
             };
-            let Some(value) = map.get(property) else {
-                return Ok(None);
-            };
-            Ok(ctx.graph.nodes_by_index(name, property, value))
+            let mut values = Vec::with_capacity(properties.len());
+            for property in properties {
+                match map.get(property) {
+                    Some(value) => values.push(value),
+                    // A composite index needs every component pinned.
+                    None => return Ok(None),
+                }
+            }
+            Ok(ctx.graph.nodes_by_index(name, properties, &values))
         }
         Some(IndexHint::IndexRange {
             name,
