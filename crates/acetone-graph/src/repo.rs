@@ -1271,51 +1271,43 @@ impl Repository {
         self.gc_with_hooks(|| {}, || {})
     }
 
-    /// [`gc`](Self::gc)'s body, with two test seams for the worktree TOCTOU
-    /// (acetone-dfh): `after_lock` runs once the write lock is held, *before*
-    /// the under-lock linked-worktree re-check; `after_recheck` runs after the
-    /// re-check passed — the residual window before the sweep. Production
-    /// callers go through `gc`, which passes no-ops; the hooks let tests
-    /// interleave a `git worktree add` deterministically at each point.
+    /// [`gc`](Self::gc)'s body, with two test seams (acetone-dfh):
+    /// `after_lock` runs once the write lock is held, `after_recheck`
+    /// just before the anchor sweep and consolidation — the residual
+    /// window in which tests interleave a `git worktree add`
+    /// deterministically. Production callers go through `gc`, which
+    /// passes no-ops.
     #[doc(hidden)]
     pub fn gc_with_hooks(
         &self,
         after_lock: impl FnOnce(),
         after_recheck: impl FnOnce(),
     ) -> Result<ConsolidateStats, GraphError> {
-        // Consolidation's reachability walk (`references().all()`) does not see
-        // *other* linked worktrees' private refs (`refs/worktree/*`, ADR-0014),
-        // so pruning could destroy their uncommitted workspace or in-progress
-        // merge. Refuse when any linked worktree exists until gc is made
-        // worktree-aware (walk every worktree's private refs); the single-
-        // worktree case — the common one — is safe. This pre-lock check is the
-        // cheap fast-fail for the common error path only; the authoritative
-        // check is the one below, under the lock.
-        if self.has_linked_worktrees()? {
-            return Err(GraphError::GcWithLinkedWorktrees);
-        }
+        // gc is worktree-aware (acetone-6g5.10): consolidation
+        // enumerates every other worktree's private refs and HEAD
+        // (`refs/worktree/*` under `<common>/worktrees/<id>/`, plus the
+        // main worktree's when run from a linked one) and classifies
+        // them by ownership — the graph's own become pack roots, foreign
+        // ones join ADR-0051's prune guard — so the old blanket refusal
+        // (GcWithLinkedWorktrees) is gone. The enumeration is a
+        // completeness improvement, not the safety floor: the floor is
+        // that pruning only ever removes loose copies of objects in the
+        // freshly installed pack, so any root it misses (`refs/bisect/*`,
+        // a worktree added mid-gc, chunks a late save writes) keeps its
+        // objects loose and untouched — acetone-dfh's residual analysis,
+        // pinned by the gc tripwire test.
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         after_lock();
-        // Re-check under the write lock (acetone-dfh): a `git worktree add`
-        // racing the pre-lock check would otherwise slip past the refusal and
-        // have its private state swept. The lock does not stop `git worktree
-        // add` itself (plain git respects no acetone lock) — it merely
-        // re-anchors the check as late as possible; the sweep below is
-        // additionally safe for a worktree that appears later still.
-        if self.has_linked_worktrees()? {
-            return Err(GraphError::GcWithLinkedWorktrees);
-        }
         after_recheck();
-        // gc runs only when no linked worktree was seen (checked above), so
-        // `refs/acetone/worktree-anchors/*` are leftovers from since-removed
-        // worktrees — pinning chunks nothing live needs (ADR-0044). Delete
-        // them before consolidating so their now-unreferenced chunks are
-        // reclaimed. Each deletion is gated on the anchor's worktree directory
-        // being absent AT DELETION TIME: a worktree that appears in the window
-        // after the re-check keeps its durability anchor — when in doubt, gc
-        // keeps data. (A crafted anchor id could only make the existence check
-        // succeed, i.e. keep the anchor; deletion goes through the ref store,
-        // never a raw path.)
+        // `refs/acetone/worktree-anchors/*` whose worktree directory no
+        // longer exists are leftovers from removed worktrees — pinning
+        // chunks nothing live needs (ADR-0044). Delete them before
+        // consolidating so their chunks are reclaimed. Each deletion is
+        // gated on the directory being absent AT DELETION TIME: a
+        // worktree that appears mid-gc keeps its durability anchor —
+        // when in doubt, gc keeps data. (A crafted anchor id could only
+        // make the existence check succeed, i.e. keep the anchor;
+        // deletion goes through the ref store, never a raw path.)
         let worktrees_dir = self.store.common_dir().join("worktrees");
         for (anchor, _) in self.store.list_refs(WORKTREE_ANCHOR_PREFIX)? {
             let id = anchor
@@ -1343,17 +1335,6 @@ impl Repository {
             .consolidate_scoped(ConsolidateOptions::default(), &|name| {
                 namespace.owns_ref(name)
             })?)
-    }
-
-    /// Whether the repository has any linked worktree — git records one
-    /// directory per linked worktree under `<common>/worktrees/`.
-    fn has_linked_worktrees(&self) -> Result<bool, GraphError> {
-        let dir = self.store.common_dir().join("worktrees");
-        match std::fs::read_dir(&dir) {
-            Ok(mut entries) => Ok(entries.next().is_some()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(source) => Err(GraphError::LockIo { path: dir, source }),
-        }
     }
 
     /// Resolve a refspec — full ref name, tag or branch short name, or hex

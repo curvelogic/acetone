@@ -892,24 +892,45 @@ fn check_canonical(
     let Ok(root) = map_root.to_root(params) else {
         return;
     };
-    let mut ops = Vec::new();
+    // Stream the rebuild in bounded batches folded over the growing
+    // tree (acetone-6g5.10): history independence (Invariant #1)
+    // guarantees the folded root equals the one-shot build, so the
+    // check's verdict is unchanged while THIS pass's resident memory
+    // drops from O(map) to O(batch + tree cache). (Other fsck passes
+    // still hold O(map) state; peak RSS is bounded by them, not here.
+    // A mid-scan read error abandons the partial rebuild — its already-
+    // written chunks are harmless unreachable loose objects.)
+    const REBUILD_BATCH: usize = 8192;
+    let Ok(empty_root) = empty(store, params) else {
+        return;
+    };
+    let mut rebuilt = empty_root;
+    let mut ops: Vec<BatchOp> = Vec::with_capacity(REBUILD_BATCH);
     match scan(store, &root, ..) {
         Ok(items) => {
             for item in items {
                 match item {
-                    Ok((key, value)) => ops.push(BatchOp::Put(key.to_vec(), value.to_vec())),
+                    Ok((key, value)) => {
+                        ops.push(BatchOp::Put(key.to_vec(), value.to_vec()));
+                        if ops.len() >= REBUILD_BATCH {
+                            match apply_batch(store, &rebuilt, std::mem::take(&mut ops)) {
+                                Ok(next) => rebuilt = next,
+                                Err(_) => return,
+                            }
+                        }
+                    }
                     Err(_) => return,
                 }
             }
         }
         Err(_) => return,
     }
-    let Ok(empty_root) = empty(store, params) else {
-        return;
-    };
-    let Ok(rebuilt) = apply_batch(store, &empty_root, ops) else {
-        return;
-    };
+    if !ops.is_empty() {
+        match apply_batch(store, &rebuilt, ops) {
+            Ok(next) => rebuilt = next,
+            Err(_) => return,
+        }
+    }
     if rebuilt.hash() != root.hash() {
         report.push(
             FindingKind::HistoryIndependence,

@@ -244,7 +244,7 @@ impl GitStore {
     /// The reduced-trust open options applied to **every** repository this
     /// store opens (see the module docs). Isolated config, trust pinned to
     /// [`gix::sec::Trust::Reduced`]; discovery never relaxes this posture.
-    fn isolated_open_options() -> gix::open::Options {
+    pub(crate) fn isolated_open_options() -> gix::open::Options {
         // Isolated (no ambient config) means gix has no committer identity for
         // reflog entries. Bare acetone repositories never log ref updates, but a
         // co-tenant graph lives in the user's *non-bare* repository where

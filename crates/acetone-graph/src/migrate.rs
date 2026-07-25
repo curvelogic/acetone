@@ -271,13 +271,18 @@ pub fn pending_migration(repo: &Repository) -> Result<Option<MigrateJournal>, Gr
 /// the ref `name`. The allow-list is exactly what [`rewrite_history`] plans:
 /// the graph's own branches, tags and private namespace
 /// ([`GraphRefNamespace::owns_ref`]), plus the per-worktree workspace pointer
-/// [`WORKTREE_WORKSPACE_REF`] — the one legitimate swing target `owns_ref` does
-/// not own in the co-tenant layout (it sits outside the graph's private
-/// prefixes). Any other ref in a journal — the user's code branch, another
-/// co-tenant graph's refs — is foreign and must never be applied by recovery
-/// (acetone-w9uu).
+/// [`WORKTREE_WORKSPACE_REF`]. `owns_ref` grew broader `refs/worktree/acetone/`
+/// ownership for gc classification (acetone-6g5.10), but a recovery journal's
+/// swing surface must not widen with it: within `refs/worktree/` the workspace
+/// pointer stays the ONLY swing target — never merge state or future
+/// per-worktree refs. Any other ref in a journal — the user's code branch,
+/// another co-tenant graph's refs — is foreign and must never be applied by
+/// recovery (acetone-w9uu).
 fn migrate_may_swing(namespace: &GraphRefNamespace, name: &str) -> bool {
-    namespace.owns_ref(name) || name == WORKTREE_WORKSPACE_REF
+    if name.starts_with("refs/worktree/") {
+        return name == WORKTREE_WORKSPACE_REF;
+    }
+    namespace.owns_ref(name)
 }
 
 /// Validate every journalled swing before any of it is applied — the security

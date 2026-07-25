@@ -757,3 +757,132 @@ fn migrate_recovery_refuses_a_journal_naming_the_code_branch() {
         "the refused journal is kept, not silently cleared"
     );
 }
+
+#[test]
+fn gc_guards_a_code_worktrees_private_refs_and_packs_the_graphs() {
+    // acetone-6g5.10 + PR #212 review Major 1: gc enumerates every linked
+    // worktree's private refs, classified by OWNERSHIP. A code worktree's
+    // `refs/worktree/*` state is foreign — its objects must stay loose
+    // (guarded in place, never drawn into the graph's pack, per ADR-0051
+    // reading B) — while the graph's own linked-worktree workspace
+    // (`refs/worktree/acetone/*`) is graph state and must be packed.
+    let (project, dir, _code_commit, _code_blob) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 30);
+    for round in 0..10i64 {
+        let mut tx = graph.begin_write().expect("begin");
+        tx.put_node(
+            &node(round % 30),
+            &NodeRecord::new(
+                [],
+                BTreeMap::from([("v".to_owned(), Value::Int(9000 + round))]),
+            ),
+        )
+        .expect("node");
+        tx.commit(&format!("churn {round}"), &[], None)
+            .expect("commit");
+    }
+
+    // A code worktree with a private ref at a blob referenced by nothing else.
+    let wt = dir.path().join("code-wt");
+    git(
+        &project,
+        &["worktree", "add", "--detach", wt.to_str().unwrap()],
+    );
+    let foreign_blob = {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&wt)
+            .args(["hash-object", "-w", "--stdin"])
+            .env("GIT_WORK_TREE", &wt)
+            .arg("--")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write;
+                c.stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(b"private tool state, not the graph's")?;
+                c.wait_with_output()
+            })
+            .expect("hash-object");
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let wt_git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&wt)
+            .args(args)
+            .output()
+            .expect("git in worktree");
+        assert!(out.status.success(), "git {args:?}: {:?}", out);
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    wt_git(&["update-ref", "refs/worktree/mytool/state", &foreign_blob]);
+
+    graph.gc().expect("gc");
+
+    // Foreign private ref: guarded in place — loose, retrievable, unpacked.
+    assert!(
+        loose_object_exists(&project, &foreign_blob),
+        "reading B: the code worktree's private blob must stay loose"
+    );
+    assert!(
+        !packed_object_exists(&project, &foreign_blob),
+        "reading B: the code worktree's private blob must not enter the graph's pack"
+    );
+    assert_eq!(
+        wt_git(&["rev-parse", "refs/worktree/mytool/state"]),
+        foreign_blob,
+        "the foreign private ref survives"
+    );
+}
+
+#[test]
+fn migrate_recovery_refuses_a_journal_naming_worktree_merge_state() {
+    // PR #212 review: gc ownership classification (acetone-6g5.10) made
+    // `refs/worktree/acetone/*` graph-owned, but the migrate-journal swing
+    // surface must not widen with it (acetone-w9uu). Within refs/worktree/
+    // the workspace pointer stays the ONLY legitimate swing target; a
+    // journal naming per-worktree merge state is refused and kept.
+    let (project, _dir, _code_commit, _blob) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 10);
+    let graph_head = graph
+        .store()
+        .read_ref("refs/heads/acetone/g/main")
+        .expect("read")
+        .expect("graph branch exists");
+
+    let journal = MigrateJournal {
+        swings: vec![RefSwing {
+            name: "refs/worktree/acetone/merge-head".into(),
+            expected: None,
+            new: graph_head,
+        }],
+    };
+    let blob = graph.store().put(&journal.encode()).expect("journal blob");
+    graph
+        .store()
+        .write_ref(graph.namespace().migrate_journal_ref(), None, &blob)
+        .expect("journal ref");
+
+    match rewrite_history(&graph, &Rechunk::new(ChunkParams::default())) {
+        Err(acetone_graph::GraphError::Migrate(msg)) => {
+            assert!(
+                msg.contains("refs/worktree/acetone/merge-head"),
+                "names the offending ref: {msg}"
+            );
+        }
+        other => panic!("expected a refusal for worktree merge state, got {other:?}"),
+    }
+    assert!(
+        pending_migration(&graph).expect("pending").is_some(),
+        "the refused journal is kept"
+    );
+}

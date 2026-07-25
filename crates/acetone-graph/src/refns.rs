@@ -107,6 +107,13 @@ impl GraphRefNamespace {
                 // gc roots. Multi-graph co-tenancy must revisit this (the
                 // bead notes the overlap with acetone-gns).
                 WORKTREE_ANCHOR_PREFIX.to_owned(),
+                // Per-worktree acetone state (`refs/worktree/acetone/*`:
+                // workspace and merge refs, ADR-0014). Same single-graph
+                // sharing caveat as the anchors. Without this, gc's
+                // worktree enumeration (acetone-6g5.10) would classify a
+                // linked worktree's acetone workspace as foreign — safe
+                // (guarded, preserved in place) but never consolidated.
+                "refs/worktree/acetone/".to_owned(),
             ],
             // The graph's own marker only — matched exactly, never by prefix,
             // so `g` cannot claim `g2`'s marker.
