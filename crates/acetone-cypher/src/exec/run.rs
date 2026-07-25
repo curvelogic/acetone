@@ -1840,9 +1840,11 @@ fn eval_with_group(
     eval(expr, representative, &inner)
 }
 
-/// Enumerate Aggregate nodes in the same traversal order `eval` visits
-/// them (depth-first, argument order). Aggregate arguments cannot contain
-/// aggregates (binder-enforced), so no recursion into them.
+/// Enumerate every Aggregate node in the expression for accumulation.
+/// Order is irrelevant — evaluation looks slots up by node identity, and
+/// may skip (untaken CASE arms) or revisit (comprehension bodies) nodes.
+/// Aggregate arguments cannot contain aggregates (binder-enforced), so no
+/// recursion into them.
 fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
     match expr {
         BoundExpr::Aggregate { .. } => out.push(expr),

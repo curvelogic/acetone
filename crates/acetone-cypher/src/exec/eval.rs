@@ -1,7 +1,7 @@
 //! Expression evaluation over the bound IR with openCypher null
 //! semantics, TCK-verified. Aggregate sub-expressions are computed by the
-//! Aggregate operator; here they read from a pre-computed slot sequence
-//! in deterministic traversal order.
+//! Aggregate operator; here they read from a map keyed by the aggregate
+//! node's identity, so traversal order is deliberately not load-bearing.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -138,8 +138,6 @@ pub struct EvalCtx<'a> {
     /// counters) because `EvalCtx` is rebuilt per clause but the budget spans
     /// the whole query — see [`crate::exec::governor`].
     pub governor: &'a super::governor::Governor,
-    /// Pre-computed aggregate results, consumed in traversal order by
-    /// `BoundExpr::Aggregate` nodes (set by the Aggregate operator).
     /// Accumulated aggregate results, keyed by the identity of the
     /// `Aggregate` node in the projection's expression tree. Identity
     /// (not traversal order) is what makes evaluation robust to
