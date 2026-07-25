@@ -1200,11 +1200,10 @@ mod tests {
             single("RETURN 1 < 2 = 3 <> 3"),
             Value::Bool(false)
         ));
-        // Aggregates in a chain: the duplicated Aggregate clones and the
-        // slot machinery stay aligned because collect_aggregates and
-        // eval traverse the same desugared tree and AND evaluates both
-        // sides strictly. Pinned so a future short-circuiting AND cannot
-        // silently desync the slots (PR #203 review).
+        // Aggregates in a chain: the desugar duplicates Aggregate nodes,
+        // each with its own identity-keyed slot, so evaluation order —
+        // strict or short-circuiting — cannot desync them (PR #203
+        // review; identity keying since acetone-2ck.8).
         let result = run_query(
             "MATCH (n) RETURN min(n.num) < max(n.num) < 10 AS chained, count(*) AS c",
             &graph,

@@ -11,7 +11,6 @@
 //! at most once per MATCH clause (across all its comma patterns and
 //! within var-length expansions).
 
-use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::{AtRef, Direction};
@@ -1825,22 +1824,27 @@ fn eval_with_group(
 ) -> Result<Value, ExecError> {
     let mut aggregates = Vec::new();
     collect_aggregates(expr, &mut aggregates);
-    let mut slots = Vec::with_capacity(aggregates.len());
+    let mut slots = std::collections::HashMap::with_capacity(aggregates.len());
     for aggregate in aggregates {
-        slots.push(accumulate(aggregate, group, ctx)?);
+        slots.insert(
+            crate::exec::eval::expr_identity(aggregate),
+            accumulate(aggregate, group, ctx)?,
+        );
     }
     let inner = EvalCtx {
         graph: ctx.graph,
         parameters: ctx.parameters,
         governor: ctx.governor,
-        aggregates: Some((&slots, Cell::new(0))),
+        aggregates: Some(&slots),
     };
     eval(expr, representative, &inner)
 }
 
-/// Enumerate Aggregate nodes in the same traversal order `eval` visits
-/// them (depth-first, argument order). Aggregate arguments cannot contain
-/// aggregates (binder-enforced), so no recursion into them.
+/// Enumerate every Aggregate node in the expression for accumulation.
+/// Order is irrelevant — evaluation looks slots up by node identity, and
+/// may skip (untaken CASE arms) or revisit (comprehension bodies) nodes.
+/// Aggregate arguments cannot contain aggregates (binder-enforced), so no
+/// recursion into them.
 fn collect_aggregates<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
     match expr {
         BoundExpr::Aggregate { .. } => out.push(expr),
