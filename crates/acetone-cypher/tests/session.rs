@@ -567,3 +567,39 @@ fn stored_unique_collision_parity_with_and_without_index() {
             });
     }
 }
+
+/// Signed zeros are one value under openCypher equality: an in-statement
+/// pair of -0.0 and 0.0 claimants must collide (the stored paths already
+/// treated them as equal — PR #208 review Blocker), and NaN — which
+/// equals nothing — must never collide with itself in one statement.
+#[test]
+fn in_statement_claims_use_opencypher_value_equality() {
+    for with_index in [false, true] {
+        let (_d, repo) = repo();
+        declare_service(&repo, with_index);
+        let session = Session::new(&repo);
+        // -0.0 and 0.0 collide.
+        let err = session
+            .run("CREATE (:Service {name: 'a', ip: -0.0}), (:Service {name: 'b', ip: 0.0})")
+            .expect_err("signed zeros are one unique value");
+        assert!(
+            err.to_string().contains("ip"),
+            "with_index={with_index}: {err}"
+        );
+        // Nested in a list, likewise.
+        let err = session
+            .run("CREATE (:Service {name: 'c', ip: [-0.0]}), (:Service {name: 'd', ip: [0.0]})")
+            .expect_err("nested signed zeros are one unique value");
+        assert!(
+            err.to_string().contains("ip"),
+            "with_index={with_index}: {err}"
+        );
+        // NaN equals nothing: two NaN claimants in one statement are fine.
+        session
+            .run(
+                "CREATE (:Service {name: 'e', ip: 0.0/0.0}), \
+                 (:Service {name: 'f', ip: 0.0/0.0})",
+            )
+            .unwrap_or_else(|e| panic!("NaN never collides (with_index={with_index}): {e}"));
+    }
+}

@@ -17,15 +17,15 @@
 //!
 //! The transaction stages every put/delete and advances the workspace
 //! atomically on `save`/`commit`, maintaining `edges_rev` by construction
-//! (spec §3.3). Constraints (spec §2, acetone-mex.3) are checked here
-//! against the workspace before the transaction: mandatory single-keyed
-//! identity, key immutability, CREATE-of-an-existing-key, existence and
-//! UNIQUE. UNIQUE is a base scan (excluding same-transaction deletions) for
-//! now: it catches a new value colliding with committed data, but NOT two
-//! *new* nodes that collide within one statement — so an unindexed UNIQUE
-//! can still admit a violating graph until index-backed enforcement lands
-//! (Phase 5, acetone-ryg). Same-transaction deletions are subtracted so the
-//! delete-plus-create rekey path is not falsely rejected.
+//! (spec §3.3). Constraints (spec §2, acetone-mex.3/acetone-ryg) are
+//! checked here against the workspace before the transaction: mandatory
+//! single-keyed identity, key immutability, CREATE-of-an-existing-key,
+//! existence and UNIQUE. UNIQUE covers both the stored state (via a
+//! declared single-property index probe when one exists, a label scan
+//! otherwise) and the statement itself (two new claimants of one value
+//! collide). Records the statement supersedes or deletes are subtracted
+//! from the stored check, so value moves and the delete-plus-create
+//! rekey path are not falsely rejected.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -351,10 +351,6 @@ fn node_key_and_record(
     Ok((node_key, NodeRecord::new(secondary, properties)))
 }
 
-/// Enforce the schema's existence and UNIQUE constraints (spec §2) for one
-/// upserted node against the workspace `base`. UNIQUE is a base scan here —
-/// index-backed enforcement (and catching two *new* nodes that collide in
-/// one statement) arrives with the secondary indexes of Phase 5.
 /// Existence and UNIQUE enforcement for one statement's upserts
 /// (acetone-ryg). Existence is per record. UNIQUE checks two layers:
 /// the *statement* claims (two upserts colliding on a value — neither
@@ -420,10 +416,16 @@ impl<'a> UniqueChecker<'a> {
         let this_key = key.encode()?;
         for (property, value) in &wanted {
             // In-statement claims: a value only ever admits one claimant
-            // per statement. An unencodable value (NaN somewhere) never
-            // equals anything under `ModelValue` equality, so it claims
-            // nothing.
-            if let Ok(value_enc) = acetone_model::values::encode_value(value) {
+            // per statement. The claim key is the memcomparable KEY
+            // encoding, not the canonical CBOR value encoding: the key
+            // encoding normalises signed zeros (-0.0 == 0.0 in
+            // openCypher, nested included) and rejects NaN — exactly the
+            // extensional equality the stored paths enforce (derived
+            // PartialEq treats -0.0 == 0.0; the idx/ map normalises
+            // zeros per ADR-0004; NaN equals nothing and claims
+            // nothing). Using CBOR here admitted a signed-zero breach
+            // and falsely rejected NaN pairs (PR #208 review).
+            if let Ok(value_enc) = acetone_model::keys::encode_key(std::slice::from_ref(value)) {
                 let claim = (key.label().to_owned(), (*property).to_owned(), value_enc);
                 if !self.statement_claims.insert(claim) {
                     return Err(PersistError::UniqueViolation {
