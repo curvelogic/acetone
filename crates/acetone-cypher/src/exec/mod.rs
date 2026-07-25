@@ -1075,15 +1075,12 @@ mod tests {
             items[..],
             [Value::Int(6), Value::Int(7), Value::Int(8)]
         ));
-        // No pushdown when the WITH sorts, de-duplicates, aggregates or
-        // filters — those genuinely need the full expansion, which stays
-        // governed. (WHERE: project() filters before SKIP/LIMIT,
-        // acetone-2ck.9, so a capped input would change the answer.)
+        // No pushdown when the WITH sorts, de-duplicates or aggregates —
+        // those genuinely need the full expansion, which stays governed.
         for query in [
             "UNWIND range(1, 1000) AS i WITH DISTINCT i LIMIT 10 RETURN count(i) AS c",
             "UNWIND range(1, 1000) AS i WITH i ORDER BY i DESC LIMIT 10 RETURN collect(i)[0] AS c",
             "UNWIND range(1, 1000) AS i WITH sum(i) AS s LIMIT 10 RETURN s",
-            "UNWIND range(1, 1000) AS i WITH i LIMIT 10 WHERE i > 5 RETURN i",
         ] {
             let err =
                 run_query_with_limits(query, &EmptyGraph, &BTreeMap::new(), &tight).unwrap_err();
@@ -1092,25 +1089,50 @@ mod tests {
                 "{query}: {err:?}"
             );
         }
-        // And under generous limits the unsafe-to-cap forms stay correct.
-        // WHERE + LIMIT keeps the engine's established answer (WHERE
-        // filters first, then LIMIT — acetone-2ck.9): a capped input
-        // would return no rows here (PR #204 review finding).
+        // WHERE no longer disables the cap (acetone-2ck.9: WHERE runs
+        // AFTER SKIP/LIMIT per openCypher, so the truncation point is
+        // predicate-independent): under tight limits the capped form
+        // succeeds, and the answer is the spec's — LIMIT first, then the
+        // predicate over the truncated rows.
+        let result = run_query_with_limits(
+            "UNWIND range(1, 1000) AS i WITH i LIMIT 10 WHERE i > 5 RETURN collect(i) AS c",
+            &EmptyGraph,
+            &BTreeMap::new(),
+            &tight,
+        )
+        .expect("where after limit, capped");
+        let Value::List(items) = &result.rows[0][0] else {
+            panic!("expected list");
+        };
+        assert!(matches!(
+            items[..],
+            [
+                Value::Int(6),
+                Value::Int(7),
+                Value::Int(8),
+                Value::Int(9),
+                Value::Int(10)
+            ]
+        ));
+        // The predicate can filter EVERYTHING the truncation kept: LIMIT 3
+        // keeps 1..3, WHERE i > 5 then leaves no rows (previously 6,7,8 —
+        // the recorded divergence, now conformant).
         let result = run_query(
             "UNWIND range(1, 1000) AS i WITH i LIMIT 3 WHERE i > 5 RETURN i",
             &EmptyGraph,
             &BTreeMap::new(),
         )
         .expect("limit + where");
-        let values: Vec<i64> = result
-            .rows
-            .iter()
-            .map(|row| match &row[0] {
-                Value::Int(n) => *n,
-                other => panic!("expected ints, got {other:?}"),
-            })
-            .collect();
-        assert_eq!(values, vec![6, 7, 8]);
+        assert!(result.rows.is_empty(), "WHERE filters the truncated rows");
+        // The bead's cross-engine repro (acetone-2ck.9): Neo4j returns 4.
+        let result = run_query(
+            "UNWIND range(1, 10) AS i WITH i SKIP 2 LIMIT 2 WHERE i > 3 RETURN i",
+            &EmptyGraph,
+            &BTreeMap::new(),
+        )
+        .expect("skip + limit + where");
+        assert_eq!(result.rows.len(), 1);
+        assert!(matches!(result.rows[0][0], Value::Int(4)));
         let result = run_query(
             "UNWIND range(1, 1000) AS i WITH i ORDER BY i DESC LIMIT 3 RETURN collect(i) AS c",
             &EmptyGraph,
