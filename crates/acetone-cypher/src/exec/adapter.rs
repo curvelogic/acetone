@@ -34,10 +34,24 @@ pub struct GraphSnapshot {
     /// `nodes` directly).
     by_label: HashMap<String, Vec<usize>>,
     /// Declared index name → encoded property value → node indices
-    /// (IndexSeek). Built for the schema's declared indexes, keyed by the
-    /// memcomparable value encoding so lookups match the stored `idx/<name>`
-    /// map's selection exactly (null/NaN-blind).
-    by_index: HashMap<String, HashMap<Vec<u8>, Vec<usize>>>,
+    /// (IndexSeek/IndexRange). Built for the schema's declared indexes,
+    /// keyed by the memcomparable value encoding so lookups match the
+    /// stored `idx/<name>` map's selection exactly (null/NaN-blind), and
+    /// ordered so byte-range scans are value-ordered (Invariant #2:
+    /// byte order == logical order within a type family).
+    by_index: HashMap<String, std::collections::BTreeMap<Vec<u8>, Vec<usize>>>,
+    /// `(label, runtime-faithful encoded key tuple)` → node indices
+    /// (KeySeek). Keyed by the concatenated per-component encoding of the
+    /// node's *runtime* key values — the same representation
+    /// `node_satisfies` filters — so a seek and the filter agree on
+    /// equality. Values are vectors: numeric cross-typing means distinct
+    /// stored keys (`Int(1)`, `Float(1.0)`) can collide under runtime
+    /// equality probes. Populated only when the schema names the label's
+    /// key.
+    by_key: HashMap<(String, Vec<u8>), Vec<usize>>,
+    /// Index name → indexed property, for validating hints bound against
+    /// a different version's catalogue (PR #206 review finding 4).
+    index_properties: HashMap<String, String>,
     /// Node id → indices into `rels` of edges leaving it (ExpandOut).
     out_edges: HashMap<EntityId, Vec<usize>>,
     /// Node id → indices into `rels` of edges entering it (ExpandIn).
@@ -124,7 +138,8 @@ impl GraphSnapshot {
         // (This matters for stored `Bytes`/temporal values, which the runtime
         // renders to a string; keying the raw typed value here would let a
         // string-pinned seek miss them.) null/NaN-blind.
-        let mut by_index: HashMap<String, HashMap<Vec<u8>, Vec<usize>>> = HashMap::new();
+        let mut by_index: HashMap<String, std::collections::BTreeMap<Vec<u8>, Vec<usize>>> =
+            HashMap::new();
         for (name, label, property) in index_defs {
             let map = by_index.entry(name.clone()).or_default();
             for (index, node) in node_values.iter().enumerate() {
@@ -134,12 +149,44 @@ impl GraphSnapshot {
             }
         }
 
+        // Primary-key seeks (KeySeek): only labels whose key the schema
+        // names. Keys encode from the node's RUNTIME key values (the
+        // re-exposed properties), per-component and concatenated — the
+        // per-value encoding is self-delimiting, so concatenation equals
+        // the tuple encoding — matching what probes can compute from a
+        // pattern's pinned values.
+        let mut by_key: HashMap<(String, Vec<u8>), Vec<usize>> = HashMap::new();
+        for (index, (key, _)) in nodes.iter().enumerate() {
+            let Some(names) = key_names.get(key.label()) else {
+                continue;
+            };
+            let node = &node_values[index];
+            let encoded: Option<Vec<u8>> = names
+                .iter()
+                .map(|name| node.properties.get(name).and_then(encode_index_value))
+                .collect::<Option<Vec<Vec<u8>>>>()
+                .map(|parts| parts.concat());
+            if let Some(encoded) = encoded {
+                by_key
+                    .entry((key.label().to_owned(), encoded))
+                    .or_default()
+                    .push(index);
+            }
+        }
+
+        let index_properties: HashMap<String, String> = index_defs
+            .iter()
+            .map(|(name, _, property)| (name.clone(), property.clone()))
+            .collect();
+
         GraphSnapshot {
             nodes: node_values,
             rels: rel_values,
             by_id,
             by_label,
             by_index,
+            by_key,
+            index_properties,
             out_edges,
             in_edges,
         }
@@ -413,25 +460,128 @@ impl GraphSource for GraphSnapshot {
         self.by_id.get(id).map(|&i| self.nodes[i].clone())
     }
 
-    fn nodes_by_index(&self, index_name: &str, value: &Value) -> Option<Vec<NodeValue>> {
-        // Unknown index → the caller falls back to a label scan.
+    fn nodes_by_key(&self, label: &str, key_values: &[Value]) -> Option<Vec<NodeValue>> {
+        // Candidate-superset semantics (PR #206 review finding 1): probe
+        // every per-component encoding the pin could equal at runtime
+        // (numeric cross-typing via the same alternatives the equality
+        // index uses), and treat a complete miss as "cannot serve" so
+        // the caller scans — never a definitive absence.
+        // Any component whose probe set may be incomplete (integral float
+        // >= 2^53: non-unique i64 preimage) forces a scan — the same bail
+        // the equality index takes (PR #206 review NEW-1).
+        if key_values.iter().any(probe_set_incomplete) {
+            return None;
+        }
+        let per_component: Vec<Vec<Vec<u8>>> = key_values.iter().map(index_lookup_keys).collect();
+        if per_component
+            .iter()
+            .any(|alternatives| alternatives.is_empty())
+        {
+            // A null/NaN/unstorable component has no encodings; let the
+            // scan decide (openCypher: it will match nothing anyway).
+            return None;
+        }
+        // Bounded cartesian product over the alternatives (<= 2 per
+        // numeric component); a pathological blow-up falls back to a scan.
+        let combinations: usize = per_component.iter().map(Vec::len).product();
+        if combinations > 16 {
+            return None;
+        }
+        let mut probes: Vec<Vec<u8>> = vec![Vec::new()];
+        for alternatives in &per_component {
+            let mut next = Vec::with_capacity(probes.len() * alternatives.len());
+            for prefix in &probes {
+                for alt in alternatives {
+                    let mut bytes = prefix.clone();
+                    bytes.extend_from_slice(alt);
+                    next.push(bytes);
+                }
+            }
+            probes = next;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        let mut hit = false;
+        for probe in probes {
+            if let Some(indices) = self.by_key.get(&(label.to_owned(), probe)) {
+                hit = true;
+                for &i in indices {
+                    if seen.insert(i) {
+                        out.push(self.nodes[i].clone());
+                    }
+                }
+            }
+        }
+        if hit { Some(out) } else { None }
+    }
+
+    fn nodes_by_index_range(
+        &self,
+        index_name: &str,
+        property: &str,
+        lower: Option<(&Value, bool)>,
+        upper: Option<(&Value, bool)>,
+    ) -> Option<Vec<NodeValue>> {
+        if self.index_properties.get(index_name).map(String::as_str) != Some(property) {
+            return None;
+        }
+        let map = self.by_index.get(index_name)?;
+        let ranges = range_families(lower, upper)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for (start, end) in ranges {
+            // An inverted range (`> 5 AND < 3`) selects nothing —
+            // BTreeMap::range would panic on it.
+            let start_bytes = match &start {
+                std::ops::Bound::Included(b) | std::ops::Bound::Excluded(b) => b.as_slice(),
+                std::ops::Bound::Unbounded => &[],
+            };
+            let end_bytes = match &end {
+                std::ops::Bound::Included(b) | std::ops::Bound::Excluded(b) => b.as_slice(),
+                std::ops::Bound::Unbounded => &[0xff],
+            };
+            if start_bytes > end_bytes {
+                continue;
+            }
+            if start_bytes == end_bytes
+                && matches!(
+                    (&start, &end),
+                    (std::ops::Bound::Excluded(_), _) | (_, std::ops::Bound::Excluded(_))
+                )
+            {
+                continue;
+            }
+            for (_, indices) in map.range((start, end)) {
+                for &i in indices {
+                    if seen.insert(i) {
+                        out.push(self.nodes[i].clone());
+                    }
+                }
+            }
+        }
+        Some(out)
+    }
+
+    fn nodes_by_index(
+        &self,
+        index_name: &str,
+        property: &str,
+        value: &Value,
+    ) -> Option<Vec<NodeValue>> {
+        // Unknown index → the caller falls back to a label scan. A hint
+        // bound against another version's catalogue must not be served by
+        // a same-named index over a different property (finding 4).
+        if self.index_properties.get(index_name).map(String::as_str) != Some(property) {
+            return None;
+        }
         let map = self.by_index.get(index_name)?;
         // A list value's equality recurses element-wise with the same Int/Float
         // cross-type rule (`[1] = [1.0]`), which an exact-byte bucket cannot
         // serve without enumerating 2^k element-type combinations. Fall back to
         // a scan for a list pin (`None`) — correct, just not accelerated.
-        if matches!(value, Value::List(_)) {
-            return None;
-        }
-        // A float pin that is an integer at or beyond 2^53 has a non-unique
-        // integer preimage — many i64s round to the same f64 — so probing the
-        // single `f as i64` would miss the others and under-select. Below 2^53
-        // every integer is exactly representable, so the preimage is unique and
-        // the Int/Float probe below is exact; at/above it, fall back to a scan.
-        if let Value::Float(f) = value
-            && f.fract() == 0.0
-            && f.abs() >= 9_007_199_254_740_992.0
-        {
+        // Likewise an integral float pin at/beyond 2^53: its i64 preimage
+        // is non-unique, so the probe set would under-select.
+        if probe_set_incomplete(value) {
             return None;
         }
         // The candidate byte keys whose stored values could equal `value` under
@@ -451,6 +601,22 @@ impl GraphSource for GraphSnapshot {
             }
         }
         Some(out)
+    }
+}
+
+/// Whether `index_lookup_keys`' probe set for `value` may be INCOMPLETE
+/// under openCypher equality — a float pin that is an integer at or
+/// beyond 2^53 has a non-unique i64 preimage (many integers round to the
+/// same f64 under `eq3`'s lossy comparison), so probing the single
+/// `f as i64` would under-select. Every seek caller must bail to a scan
+/// on this condition; sharing it here keeps the callers from diverging
+/// (PR #206 review NEW-1). Also true for list pins, whose element-wise
+/// cross-typing an exact-byte bucket cannot serve.
+fn probe_set_incomplete(value: &Value) -> bool {
+    match value {
+        Value::List(_) => true,
+        Value::Float(f) => f.fract() == 0.0 && f.abs() >= F64_EXACT_INT_LIMIT,
+        _ => false,
     }
 }
 
@@ -485,6 +651,196 @@ fn index_lookup_keys(value: &Value) -> Vec<Vec<u8>> {
         }
         other => encode_index_value(other).into_iter().collect(),
     }
+}
+
+/// The per-type-family byte ranges an index range scan must cover
+/// (memcomparable encoding: byte order == logical order *within* a type
+/// family; Int (0x04) and Float (0x05) are distinct families that both
+/// hold numbers, so a numeric bound spans two ranges — mirroring the
+/// equality seek's dual probe). `None` means the range cannot be served
+/// (precision hazard) — fall back to a scan. Over-selection is safe (the
+/// WHERE still filters); under-selection is a bug.
+#[allow(clippy::type_complexity)]
+fn range_families(
+    lower: Option<(&Value, bool)>,
+    upper: Option<(&Value, bool)>,
+) -> Option<Vec<(std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>)>> {
+    use std::ops::Bound;
+    let numeric = |v: &Value| matches!(v, Value::Int(_) | Value::Float(_));
+    let is_num_bound = |b: &Option<(&Value, bool)>| b.map(|(v, _)| numeric(v)).unwrap_or(true);
+    // A null/NaN endpoint compares as null/false against everything: the
+    // predicate can never hold, so select nothing.
+    let degenerate = |b: &Option<(&Value, bool)>| {
+        b.map(|(v, _)| matches!(v, Value::Null) || matches!(v, Value::Float(f) if f.is_nan()))
+            .unwrap_or(false)
+    };
+    if degenerate(&lower) || degenerate(&upper) {
+        return Some(Vec::new());
+    }
+    let fully_open = lower.is_none() && upper.is_none();
+    if fully_open {
+        // No bound at all — nothing to prune; let the caller scan.
+        return None;
+    }
+    if is_num_bound(&lower) && is_num_bound(&upper) && (lower.is_some() || upper.is_some()) {
+        // Either family hitting a precision hazard bails to a scan.
+        let int_range = int_family_range(lower, upper)?;
+        let float_range = float_family_range(lower, upper)?;
+        return Some([int_range, float_range].into_iter().flatten().collect());
+    }
+    // Non-numeric: both present bounds must share the encoded type family,
+    // else the comparison is null everywhere — select nothing.
+    let encode = |v: &Value| encode_index_value(v);
+    let family_of = |bytes: &[u8]| bytes.first().copied();
+    let lower_enc = match lower {
+        None => None,
+        Some((v, inc)) => match encode(v) {
+            Some(b) => Some((b, inc)),
+            None => return Some(Vec::new()),
+        },
+    };
+    let upper_enc = match upper {
+        None => None,
+        Some((v, inc)) => match encode(v) {
+            Some(b) => Some((b, inc)),
+            None => return Some(Vec::new()),
+        },
+    };
+    let family = match (&lower_enc, &upper_enc) {
+        (Some((l, _)), Some((u, _))) => {
+            if family_of(l) != family_of(u) {
+                return Some(Vec::new());
+            }
+            family_of(l)?
+        }
+        (Some((l, _)), None) => family_of(l)?,
+        (None, Some((u, _))) => family_of(u)?,
+        (None, None) => return None,
+    };
+    let start = match lower_enc {
+        Some((b, true)) => Bound::Included(b),
+        Some((b, false)) => Bound::Excluded(b),
+        None => Bound::Included(vec![family]),
+    };
+    let end = match upper_enc {
+        Some((b, true)) => Bound::Included(b),
+        Some((b, false)) => Bound::Excluded(b),
+        None => Bound::Excluded(vec![family + 1]),
+    };
+    Some(vec![(start, end)])
+}
+
+/// Integers exactly representable as f64 end here; beyond it the
+/// Int↔Float bound conversions lose precision, so range pruning bails.
+const F64_EXACT_INT_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// The Int-family (tag 0x04) byte range for numeric bounds, or `None` on
+/// a precision hazard. The outer Option wraps a possibly-empty range.
+#[allow(clippy::type_complexity)]
+fn int_family_range(
+    lower: Option<(&Value, bool)>,
+    upper: Option<(&Value, bool)>,
+) -> Option<Option<(std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>)>> {
+    use std::ops::Bound;
+    let enc = |n: i64| encode_model_value(&ModelValue::Int(n));
+    let start = match lower {
+        None => Bound::Included(vec![0x04]),
+        Some((Value::Int(n), true)) => Bound::Included(enc(*n)?),
+        Some((Value::Int(n), false)) => Bound::Excluded(enc(*n)?),
+        Some((Value::Float(f), _)) if f.abs() >= F64_EXACT_INT_LIMIT => return None,
+        Some((Value::Float(f), inclusive)) => {
+            // The smallest int i with i > f (or i >= f when inclusive).
+            let i = if f.fract() == 0.0 {
+                let n = *f as i64;
+                if inclusive { n } else { n.checked_add(1)? }
+            } else {
+                f.ceil() as i64
+            };
+            Bound::Included(enc(i)?)
+        }
+        Some(_) => return None,
+    };
+    let end = match upper {
+        None => Bound::Excluded(vec![0x05]),
+        Some((Value::Int(n), true)) => Bound::Included(enc(*n)?),
+        Some((Value::Int(n), false)) => Bound::Excluded(enc(*n)?),
+        Some((Value::Float(f), _)) if f.abs() >= F64_EXACT_INT_LIMIT => return None,
+        Some((Value::Float(f), inclusive)) => {
+            // The largest int i with i < f (or i <= f when inclusive).
+            let i = if f.fract() == 0.0 {
+                let n = *f as i64;
+                if inclusive { n } else { n.checked_sub(1)? }
+            } else {
+                f.floor() as i64
+            };
+            Bound::Included(enc(i)?)
+        }
+        Some(_) => return None,
+    };
+    Some(Some((start, end)))
+}
+
+/// The Float-family (tag 0x05) byte range for numeric bounds, or `None`
+/// on a precision hazard. Zero bounds widen across the -0.0/+0.0
+/// total-order split (they are numerically equal but encode apart), so a
+/// `>= 0.0` range still selects stored `-0.0` values.
+#[allow(clippy::type_complexity)]
+fn float_family_range(
+    lower: Option<(&Value, bool)>,
+    upper: Option<(&Value, bool)>,
+) -> Option<Option<(std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>)>> {
+    use std::ops::Bound;
+    let as_f64 = |v: &Value| -> Option<f64> {
+        match v {
+            Value::Float(f) => Some(*f),
+            Value::Int(n) => {
+                if (n.unsigned_abs() as f64) >= F64_EXACT_INT_LIMIT {
+                    None
+                } else {
+                    Some(*n as f64)
+                }
+            }
+            _ => None,
+        }
+    };
+    let enc = |f: f64| encode_model_value(&ModelValue::Float(f));
+    let start = match lower {
+        None => Bound::Included(vec![0x05]),
+        Some((v, inclusive)) => {
+            let mut f = as_f64(v)?;
+            if f == 0.0 {
+                f = -0.0; // widen across the total-order zero split
+            }
+            if inclusive {
+                Bound::Included(enc(f)?)
+            } else if f == 0.0 {
+                // `> 0.0` must still exclude +0.0 AND -0.0 (equal), but
+                // the byte range from -0.0-exclusive would include +0.0.
+                // Start above +0.0 instead.
+                Bound::Excluded(enc(0.0)?)
+            } else {
+                Bound::Excluded(enc(f)?)
+            }
+        }
+    };
+    let end = match upper {
+        None => Bound::Excluded(vec![0x06]),
+        Some((v, inclusive)) => {
+            let mut f = as_f64(v)?;
+            if f == 0.0 {
+                f = 0.0_f64.copysign(1.0); // +0.0: widen upward
+            }
+            if inclusive {
+                Bound::Included(enc(f)?)
+            } else if f == 0.0 {
+                // `< 0.0` must exclude both zeros: end below -0.0.
+                Bound::Excluded(enc(-0.0)?)
+            } else {
+                Bound::Excluded(enc(f)?)
+            }
+        }
+    };
+    Some(Some((start, end)))
 }
 
 /// The memcomparable encoding of a runtime node's indexed property value, or
@@ -993,6 +1349,348 @@ mod tests {
             if let ExecValue::List(items) = value {
                 stack.extend(items);
             }
+        }
+    }
+    /// A snapshot with a declared schema: keyed Host nodes carrying an
+    /// indexed numeric `cores` (mixed Int/Float) and string `os`.
+    fn indexed_snapshot() -> GraphSnapshot {
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let mut nodes = Vec::new();
+        let values: [(&str, ModelValue); 6] = [
+            ("h1", ModelValue::Int(2)),
+            ("h2", ModelValue::Int(4)),
+            ("h3", ModelValue::Float(4.5)),
+            ("h4", ModelValue::Int(8)),
+            ("h5", ModelValue::Float(-0.0)),
+            ("h6", ModelValue::Int(0)),
+        ];
+        for (name, cores) in values {
+            let mut props = BTreeMap::new();
+            props.insert("cores".to_string(), cores);
+            props.insert("os".to_string(), ModelValue::String(format!("os-{name}")));
+            nodes.push((node_key("Host", name), NodeRecord::new([], props)));
+        }
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_cores".into(),
+                def: IndexDef::new("Host", vec!["cores".into()]).unwrap(),
+            },
+        ];
+        GraphSnapshot::from_records_with_schema(&nodes, &[], &schema)
+    }
+
+    fn range_names(
+        snapshot: &GraphSnapshot,
+        lower: Option<(&Value, bool)>,
+        upper: Option<(&Value, bool)>,
+    ) -> Vec<String> {
+        use crate::exec::source::GraphSource;
+        let mut names: Vec<String> = snapshot
+            .nodes_by_index_range("by_cores", "cores", lower, upper)
+            .expect("index exists")
+            .into_iter()
+            .filter_map(|n| match n.properties.get("hostname") {
+                Some(Value::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn index_range_spans_both_numeric_families() {
+        let snapshot = indexed_snapshot();
+        // (2, 8): excludes both endpoints, spans Int 4 and Float 4.5.
+        let lower = Value::Int(2);
+        let upper = Value::Int(8);
+        assert_eq!(
+            range_names(&snapshot, Some((&lower, false)), Some((&upper, false))),
+            vec!["h2", "h3"]
+        );
+        // >= 4.5 with a float bound: Int 8 must appear (cross-family).
+        let lower = Value::Float(4.5);
+        assert_eq!(
+            range_names(&snapshot, Some((&lower, true)), None),
+            vec!["h3", "h4"]
+        );
+        // <= 4 inclusive: h1, h2, h5(-0.0), h6(0).
+        let upper = Value::Int(4);
+        assert_eq!(
+            range_names(&snapshot, None, Some((&upper, true))),
+            vec!["h1", "h2", "h5", "h6"]
+        );
+    }
+
+    #[test]
+    fn index_range_handles_zero_and_degenerates() {
+        let snapshot = indexed_snapshot();
+        // >= 0 must select the stored -0.0 (numerically equal) and 0.
+        let zero = Value::Int(0);
+        assert_eq!(
+            range_names(&snapshot, Some((&zero, true)), None),
+            vec!["h1", "h2", "h3", "h4", "h5", "h6"]
+        );
+        // > 0 must exclude BOTH zeros.
+        assert_eq!(
+            range_names(&snapshot, Some((&zero, false)), None),
+            vec!["h1", "h2", "h3", "h4"]
+        );
+        let zero_f = Value::Float(0.0);
+        // < 0.0 excludes both zeros (nothing negative stored).
+        assert!(range_names(&snapshot, None, Some((&zero_f, false))).is_empty());
+        // Inverted range selects nothing (and must not panic).
+        let five = Value::Int(5);
+        let three = Value::Int(3);
+        assert!(range_names(&snapshot, Some((&five, false)), Some((&three, false))).is_empty());
+        // Null/NaN endpoints select nothing.
+        let null = Value::Null;
+        assert!(range_names(&snapshot, Some((&null, true)), None).is_empty());
+        let nan = Value::Float(f64::NAN);
+        assert!(range_names(&snapshot, None, Some((&nan, true))).is_empty());
+        // Mixed-family bounds (number vs string) select nothing.
+        let s = Value::String("a".into());
+        let one = Value::Int(1);
+        assert!(range_names(&snapshot, Some((&one, true)), Some((&s, true))).is_empty());
+    }
+
+    #[test]
+    fn key_seek_candidates_and_fallbacks() {
+        use crate::exec::source::GraphSource;
+        let snapshot = indexed_snapshot();
+        // Present key: exactly the node.
+        let found = snapshot
+            .nodes_by_key("Host", &[Value::String("h3".into())])
+            .expect("seekable");
+        assert_eq!(found.len(), 1);
+        assert!(matches!(
+            found[0].properties.get("cores"),
+            Some(Value::Float(f)) if *f == 4.5
+        ));
+        // A miss is NEVER a definitive absence — the caller scans
+        // (PR #206 review finding 1).
+        assert!(
+            snapshot
+                .nodes_by_key("Host", &[Value::String("nope".into())])
+                .is_none()
+        );
+        // A label the schema gave no key: cannot seek, fall back.
+        assert!(
+            snapshot
+                .nodes_by_key("Software", &[Value::Int(1)])
+                .is_none()
+        );
+        // A null key value has no encoding: scan decides.
+        assert!(snapshot.nodes_by_key("Host", &[Value::Null]).is_none());
+    }
+
+    /// Cross-type key pins through full execution: hinted results must
+    /// equal scanned results for `{id: 1.0}` vs a stored `Int(1)` key and
+    /// vice versa — the exact row-drops of PR #206 review finding 1.
+    #[test]
+    fn cross_type_key_pins_match_scan_end_to_end() {
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+        let nodes = vec![
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(1)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(2.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(-0.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+        ];
+        let schema = vec![SchemaEntry::Label {
+            name: "Item".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        let with_schema = Catalogue::from_entries(schema);
+        for query in [
+            "MATCH (i:Item {id: 1.0}) RETURN i.id",
+            "MATCH (i:Item {id: 1}) RETURN i.id",
+            "MATCH (i:Item {id: 2}) RETURN i.id",
+            "MATCH (i:Item {id: 0}) RETURN i.id",
+            "MATCH (i:Item {id: 'absent'}) RETURN i.id",
+        ] {
+            let parsed = crate::parse(query).unwrap();
+            let hinted = {
+                let bound =
+                    crate::bind::bind(query, &parsed, &with_schema, crate::bind::BindMode::Strict)
+                        .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            let scanned = {
+                let bound = crate::bind::bind(
+                    query,
+                    &parsed,
+                    &Catalogue::empty(),
+                    crate::bind::BindMode::Lenient,
+                )
+                .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            assert_eq!(
+                format!("{:?}", hinted.rows),
+                format!("{:?}", scanned.rows),
+                "{query}"
+            );
+        }
+    }
+
+    /// The precision edge (PR #206 review NEW-1): an integral float pin
+    /// at/beyond 2^53 has a non-unique i64 preimage, so the key seek must
+    /// bail to a scan — and end-to-end results must match the scan.
+    #[test]
+    fn key_seek_bails_at_the_float_precision_edge() {
+        use crate::exec::source::GraphSource;
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+        const EDGE: i64 = 9_007_199_254_740_992; // 2^53
+        let nodes = vec![
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(EDGE)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(EDGE + 1)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+        ];
+        let schema = vec![SchemaEntry::Label {
+            name: "Item".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        // The float pin cannot be served: both stored Int keys are
+        // lossy-equal to it. Bail (scan), never a partial candidate set.
+        assert!(
+            snapshot
+                .nodes_by_key("Item", &[Value::Float(EDGE as f64)])
+                .is_none()
+        );
+        // End to end, hinted equals scanned.
+        let with_schema = Catalogue::from_entries(schema);
+        let query = "MATCH (i:Item {id: 9007199254740992.0}) RETURN i.id ORDER BY i.id";
+        let parsed = crate::parse(query).unwrap();
+        let hinted = {
+            let bound =
+                crate::bind::bind(query, &parsed, &with_schema, crate::bind::BindMode::Strict)
+                    .unwrap();
+            execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+        };
+        let scanned = {
+            let bound = crate::bind::bind(
+                query,
+                &parsed,
+                &Catalogue::empty(),
+                crate::bind::BindMode::Lenient,
+            )
+            .unwrap();
+            execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+        };
+        assert_eq!(hinted.rows.len(), 2, "both lossy-equal keys match");
+        assert_eq!(format!("{:?}", hinted.rows), format!("{:?}", scanned.rows));
+    }
+
+    /// Numeric cross-typing: a pin of either numeric type must reach keys
+    /// stored under both families — `{id: 1.0}` matches a key `Int(1)`,
+    /// and a pin `{id: 1}` returns BOTH a key `Int(1)` and a distinct
+    /// node keyed `Float(1.0)` (PR #206 review finding 1).
+    #[test]
+    fn key_seek_probes_numeric_cross_types() {
+        use crate::exec::source::GraphSource;
+        use acetone_model::schema::{LabelDef, SchemaEntry};
+        let nodes = vec![
+            (
+                NodeKey::new("Item", vec![ModelValue::Int(1)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(1.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+            (
+                NodeKey::new("Item", vec![ModelValue::Float(-0.0)]).unwrap(),
+                NodeRecord::new([], BTreeMap::new()),
+            ),
+        ];
+        let schema = vec![SchemaEntry::Label {
+            name: "Item".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).unwrap(),
+        }];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        // Either numeric pin reaches both same-value keys.
+        let candidates = snapshot
+            .nodes_by_key("Item", &[Value::Float(1.0)])
+            .expect("hit");
+        assert_eq!(candidates.len(), 2);
+        let candidates = snapshot
+            .nodes_by_key("Item", &[Value::Int(1)])
+            .expect("hit");
+        assert_eq!(candidates.len(), 2);
+        // A zero pin reaches the -0.0 key (numerically equal).
+        let candidates = snapshot
+            .nodes_by_key("Item", &[Value::Int(0)])
+            .expect("hit");
+        assert_eq!(candidates.len(), 1);
+    }
+
+    /// End-to-end parity: range- and key-hinted execution returns exactly
+    /// the rows a plain scan does — the hint only prunes anchors.
+    #[test]
+    fn hinted_execution_matches_scan_results() {
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let snapshot = indexed_snapshot();
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_cores".into(),
+                def: IndexDef::new("Host", vec!["cores".into()]).unwrap(),
+            },
+        ];
+        let with_index = Catalogue::from_entries(schema);
+        let queries = [
+            "MATCH (h:Host) WHERE h.cores > 2 AND h.cores <= 4.5 RETURN h.hostname ORDER BY h.hostname",
+            "MATCH (h:Host) WHERE h.cores >= 0 RETURN h.hostname ORDER BY h.hostname",
+            "MATCH (h:Host {hostname: 'h4'}) RETURN h.cores",
+            "MATCH (h:Host {hostname: 'absent'}) RETURN h.cores",
+        ];
+        // With MutableGraph forwarding the seeks (PR #206 review finding
+        // 2), this parity harness genuinely drives the hinted paths.
+        for query in queries {
+            let parsed = crate::parse(query).unwrap();
+            let hinted = {
+                let bound =
+                    crate::bind::bind(query, &parsed, &with_index, crate::bind::BindMode::Strict)
+                        .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            let scanned = {
+                let bound = crate::bind::bind(
+                    query,
+                    &parsed,
+                    &Catalogue::empty(),
+                    crate::bind::BindMode::Lenient,
+                )
+                .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            assert_eq!(
+                format!("{:?}", hinted.rows),
+                format!("{:?}", scanned.rows),
+                "{query}"
+            );
         }
     }
 }

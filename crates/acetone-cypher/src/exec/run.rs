@@ -1132,11 +1132,12 @@ pub(crate) fn match_path(
             Value::Node(node) => vec![node],
             _ => return Ok(Vec::new()),
         },
-        // Fresh or anonymous: an IndexSeek when the binder found a declared
-        // index covering a pinned equality (spec §5.3), else a LabelScan.
-        // Either way `node_satisfies` below still filters, so the seek only
-        // needs to return a candidate superset.
-        _ => match index_seek_anchor(&pattern.start, &state.row, ctx)? {
+        // Fresh or anonymous: a KeySeek/IndexSeek/IndexRange when the
+        // binder attached a hint the source can serve (spec §5.3,
+        // acetone-6g5.3.3), else a LabelScan. Either way `node_satisfies`
+        // below still filters, so a seek only needs to return a
+        // candidate superset.
+        _ => match seek_anchor(&pattern.start, &state.row, ctx)? {
             Some(nodes) => nodes,
             None => ctx.graph.nodes_by_labels(&pattern.start.labels),
         },
@@ -1171,29 +1172,105 @@ pub(crate) fn match_path(
     Ok(results)
 }
 
-/// The anchor set for a leading node pattern the binder marked with an
-/// `IndexSeek` hint: the nodes the declared index selects for the pattern's
-/// pinned equality value. `None` when there is no usable index seek (no hint,
-/// no property map, the pinned property is absent, or the source has no such
-/// index), so the caller falls back to a label scan.
-fn index_seek_anchor(
+/// The anchor set for a leading node pattern carrying a planner hint:
+/// a primary-key point lookup (`KeySeek`, when every declared key
+/// property is pinned), an equality index seek (`IndexSeek`), or an
+/// ordered index range scan (`IndexRange`). `None` means no usable seek
+/// (no hint, unresolvable values, or the source cannot serve it) — the
+/// caller falls back to a label scan. Results are candidate supersets;
+/// `node_satisfies` and the WHERE still filter.
+fn seek_anchor(
     pattern: &BoundNodePattern,
     row: &Row,
     ctx: &EvalCtx,
 ) -> Result<Option<Vec<NodeValue>>, ExecError> {
-    let Some(IndexHint::IndexSeek { name, property, .. }) = &pattern.index_hint else {
-        return Ok(None);
-    };
-    let Some(props) = &pattern.properties else {
-        return Ok(None);
-    };
-    let Value::Map(map) = eval(props, row, ctx)? else {
-        return Ok(None);
-    };
-    let Some(value) = map.get(property) else {
-        return Ok(None);
-    };
-    Ok(ctx.graph.nodes_by_index(name, value))
+    match &pattern.index_hint {
+        Some(IndexHint::KeySeek { label, key }) if !key.is_empty() => {
+            let Some(props) = &pattern.properties else {
+                return Ok(None);
+            };
+            let Value::Map(map) = eval(props, row, ctx)? else {
+                return Ok(None);
+            };
+            let mut key_values = Vec::with_capacity(key.len());
+            for name in key {
+                match map.get(name) {
+                    Some(value) => key_values.push(value.clone()),
+                    // Partial key pin: no point lookup, scan instead.
+                    None => return Ok(None),
+                }
+            }
+            Ok(ctx.graph.nodes_by_key(label, &key_values))
+        }
+        Some(IndexHint::KeySeek { .. }) => Ok(None),
+        Some(IndexHint::IndexSeek { name, property, .. }) => {
+            let Some(props) = &pattern.properties else {
+                return Ok(None);
+            };
+            let Value::Map(map) = eval(props, row, ctx)? else {
+                return Ok(None);
+            };
+            let Some(value) = map.get(property) else {
+                return Ok(None);
+            };
+            Ok(ctx.graph.nodes_by_index(name, property, value))
+        }
+        Some(IndexHint::IndexRange {
+            name,
+            property,
+            lower,
+            upper,
+            ..
+        }) => {
+            let resolve = |bound: &Option<(RangeBound, bool)>| -> Option<(Value, bool)> {
+                match bound {
+                    None => None,
+                    Some((RangeBound::Literal(l), inclusive)) => {
+                        Some((literal_value(l), *inclusive))
+                    }
+                    Some((RangeBound::Parameter(p), inclusive)) => ctx
+                        .parameters
+                        .get(p)
+                        .map(|value| (value.clone(), *inclusive)),
+                }
+            };
+            // A missing parameter falls back to a scan here; the WHERE
+            // evaluation raises the MissingParameter error properly.
+            let lower = resolve(lower);
+            let upper = resolve(upper);
+            if (lower.is_none()
+                && matches!(
+                    &pattern.index_hint,
+                    Some(IndexHint::IndexRange { lower: Some(_), .. })
+                ))
+                || (upper.is_none()
+                    && matches!(
+                        &pattern.index_hint,
+                        Some(IndexHint::IndexRange { upper: Some(_), .. })
+                    ))
+            {
+                return Ok(None);
+            }
+            Ok(ctx.graph.nodes_by_index_range(
+                name,
+                property,
+                lower.as_ref().map(|(v, i)| (v, *i)),
+                upper.as_ref().map(|(v, i)| (v, *i)),
+            ))
+        }
+        None => Ok(None),
+    }
+}
+
+/// A literal's runtime value (the `BoundExpr::Literal` evaluation).
+fn literal_value(literal: &crate::ast::Literal) -> Value {
+    match literal {
+        crate::ast::Literal::Null => Value::Null,
+        crate::ast::Literal::Boolean(b) => Value::Bool(*b),
+        crate::ast::Literal::Integer(n) => Value::Int(*n),
+        crate::ast::Literal::Float(x) => Value::Float(*x),
+        crate::ast::Literal::String(s) => Value::String(s.clone()),
+    }
 }
 
 #[derive(Clone)]

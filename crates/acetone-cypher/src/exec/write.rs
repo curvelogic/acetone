@@ -540,6 +540,14 @@ impl<'a> MutableGraph<'a> {
 impl MutableGraph<'_> {
     /// Apply any recorded property/label override to a node value read from
     /// the base or created set.
+    /// Whether any write has landed in the overlay — base indexes and key
+    /// maps are then no longer authoritative and seeks must scan.
+    fn overlay_dirty(&self) -> bool {
+        !self.created_nodes.is_empty()
+            || !self.node_overrides.is_empty()
+            || !self.deleted_nodes.is_empty()
+    }
+
     fn overlay_node(&self, node: NodeValue) -> NodeValue {
         self.node_overrides.get(&node.id).cloned().unwrap_or(node)
     }
@@ -618,18 +626,38 @@ impl GraphSource for MutableGraph<'_> {
         self.current_node(id)
     }
 
-    fn nodes_by_index(&self, name: &str, value: &Value) -> Option<Vec<NodeValue>> {
+    fn nodes_by_index(&self, name: &str, property: &str, value: &Value) -> Option<Vec<NodeValue>> {
         // The base's index is authoritative only while the overlay is empty:
         // a created, modified, or deleted node could change which nodes match,
         // and the base index knows nothing of the overlay. Once any write has
         // landed, fall back to a scan (`None`) so correctness is preserved.
-        if !self.created_nodes.is_empty()
-            || !self.node_overrides.is_empty()
-            || !self.deleted_nodes.is_empty()
-        {
+        if self.overlay_dirty() {
             return None;
         }
-        self.base.nodes_by_index(name, value)
+        self.base.nodes_by_index(name, property, value)
+    }
+
+    fn nodes_by_index_range(
+        &self,
+        name: &str,
+        property: &str,
+        lower: Option<(&Value, bool)>,
+        upper: Option<(&Value, bool)>,
+    ) -> Option<Vec<NodeValue>> {
+        // Same overlay-empty guard as `nodes_by_index` (PR #206 review
+        // finding 2: without this forward the hint is dead on the main
+        // execution path, which always wraps sources in MutableGraph).
+        if self.overlay_dirty() {
+            return None;
+        }
+        self.base.nodes_by_index_range(name, property, lower, upper)
+    }
+
+    fn nodes_by_key(&self, label: &str, key_values: &[Value]) -> Option<Vec<NodeValue>> {
+        if self.overlay_dirty() {
+            return None;
+        }
+        self.base.nodes_by_key(label, key_values)
     }
 }
 

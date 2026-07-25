@@ -44,8 +44,8 @@ impl GraphSource for Counting<'_> {
         self.scans.set(self.scans.get() + 1);
         self.inner.nodes_by_labels(labels)
     }
-    fn nodes_by_index(&self, name: &str, value: &Value) -> Option<Vec<NodeValue>> {
-        let result = self.inner.nodes_by_index(name, value);
+    fn nodes_by_index(&self, name: &str, property: &str, value: &Value) -> Option<Vec<NodeValue>> {
+        let result = self.inner.nodes_by_index(name, property, value);
         if result.is_some() {
             self.seeks.set(self.seeks.get() + 1);
         }
@@ -310,18 +310,18 @@ fn numeric_index_seek_matches_across_int_and_float_like_a_scan() {
 
     // Seek with an Int: finds both the Int-stored and Float-stored node.
     let by_int = adapter
-        .nodes_by_index("m_v", &Value::Int(3))
+        .nodes_by_index("m_v", "v", &Value::Int(3))
         .expect("present");
     assert_eq!(by_int.len(), 2, "Int seek missed the Float-stored node");
     // Seek with a Float: same two nodes.
     let by_float = adapter
-        .nodes_by_index("m_v", &Value::Float(3.0))
+        .nodes_by_index("m_v", "v", &Value::Float(3.0))
         .expect("present");
     assert_eq!(by_float.len(), 2, "Float seek missed the Int-stored node");
     // A non-integer float matches neither.
     assert_eq!(
         adapter
-            .nodes_by_index("m_v", &Value::Float(3.5))
+            .nodes_by_index("m_v", "v", &Value::Float(3.5))
             .expect("present")
             .len(),
         0
@@ -406,7 +406,7 @@ fn list_valued_seek_falls_back_to_a_scan() {
     let adapter = GraphSnapshot::from_records_with_schema(&recs, &edges, &schema);
     assert!(
         adapter
-            .nodes_by_index("m_tags", &Value::List(vec![Value::Int(1)]))
+            .nodes_by_index("m_tags", "tags", &Value::List(vec![Value::Int(1)]))
             .is_none(),
         "a list pin must fall back to a scan, not risk a subset"
     );
@@ -421,7 +421,7 @@ fn nodes_by_index_selects_correctly_and_is_null_blind() {
 
     // Two linux hosts.
     let linux = adapter
-        .nodes_by_index("host_os", &Value::String("linux".into()))
+        .nodes_by_index("host_os", "os", &Value::String("linux".into()))
         .expect("index present");
     let mut names: Vec<String> = linux
         .iter()
@@ -436,7 +436,7 @@ fn nodes_by_index_selects_correctly_and_is_null_blind() {
     // One windows host.
     assert_eq!(
         adapter
-            .nodes_by_index("host_os", &Value::String("windows".into()))
+            .nodes_by_index("host_os", "os", &Value::String("windows".into()))
             .expect("present")
             .len(),
         1
@@ -444,7 +444,7 @@ fn nodes_by_index_selects_correctly_and_is_null_blind() {
     // A value with no matching node: empty, not None.
     assert_eq!(
         adapter
-            .nodes_by_index("host_os", &Value::String("bsd".into()))
+            .nodes_by_index("host_os", "os", &Value::String("bsd".into()))
             .expect("present")
             .len(),
         0
@@ -452,14 +452,14 @@ fn nodes_by_index_selects_correctly_and_is_null_blind() {
     // Null is null-blind: selects nothing.
     assert!(
         adapter
-            .nodes_by_index("host_os", &Value::Null)
+            .nodes_by_index("host_os", "os", &Value::Null)
             .expect("present")
             .is_empty()
     );
     // An undeclared index → None, so the executor falls back to a scan.
     assert!(
         adapter
-            .nodes_by_index("nonexistent", &Value::String("x".into()))
+            .nodes_by_index("nonexistent", "x", &Value::String("x".into()))
             .is_none()
     );
 }

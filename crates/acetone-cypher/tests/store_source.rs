@@ -112,7 +112,7 @@ fn string_index_seek_matches_the_scan() {
 
     // A String pin on a String-typed property is served by the seek.
     let got = src
-        .nodes_by_index("host_region", &RtValue::String("eu".into()))
+        .nodes_by_index("host_region", "region", &RtValue::String("eu".into()))
         .expect("seek served");
     assert_eq!(
         names(got.iter().map(id_of).collect()),
@@ -139,7 +139,7 @@ fn numeric_index_seek_probes_int_and_float() {
 
     // Int pin: matches the Int-stored port 80 on a and c.
     let by_int = src
-        .nodes_by_index("host_port", &RtValue::Int(80))
+        .nodes_by_index("host_port", "port", &RtValue::Int(80))
         .expect("served");
     assert_eq!(
         names(by_int.iter().map(id_of).collect()),
@@ -148,7 +148,7 @@ fn numeric_index_seek_probes_int_and_float() {
 
     // Float pin 80.0 must select the same nodes (3 = 3.0 cross-type).
     let by_float = src
-        .nodes_by_index("host_port", &RtValue::Float(80.0))
+        .nodes_by_index("host_port", "port", &RtValue::Float(80.0))
         .expect("served");
     assert_eq!(
         names(by_float.iter().map(id_of).collect()),
@@ -189,12 +189,15 @@ fn a_string_pin_on_an_untyped_property_falls_back_to_a_scan() {
     let snap = repo.workspace_snapshot().expect("snap");
     let src = source_over(&snap);
     assert!(
-        src.nodes_by_index("thing_tag", &RtValue::String("x".into()))
+        src.nodes_by_index("thing_tag", "tag", &RtValue::String("x".into()))
             .is_none(),
         "a string pin on an untyped index property must fall back to a scan"
     );
     // A numeric pin is still safe even when untyped (never matches a rendering).
-    assert!(src.nodes_by_index("thing_tag", &RtValue::Int(1)).is_some());
+    assert!(
+        src.nodes_by_index("thing_tag", "tag", &RtValue::Int(1))
+            .is_some()
+    );
 }
 
 #[test]
@@ -203,7 +206,10 @@ fn unknown_index_falls_back() {
     seed(&repo);
     let snap = repo.workspace_snapshot().expect("snap");
     let src = source_over(&snap);
-    assert!(src.nodes_by_index("no_such", &RtValue::Int(1)).is_none());
+    assert!(
+        src.nodes_by_index("no_such", "p", &RtValue::Int(1))
+            .is_none()
+    );
 }
 
 #[test]
@@ -213,7 +219,7 @@ fn expand_reads_incident_edges_lazily() {
     let snap = repo.workspace_snapshot().expect("snap");
     let src = source_over(&snap);
 
-    let a = src.node_by_id_via_index("host_region", "eu", "a");
+    let a = src.node_by_id_via_index("host_region", "region", "eu", "a");
 
     // Out: a -> b, a -> c.
     let mut out: Vec<String> = src
@@ -231,7 +237,7 @@ fn expand_reads_incident_edges_lazily() {
     );
 
     // In-edges of b: a -> b.
-    let b = src.node_by_id_via_index("host_region", "eu", "b");
+    let b = src.node_by_id_via_index("host_region", "region", "eu", "b");
     let into: Vec<String> = src
         .expand(&b, Direction::In, &[])
         .into_iter()
@@ -247,7 +253,7 @@ fn node_round_trips_by_id() {
     seed(&repo);
     let snap = repo.workspace_snapshot().expect("snap");
     let src = source_over(&snap);
-    let a = src.node_by_id_via_index("host_region", "eu", "a");
+    let a = src.node_by_id_via_index("host_region", "region", "eu", "a");
     let node = src.node(&a).expect("node present");
     assert_eq!(id_of(&node), "a");
     assert!(src.take_error().is_none());
@@ -258,6 +264,7 @@ trait FindNode {
     fn node_by_id_via_index(
         &self,
         index: &str,
+        property: &str,
         value: &str,
         id: &str,
     ) -> acetone_cypher::exec::value::EntityId;
@@ -266,10 +273,11 @@ impl FindNode for StoreBackedSource<'_> {
     fn node_by_id_via_index(
         &self,
         index: &str,
+        property: &str,
         value: &str,
         id: &str,
     ) -> acetone_cypher::exec::value::EntityId {
-        self.nodes_by_index(index, &RtValue::String(value.into()))
+        self.nodes_by_index(index, property, &RtValue::String(value.into()))
             .expect("served")
             .into_iter()
             .find(|n| id_of(n) == id)

@@ -25,10 +25,49 @@ pub trait GraphSource {
 
     /// Nodes an equality on the declared index `index_name` selects for
     /// `value` (`IndexSeek`, spec §5.3). `None` means this source has no such
-    /// index, so the caller falls back to a label scan; `Some` is a candidate
-    /// superset the caller still filters. Indexes are null/NaN-blind, so a
-    /// null or NaN `value` selects nothing. The default has no indexes.
-    fn nodes_by_index(&self, _index_name: &str, _value: &Value) -> Option<Vec<NodeValue>> {
+    /// index (or its index named so is over a *different property* — the
+    /// hint may come from another version's catalogue, PR #206 review
+    /// finding 4), so the caller falls back to a label scan; `Some` is a
+    /// candidate superset the caller still filters. Indexes are
+    /// null/NaN-blind, so a null or NaN `value` selects nothing. The
+    /// default has no indexes.
+    fn nodes_by_index(
+        &self,
+        _index_name: &str,
+        _property: &str,
+        _value: &Value,
+    ) -> Option<Vec<NodeValue>> {
+        None
+    }
+
+    /// Nodes a range predicate on the declared index `index_name` selects
+    /// (`IndexRange`, acetone-6g5.3.3): every indexed value inside the
+    /// bounds (each an optional `(value, inclusive)` pair; `None` = open
+    /// end). `None` means no such index — fall back to a label scan;
+    /// `Some` is a candidate superset the caller still filters, so
+    /// over-selection is safe and under-selection is a bug. Numeric
+    /// bounds select across the Int/Float families like the equality
+    /// seek. Indexes are null/NaN-blind. The default has no indexes.
+    fn nodes_by_index_range(
+        &self,
+        _index_name: &str,
+        _property: &str,
+        _lower: Option<(&Value, bool)>,
+        _upper: Option<(&Value, bool)>,
+    ) -> Option<Vec<NodeValue>> {
+        None
+    }
+
+    /// A primary-key seek: candidate nodes of `label` whose declared key
+    /// tuple could equal `key_values` under openCypher equality (`KeySeek`
+    /// execution, acetone-6g5.3.3). `Some` is a candidate *superset* the
+    /// caller still filters — numeric cross-typing means a pin can match
+    /// several stored keys (`{id: 1}` matches keys `Int(1)` and
+    /// `Float(1.0)`, distinct identities). `None` means this source
+    /// cannot serve the seek — fall back to a label scan. There is no
+    /// "definitively absent" answer: a miss is `None`, never an empty
+    /// promise (PR #206 review finding 1).
+    fn nodes_by_key(&self, _label: &str, _key_values: &[Value]) -> Option<Vec<NodeValue>> {
         None
     }
 
