@@ -1528,28 +1528,47 @@ impl Repository {
     /// in-progress merge (`acetone.conflicts`, acetone-s7d): the base's values
     /// are recomputed from `merge_base(ours, MERGE_HEAD)`, not persisted.
     pub fn merge_base(&self, a: &Hash, b: &Hash) -> Result<Option<Hash>, GraphError> {
+        // Two O(V + E) walks (acetone-vgt, fixing the Phase 4 L1
+        // finding: the old per-pair `is_ancestor` cross-check over the
+        // common-ancestor set was worst-case ~O(V^2 E) on a hostile
+        // shared history). The common set is ancestor-closed (a common
+        // commit's parents are common), so its *maximal* elements — the
+        // candidate bases — are exactly the common commits that are a
+        // strict ancestor of no other common commit. One multi-source
+        // parentward sweep from every common commit marks the dominated
+        // (strict-ancestor) subset; maximal = common − dominated.
         let anc_a = self.ancestors(a)?;
         let anc_b = self.ancestors(b)?;
-        let common: Vec<Hash> = anc_a.intersection(&anc_b).copied().collect();
+        let common: BTreeSet<Hash> = anc_a.intersection(&anc_b).copied().collect();
         if common.is_empty() {
             return Ok(None);
         }
-        let mut bases: Vec<Hash> = Vec::new();
+        let mut dominated: BTreeSet<Hash> = BTreeSet::new();
+        let mut stack: Vec<Hash> = Vec::new();
         for c in &common {
-            let mut dominated = false;
-            for d in &common {
-                if d != c && self.is_ancestor(c, d)? {
-                    dominated = true;
-                    break;
-                }
-            }
-            if !dominated {
-                bases.push(*c);
-            }
+            let commit = self
+                .store
+                .read_commit(c)?
+                .ok_or_else(|| GraphError::NotACommit { name: c.to_hex() })?;
+            // Parents of a common commit are strict ancestors of it —
+            // dominated. (Parents outside `common` are irrelevant, but a
+            // common commit's parents are common by closure.)
+            stack.extend(commit.parents);
         }
-        // A finite non-empty DAG always has a maximal element, so `bases` is
-        // non-empty here; `min` is a total, deterministic tie-break.
-        Ok(bases.into_iter().min())
+        while let Some(id) = stack.pop() {
+            if !dominated.insert(id) {
+                continue;
+            }
+            let commit = self
+                .store
+                .read_commit(&id)?
+                .ok_or_else(|| GraphError::NotACommit { name: id.to_hex() })?;
+            stack.extend(commit.parents);
+        }
+        // A finite non-empty DAG always has a maximal element, so the
+        // difference is non-empty here; `min` is a total, deterministic
+        // tie-break (unchanged from the old implementation).
+        Ok(common.difference(&dominated).min().copied())
     }
 
     /// Compare-and-swap the per-worktree workspace ref. `expected` is its
