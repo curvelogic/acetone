@@ -9,6 +9,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::NodeKey;
 use acetone_model::records::NodeRecord;
 use acetone_model::schema::{LabelDef, SchemaEntry};
+use acetone_store::RefStore;
 use std::collections::BTreeMap;
 
 fn init_repo(dir: &Path) -> Repository {
@@ -146,59 +147,124 @@ fn gc_preserves_uncommitted_workspace_state() {
 }
 
 #[test]
-fn gc_refuses_when_linked_worktrees_exist() {
-    // gc cannot see another worktree's private refs, so it must refuse rather
-    // than risk pruning their uncommitted state (ADR-0014).
+fn gc_with_linked_worktrees_packs_their_private_state() {
+    // acetone-6g5.10: gc enumerates every linked worktree's private refs
+    // as pack roots, so another worktree's uncommitted state survives
+    // consolidation — the old blanket refusal is gone.
     let dir = tempfile::tempdir().expect("tmp");
-    let repo = init_repo(dir.path());
-    {
+    let main_git = dir.path().join("graph.git");
+    let repo = Repository::init(&main_git, InitOptions::default()).expect("init");
+    let base = {
         let mut tx = repo.begin_write().expect("begin");
         tx.put_schema(&SchemaEntry::Label {
             name: "N".into(),
             def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
         })
         .expect("schema");
-        tx.commit("schema", &[], None).expect("commit");
-    }
-    // Simulate a linked worktree the way git records one.
-    let worktrees = repo.store().common_dir().join("worktrees").join("wt-1");
-    std::fs::create_dir_all(&worktrees).expect("mkdir worktrees");
+        tx.commit("schema", &[], None).expect("commit")
+    };
 
-    match repo.gc() {
-        Err(acetone_graph::GraphError::GcWithLinkedWorktrees) => {}
-        other => panic!("expected refusal with linked worktrees, got {other:?}"),
+    let wt = dir.path().join("wt-live");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(base.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success(), "git worktree add failed");
+
+    // Uncommitted state in the LINKED worktree.
+    let wt_repo = Repository::open(&wt).expect("open worktree");
+    {
+        let mut tx = wt_repo.begin_write().expect("begin");
+        for i in 0..100 {
+            let key = NodeKey::new("N", vec![Value::Int(i)]).expect("k");
+            tx.put_node(
+                &key,
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+            )
+            .expect("n");
+        }
+        tx.save().expect("save");
     }
+    assert!(wt_repo.is_dirty().expect("dirty"));
+
+    // gc from the MAIN worktree succeeds and preserves the linked
+    // worktree's saved-but-uncommitted work.
+    repo.gc().expect("gc must succeed with linked worktrees");
+    let snapshot = wt_repo.workspace_snapshot().expect("snap");
+    assert_eq!(
+        snapshot.nodes().expect("nodes").len(),
+        100,
+        "linked-worktree uncommitted nodes were lost by gc"
+    );
+    let report = acetone_graph::fsck(&repo).expect("fsck");
+    assert!(
+        !report.has_errors(),
+        "gc broke the store: {:?}",
+        report.findings
+    );
 }
 
 #[test]
-fn gc_rechecks_for_linked_worktrees_under_the_write_lock() {
-    // acetone-dfh: the linked-worktree check was lock-free, so a `git worktree
-    // add` racing between the check and the write-lock acquisition could slip
-    // past gc's refusal. The check must be repeated UNDER the lock: this test
-    // interleaves a worktree appearing exactly in that window (via the test
-    // seam) and requires gc to abort rather than sweep.
+fn gc_packs_worktree_state_even_without_its_durability_anchor() {
+    // The load-bearing proof that gc's linked-worktree ref enumeration
+    // (acetone-6g5.10) protects private state on its own: delete the
+    // worktree's ADR-0044 durability anchor — the belt — and gc must
+    // still preserve the uncommitted workspace via the enumerated
+    // `refs/worktree/*` roots — the braces.
     let dir = tempfile::tempdir().expect("tmp");
-    let repo = init_repo(dir.path());
-    {
+    let main_git = dir.path().join("graph.git");
+    let repo = Repository::init(&main_git, InitOptions::default()).expect("init");
+    let base = {
         let mut tx = repo.begin_write().expect("begin");
         tx.put_schema(&SchemaEntry::Label {
             name: "N".into(),
             def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
         })
         .expect("schema");
-        tx.commit("schema", &[], None).expect("commit");
+        tx.commit("schema", &[], None).expect("commit")
+    };
+    let wt = dir.path().join("wt-anchorless");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(base.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success(), "git worktree add failed");
+    let wt_repo = Repository::open(&wt).expect("open worktree");
+    {
+        let mut tx = wt_repo.begin_write().expect("begin");
+        for i in 0..60 {
+            let key = NodeKey::new("N", vec![Value::Int(i)]).expect("k");
+            tx.put_node(
+                &key,
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+            )
+            .expect("n");
+        }
+        tx.save().expect("save");
     }
-
-    let worktrees = repo.store().common_dir().join("worktrees").join("wt-racer");
-    match repo.gc_with_hooks(
-        // The race: git records a linked worktree after gc's pre-lock check
-        // passed, while gc is acquiring the lock.
-        || std::fs::create_dir_all(&worktrees).expect("mkdir worktrees"),
-        || {},
-    ) {
-        Err(acetone_graph::GraphError::GcWithLinkedWorktrees) => {}
-        other => panic!("expected the under-lock re-check to refuse, got {other:?}"),
+    // Remove the belt: every durability anchor this save mirrored.
+    for (anchor, _) in repo
+        .store()
+        .list_refs("refs/acetone/worktree-anchors/")
+        .expect("list anchors")
+    {
+        repo.store().delete_ref(&anchor).expect("delete anchor");
     }
+    repo.gc().expect("gc succeeds");
+    let snapshot = wt_repo.workspace_snapshot().expect("snap");
+    assert_eq!(
+        snapshot.nodes().expect("nodes").len(),
+        60,
+        "the enumerated private refs alone must keep the state alive"
+    );
 }
 
 #[test]

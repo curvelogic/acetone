@@ -291,7 +291,50 @@ impl GitStore {
                 }
             }
         }
+        // `references().all()` sees only THIS worktree's private refs
+        // (`refs/worktree/*`); every OTHER linked worktree's private
+        // refs — its uncommitted workspace tree and any merge state —
+        // live under `<common>/worktrees/<id>/refs/worktree/` and would
+        // be invisible here, letting gc prune live state (acetone-6g5.10;
+        // ADR-0044's common-dir anchors cover the workspace tree, this
+        // covers the rest and is the belt to that braces). Every linked
+        // worktree's private refs join the PACK roots: they are graph
+        // state by definition.
+        for oid in self.linked_worktree_private_roots()? {
+            pack_roots.push(oid);
+        }
         Ok((pack_roots, guard_roots))
+    }
+
+    /// Resolve every linked worktree's `refs/worktree/*` targets by
+    /// opening each worktree's repository view. A worktree that cannot
+    /// be opened is an error — skipping it would silently expose its
+    /// uncommitted state to pruning.
+    fn linked_worktree_private_roots(&self) -> Result<Vec<ObjectId>, StoreError> {
+        let mut roots = Vec::new();
+        let worktrees = self
+            .repo()
+            .worktrees()
+            .map_err(|e| StoreError::backend("listing worktrees for consolidation", e))?;
+        for proxy in worktrees {
+            let wt_repo = proxy
+                .into_repo_with_possibly_inaccessible_worktree()
+                .map_err(|e| StoreError::backend("opening worktree for consolidation", e))?;
+            let references = wt_repo
+                .references()
+                .map_err(|e| StoreError::backend("listing worktree refs", e))?;
+            let private = references
+                .prefixed("refs/worktree/")
+                .map_err(|e| StoreError::backend("iterating worktree refs", e))?;
+            for reference in private {
+                let mut reference =
+                    reference.map_err(|e| StoreError::corrupt("worktree ref", e.to_string()))?;
+                if let Ok(id) = reference.follow_to_object() {
+                    roots.push(id.detach());
+                }
+            }
+        }
+        Ok(roots)
     }
 
     /// Enumerate every object reachable from `roots`, with its git kind. Walks

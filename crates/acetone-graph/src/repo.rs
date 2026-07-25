@@ -1283,39 +1283,29 @@ impl Repository {
         after_lock: impl FnOnce(),
         after_recheck: impl FnOnce(),
     ) -> Result<ConsolidateStats, GraphError> {
-        // Consolidation's reachability walk (`references().all()`) does not see
-        // *other* linked worktrees' private refs (`refs/worktree/*`, ADR-0014),
-        // so pruning could destroy their uncommitted workspace or in-progress
-        // merge. Refuse when any linked worktree exists until gc is made
-        // worktree-aware (walk every worktree's private refs); the single-
-        // worktree case — the common one — is safe. This pre-lock check is the
-        // cheap fast-fail for the common error path only; the authoritative
-        // check is the one below, under the lock.
-        if self.has_linked_worktrees()? {
-            return Err(GraphError::GcWithLinkedWorktrees);
-        }
+        // gc is worktree-aware (acetone-6g5.10): consolidation's
+        // reachability walk enumerates every linked worktree's private
+        // refs (`refs/worktree/*` under `<common>/worktrees/<id>/`) as
+        // pack roots, in addition to ADR-0044's common-dir workspace
+        // anchors — so linked-worktree uncommitted state and in-progress
+        // merges are packed, not pruned, and the old blanket refusal
+        // (GcWithLinkedWorktrees) is gone. A worktree added *during* gc
+        // still loses nothing: pruning only ever removes a loose copy of
+        // an object already durably packed, and chunks a late worktree
+        // writes are new loose objects outside the packed set
+        // (acetone-dfh's residual analysis, unchanged).
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         after_lock();
-        // Re-check under the write lock (acetone-dfh): a `git worktree add`
-        // racing the pre-lock check would otherwise slip past the refusal and
-        // have its private state swept. The lock does not stop `git worktree
-        // add` itself (plain git respects no acetone lock) — it merely
-        // re-anchors the check as late as possible; the sweep below is
-        // additionally safe for a worktree that appears later still.
-        if self.has_linked_worktrees()? {
-            return Err(GraphError::GcWithLinkedWorktrees);
-        }
         after_recheck();
-        // gc runs only when no linked worktree was seen (checked above), so
-        // `refs/acetone/worktree-anchors/*` are leftovers from since-removed
-        // worktrees — pinning chunks nothing live needs (ADR-0044). Delete
-        // them before consolidating so their now-unreferenced chunks are
-        // reclaimed. Each deletion is gated on the anchor's worktree directory
-        // being absent AT DELETION TIME: a worktree that appears in the window
-        // after the re-check keeps its durability anchor — when in doubt, gc
-        // keeps data. (A crafted anchor id could only make the existence check
-        // succeed, i.e. keep the anchor; deletion goes through the ref store,
-        // never a raw path.)
+        // `refs/acetone/worktree-anchors/*` whose worktree directory no
+        // longer exists are leftovers from removed worktrees — pinning
+        // chunks nothing live needs (ADR-0044). Delete them before
+        // consolidating so their chunks are reclaimed. Each deletion is
+        // gated on the directory being absent AT DELETION TIME: a
+        // worktree that appears mid-gc keeps its durability anchor —
+        // when in doubt, gc keeps data. (A crafted anchor id could only
+        // make the existence check succeed, i.e. keep the anchor;
+        // deletion goes through the ref store, never a raw path.)
         let worktrees_dir = self.store.common_dir().join("worktrees");
         for (anchor, _) in self.store.list_refs(WORKTREE_ANCHOR_PREFIX)? {
             let id = anchor
@@ -1343,17 +1333,6 @@ impl Repository {
             .consolidate_scoped(ConsolidateOptions::default(), &|name| {
                 namespace.owns_ref(name)
             })?)
-    }
-
-    /// Whether the repository has any linked worktree — git records one
-    /// directory per linked worktree under `<common>/worktrees/`.
-    fn has_linked_worktrees(&self) -> Result<bool, GraphError> {
-        let dir = self.store.common_dir().join("worktrees");
-        match std::fs::read_dir(&dir) {
-            Ok(mut entries) => Ok(entries.next().is_some()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(source) => Err(GraphError::LockIo { path: dir, source }),
-        }
     }
 
     /// Resolve a refspec — full ref name, tag or branch short name, or hex
