@@ -3131,9 +3131,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::adapter
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl core::default::Default for acetone_cypher::exec::adapter::GraphSnapshot
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::default() -> acetone_cypher::exec::adapter::GraphSnapshot
@@ -3521,9 +3521,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source:
 pub fn acetone_cypher::exec::source::EmptyGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::EmptyGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::EmptyGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::EmptyGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl core::marker::Freeze for acetone_cypher::exec::source::EmptyGraph
 impl core::marker::Send for acetone_cypher::exec::source::EmptyGraph
@@ -3562,9 +3562,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source:
 pub fn acetone_cypher::exec::source::MemoryGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::MemoryGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::MemoryGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::MemoryGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl core::default::Default for acetone_cypher::exec::source::MemoryGraph
 pub fn acetone_cypher::exec::source::MemoryGraph::default() -> acetone_cypher::exec::source::MemoryGraph
@@ -3658,49 +3658,49 @@ pub trait acetone_cypher::exec::source::GraphSource
 pub fn acetone_cypher::exec::source::GraphSource::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::GraphSource::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::GraphSource::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::GraphSource::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::GraphSource::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::GraphSource::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::GraphSource::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::GraphSource::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::GraphSource::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::GraphSource::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::adapter::GraphSnapshot
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source::EmptyGraph
 pub fn acetone_cypher::exec::source::EmptyGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::EmptyGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::EmptyGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::EmptyGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source::MemoryGraph
 pub fn acetone_cypher::exec::source::MemoryGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::MemoryGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::MemoryGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::MemoryGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::store_source::StoreBackedSource<'_>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::write::MutableGraph<'_>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub trait acetone_cypher::exec::source::ProcedureProvider
 pub fn acetone_cypher::exec::source::ProcedureProvider::call(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<acetone_cypher::exec::value::Value>>, alloc::string::String>
@@ -3721,9 +3721,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::store_s
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl<'s> !core::marker::Freeze for acetone_cypher::exec::store_source::StoreBackedSource<'s>
 impl<'s> !core::marker::Send for acetone_cypher::exec::store_source::StoreBackedSource<'s>
@@ -4070,9 +4070,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::write::
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl<'a> core::marker::Freeze for acetone_cypher::exec::write::MutableGraph<'a>
 impl<'a> !core::marker::Send for acetone_cypher::exec::write::MutableGraph<'a>
@@ -4481,9 +4481,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source:
 pub fn acetone_cypher::exec::source::EmptyGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::EmptyGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::EmptyGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::EmptyGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl core::marker::Freeze for acetone_cypher::exec::source::EmptyGraph
 impl core::marker::Send for acetone_cypher::exec::source::EmptyGraph
@@ -4553,9 +4553,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::adapter
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl core::default::Default for acetone_cypher::exec::adapter::GraphSnapshot
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::default() -> acetone_cypher::exec::adapter::GraphSnapshot
@@ -4598,9 +4598,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source:
 pub fn acetone_cypher::exec::source::MemoryGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::MemoryGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::MemoryGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::MemoryGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl core::default::Default for acetone_cypher::exec::source::MemoryGraph
 pub fn acetone_cypher::exec::source::MemoryGraph::default() -> acetone_cypher::exec::source::MemoryGraph
@@ -4657,9 +4657,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::write::
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl<'a> core::marker::Freeze for acetone_cypher::exec::write::MutableGraph<'a>
 impl<'a> !core::marker::Send for acetone_cypher::exec::write::MutableGraph<'a>
@@ -4891,9 +4891,9 @@ impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::store_s
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl<'s> !core::marker::Freeze for acetone_cypher::exec::store_source::StoreBackedSource<'s>
 impl<'s> !core::marker::Send for acetone_cypher::exec::store_source::StoreBackedSource<'s>
@@ -5014,49 +5014,49 @@ pub trait acetone_cypher::exec::GraphSource
 pub fn acetone_cypher::exec::GraphSource::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::GraphSource::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::GraphSource::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::GraphSource::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::GraphSource::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::GraphSource::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::GraphSource::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::GraphSource::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::GraphSource::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::GraphSource::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::adapter::GraphSnapshot
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::adapter::GraphSnapshot::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source::EmptyGraph
 pub fn acetone_cypher::exec::source::EmptyGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::EmptyGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::EmptyGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::EmptyGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::EmptyGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::source::MemoryGraph
 pub fn acetone_cypher::exec::source::MemoryGraph::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::source::MemoryGraph::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::source::MemoryGraph::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::source::MemoryGraph::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::source::MemoryGraph::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::store_source::StoreBackedSource<'_>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 impl acetone_cypher::exec::source::GraphSource for acetone_cypher::exec::write::MutableGraph<'_>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::all_nodes(&self) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::expand(&self, &acetone_cypher::exec::value::EntityId, acetone_cypher::ast::Direction, &[alloc::string::String]) -> alloc::vec::Vec<(acetone_cypher::exec::value::RelValue, acetone_cypher::exec::value::NodeValue)>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::node(&self, &acetone_cypher::exec::value::EntityId) -> core::option::Option<acetone_cypher::exec::value::NodeValue>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::node_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<core::option::Option<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
-pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index(&self, &str, &str, &acetone_cypher::exec::value::Value) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_index_range(&self, &str, &str, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>, core::option::Option<(&acetone_cypher::exec::value::Value, bool)>) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
+pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_key(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::option::Option<alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>>
 pub fn acetone_cypher::exec::write::MutableGraph<'_>::nodes_by_labels(&self, &[alloc::string::String]) -> alloc::vec::Vec<acetone_cypher::exec::value::NodeValue>
 pub trait acetone_cypher::exec::ProcedureProvider
 pub fn acetone_cypher::exec::ProcedureProvider::call(&self, &str, &[acetone_cypher::exec::value::Value]) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<acetone_cypher::exec::value::Value>>, alloc::string::String>
