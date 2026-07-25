@@ -249,6 +249,17 @@ pub fn schema() -> Vec<SchemaEntry> {
             name: "host_os".into(),
             def: IndexDef::new("Host", vec!["os".into()]).expect("valid"),
         },
+        // Range measurements (acetone-2ck.10): the expiry sweep's natural
+        // predicate is `not_after < t`.
+        SchemaEntry::Index {
+            name: "cert_not_after".into(),
+            def: IndexDef::new("Certificate", vec!["not_after".into()]).expect("valid"),
+        },
+        // Composite seek measurements (ADR-0027, acetone-0c7).
+        SchemaEntry::Index {
+            name: "host_os_criticality".into(),
+            def: IndexDef::new("Host", vec!["os".into(), "criticality".into()]).expect("valid"),
+        },
     ]
 }
 

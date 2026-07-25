@@ -53,3 +53,24 @@ scanned the whole edge set on every expansion — O(nodes·edges) over a
 MATCH. The adapter now builds id/label/adjacency indexes at construction
 (`GraphSnapshot`), making node lookup, label scan and edge expansion
 sub-linear. The lab graph existed to surface exactly this, and did.
+
+## Phase 9 criterion-3 measurements (acetone-2ck.10)
+
+At `--scale 200000` (440,800 nodes / 879,982 edges — 4x the envelope
+above), the seek paths against their scan equivalents, best of 7 runs
+each, with in-run parity assertions (hinted rows == scanned rows):
+
+| case                                   | hinted     | scan      | speedup |
+|----------------------------------------|-----------:|----------:|--------:|
+| IndexSeek equality (`host_os`)         |   52.0 ms  | 226.1 ms  |    4.3x |
+| IndexRange (`not_after < 30`, ~8%)     |   18.0 ms  | 323.5 ms  |   18.0x |
+| Composite seek (populated ~40k bucket) |   54.7 ms  | 226.3 ms  |    4.1x |
+| Composite seek (empty bucket)          |  ~0.001 ms | 198.3 ms  |  >10^5x |
+| KeySeek (existing primary key)         |  ~0.002 ms | 189.7 ms  |  >10^5x |
+
+(Wall-clock on the developer machine, not a CI-asserted threshold. The
+populated cases still pay candidate materialisation — their speedup is
+selectivity-bound; the absence-proof and point-lookup cases show the
+floor.) At this scale the heaviest registry query (a full two-hop join)
+trips the default expansion-step governor; the harness reports that and
+continues rather than aborting.

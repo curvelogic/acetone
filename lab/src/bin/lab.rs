@@ -84,13 +84,22 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
         // or properties would be caught at bind time.
         let bound = bind(cypher, &parsed, &catalogue, BindMode::Strict)?;
         let start = Instant::now();
-        let result = execute(&bound, &graph, &params)?;
-        let elapsed = start.elapsed();
-        println!(
-            "  {name:<48} {:>7} rows   {:>8.2} ms",
-            result.rows.len(),
-            elapsed.as_secs_f64() * 1000.0
-        );
+        // At larger envelopes the heaviest joins can trip the *default*
+        // governor caps — report that honestly and keep going rather
+        // than aborting the remaining measurements.
+        match execute(&bound, &graph, &params) {
+            Ok(result) => {
+                let elapsed = start.elapsed();
+                println!(
+                    "  {name:<48} {:>7} rows   {:>8.2} ms",
+                    result.rows.len(),
+                    elapsed.as_secs_f64() * 1000.0
+                );
+            }
+            Err(e) => {
+                println!("  {name:<48} governor-limited at this scale ({e})");
+            }
+        }
     }
 
     index_vs_scan_demo(&graph, &node_records, &edge_records, &schema, &params)?;
@@ -153,6 +162,77 @@ fn index_vs_scan_demo(
     println!("  LabelScan + filter:       {scan_ms:>8.3} ms");
     if seek_ms > 0.0 {
         println!("  speedup:                  {:>8.1}x", scan_ms / seek_ms);
+    }
+
+    // The Phase 9 criterion-3 measurements (acetone-2ck.10): range,
+    // composite and primary-key seeks against their scan equivalents.
+    // Each hinted run binds Strict against the full schema; each scan
+    // run binds against the schema with indexes stripped (range,
+    // composite) or Lenient against an empty catalogue (key seek — the
+    // primary key map exists whenever the schema does, so the scan
+    // comparison must drop the schema entirely).
+    // Case selection against the generator's distributions: `not_after`
+    // is `i % 365`, so `< 30` selects ~8% of certificates (a selective
+    // range); `os` and `criticality` share modulus 5, so 'debian'
+    // (i%5==0) co-occurs only with criticality 0 — a populated composite
+    // bucket of ~a fifth of hosts; hostnames are `host-{i}` unpadded.
+    // An EMPTY composite bucket ('debian', 3) is measured too: proving
+    // absence without a scan is half the point of a seek.
+    let cases: [(&str, &str); 4] = [
+        (
+            "IndexRange (cert_not_after < 30)",
+            "MATCH (c:Certificate) WHERE c.not_after < 30 RETURN count(*) AS n",
+        ),
+        (
+            "Composite seek (populated bucket)",
+            "MATCH (h:Host {os: 'debian', criticality: 0}) RETURN count(*) AS n",
+        ),
+        (
+            "Composite seek (empty bucket)",
+            "MATCH (h:Host {os: 'debian', criticality: 3}) RETURN count(*) AS n",
+        ),
+        (
+            "KeySeek (Host primary key)",
+            "MATCH (h:Host {hostname: 'host-123456'}) RETURN count(*) AS n",
+        ),
+    ];
+    println!("\nPhase 9 criterion-3 measurements (hinted vs scan):");
+    for (name, cypher) in cases {
+        let parsed = acetone_cypher::parse(cypher)?;
+        let hinted = bind(cypher, &parsed, &cat_indexed, BindMode::Strict)?;
+        let scanned = if name.starts_with("KeySeek") {
+            bind(
+                cypher,
+                &parsed,
+                &acetone_cypher::bind::Catalogue::empty(),
+                BindMode::Lenient,
+            )?
+        } else {
+            bind(cypher, &parsed, &cat_scan, BindMode::Strict)?
+        };
+        let hinted_result = execute(&hinted, indexed, params)?;
+        let scanned_graph: &GraphSnapshot = if name.starts_with("KeySeek") {
+            indexed
+        } else {
+            &scan_graph
+        };
+        let scanned_result = execute(&scanned, scanned_graph, params)?;
+        // Parity first: the acceleration must not change the answer.
+        assert_eq!(
+            format!("{:?}", hinted_result.rows),
+            format!("{:?}", scanned_result.rows),
+            "hinted and scanned rows must match for {name}"
+        );
+        let hinted_ms = best(&hinted, indexed)?;
+        let scanned_ms = best(&scanned, scanned_graph)?;
+        println!(
+            "  {name:<40} hinted {hinted_ms:>8.3} ms   scan {scanned_ms:>8.3} ms   speedup {:>6.1}x",
+            if hinted_ms > 0.0 {
+                scanned_ms / hinted_ms
+            } else {
+                f64::INFINITY
+            }
+        );
     }
     Ok(())
 }
