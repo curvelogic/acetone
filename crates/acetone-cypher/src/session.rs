@@ -203,6 +203,9 @@ impl<'r> Session<'r> {
             return Err(QueryError::Graph(error));
         }
         result.advisories = undeclared_label_advisories(parsed, &catalogue, &result, &base);
+        result
+            .advisories
+            .extend(expression_label_advisories(&bound));
         Ok(result)
     }
 
@@ -290,6 +293,33 @@ fn undeclared_label_advisories(
         "note: {plural} {names} not declared and matched no nodes in this schema-free \
          repository — 0 rows. Declare a label with `acetone declare-label <label> \
          --key <property>`, or check for a typo."
+    )]
+}
+
+/// Advisory for expression-position label predicates (`n:Label`) naming
+/// labels the schema does not declare (acetone-2ck.3). TCK semantics
+/// require them to evaluate false/null — never an error — so a typo'd
+/// label silently filters everything; in a schema-backed session that
+/// deserves a signal. Collected at bind time (the binder sees every
+/// expression position: WHERE, CASE, comprehensions), and only when the
+/// catalogue is non-empty, so Lenient/TCK sessions are unaffected.
+fn expression_label_advisories(bound: &crate::bind::bound::BoundQuery) -> Vec<String> {
+    if bound.undeclared_expr_labels.is_empty() {
+        return Vec::new();
+    }
+    let names = bound
+        .undeclared_expr_labels
+        .iter()
+        .map(|l| format!("{l:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let plural = if bound.undeclared_expr_labels.len() == 1 {
+        "label"
+    } else {
+        "labels"
+    };
+    vec![format!(
+        "note: {plural} {names} in a label predicate not declared in this repository's          schema — the predicate is false for every node. Declare the label or check          for a typo."
     )]
 }
 

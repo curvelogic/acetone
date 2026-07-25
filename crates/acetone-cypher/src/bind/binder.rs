@@ -42,14 +42,19 @@ pub fn bind(
         mode,
         variables: Vec::new(),
         scope: HashMap::new(),
+        undeclared_expr_labels: Vec::new(),
     };
     let mut clauses = Vec::new();
     for clause in &query.clauses {
         clauses.push(binder.clause(clause)?);
     }
+    let mut undeclared_expr_labels = binder.undeclared_expr_labels;
+    undeclared_expr_labels.sort();
+    undeclared_expr_labels.dedup();
     Ok(BoundQuery {
         clauses,
         variables: binder.variables,
+        undeclared_expr_labels,
     })
 }
 
@@ -60,6 +65,12 @@ struct Binder<'a> {
     variables: Vec<VarBinding>,
     /// Names currently visible.
     scope: HashMap<String, VarId>,
+    /// Labels used in expression position (`n:Label`) that the non-empty
+    /// catalogue does not declare. TCK semantics require these to
+    /// evaluate false/null rather than error, so they surface as
+    /// advisories — a typo'd label otherwise filters everything with no
+    /// signal (acetone-2ck.3).
+    undeclared_expr_labels: Vec<String>,
 }
 
 /// Expression context: where aggregates may appear.
@@ -1075,11 +1086,20 @@ impl<'a> Binder<'a> {
                 subject,
                 labels,
                 span,
-            } => Ok(BoundExpr::HasLabels {
-                subject: Box::new(self.expr(subject, ctx)?),
-                labels: labels.clone(),
-                span: *span,
-            }),
+            } => {
+                if !self.catalogue.is_empty() {
+                    for label in labels {
+                        if self.catalogue.label(label).is_none() {
+                            self.undeclared_expr_labels.push(label.clone());
+                        }
+                    }
+                }
+                Ok(BoundExpr::HasLabels {
+                    subject: Box::new(self.expr(subject, ctx)?),
+                    labels: labels.clone(),
+                    span: *span,
+                })
+            }
             ast::Expr::PatternComprehension {
                 pattern,
                 where_clause,

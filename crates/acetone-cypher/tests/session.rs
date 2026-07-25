@@ -674,3 +674,38 @@ fn aggregate_in_a_skipped_case_branch_does_not_desync_slots() {
         7
     );
 }
+
+/// acetone-2ck.3: `WHERE n:Undeclared` must stay false/null per the TCK
+/// (never an error), but in a schema-backed session a typo'd label in
+/// expression position now carries an advisory instead of silently
+/// filtering everything.
+#[test]
+fn undeclared_expression_label_carries_an_advisory() {
+    let (_dir, repo) = repo();
+    seed(&repo);
+    let session = Session::new(&repo);
+    let run = |q: &str| match session.run(q).expect("query") {
+        Outcome::Read(result) => result,
+        Outcome::Write(_) => panic!("read expected"),
+    };
+
+    // Typo'd label in expression position: zero rows, one advisory.
+    let result = run("MATCH (h:Host) WHERE h:Hots RETURN h.name");
+    assert!(result.rows.is_empty(), "predicate is false for every node");
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+    assert!(
+        result.advisories[0].contains("\"Hots\"") && result.advisories[0].contains("typo"),
+        "names the label: {}",
+        result.advisories[0]
+    );
+
+    // A declared label in the same position: no advisory.
+    let result = run("MATCH (h:Host) WHERE h:Host RETURN h.name");
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.advisories.is_empty(), "{:?}", result.advisories);
+
+    // Expression positions beyond WHERE are covered too (the binder
+    // sees them all): CASE.
+    let result = run("MATCH (h:Host) RETURN CASE WHEN h:Hsot THEN 1 ELSE 0 END");
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+}
