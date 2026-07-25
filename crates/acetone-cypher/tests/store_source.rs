@@ -112,7 +112,11 @@ fn string_index_seek_matches_the_scan() {
 
     // A String pin on a String-typed property is served by the seek.
     let got = src
-        .nodes_by_index("host_region", "region", &RtValue::String("eu".into()))
+        .nodes_by_index(
+            "host_region",
+            &["region".into()],
+            &[&RtValue::String("eu".into())],
+        )
         .expect("seek served");
     assert_eq!(
         names(got.iter().map(id_of).collect()),
@@ -139,7 +143,7 @@ fn numeric_index_seek_probes_int_and_float() {
 
     // Int pin: matches the Int-stored port 80 on a and c.
     let by_int = src
-        .nodes_by_index("host_port", "port", &RtValue::Int(80))
+        .nodes_by_index("host_port", &["port".into()], &[&RtValue::Int(80)])
         .expect("served");
     assert_eq!(
         names(by_int.iter().map(id_of).collect()),
@@ -148,7 +152,7 @@ fn numeric_index_seek_probes_int_and_float() {
 
     // Float pin 80.0 must select the same nodes (3 = 3.0 cross-type).
     let by_float = src
-        .nodes_by_index("host_port", "port", &RtValue::Float(80.0))
+        .nodes_by_index("host_port", &["port".into()], &[&RtValue::Float(80.0)])
         .expect("served");
     assert_eq!(
         names(by_float.iter().map(id_of).collect()),
@@ -189,13 +193,17 @@ fn a_string_pin_on_an_untyped_property_falls_back_to_a_scan() {
     let snap = repo.workspace_snapshot().expect("snap");
     let src = source_over(&snap);
     assert!(
-        src.nodes_by_index("thing_tag", "tag", &RtValue::String("x".into()))
-            .is_none(),
+        src.nodes_by_index(
+            "thing_tag",
+            &["tag".into()],
+            &[&RtValue::String("x".into())]
+        )
+        .is_none(),
         "a string pin on an untyped index property must fall back to a scan"
     );
     // A numeric pin is still safe even when untyped (never matches a rendering).
     assert!(
-        src.nodes_by_index("thing_tag", "tag", &RtValue::Int(1))
+        src.nodes_by_index("thing_tag", &["tag".into()], &[&RtValue::Int(1)])
             .is_some()
     );
 }
@@ -207,7 +215,7 @@ fn unknown_index_falls_back() {
     let snap = repo.workspace_snapshot().expect("snap");
     let src = source_over(&snap);
     assert!(
-        src.nodes_by_index("no_such", "p", &RtValue::Int(1))
+        src.nodes_by_index("no_such", &["p".into()], &[&RtValue::Int(1)])
             .is_none()
     );
 }
@@ -277,11 +285,142 @@ impl FindNode for StoreBackedSource<'_> {
         value: &str,
         id: &str,
     ) -> acetone_cypher::exec::value::EntityId {
-        self.nodes_by_index(index, property, &RtValue::String(value.into()))
-            .expect("served")
-            .into_iter()
-            .find(|n| id_of(n) == id)
-            .expect("node present")
-            .id
+        self.nodes_by_index(
+            index,
+            &[property.to_owned()],
+            &[&RtValue::String(value.into())],
+        )
+        .expect("served")
+        .into_iter()
+        .find(|n| id_of(n) == id)
+        .expect("node present")
+        .id
     }
+}
+
+// --- Composite index seeks (acetone-0c7, PR #207 review Major) --------------
+
+/// A repo with a composite `(region, port)` index over Hosts whose `port`
+/// values mix Int and Float, plus an `Item` label carrying an UNTYPED
+/// `tag` inside a composite — the typed-string safety must apply per
+/// component.
+fn seed_composite(repo: &Repository) {
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&host_label()).expect("label");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "host_region_port".into(),
+        def: IndexDef::new("Host", vec!["region".into(), "port".into()]).expect("idx"),
+    })
+    .expect("composite idx");
+    // Item: `id` key; `region` typed String; `tag` UNTYPED.
+    tx.put_schema(&SchemaEntry::Label {
+        name: "Item".into(),
+        def: LabelDef::new(
+            vec!["id".into()],
+            BTreeMap::from([("region".to_owned(), PropertyType::String)]),
+            [],
+            [],
+        )
+        .expect("label"),
+    })
+    .expect("item label");
+    tx.put_schema(&SchemaEntry::Index {
+        name: "item_region_tag".into(),
+        def: IndexDef::new("Item", vec!["region".into(), "tag".into()]).expect("idx"),
+    })
+    .expect("item idx");
+    for (id, region, port) in [
+        ("a", "eu", MV::Int(80)),
+        ("b", "eu", MV::Float(80.0)),
+        ("c", "eu", MV::Int(443)),
+        ("d", "us", MV::Int(80)),
+    ] {
+        tx.put_node(
+            &node(id),
+            &NodeRecord::new(
+                [],
+                BTreeMap::from([
+                    ("region".to_owned(), MV::String(region.into())),
+                    ("port".to_owned(), port),
+                ]),
+            ),
+        )
+        .expect("node");
+    }
+    tx.put_node(
+        &NodeKey::new("Item", vec![MV::String("i1".into())]).expect("key"),
+        &NodeRecord::new(
+            [],
+            BTreeMap::from([
+                ("region".to_owned(), MV::String("eu".into())),
+                ("tag".to_owned(), MV::String("x".into())),
+            ]),
+        ),
+    )
+    .expect("item");
+    tx.save().expect("save");
+}
+
+#[test]
+fn composite_seek_serves_with_per_component_cross_typing() {
+    let (_d, repo) = repo();
+    seed_composite(&repo);
+    let snap = repo.workspace_snapshot().expect("snap");
+    let src = source_over(&snap);
+    let props: Vec<String> = vec!["region".into(), "port".into()];
+    // An Int pin reaches BOTH the Int(80) and Float(80.0) entries under
+    // ("eu", 80) — per-component cross-typing on the stored map.
+    let region = RtValue::String("eu".into());
+    let port = RtValue::Int(80);
+    let got = src
+        .nodes_by_index("host_region_port", &props, &[&region, &port])
+        .expect("served");
+    assert_eq!(names(got.iter().map(id_of).collect()), vec!["a", "b"]);
+    // The float orientation reaches the same pair.
+    let port = RtValue::Float(80.0);
+    let got = src
+        .nodes_by_index("host_region_port", &props, &[&region, &port])
+        .expect("served");
+    assert_eq!(got.len(), 2);
+    // Arity / property-list mismatches refuse (scan fallback).
+    assert!(
+        src.nodes_by_index("host_region_port", &["region".into()], &[&region])
+            .is_none()
+    );
+    let wrong: Vec<String> = vec!["port".into(), "region".into()];
+    assert!(
+        src.nodes_by_index("host_region_port", &wrong, &[&region, &region])
+            .is_none()
+    );
+}
+
+#[test]
+fn composite_seek_edges_bail_or_empty_per_component() {
+    let (_d, repo) = repo();
+    seed_composite(&repo);
+    let snap = repo.workspace_snapshot().expect("snap");
+    let src = source_over(&snap);
+    let props: Vec<String> = vec!["region".into(), "port".into()];
+    let region = RtValue::String("eu".into());
+    // An integral float >= 2^53 in a NON-FIRST component bails the whole
+    // seek (non-unique i64 preimage — under-selection hazard).
+    let edge = RtValue::Float(9_007_199_254_740_992.0);
+    assert!(
+        src.nodes_by_index("host_region_port", &props, &[&region, &edge])
+            .is_none()
+    );
+    // A null component selects nothing, definitively (null-blind index).
+    let null = RtValue::Null;
+    let got = src
+        .nodes_by_index("host_region_port", &props, &[&region, &null])
+        .expect("served");
+    assert!(got.is_empty());
+    // A string pin on the UNTYPED second component refuses: a stored
+    // Bytes/temporal value's rendering would be missed by a raw probe.
+    let item_props: Vec<String> = vec!["region".into(), "tag".into()];
+    let tag = RtValue::String("x".into());
+    assert!(
+        src.nodes_by_index("item_region_tag", &item_props, &[&region, &tag])
+            .is_none()
+    );
 }

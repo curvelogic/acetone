@@ -49,9 +49,10 @@ pub struct GraphSnapshot {
     /// equality probes. Populated only when the schema names the label's
     /// key.
     by_key: HashMap<(String, Vec<u8>), Vec<usize>>,
-    /// Index name → indexed property, for validating hints bound against
-    /// a different version's catalogue (PR #206 review finding 4).
-    index_properties: HashMap<String, String>,
+    /// Index name → indexed property list (declared order), for
+    /// validating hints bound against a different version's catalogue
+    /// (PR #206 review finding 4).
+    index_properties: HashMap<String, Vec<String>>,
     /// Node id → indices into `rels` of edges leaving it (ExpandOut).
     out_edges: HashMap<EntityId, Vec<usize>>,
     /// Node id → indices into `rels` of edges entering it (ExpandIn).
@@ -82,19 +83,22 @@ impl GraphSnapshot {
         schema: &[SchemaEntry],
     ) -> Self {
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
-        // Only single-property indexes drive the in-memory seek (ADR-0022);
-        // composite indexes are maintained and fsck-verified but not yet
-        // seek-accelerated (a tracked follow-up), so a composite pin scans.
-        let mut index_defs: Vec<(String, String, String)> = Vec::new();
+        // Every declared index drives the in-memory seek — composite
+        // indexes included (ADR-0027, acetone-0c7): the map keys are the
+        // concatenated per-component encodings, which the self-delimiting
+        // per-value encoding makes equal to the tuple encoding.
+        let mut index_defs: Vec<(String, String, Vec<String>)> = Vec::new();
         for entry in schema {
             match entry {
                 SchemaEntry::Label { name, def } => {
                     key_names.insert(name.clone(), def.key().to_vec());
                 }
                 SchemaEntry::Index { name, def } => {
-                    if let [property] = def.properties() {
-                        index_defs.push((name.clone(), def.label().to_owned(), property.clone()));
-                    }
+                    index_defs.push((
+                        name.clone(),
+                        def.label().to_owned(),
+                        def.properties().to_vec(),
+                    ));
                 }
                 SchemaEntry::RelType { .. } => {}
             }
@@ -106,7 +110,7 @@ impl GraphSnapshot {
         nodes: &[(NodeKey, NodeRecord)],
         edges: &[(EdgeKey, EdgeRecord)],
         key_names: &HashMap<String, Vec<String>>,
-        index_defs: &[(String, String, String)],
+        index_defs: &[(String, String, Vec<String>)],
     ) -> Self {
         let node_values: Vec<NodeValue> = nodes
             .iter()
@@ -140,10 +144,15 @@ impl GraphSnapshot {
         // string-pinned seek miss them.) null/NaN-blind.
         let mut by_index: HashMap<String, std::collections::BTreeMap<Vec<u8>, Vec<usize>>> =
             HashMap::new();
-        for (name, label, property) in index_defs {
+        for (name, label, properties) in index_defs {
             let map = by_index.entry(name.clone()).or_default();
             for (index, node) in node_values.iter().enumerate() {
-                if let Some(bytes) = index_value_bytes(node, label, property) {
+                let encoded: Option<Vec<u8>> = properties
+                    .iter()
+                    .map(|property| index_value_bytes(node, label, property))
+                    .collect::<Option<Vec<Vec<u8>>>>()
+                    .map(|parts| parts.concat());
+                if let Some(bytes) = encoded {
                     map.entry(bytes).or_default().push(index);
                 }
             }
@@ -174,9 +183,9 @@ impl GraphSnapshot {
             }
         }
 
-        let index_properties: HashMap<String, String> = index_defs
+        let index_properties: HashMap<String, Vec<String>> = index_defs
             .iter()
-            .map(|(name, _, property)| (name.clone(), property.clone()))
+            .map(|(name, _, properties)| (name.clone(), properties.clone()))
             .collect();
 
         GraphSnapshot {
@@ -461,44 +470,12 @@ impl GraphSource for GraphSnapshot {
     }
 
     fn nodes_by_key(&self, label: &str, key_values: &[Value]) -> Option<Vec<NodeValue>> {
-        // Candidate-superset semantics (PR #206 review finding 1): probe
-        // every per-component encoding the pin could equal at runtime
-        // (numeric cross-typing via the same alternatives the equality
-        // index uses), and treat a complete miss as "cannot serve" so
-        // the caller scans — never a definitive absence.
-        // Any component whose probe set may be incomplete (integral float
-        // >= 2^53: non-unique i64 preimage) forces a scan — the same bail
-        // the equality index takes (PR #206 review NEW-1).
-        if key_values.iter().any(probe_set_incomplete) {
-            return None;
-        }
-        let per_component: Vec<Vec<Vec<u8>>> = key_values.iter().map(index_lookup_keys).collect();
-        if per_component
-            .iter()
-            .any(|alternatives| alternatives.is_empty())
-        {
-            // A null/NaN/unstorable component has no encodings; let the
-            // scan decide (openCypher: it will match nothing anyway).
-            return None;
-        }
-        // Bounded cartesian product over the alternatives (<= 2 per
-        // numeric component); a pathological blow-up falls back to a scan.
-        let combinations: usize = per_component.iter().map(Vec::len).product();
-        if combinations > 16 {
-            return None;
-        }
-        let mut probes: Vec<Vec<u8>> = vec![Vec::new()];
-        for alternatives in &per_component {
-            let mut next = Vec::with_capacity(probes.len() * alternatives.len());
-            for prefix in &probes {
-                for alt in alternatives {
-                    let mut bytes = prefix.clone();
-                    bytes.extend_from_slice(alt);
-                    next.push(bytes);
-                }
-            }
-            probes = next;
-        }
+        // Candidate-superset semantics (PR #206 review finding 1): the
+        // shared cartesian probe generalises the equality index's dual
+        // numeric probe; a complete miss means "cannot serve" (scan),
+        // never a definitive absence.
+        let refs: Vec<&Value> = key_values.iter().collect();
+        let probes = cartesian_probes(&refs)?;
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         let mut hit = false;
@@ -522,8 +499,11 @@ impl GraphSource for GraphSnapshot {
         lower: Option<(&Value, bool)>,
         upper: Option<(&Value, bool)>,
     ) -> Option<Vec<NodeValue>> {
-        if self.index_properties.get(index_name).map(String::as_str) != Some(property) {
-            return None;
+        // Ranges serve single-property indexes only: the registry entry
+        // must be exactly [property].
+        match self.index_properties.get(index_name) {
+            Some(declared) if declared.len() == 1 && declared[0] == property => {}
+            _ => return None,
         }
         let map = self.by_index.get(index_name)?;
         let ranges = range_families(lower, upper)?;
@@ -565,34 +545,28 @@ impl GraphSource for GraphSnapshot {
     fn nodes_by_index(
         &self,
         index_name: &str,
-        property: &str,
-        value: &Value,
+        properties: &[String],
+        values: &[&Value],
     ) -> Option<Vec<NodeValue>> {
         // Unknown index → the caller falls back to a label scan. A hint
         // bound against another version's catalogue must not be served by
-        // a same-named index over a different property (finding 4).
-        if self.index_properties.get(index_name).map(String::as_str) != Some(property) {
+        // a same-named index over different properties (finding 4), and
+        // the value tuple must match the declared arity.
+        if self.index_properties.get(index_name).map(Vec::as_slice) != Some(properties)
+            || values.len() != properties.len()
+        {
             return None;
         }
         let map = self.by_index.get(index_name)?;
-        // A list value's equality recurses element-wise with the same Int/Float
-        // cross-type rule (`[1] = [1.0]`), which an exact-byte bucket cannot
-        // serve without enumerating 2^k element-type combinations. Fall back to
-        // a scan for a list pin (`None`) — correct, just not accelerated.
-        // Likewise an integral float pin at/beyond 2^53: its i64 preimage
-        // is non-unique, so the probe set would under-select.
-        if probe_set_incomplete(value) {
-            return None;
-        }
-        // The candidate byte keys whose stored values could equal `value` under
-        // openCypher equality: for a number that means BOTH the Int and Float
-        // encodings (3 = 3.0), since the index stores them under distinct keys.
-        // The result is a candidate superset the caller still filters, so being
-        // over-broad is safe; under-selecting would silently drop matches.
+        // Cartesian per-component probes, exactly as `nodes_by_key`: any
+        // component with a possibly-incomplete probe set (list pin;
+        // integral float >= 2^53) bails to a scan — a candidate superset
+        // is safe, under-selection never is.
+        let probes = cartesian_probes(values)?;
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
-        for bytes in index_lookup_keys(value) {
-            if let Some(indices) = map.get(&bytes) {
+        for probe in probes {
+            if let Some(indices) = map.get(&probe) {
                 for &i in indices {
                     if seen.insert(i) {
                         out.push(self.nodes[i].clone());
@@ -602,6 +576,51 @@ impl GraphSource for GraphSnapshot {
         }
         Some(out)
     }
+}
+
+/// The bounded cartesian of per-component probe encodings for a pinned
+/// value tuple (key seek and single/composite index seek alike): each
+/// component contributes its runtime-equality-compatible encodings
+/// (`index_lookup_keys` — both numeric families for a number), and the
+/// concatenations enumerate every byte key a matching stored tuple could
+/// have. Mirrored (over `ModelValue` tuples) by the store-backed
+/// source's expansion in `store_source.rs` — keep their caps and bail
+/// rules aligned. `None` when any component's probe set may be incomplete or the
+/// product exceeds a small cap (the scan decides); `Some(empty)` when a
+/// component has no encoding at all (null/NaN/unstorable) — such a pin
+/// is null-blind and matches nothing, so an empty candidate set is the
+/// correct, cheap answer.
+fn cartesian_probes(values: &[&Value]) -> Option<Vec<Vec<u8>>> {
+    if values.iter().any(|value| probe_set_incomplete(value)) {
+        return None;
+    }
+    let per_component: Vec<Vec<Vec<u8>>> = values
+        .iter()
+        .map(|value| index_lookup_keys(value))
+        .collect();
+    if per_component
+        .iter()
+        .any(|alternatives| alternatives.is_empty())
+    {
+        return Some(Vec::new());
+    }
+    let combinations: usize = per_component.iter().map(Vec::len).product();
+    if combinations > 16 {
+        return None;
+    }
+    let mut probes: Vec<Vec<u8>> = vec![Vec::new()];
+    for alternatives in &per_component {
+        let mut next = Vec::with_capacity(probes.len() * alternatives.len());
+        for prefix in &probes {
+            for alt in alternatives {
+                let mut bytes = prefix.clone();
+                bytes.extend_from_slice(alt);
+                next.push(bytes);
+            }
+        }
+        probes = next;
+    }
+    Some(probes)
 }
 
 /// Whether `index_lookup_keys`' probe set for `value` may be INCOMPLETE
@@ -1673,6 +1692,122 @@ mod tests {
             let hinted = {
                 let bound =
                     crate::bind::bind(query, &parsed, &with_index, crate::bind::BindMode::Strict)
+                        .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            let scanned = {
+                let bound = crate::bind::bind(
+                    query,
+                    &parsed,
+                    &Catalogue::empty(),
+                    crate::bind::BindMode::Lenient,
+                )
+                .unwrap();
+                execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
+            };
+            assert_eq!(
+                format!("{:?}", hinted.rows),
+                format!("{:?}", scanned.rows),
+                "{query}"
+            );
+        }
+    }
+
+    /// The range path serves single-property indexes only: a composite
+    /// registry entry must refuse a range (an AT/version-skew hint could
+    /// otherwise range-scan a composite-keyed map with single-value
+    /// bounds and under-select arbitrarily — PR #207 review).
+    #[test]
+    fn index_range_refuses_composite_indexes() {
+        use crate::exec::source::GraphSource;
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let mut props = BTreeMap::new();
+        props.insert("region".to_string(), ModelValue::String("eu".into()));
+        props.insert("port".to_string(), ModelValue::Int(80));
+        let nodes = vec![(node_key("Host", "a"), NodeRecord::new([], props))];
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_region_port".into(),
+                def: IndexDef::new("Host", vec!["region".into(), "port".into()]).unwrap(),
+            },
+        ];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        let lower = Value::Int(1);
+        assert!(
+            snapshot
+                .nodes_by_index_range("by_region_port", "port", Some((&lower, true)), None)
+                .is_none()
+        );
+        assert!(
+            snapshot
+                .nodes_by_index_range("by_region_port", "region", Some((&lower, true)), None)
+                .is_none()
+        );
+    }
+
+    /// Composite index seek (acetone-0c7): an all-properties-pinned
+    /// composite index serves the seek, with per-component numeric
+    /// cross-typing, and hinted results equal scanned results.
+    #[test]
+    fn composite_index_seek_matches_scan() {
+        use crate::exec::source::GraphSource;
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let mut nodes = Vec::new();
+        for (name, region, port) in [
+            ("a", "eu", ModelValue::Int(80)),
+            ("b", "eu", ModelValue::Int(443)),
+            ("c", "us", ModelValue::Int(80)),
+            ("d", "eu", ModelValue::Float(80.0)),
+        ] {
+            let mut props = BTreeMap::new();
+            props.insert("region".to_string(), ModelValue::String(region.into()));
+            props.insert("port".to_string(), port);
+            nodes.push((node_key("Host", name), NodeRecord::new([], props)));
+        }
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_region_port".into(),
+                def: IndexDef::new("Host", vec!["region".into(), "port".into()]).unwrap(),
+            },
+        ];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        // Direct: an Int pin reaches BOTH the Int(80) and Float(80.0)
+        // entries under ("eu", 80) — per-component cross-typing.
+        let region = Value::String("eu".into());
+        let port = Value::Int(80);
+        let got = snapshot
+            .nodes_by_index(
+                "by_region_port",
+                &["region".into(), "port".into()],
+                &[&region, &port],
+            )
+            .expect("served");
+        assert_eq!(got.len(), 2);
+        // Arity/property-list mismatches refuse (scan fallback).
+        assert!(
+            snapshot
+                .nodes_by_index("by_region_port", &["region".into()], &[&region])
+                .is_none()
+        );
+        // End to end: hinted equals scanned, including the cross-typed row.
+        let with_schema = Catalogue::from_entries(schema);
+        for query in [
+            "MATCH (h:Host {region: 'eu', port: 80}) RETURN h.hostname ORDER BY h.hostname",
+            "MATCH (h:Host {region: 'eu', port: 443}) RETURN h.hostname",
+            "MATCH (h:Host {region: 'nowhere', port: 80}) RETURN h.hostname",
+        ] {
+            let parsed = crate::parse(query).unwrap();
+            let hinted = {
+                let bound =
+                    crate::bind::bind(query, &parsed, &with_schema, crate::bind::BindMode::Strict)
                         .unwrap();
                 execute(&bound, &snapshot, &BTreeMap::new()).unwrap()
             };

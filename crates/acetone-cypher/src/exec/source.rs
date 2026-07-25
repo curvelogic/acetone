@@ -24,7 +24,9 @@ pub trait GraphSource {
     }
 
     /// Nodes an equality on the declared index `index_name` selects for
-    /// `value` (`IndexSeek`, spec §5.3). `None` means this source has no such
+    /// the pinned `values` (one per indexed property, in the index's
+    /// declared order — single or composite, ADR-0027). `None` means this
+    /// source has no such
     /// index (or its index named so is over a *different property* — the
     /// hint may come from another version's catalogue, PR #206 review
     /// finding 4), so the caller falls back to a label scan; `Some` is a
@@ -34,8 +36,8 @@ pub trait GraphSource {
     fn nodes_by_index(
         &self,
         _index_name: &str,
-        _property: &str,
-        _value: &Value,
+        _properties: &[String],
+        _values: &[&Value],
     ) -> Option<Vec<NodeValue>> {
         None
     }

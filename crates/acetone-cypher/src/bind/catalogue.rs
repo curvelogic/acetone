@@ -79,12 +79,30 @@ impl Catalogue {
         }
     }
 
-    /// A declared **single-property** secondary index over `(label, property)`,
-    /// if any. Composite (multi-property) indexes are not yet consulted for
-    /// seek planning — a query pinning all their properties falls back to a
-    /// scan-and-filter, which is correct but unaccelerated (the seek
-    /// acceleration is a tracked follow-up); they are still maintained and
-    /// `fsck`-verified.
+    /// The declared index best serving an equality seek over `pinned`
+    /// properties of `label` (single or composite, acetone-0c7): every
+    /// indexed property must be pinned; the longest (most selective)
+    /// property list wins ties.
+    pub fn seek_index_on(&self, label: &str, pinned: &[&str]) -> Option<(&str, &IndexDef)> {
+        self.indexes
+            .iter()
+            .filter(|(_, def)| {
+                def.label() == label
+                    && !def.properties().is_empty()
+                    && def
+                        .properties()
+                        .iter()
+                        .all(|p| pinned.iter().any(|pin| pin == p))
+            })
+            .max_by_key(|(_, def)| def.properties().len())
+            .map(|(name, def)| (name.as_str(), def))
+    }
+
+    /// A declared **single-property** index over `(label, property)`, if
+    /// any — the only kind the range path serves (a composite map's byte
+    /// order interleaves later components, so a single-value range over
+    /// it would under-select). Equality seeks use
+    /// [`Self::seek_index_on`] instead.
     pub fn index_on(&self, label: &str, property: &str) -> Option<(&str, &IndexDef)> {
         self.indexes
             .iter()

@@ -340,7 +340,7 @@ mod tests {
             Some(IndexHint::IndexSeek {
                 name: "host_os".into(),
                 label: "Host".into(),
-                property: "os".into()
+                properties: vec!["os".into()]
             })
         );
 

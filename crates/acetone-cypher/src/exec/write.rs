@@ -626,7 +626,12 @@ impl GraphSource for MutableGraph<'_> {
         self.current_node(id)
     }
 
-    fn nodes_by_index(&self, name: &str, property: &str, value: &Value) -> Option<Vec<NodeValue>> {
+    fn nodes_by_index(
+        &self,
+        name: &str,
+        properties: &[String],
+        values: &[&Value],
+    ) -> Option<Vec<NodeValue>> {
         // The base's index is authoritative only while the overlay is empty:
         // a created, modified, or deleted node could change which nodes match,
         // and the base index knows nothing of the overlay. Once any write has
@@ -634,7 +639,7 @@ impl GraphSource for MutableGraph<'_> {
         if self.overlay_dirty() {
             return None;
         }
-        self.base.nodes_by_index(name, property, value)
+        self.base.nodes_by_index(name, properties, values)
     }
 
     fn nodes_by_index_range(

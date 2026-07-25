@@ -1017,14 +1017,12 @@ impl<'a> Binder<'a> {
                 });
             }
         }
-        for property in pinned {
-            if let Some((name, _)) = self.catalogue.index_on(label, property) {
-                return Some(IndexHint::IndexSeek {
-                    name: name.to_string(),
-                    label: label.clone(),
-                    property: property.to_string(),
-                });
-            }
+        if let Some((name, def)) = self.catalogue.seek_index_on(label, &pinned) {
+            return Some(IndexHint::IndexSeek {
+                name: name.to_string(),
+                label: label.clone(),
+                properties: def.properties().to_vec(),
+            });
         }
         None
     }

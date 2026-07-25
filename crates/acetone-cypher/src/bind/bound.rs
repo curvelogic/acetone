@@ -214,11 +214,13 @@ pub enum IndexHint {
     /// the primary map when every key property is pinned
     /// (acetone-6g5.3.3) and fall back to a scan otherwise.
     KeySeek { label: String, key: Vec<String> },
-    /// A declared index `name` on `(label, property)` covers an equality.
+    /// A declared index `name` on `(label, properties)` covers an
+    /// equality on every indexed property (single or composite,
+    /// ADR-0027/acetone-0c7). `properties` is the index's declared order.
     IndexSeek {
         name: String,
         label: String,
-        property: String,
+        properties: Vec<String>,
     },
     /// A declared index `name` on `(label, property)` covers WHERE-level
     /// range predicate(s) on the anchor variable (acetone-6g5.3.3). Each
