@@ -583,7 +583,9 @@ impl GraphSource for GraphSnapshot {
 /// component contributes its runtime-equality-compatible encodings
 /// (`index_lookup_keys` — both numeric families for a number), and the
 /// concatenations enumerate every byte key a matching stored tuple could
-/// have. `None` when any component's probe set may be incomplete or the
+/// have. Mirrored (over `ModelValue` tuples) by the store-backed
+/// source's expansion in `store_source.rs` — keep their caps and bail
+/// rules aligned. `None` when any component's probe set may be incomplete or the
 /// product exceeds a small cap (the scan decides); `Some(empty)` when a
 /// component has no encoding at all (null/NaN/unstorable) — such a pin
 /// is null-blind and matches nothing, so an empty candidate set is the
@@ -1709,6 +1711,42 @@ mod tests {
                 "{query}"
             );
         }
+    }
+
+    /// The range path serves single-property indexes only: a composite
+    /// registry entry must refuse a range (an AT/version-skew hint could
+    /// otherwise range-scan a composite-keyed map with single-value
+    /// bounds and under-select arbitrarily — PR #207 review).
+    #[test]
+    fn index_range_refuses_composite_indexes() {
+        use crate::exec::source::GraphSource;
+        use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+        let mut props = BTreeMap::new();
+        props.insert("region".to_string(), ModelValue::String("eu".into()));
+        props.insert("port".to_string(), ModelValue::Int(80));
+        let nodes = vec![(node_key("Host", "a"), NodeRecord::new([], props))];
+        let schema = vec![
+            SchemaEntry::Label {
+                name: "Host".into(),
+                def: LabelDef::new(vec!["hostname".into()], BTreeMap::new(), [], []).unwrap(),
+            },
+            SchemaEntry::Index {
+                name: "by_region_port".into(),
+                def: IndexDef::new("Host", vec!["region".into(), "port".into()]).unwrap(),
+            },
+        ];
+        let snapshot = GraphSnapshot::from_records_with_schema(&nodes, &[], &schema);
+        let lower = Value::Int(1);
+        assert!(
+            snapshot
+                .nodes_by_index_range("by_region_port", "port", Some((&lower, true)), None)
+                .is_none()
+        );
+        assert!(
+            snapshot
+                .nodes_by_index_range("by_region_port", "region", Some((&lower, true)), None)
+                .is_none()
+        );
     }
 
     /// Composite index seek (acetone-0c7): an all-properties-pinned

@@ -60,15 +60,15 @@ pub struct StoreBackedSource<'s> {
     snapshot: &'s Snapshot<'s>,
     /// label → key property names (to re-expose key values as properties).
     key_names: HashMap<String, Vec<String>>,
-    /// index name → `(label, property, type)` for single-property indexes.
+    /// index name → its label, ordered properties and per-component types.
     indexes: HashMap<String, IndexInfo>,
     /// The first store read error hit during a query, surfaced by the caller.
     error: Cell<Option<GraphError>>,
 }
 
 impl<'s> StoreBackedSource<'s> {
-    /// Build over `snapshot`, using `schema` for key-property names and the
-    /// seekable single-property indexes.
+    /// Build over `snapshot`, using `schema` for key-property names and
+    /// the seekable declared indexes (single and composite).
     pub fn new(snapshot: &'s Snapshot<'s>, schema: &[SchemaEntry]) -> Self {
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
         let mut label_types: HashMap<String, BTreeMap<String, PropertyType>> = HashMap::new();
@@ -139,9 +139,10 @@ impl<'s> StoreBackedSource<'s> {
         NodeKey::decode(id.0.as_ref()).ok()
     }
 
-    /// The candidate raw model values whose stored index key a pin could equal,
-    /// or `None` to fall back to a scan (the pin cannot be served exactly).
-    /// Probe alternatives for the `component`-th indexed property.
+    /// Probe alternatives for the `component`-th indexed property: the
+    /// candidate raw model values whose stored index key the pin could
+    /// equal, or `None` to fall back to a scan (the pin cannot be
+    /// served exactly).
     fn probe_value(
         &self,
         info: &IndexInfo,
@@ -216,8 +217,10 @@ impl GraphSource for StoreBackedSource<'_> {
         if info.properties.as_slice() != properties || values.len() != properties.len() {
             return None;
         }
-        // Per-component probe alternatives, then their bounded cartesian:
-        // a composite entry's key is the ordered value tuple (ADR-0027).
+        // Per-component probe alternatives, then their bounded cartesian
+        // (mirrors adapter.rs::cartesian_probes over byte encodings —
+        // keep caps and bail rules aligned): a composite entry's key is
+        // the ordered value tuple (ADR-0027).
         let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(values.len());
         for (component, value) in values.iter().enumerate() {
             let probes = self.probe_value(info, component, value)?;
