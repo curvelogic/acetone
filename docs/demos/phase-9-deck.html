@@ -347,7 +347,7 @@
           <div class="tag">BLOCKER 2 · EXECUTOR</div>
           <h3 style="margin-top:6px">One line, hangs forever</h3>
           <p style="margin-top:6px">A pattern comprehension with a fresh anchor is evaluated per row and re-scanned the whole node map at <b>zero governor charge</b>.</p>
-          <p style="margin-top:8px;color:var(--good)"><b>Fixed:</b> anchor candidates charged — first scan free of expansion (an ordinary big <code>MATCH</code> must not error), later scans charged, so a runaway trips <em>sooner on a bigger graph</em>.</p>
+          <p style="margin-top:8px;color:var(--good)"><b>Fixed:</b> anchor candidates charged uniformly against a <b>dedicated budget</b> (ADR-0064). Two earlier designs were tried and rejected in review — work-only (too loose) and borrowing the expansion budget (rejected ordinary joins).</p>
         </div>
       </div>
       <p>Seven lesser findings filed as beads. Defences that <strong>held</strong>: <code>prune_loose</code>'s safety floor survived every gc/worktree scenario; ADR-0044 anchors survived a real <code>git gc --prune=now --aggressive</code>; ref-name injection failed closed; 3M mutated queries, no panics; and <strong>no dependency added, bumped or re-featured all phase</strong>.</p>
@@ -359,7 +359,7 @@
   <section class="slide" id="s10">
     <div class="slide-inner">
       <p class="eyebrow">Decisions taken</p>
-      <h2>Two ADRs for the agenda.</h2>
+      <h2>Three ADRs for the agenda.</h2>
       <div class="grid cols-2" style="margin-top:16px">
         <div class="card lead">
           <div class="tag">ADR-0062</div>
@@ -371,6 +371,11 @@
           <h3 style="margin-top:6px">Workspace anchor coverage</h3>
           <p style="margin-top:6px">Self-anchoring mandatory for every live version; borrowed coverage for exactly one shape — a superseded pre-ADR-0014 ref no writer can upgrade — and only from durable, gc-enumerable sources. Written <em>because</em> the first rule was unsound.</p>
         </div>
+      </div>
+      <div class="card lead" style="margin-top:16px">
+        <div class="tag">ADR-0064</div>
+        <h3 style="margin-top:6px">Scanning gets its own budget</h3>
+        <p style="margin-top:6px"><code>max_scanned_candidates</code>, not the expansion budget — borrowing that one rejected ordinary nested-loop joins. <b>Adds a public field to <code>QueryLimits</code> and a variant to <code>ResourceLimit</code></b>, both in the frozen surface, inside a 0.3.x "additive only" series — and the CI freeze gate cannot see either, since <code>public-api.txt</code> records only the re-export line. Needs your ruling.</p>
       </div>
       <div class="card" style="margin-top:16px">
         <div class="tag">PROCESS · DISCLOSED DEVIATION</div>
@@ -389,15 +394,15 @@
         <div class="term-bar"><i></i><i></i><i></i><span class="term-title">acetone · phase 9 demo</span></div>
         <div class="term-body">
 <div class="l"><span class="p">$</span> <span class="c">cargo run --release -p acetone-tck --bin tck_runner</span></div>
-<div class="l"><span class="ok">  passed:  2185  (56.1%)   failed: 0  (0.0%)</span></div>
+<div class="l"><span class="ok">  passed:  2185  (56.07%)   failed: 0  (0.0%)</span></div>
 <div class="l"><span class="o">  # the conformance number, live</span></div>
 <div class="l"> </div>
 <div class="l"><span class="p">$</span> <span class="c">acetone query "RETURN 1 &lt; (((…))) &lt; 1"</span>  <span class="o"># the 268-byte bomb</span></div>
-<div class="l"><span class="no">  error: chained comparison duplicates too large an operand</span></div>
+<div class="l"><span class="no">  error: chained comparisons in this query duplicate more than the 4096-node…</span></div>
 <div class="l"><span class="o">  # 0.03 s — was 67 s and 53.8 GB</span></div>
 <div class="l"> </div>
 <div class="l"><span class="p">$</span> <span class="c">acetone query "UNWIND range(1,1000000) AS i RETURN size([(x)--&gt;(y)|1])"</span></div>
-<div class="l"><span class="no">  error: query exceeded the expansion-step resource limit</span></div>
+<div class="l"><span class="no">  error: query exceeded the scanned-candidate resource limit</span></div>
 <div class="l"><span class="o">  # was: hangs indefinitely</span></div>
 <div class="l"> </div>
 <div class="l"><span class="p">$</span> <span class="c">acetone import big.csv --label Host --batch-size 8192</span></div>
@@ -417,18 +422,19 @@
       <h2>What's yours to rule on.</h2>
       <ul class="clean" style="margin:18px 0">
         <li><b>Gate <code>acetone-2ck.1</code>.</b> All four criteria have evidence; both security blockers are closed. Yours to close — agents never close it.</li>
-        <li><b>Criterion 3's caveat.</b> Range seeks are implemented and measured but not yet reachable through <code>Session</code>. Under the "not delivered until reachable through the shipped interface" rule, does that satisfy the criterion, or should <code>acetone-2ck.13</code> land first?</li>
+        <li><b>Criterion 3's caveat.</b> The criterion names two seek kinds; one of them — range — is implemented and measured but not reachable through <code>Session</code>, and every lab figure was measured on the in-memory source. Under the "not delivered until reachable through the shipped interface" rule, does that satisfy the criterion, or should <code>acetone-2ck.14</code> land first?</li>
+        <li><b>The API-freeze question ADR-0064 raises.</b> A public field and enum variant added to types STABILITY.md freezes, in a patch series whose policy is additive-only, and invisible to the freeze gate. <code>#[non_exhaustive]</code> on both, or a minor bump?</li>
         <li><b>The Opus tier substitution.</b> Disclosed, compliant with ADR-0009 as written — but worth your view on whether the policy should say something explicit about capacity exhaustion.</li>
-        <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>2ck.13</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code> and the seven security beads. All re-homed; none floating.</li>
+        <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>2ck.14</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code>, <code>2ck.2</code> and the security beads — all re-homed to <code>7qw</code>. The epic still carries 23 pre-existing beads from the Phase 8 triage; whether those move is yours.</li>
       </ul>
       <div class="chips">
         <span class="chip good"><span class="dot"></span>TCK 2185/3897 · 0 failures</span>
         <span class="chip good"><span class="dot"></span>Import bounded</span>
-        <span class="chip warn"><span class="dot"></span>Seeks: 2 of 3 kinds shipped</span>
+        <span class="chip warn"><span class="dot"></span>Seeks: range not reachable via Session</span>
         <span class="chip good"><span class="dot"></span>fsck ≈N^1.27 · merge_base flat</span>
       </div>
     </div>
-    <p class="foot">docs/reports/phase-9.md · docs/conformance.md · ADR-0062, ADR-0063</p>
+    <p class="foot">docs/reports/phase-9.md · docs/conformance.md · ADR-0062, ADR-0063, ADR-0064</p>
     <p class="num">12</p>
   </section>
 

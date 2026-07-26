@@ -11,14 +11,14 @@ to stop assuming everything fits in memory or in one pass (the scale half).
 The headline numbers: **TCK conformance moved from 1602/3897 (41.1%) with 50
 failures to 2185/3897 (56.07%) with zero failures**; import of a source larger
 than memory completes in bounded resident memory; index seeks beat scans by
-13.8×–10⁵× on the lab graph; and `fsck` and `merge_base` are verified
+4.5×–10⁵× on the lab graph (the low end being an unselective equality seek); and `fsck` and `merge_base` are verified
 sub-quadratic on multi-version repositories.
 
 Everything landed autonomously under the usual gate: per bead a design recorded
 in the bead, TDD, a fresh strongest-tier adversarial review with no
 implementation context, fix/re-review, squash-merge on green CI, close. That
-gate earned its keep more than in any previous phase — see *What review caught*
-below, which is the most important section of this report.
+gate did substantial work this phase — see *What review caught* below, which is
+the most important section of this report.
 
 ## What shipped
 
@@ -44,7 +44,7 @@ below, which is the most important section of this report.
 | `acetone-2ck.3` | #216 | **Undeclared-label advisory** for expression-position label predicates. |
 | `acetone-2ck.11` | #217 | **`fsck` anchor-completeness for workspaces** (ADR-0063). |
 | `acetone-cbl.2` | #218 | **Conformance statement published** with every residual parse rejection individually justified. **Criterion 1.** |
-| `acetone-2ck.sec` | #219 | **Both milestone-security blockers closed**; `KeySeek` wired into the shipped read path. |
+| `acetone-2ck.15` | #219 | **Both milestone-security blockers closed**; `KeySeek` wired into the shipped read path. |
 
 ## Gate evidence — Phase 9 exit criteria
 
@@ -102,6 +102,7 @@ Measured on the lab graph at 440,800 nodes (`lab/README.md`):
 | Composite seek (populated bucket) | 7.7 ms | 213.1 ms | **27.6×** |
 | Composite seek (empty bucket) | 0.001 ms | 208.2 ms | ~10⁵× |
 | KeySeek (primary key) | 0.002 ms | 201.0 ms | ~10⁵× |
+| IndexSeek equality (`host_os`) | 53.0 ms | 236.2 ms | **4.5×** |
 
 Each case carries a parity assertion, so a "speed-up" that returned different
 rows would fail rather than flatter.
@@ -109,15 +110,26 @@ rows would fail rather than flatter.
 **The caveat, and it is a real one.** The milestone security review found that
 `StoreBackedSource` — the source `Session` actually uses — implemented only
 `nodes_by_index`. `KeySeek` and `IndexRange` fell through to the `GraphSource`
-default and always label-scanned, so **these numbers were measured against the
-in-memory `GraphSnapshot`, not the shipped read path**. PR #219 wires
-`nodes_by_key`, so point lookups now reach the product. **`IndexRange` remains
-unwired** (`acetone-2ck.13`, P1): index keys are
+default and always label-scanned. More than that: the lab builds a
+`GraphSnapshot` for **every** case, so *all* the rows above — composite seeks
+included — were measured against the in-memory source rather than the shipped
+read path. (`lab/README.md` does not yet say which source it measures;
+`acetone-2ck.14` covers fixing that.) PR #219 wires
+`nodes_by_key`, so point lookups now reach the product — reasoned from
+`Session`'s use of `StoreBackedSource` plus the new method and its unit test;
+no store-path speed-up has itself been measured. **`IndexRange` remains
+unwired** (`acetone-2ck.14`, P1 — `acetone-2ck.13` covered both seeks and is now closed
+as superseded, its KeySeek half having shipped): index keys are
 `encode_key([label, properties, values])`, so the values sit *inside* a List
 encoding, and constructing correct memcomparable range bounds is Load-Bearing
 Invariant #2 territory where a mistake silently returns wrong rows. That belongs
 in its own change with property tests over the bound construction and its own
 adversarial review, not landed unreviewed at a phase boundary.
+
+**Not attempted this phase**: `acetone-2ck.2`, costed planning seeds
+(cardinality-informed anchor choice), which the roadmap names in Phase 9's
+paragraph alongside var-length path performance. It is not part of the four
+exit criteria and did not ship; it is re-homed with the rest.
 
 One further limit, disclosed rather than buried: a key-seek **miss** declines
 and falls back to a scan (matching the in-memory source), and string-typed key
@@ -128,8 +140,10 @@ So: composite/equality seeks are delivered through the shipped interface;
 point lookups are now delivered for numeric keys; **range seeks are implemented and measured but not
 yet reachable through `Session`**. Under CLAUDE.md's rule that a user-facing
 feature is not delivered until it is reachable through the shipped interface,
-this criterion is **met for two of its three seek kinds**, and whether that
-satisfies the gate is Greg's call.
+the criterion names **two** seek kinds — index range and composite — and one of
+those two, range, is not reachable through `Session`. (KeySeek, now wired, is
+not named by the criterion at all.) Whether that satisfies the gate is Greg's
+call.
 
 ### Criterion 4 — `fsck` and `merge_base` sub-quadratic on a multi-version repository ✅
 
@@ -141,7 +155,10 @@ Measured on this machine over linear histories built through the CLI:
 | 400 | 0.412 s |
 | 800 | 1.125 s |
 
-Doubling ratios 2.13 and 2.73 — **≈N^1.27, comfortably sub-quadratic**. The
+Doubling ratios 2.13 then 2.73 — per-doubling exponents 1.09 then 1.45, so the
+endpoint fit is **≈N^1.27 and the exponent is climbing, not flat**. Comfortably
+sub-quadratic across the measured range; the trend is worth re-checking at
+larger N rather than averaging away. The
 PR #211 reviewer measured ≈N^1.15 over N=100–800 on an all-distinct-manifest
 worst case where the chunk-set cache never hits.
 
@@ -163,15 +180,15 @@ divergences.
 - **ADR-0062 — streaming import.** Pull-based extraction, batched staging,
   statement/stored UNIQUE layers, workspace reset on failure. Includes the
   honest memory scoping above.
-- **ADR-0064 — scanning is governed on its own budget.** `max_scanned_candidates`
-  rather than borrowing the expansion budget, because borrowing it rejected
-  ordinary nested-loop joins (a 20-row semi-join over 100k nodes). Written
-  during PR #219's review, for the same reason ADR-0063 was.
 - **ADR-0063 — workspace anchor coverage.** Self-anchoring is mandatory for
   every live version; borrowed coverage applies to exactly one shape (a
   superseded pre-ADR-0014 legacy shared ref that no writer can upgrade) and only
   from durable, gc-enumerable sources. Written *because* the first attempt at
   the rule was unsound — see below.
+- **ADR-0064 — scanning is governed on its own budget.** `max_scanned_candidates`
+  rather than borrowing the expansion budget, because borrowing it rejected
+  ordinary nested-loop joins (a 20-row semi-join over 100k nodes). Written
+  during PR #219's review, for the same reason ADR-0063 was.
 
 ## What review caught
 
@@ -214,10 +231,12 @@ regression tests:
 2. **Ungoverned per-row full scan** — a pattern comprehension with a fresh
    anchor re-materialised the whole node map per row at zero governor charge;
    `UNWIND range(1,1000000) AS i RETURN size([(x)-->(y) | 1])` hung
-   indefinitely. Anchor candidates are now charged, with the first scan of a
-   query paying work only (so an ordinary large `MATCH` does not become an
-   error) and later scans also charging expansion (so a runaway trips sooner on
-   a bigger graph). The exploit now raises a typed `ResourceExceeded`.
+   indefinitely. Anchor candidates are now charged against a **dedicated
+   budget** (`max_scanned_candidates`, ADR-0064), uniformly — no scan is exempt
+   by ordinality. Two earlier designs were tried and rejected in review:
+   charging work only (bounded but far too loose) and charging the expansion
+   budget (tight, but it rejected ordinary nested-loop joins). The exploit now
+   raises a typed `ResourceExceeded`.
 
 **The security fix itself needed three rounds.** PR #219's own adversarial
 review found that my first attempt at each blocker was incomplete, and every
@@ -255,7 +274,7 @@ reviewer at the merged commit:
 - **`allocated_size` weights structure but not byte payloads.** A long string
   literal inside nested chains still amplifies ~780× — linear and refused in
   ≤ 212 ms, against the original exponential 106,000×, so the DoS class is gone,
-  but the bound is not as tight as its name suggests.
+  but the bound is not as tight as its name suggests (`acetone-7qw.8`).
 - **`QueryLimits` and `ResourceLimit` gained a public field and variant** — see
   the API-freeze note under *Process notes* below.
 
@@ -263,8 +282,10 @@ Seven lesser findings are filed: `acetone-7qw.2` (quadratic import
 UNIQUE-violation path, executed and measured), `acetone-7qw.3` (schema-driven
 panic), `acetone-7qw.4` (unbounded line length vs ADR-0062's promise),
 `acetone-7qw.5` (the API-freeze gate cannot see enum-variant removals in
-re-exported types), `acetone-7qw.6` (memoise anchor scans), `acetone-2ck.13`
-(IndexRange on the store path), and the co-tenancy ref-prefix note.
+re-exported types), `acetone-7qw.6` (memoise anchor scans), `acetone-2ck.14`
+(IndexRange on the store path), `acetone-7qw.7` (the scan budget's ~40×
+under-count) and `acetone-7qw.8` (the byte-payload amplifier), and
+`acetone-42d` (the co-tenancy ref-prefix note).
 
 Defences that **held up under probing**, and are worth recording as much as the
 findings: `prune_loose`'s safety floor survived every gc/worktree scenario the
@@ -303,7 +324,12 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
   (write-query escape — pre-existing, now disclosed), `acetone-hi8` (temporal
   support — a whole feature family, not a defect), `acetone-1qj` (binder
   over-accept), `acetone-taf` (import wall-time), and the seven security beads
-  above. All re-homed to owning epics; none left floating under this phase.
+  above. All of these are now re-homed to `acetone-7qw` (the 0.3.x quality and
+  security epic) rather than left under the closed phase. Note that
+  `acetone-2ck` still carries **23 open beads** that predate this phase — they
+  were parented there during the Phase 8 backlog triage, not surfaced by Phase
+  9 — plus the gate bead itself. Deciding whether those move or stay is Greg's,
+  not something this phase should have quietly re-filed.
 - **Behaviour changes worth knowing about**: `WITH … WHERE` now filters *after*
   `SKIP`/`LIMIT`, which changes results for queries combining them (conformant,
   and the TCK does not pin it); `ORDER BY` keys are now evaluated on rows the
