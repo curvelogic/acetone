@@ -93,7 +93,7 @@ Two honest scopings, both recorded when they were found rather than after:
 - **Wall-time is superlinear** even though memory is bounded, because every save
   re-anchors the whole chunk set (`acetone-taf`).
 
-### Criterion 3 — index range and composite seek beat scan on the lab graph ✅
+### Criterion 3 — index range and composite seek beat scan on the lab graph ⚠️
 
 Measured on the lab graph at 440,800 nodes (`lab/README.md`):
 
@@ -113,9 +113,11 @@ security review found that `StoreBackedSource` — the source `Session` actually
 uses — implemented only `nodes_by_index`, and that the lab builds a
 `GraphSnapshot` for *every* case, so **all the rows above were measured against
 the in-memory source, not the shipped read path**. `KeySeek` was wired in
-PR #219 and `IndexRange` in PR #221, so both now reach the product; the lab
-still measures the in-memory source, which `acetone-2ck.14`'s close records for
-whoever re-measures.
+PR #219 and `IndexRange` in PR #221, so both now reach the product. **The lab
+still measures the in-memory source and `lab/README.md` still does not say so**
+— that disclosure was on `acetone-2ck.14`, which closed with the re-measurement
+half undone, so it is re-homed to `acetone-2ck.2` rather than left on a closed
+bead.
 
 Wiring the range seek then exposed something the lab could never show, because
 the in-memory source does not pay for it: **a seek does one random point read
@@ -125,8 +127,12 @@ index at all*. Declaring an index made ordinary queries dramatically worse.
 
 The fix is to decline rather than to optimise: past 1024 candidates the source
 returns `None` — the `GraphSource` contract's "cannot serve, scan instead" —
-before paying for a single point read. Reviewer-verified on a 50,000-node graph,
-three binaries side by side:
+before paying for a point read in that family. (The budget is checked per
+family, so a numeric range whose int half fits under the cap does those reads
+before the float half can trip the decline.) Measured by PR #221's reviewer on a 50,000-node graph with three binaries side
+by side (always-scan `main`, always-seek, and the shipped fix). These are that
+reviewer's own run, not the four-row table in PR #221's description, which used
+a different data shape and a 150.4 ms scan baseline:
 
 | rows | always scan | always seek | shipped |
 |---:|---:|---:|---:|
@@ -137,14 +143,17 @@ three binaries side by side:
 
 No regime is slower than the scan, and the selective win is intact.
 
-**Two open risks fall out of this, both named rather than buried.** First, the
+**Two open risks fall out of this.** First, the
 cap is absolute where break-even scales with label cardinality (measured: ~1,000
 rows at 50k nodes loose, ~4,000 packed, ~7,000 at 400k), so it is progressively
 conservative on larger graphs. Second — and this one ships on `main` today —
 **the equality-seek path has the same cliff and no cap**: an unselective
-`IndexSeek` measured **1248 ms indexed against 67 ms unindexed, 18× slower**, a
-pre-existing consequence of PR #206's wiring that Phase 9 did not introduce and
-has not fixed. Both are recorded with their measurements on `acetone-2ck.2`
+`IndexSeek` measured **1248 ms indexed against 67 ms unindexed, 18× slower**
+(independently reproduced by the amendment's reviewer at 13.7× on a leaner node
+shape). It arrived with PR #123 (`acetone-cbl.11`, lazy store-backed
+`IndexSeek`), not with this phase — an earlier draft of this paragraph blamed
+PR #206, which is *itself Phase 9 work* and would have made the sentence
+self-contradictory. Both are recorded with their measurements on `acetone-2ck.2`
 (costed planning seeds), which the roadmap names in this phase's paragraph and
 which did not ship.
 
@@ -353,14 +362,14 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
 
 ## Gate readiness
 
-All four criteria have evidence and no caveat; both security blockers are
-closed. Criterion 3's shortfall — range seeks unreachable through `Session` —
+All four criteria have evidence; both security blockers are closed. Criterion 3
+carries one live judgement call, described above. Criterion 3's shortfall — range seeks unreachable through `Session` —
 was closed in PR #221 rather than carried across the boundary, which also
 surfaced and fixed a performance cliff the lab's in-memory measurements could
 never have shown.
 
 Two things remain for Greg rather than for an agent: the **API-freeze question**
 ADR-0064 raises, and the **pre-existing equality-seek cliff** (18× slower than
-no index on an unselective seek) that ships on `main` today, is not Phase 9's
-doing, and is now measured and recorded on `acetone-2ck.2` with a demonstrated
-remedy.
+no index on an unselective seek) that ships on `main` today, arrived with
+PR #123 rather than this phase, and is now measured and recorded on
+`acetone-2ck.2` with a demonstrated remedy.
