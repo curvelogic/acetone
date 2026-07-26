@@ -2606,8 +2606,6 @@ impl<'r> Transaction<'r> {
     }
 }
 
-/// The complete chunk set of a manifest: every chunk of every map root,
-/// as sorted anchor list for [`NewCommit::anchors`].
 /// The byte string a bound constrains against, for the inverted-range
 /// guard (`None` for an unbounded end).
 fn bound_bytes(bound: &Bound<Vec<u8>>) -> Option<&[u8]> {
@@ -2617,6 +2615,8 @@ fn bound_bytes(bound: &Bound<Vec<u8>>) -> Option<&[u8]> {
     }
 }
 
+/// The complete chunk set of a manifest: every chunk of every map root,
+/// as sorted anchor list for [`NewCommit::anchors`].
 pub(crate) fn manifest_chunk_set(
     store: &GitStore,
     manifest: &Manifest,
@@ -2777,17 +2777,23 @@ impl<'s> Snapshot<'s> {
     /// keys of every entry whose key falls inside it (acetone-2ck.14).
     /// The caller builds the bounds in index-key space; this is the range
     /// counterpart of [`Self::index_scan`]'s prefix form.
+    /// Stops as soon as `cap + 1` entries have been collected, so a caller
+    /// that means to decline an unselective range pays for the walk it
+    /// needs and no more.
     pub fn index_range(
         &self,
         name: &str,
         lower: Bound<Vec<u8>>,
         upper: Bound<Vec<u8>>,
+        cap: usize,
     ) -> Result<Option<Vec<NodeKey>>, GraphError> {
         let Some(map_root) = self.manifest.indexes.get(name) else {
             return Ok(None);
         };
-        // An inverted or empty range selects nothing; `scan` would panic
-        // on a start greater than its end, as BTreeMap::range does.
+        // An inverted range selects nothing. `scan` handles it correctly
+        // on its own (it seeks the start and checks the exit bound per
+        // entry, unlike `BTreeMap::range`, which panics) — this is a
+        // short-circuit, not a safety guard.
         if let (Some(start), Some(end)) = (bound_bytes(&lower), bound_bytes(&upper))
             && start > end
         {
@@ -2814,6 +2820,9 @@ impl<'s> Snapshot<'s> {
                     .node()
                     .clone(),
             );
+            if out.len() > cap {
+                break;
+            }
         }
         Ok(Some(out))
     }

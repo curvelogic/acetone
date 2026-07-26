@@ -423,6 +423,23 @@ impl GraphSource for StoreBackedSource<'_> {
         .ok()?;
         head.pop()?;
 
+        // A range seek does one RANDOM point read per matching entry;
+        // the label scan it replaces reads the nodes map sequentially. So
+        // the seek wins only while the range is selective, and loses
+        // badly when it is not — measured at up to 37x SLOWER than the
+        // scan for a range covering the whole label (PR #221 review
+        // blocker). Declining past a cap keeps the selective win and
+        // removes the cliff: `None` is the trait's "cannot serve, scan
+        // instead", and the scan is always correct.
+        //
+        // The cap is absolute rather than a fraction of the label's
+        // cardinality, which this source cannot learn cheaply. That is
+        // conservative on a large graph — a range selecting 50,000 of ten
+        // million rows would still beat a scan but is declined — and
+        // cardinality-informed thresholds are exactly what
+        // `acetone-2ck.2` (costed planning seeds) is for.
+        const MAX_RANGE_CANDIDATES: usize = 1024;
+
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
         let mut out = Vec::new();
         for (start, end) in families {
@@ -436,6 +453,25 @@ impl GraphSource for StoreBackedSource<'_> {
             // then the node key), so an inclusive upper bound must run to
             // the successor of that region, and an exclusive lower bound
             // must start there.
+            //
+            // INVARIANT (PR #221 review finding 5): the two arms that
+            // apply `prefix_successor` — exclusive lower, inclusive upper
+            // — require a COMPLETE value encoding. `range_families` also
+            // emits bare family-tag sentinels (`[0x04]`, `[0x05]`, …),
+            // and those only ever appear on the inclusive-lower and
+            // exclusive-upper arms, which pass the bytes through
+            // untouched. If that ever changed, `prefix_successor` on a
+            // lone `[0x04]` would yield `[0x05]` and silently skip the
+            // whole int family — under-selection, while the in-memory
+            // source stayed correct. The debug assertion below pins it.
+            debug_assert!(
+                !matches!(&start, Bound::Excluded(v) if v.len() == 1),
+                "a bare family sentinel must not reach the exclusive-lower arm"
+            );
+            debug_assert!(
+                !matches!(&end, Bound::Included(v) if v.len() == 1),
+                "a bare family sentinel must not reach the inclusive-upper arm"
+            );
             let start = match &start {
                 Bound::Included(v) => Bound::Included(lifted(v)),
                 Bound::Excluded(v) => match prefix_successor(&lifted(v)) {
@@ -455,9 +491,17 @@ impl GraphSource for StoreBackedSource<'_> {
                     None => Bound::Unbounded,
                 },
             };
-            match self.snapshot.index_range(index_name, start, end) {
+            // Budget across families: the int and float halves of one
+            // numeric range share the cap, so their sum decides.
+            let remaining = MAX_RANGE_CANDIDATES.saturating_sub(seen.len());
+            match self.snapshot.index_range(index_name, start, end, remaining) {
                 Ok(None) => return None,
                 Ok(Some(keys)) => {
+                    if keys.len() > remaining {
+                        // Unselective: hand the work back to the scan
+                        // before paying for a single point read.
+                        return None;
+                    }
                     for key in keys {
                         let Ok(encoded) = key.encode() else { continue };
                         if seen.insert(encoded)
