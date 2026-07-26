@@ -47,12 +47,22 @@ checked against their own anchor trees alone.
 
 **Coverage is borrowed for exactly one shape**: a superseded legacy shared
 `refs/acetone/workspaces/*` ref, which no writer can upgrade. Its chunks are
-considered safe when a **live** worktree anchors them, where live means the
-anchor's `worktrees/<id>` directory still exists — the same staleness test
-`gc` uses before sweeping an anchor. Coverage is computed only when a legacy
-ref is present, and only when fsck can see the whole picture from the common
-directory (`git_dir() == common_dir()`), since a linked worktree's private
-refs are not enumerable from elsewhere.
+considered safe when a **live** workspace anchors them. Two sources qualify:
+
+- **this worktree's own workspace tree** (`refs/worktree/acetone/workspace`),
+  whose ref lives in the common directory and is therefore enumerated by a
+  foreign `git gc`. On a pre-ADR-0014 repository — which by construction
+  predates linked worktrees — this is usually the *only* source, so omitting
+  it makes the "would not survive a foreign git gc" claim false on precisely
+  the shape the message exists for (measured: fsck said 3 chunks doomed where
+  `git gc --prune=now` pruned 1);
+- **live linked-worktree anchors** (ADR-0044), where live means the anchor's
+  `worktrees/<id>` directory still exists — the same staleness test `gc` uses
+  before sweeping an anchor.
+
+Coverage is computed only when a legacy ref is present, and only when fsck can
+see the whole picture from the common directory (`git_dir() == common_dir()`),
+since a linked worktree's private refs are not enumerable from elsewhere.
 
 When such a ref *is* genuinely exposed, the finding names the shape and a
 remedy that works: save from the live worktree to carry the state over, then
@@ -65,9 +75,11 @@ remedy that works: save from the live worktree to carry the state over, then
 - A pre-ADR-0014 repository is not permanently red, and the one message that
   cannot be actioned by an acetone command says so and gives the git one.
 - The borrowed-coverage exception is narrow, testable and self-limiting: it
-  disappears with the last legacy shared ref. Tests pin all three behaviours
-  (exposed legacy ref errors; stale anchor does not cover; live anchor does)
-  plus the narrowing itself (a live workspace with a peer at the same state
-  is still reported).
+  disappears with the last legacy shared ref. Tests pin every behaviour: an
+  exposed legacy ref errors; a stale anchor does not cover it; a live linked
+  anchor does; this worktree's own workspace tree does (the ordinary legacy
+  shape, with no linked worktrees at all); and the narrowing itself — a live
+  workspace with a peer at the same state is still reported, so an anchoring
+  bug in acetone's writers cannot hide.
 - `acetone` still offers no ref-deletion command; the remedy quotes git
   directly rather than implying a subcommand exists.

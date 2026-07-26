@@ -24,6 +24,8 @@ fn node(label: &str, key: &str) -> NodeKey {
     NodeKey::new(label, vec![Value::String(key.to_owned())]).expect("valid")
 }
 
+const WORKTREE_WORKSPACE_REF_NAME: &str = "refs/worktree/acetone/workspace";
+
 /// Write `manifest` behind `refname` the way a real save does: as a (huo)
 /// workspace TREE anchoring every reachable chunk — so fsck's workspace
 /// anchor-completeness check (acetone-2ck.11) sees a healthy workspace.
@@ -55,7 +57,13 @@ fn write_anchored_workspace(
     let tree = store
         .write_workspace_tree(&manifest.encode(), &anchors)
         .expect("workspace tree");
-    store.write_ref(refname, None, &tree).expect("ref");
+    // The per-worktree workspace ref already exists (init writes it), so
+    // take the unconditional path a save uses; branch-style refs are new.
+    if refname == WORKTREE_WORKSPACE_REF_NAME {
+        store.overwrite_ref(refname, &tree).expect("overwrite ref");
+    } else {
+        store.write_ref(refname, None, &tree).expect("ref");
+    }
 }
 
 /// Insert `n` nodes and commit, so the `nodes` map is a genuine multi-level
@@ -1320,6 +1328,53 @@ fn legacy_shared_workspace_exposure_and_coverage() {
                 && matches!(&f.origin, fsck::Origin::Workspace { reference }
                     if reference == "refs/acetone/workspaces/legacy")),
         "a live worktree's anchors must cover the legacy ref: {:?}",
+        report.findings
+    );
+}
+
+/// The commonest legacy shape (PR #217 review round 3): a pre-ADR-0014
+/// repository predates linked worktrees, so the only thing anchoring its
+/// chunks is THIS worktree's own workspace tree — whose ref lives in the
+/// common dir and is gc-enumerated. Coverage must include it, or fsck
+/// claims chunks would be pruned that a real `git gc` demonstrably keeps.
+#[test]
+fn live_workspace_tree_covers_a_legacy_shared_ref() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "shared").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+
+    // The live workspace anchors the state (as any save does)…
+    write_anchored_workspace(&repo, &manifest, WORKTREE_WORKSPACE_REF_NAME);
+    // …and a superseded legacy shared ref names the same manifest as a
+    // bare blob. No linked worktrees exist — the ordinary legacy shape.
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/legacy", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete),
+        "the live workspace tree covers the legacy ref: {:?}",
         report.findings
     );
 }

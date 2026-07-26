@@ -440,23 +440,32 @@ fn check_workspaces(
     // state, and a chunk kept alive only by a *stale* anchor dies the
     // moment `acetone gc` sweeps it (PR #217 review Major, driven to real
     // data loss). So coverage is built only when a legacy ref exists, and
-    // only from anchors that are themselves durable: LIVE worktree
-    // anchors (their `worktrees/<id>` directory still present — the same
-    // staleness test gc uses) and only when this process can see the
-    // whole picture from the common dir.
+    // only from sources that are themselves durable and gc-enumerable
+    // from here: this worktree's own workspace tree (its ref lives in the
+    // common dir — and on a pre-ADR-0014 repository, which by
+    // construction predates linked worktrees, it is usually the ONLY
+    // source) and LIVE linked-worktree anchors (their `worktrees/<id>`
+    // directory still present — the same staleness test gc uses). All of
+    // it applies only when this process sees the whole picture from the
+    // common dir.
     let has_legacy = refs
         .iter()
         .any(|(reference, _)| reference.starts_with(WORKSPACE_REF_PREFIX));
     let mut coverage: BTreeSet<Hash> = BTreeSet::new();
     if has_legacy && store.git_dir() == store.common_dir() {
         let worktrees_dir = store.common_dir().join("worktrees");
-        for (reference, ref_hash) in &anchor_refs {
-            let id = reference
-                .strip_prefix(WORKTREE_ANCHOR_PREFIX)
-                .unwrap_or(reference);
-            if !worktrees_dir.join(id).exists() {
-                continue; // a removed worktree's anchor: gc will sweep it
-            }
+        let live_sources = refs
+            .iter()
+            .filter(|(reference, _)| reference == WORKTREE_WORKSPACE_REF)
+            .chain(anchor_refs.iter().filter(|(reference, _)| {
+                let id = reference
+                    .strip_prefix(WORKTREE_ANCHOR_PREFIX)
+                    .unwrap_or(reference);
+                // A removed worktree's anchor: gc will sweep it, so it
+                // guarantees nothing.
+                worktrees_dir.join(id).exists()
+            }));
+        for (_, ref_hash) in live_sources {
             if let Ok(WorkspaceAnchors::Anchored(set)) = store.workspace_anchors(ref_hash) {
                 coverage.extend(set);
             }
