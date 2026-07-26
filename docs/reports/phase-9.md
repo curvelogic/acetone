@@ -199,19 +199,40 @@ hint, so this is specific to equality. Filed as `acetone-7qw.9`, with the note
 that closing it before `acetone-2ck.2` would expose *more* queries to the cliff
 rather than help.
 
-*So the ruling.* Both seek kinds are now **reachable** through `Session`, which
-they were not when this report was first written, and each beats a scan on
-selective inputs. But on the lab's own chosen cases the criterion's literal
-words — "index range + composite seek measurably beat scan on the lab graph at
-the larger envelope" — are **not satisfied on the shipped path**: one declines
-to a scan and the other is slower than no index. An earlier draft of this report
-claimed the question had disappeared, then claimed it applied only to ranges;
-both were wrong, and this is the third and I believe accurate statement of it.
-Raising the cap is not the answer — the cap is what stops an unselective range
-seek being 37× slower than no index. The honest position is that the seek
-machinery is correct and useful, the lab's parameters do not exercise the regime
-where it helps, and the criterion needs either a ruling that reachability plus
-selective-case wins is enough, or re-parameterised lab cases and a re-run.
+*Greg's ruling, at the boundary.* Neither of the two options an earlier draft
+of this section offered is the point. The real problems are that **acetone
+selects an index seek when it should not — the cost model needs refining — and
+that `WHERE` does not use indexes at all.** Re-parameterising the lab to
+demonstrate wins at reasonable selectivities is needed, but is **secondary to
+having useful beneficial indexing**.
+
+That reframes what this criterion has actually shown. Both seek kinds are now
+reachable through `Session`, which they were not when this report was first
+written, and each beats a scan on selective inputs — but what the boundary
+measurements really established is that **a declared index is not yet reliably
+beneficial**: it can make a query 1.5–3.7× slower on the lab's own composite
+ratio, 18× slower on a 20%-selectivity equality case, and it does not engage at
+all for the `WHERE` form most people write. The lab's parameters were not
+exercising the regime where seeks help, but that is the smaller finding; the
+larger one is that the seek/scan decision is being made without a cost model.
+
+The work follows from that, in order:
+
+1. **`acetone-2ck.2` (now P1) — the cost model.** Selectivity-estimated
+   seek-vs-scan for *both* the equality/composite and range paths, replacing
+   PR #221's absolute `MAX_RANGE_CANDIDATES` stopgap, so an index helps whenever
+   it can and never hurts. `MapRoot.height` is a zero-cost coarse cardinality
+   proxy already in the manifest.
+2. **`acetone-7qw.9` (now P1) — `WHERE` must use indexes.** Sequenced after or
+   with the cost model: closing it first would expose *more* queries to the
+   cliff rather than help.
+3. **Lab re-parameterisation and re-measurement through `Session`** — secondary,
+   and worth more once the numbers describe a mechanism that reliably wins.
+
+An earlier draft of this report claimed the criterion-3 question had
+disappeared, then claimed it applied only to ranges. Both were wrong. The
+accurate statement is above, and the criterion's disposition is Greg's when he
+closes `acetone-2ck.1`.
 
 **Two further open risks fall out of this.** First, the
 cap is absolute where break-even scales with label cardinality (measured: ~1,000
