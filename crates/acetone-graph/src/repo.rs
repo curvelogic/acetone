@@ -2608,6 +2608,15 @@ impl<'r> Transaction<'r> {
 
 /// The complete chunk set of a manifest: every chunk of every map root,
 /// as sorted anchor list for [`NewCommit::anchors`].
+/// The byte string a bound constrains against, for the inverted-range
+/// guard (`None` for an unbounded end).
+fn bound_bytes(bound: &Bound<Vec<u8>>) -> Option<&[u8]> {
+    match bound {
+        Bound::Included(b) | Bound::Excluded(b) => Some(b.as_slice()),
+        Bound::Unbounded => None,
+    }
+}
+
 pub(crate) fn manifest_chunk_set(
     store: &GitStore,
     manifest: &Manifest,
@@ -2762,6 +2771,51 @@ impl<'s> Snapshot<'s> {
             out.push(acetone_model::graph_keys::IndexEntry::decode(&key)?);
         }
         Ok(out)
+    }
+
+    /// Scan an index map over an explicit byte range, returning the node
+    /// keys of every entry whose key falls inside it (acetone-2ck.14).
+    /// The caller builds the bounds in index-key space; this is the range
+    /// counterpart of [`Self::index_scan`]'s prefix form.
+    pub fn index_range(
+        &self,
+        name: &str,
+        lower: Bound<Vec<u8>>,
+        upper: Bound<Vec<u8>>,
+    ) -> Result<Option<Vec<NodeKey>>, GraphError> {
+        let Some(map_root) = self.manifest.indexes.get(name) else {
+            return Ok(None);
+        };
+        // An inverted or empty range selects nothing; `scan` would panic
+        // on a start greater than its end, as BTreeMap::range does.
+        if let (Some(start), Some(end)) = (bound_bytes(&lower), bound_bytes(&upper))
+            && start > end
+        {
+            return Ok(Some(Vec::new()));
+        }
+        let root = self.root(map_root)?;
+        let mut out = Vec::new();
+        let bounds = (
+            match &lower {
+                Bound::Included(b) => Bound::Included(b.as_slice()),
+                Bound::Excluded(b) => Bound::Excluded(b.as_slice()),
+                Bound::Unbounded => Bound::Unbounded,
+            },
+            match &upper {
+                Bound::Included(b) => Bound::Included(b.as_slice()),
+                Bound::Excluded(b) => Bound::Excluded(b.as_slice()),
+                Bound::Unbounded => Bound::Unbounded,
+            },
+        );
+        for item in acetone_prolly::scan(self.store, &root, bounds)? {
+            let (key, _) = item?;
+            out.push(
+                acetone_model::graph_keys::IndexEntry::decode(&key)?
+                    .node()
+                    .clone(),
+            );
+        }
+        Ok(Some(out))
     }
 
     /// The node keys a declared index `name` selects for `prefix` — the

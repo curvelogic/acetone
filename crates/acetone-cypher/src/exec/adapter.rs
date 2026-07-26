@@ -686,7 +686,7 @@ fn index_lookup_keys(value: &Value) -> Vec<Vec<u8>> {
 /// (precision hazard) — fall back to a scan. Over-selection is safe (the
 /// WHERE still filters); under-selection is a bug.
 #[allow(clippy::type_complexity)]
-fn range_families(
+pub(crate) fn range_families(
     lower: Option<(&Value, bool)>,
     upper: Option<(&Value, bool)>,
 ) -> Option<Vec<(std::ops::Bound<Vec<u8>>, std::ops::Bound<Vec<u8>>)>> {

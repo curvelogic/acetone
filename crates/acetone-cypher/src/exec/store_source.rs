@@ -35,8 +35,10 @@ use std::collections::{BTreeMap, HashMap};
 use acetone_graph::GraphError;
 use acetone_graph::repo::Snapshot;
 use acetone_model::Value as ModelValue;
+use acetone_model::graph_keys::prefix_successor;
 use acetone_model::graph_keys::{NodeKey, index_value_prefix};
 use acetone_model::schema::{PropertyType, SchemaEntry};
+use std::ops::Bound;
 
 use crate::ast::Direction;
 use crate::exec::adapter::{node_value, rel_value};
@@ -346,6 +348,114 @@ impl GraphSource for StoreBackedSource<'_> {
             };
             match self.snapshot.index_scan(index_name, &prefix) {
                 // Index map absent though the schema declares it: fall back.
+                Ok(None) => return None,
+                Ok(Some(keys)) => {
+                    for key in keys {
+                        let Ok(encoded) = key.encode() else { continue };
+                        if seen.insert(encoded)
+                            && let Some(node) = self.node_from_key(&key)
+                        {
+                            out.push(node);
+                        }
+                    }
+                }
+                Err(e) => return self.fail(e, None),
+            }
+        }
+        Some(out)
+    }
+
+    fn nodes_by_index_range(
+        &self,
+        index_name: &str,
+        property: &str,
+        lower: Option<(&Value, bool)>,
+        upper: Option<(&Value, bool)>,
+    ) -> Option<Vec<NodeValue>> {
+        // Ranges serve single-property indexes only, and the hint may have
+        // been bound against another version's catalogue (AT clauses), so
+        // the registry entry must be exactly [property].
+        let info = self.indexes.get(index_name)?;
+        if info.properties.len() != 1 || info.properties[0] != property {
+            return None;
+        }
+        // Serve NUMERIC bounds only. The hazard is a deferred-typed
+        // (Bytes/temporal) stored value, which the runtime compares as its
+        // string *rendering* while the index holds its own encoding — so a
+        // byte range could miss it. A numeric bound is immune, exactly as
+        // `probe_value` argues for equality pins: a string rendering never
+        // compares less/greater than a number in openCypher (the
+        // comparison is null), so no row that the predicate would accept
+        // is left out. A non-numeric bound has no such guarantee, so it
+        // declines and the scan answers.
+        //
+        // Gating on the *bounds* rather than on a declared property type
+        // matters: `declare-label` does not take property types, so a
+        // declared-type test declines on ordinary graphs and the seek
+        // never fires — measured, not assumed.
+        let numeric_bound = |b: &Option<(&Value, bool)>| {
+            b.is_none_or(|(v, _)| matches!(v, Value::Int(_) | Value::Float(_)))
+        };
+        if !numeric_bound(&lower) || !numeric_bound(&upper) {
+            return None;
+        }
+        // The value ranges themselves come from the same reviewed helper
+        // the in-memory source uses (dual int/float families, precision
+        // hazards, zero-widening), then are lifted into index-key space.
+        let families = crate::exec::adapter::range_families(lower, upper)?;
+        if families.is_empty() {
+            return Some(Vec::new());
+        }
+        // An index key is encode_key([label, [property], [value]]) ++ node
+        // key. Everything before the value list is constant, and with ONE
+        // element in that list the bytes after `TAG_LIST` sort exactly as
+        // the value does — which is what makes a byte range sound here.
+        // Derived from the encoder rather than by hand: encode the key
+        // with an EMPTY value list and drop the list terminator, leaving
+        // exactly the bytes every entry for this index shares, up to and
+        // including the value list's opening tag. This cannot drift from
+        // the encoding the way a hand-written tag byte could.
+        let mut head = acetone_model::keys::encode_key(&[
+            ModelValue::String(info.label.clone()),
+            ModelValue::List(vec![ModelValue::String(property.to_owned())]),
+            ModelValue::List(Vec::new()),
+        ])
+        .ok()?;
+        head.pop()?;
+
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for (start, end) in families {
+            let lifted = |bytes: &[u8]| {
+                let mut k = head.clone();
+                k.extend_from_slice(bytes);
+                k
+            };
+            // Inclusivity is expressed against the *value region*: a key
+            // for value v continues past v's encoding (list terminator,
+            // then the node key), so an inclusive upper bound must run to
+            // the successor of that region, and an exclusive lower bound
+            // must start there.
+            let start = match &start {
+                Bound::Included(v) => Bound::Included(lifted(v)),
+                Bound::Excluded(v) => match prefix_successor(&lifted(v)) {
+                    Some(next) => Bound::Included(next),
+                    None => continue,
+                },
+                Bound::Unbounded => Bound::Included(head.clone()),
+            };
+            let end = match &end {
+                Bound::Included(v) => match prefix_successor(&lifted(v)) {
+                    Some(next) => Bound::Excluded(next),
+                    None => Bound::Unbounded,
+                },
+                Bound::Excluded(v) => Bound::Excluded(lifted(v)),
+                Bound::Unbounded => match prefix_successor(&head) {
+                    Some(next) => Bound::Excluded(next),
+                    None => Bound::Unbounded,
+                },
+            };
+            match self.snapshot.index_range(index_name, start, end) {
                 Ok(None) => return None,
                 Ok(Some(keys)) => {
                     for key in keys {
