@@ -1,6 +1,6 @@
 # Phase 9 report — at scale and in conformance
 
-*Epic `acetone-2ck` · base `main @ 848d0e9` (post-0.3.1) · this report covers PRs #199–#219*
+*Epic `acetone-2ck` · base `main @ 848d0e9` (post-0.3.1) · this report covers PRs #199–#221*
 
 Phase 9 is the phase where acetone stops being demonstrably correct on small
 inputs and starts being **measurably correct at size**. Two things had to
@@ -11,7 +11,8 @@ to stop assuming everything fits in memory or in one pass (the scale half).
 The headline numbers: **TCK conformance moved from 1602/3897 (41.1%) with 50
 failures to 2185/3897 (56.07%) with zero failures**; import of a source larger
 than memory completes in bounded resident memory; index seeks beat scans by
-4.5×–10⁵× on the lab graph (the low end being an unselective equality seek); and `fsck` and `merge_base` are verified
+4.5×–10⁵× on the lab graph (the low end being an unselective equality seek);
+and `fsck` and `merge_base` are verified
 sub-quadratic on multi-version repositories.
 
 Everything landed autonomously under the usual gate: per bead a design recorded
@@ -45,6 +46,7 @@ the most important section of this report.
 | `acetone-2ck.11` | #217 | **`fsck` anchor-completeness for workspaces** (ADR-0063). |
 | `acetone-cbl.2` | #218 | **Conformance statement published** with every residual parse rejection individually justified. **Criterion 1.** |
 | `acetone-2ck.15` | #219 | **Both milestone-security blockers closed**; `KeySeek` wired into the shipped read path. |
+| `acetone-2ck.14` | #221 | **`IndexRange` wired into the store-backed source** — range seeks reach the shipped read path, and decline when they would lose to a scan. |
 
 ## Gate evidence — Phase 9 exit criteria
 
@@ -107,43 +109,82 @@ Measured on the lab graph at 440,800 nodes (`lab/README.md`):
 Each case carries a parity assertion, so a "speed-up" that returned different
 rows would fail rather than flatter.
 
-**The caveat, and it is a real one.** The milestone security review found that
-`StoreBackedSource` — the source `Session` actually uses — implemented only
-`nodes_by_index`. `KeySeek` and `IndexRange` fell through to the `GraphSource`
-default and always label-scanned. More than that: the lab builds a
-`GraphSnapshot` for **every** case, so *all* the rows above — composite seeks
-included — were measured against the in-memory source rather than the shipped
-read path. (`lab/README.md` does not yet say which source it measures;
-`acetone-2ck.14` covers fixing that.) PR #219 wires
-`nodes_by_key`, so point lookups now reach the product — reasoned from
-`Session`'s use of `StoreBackedSource` plus the new method and its unit test;
-no store-path speed-up has itself been measured. **`IndexRange` remains
-unwired** (`acetone-2ck.14`, P1 — `acetone-2ck.13` covered both seeks and is now closed
-as superseded, its KeySeek half having shipped): index keys are
-`encode_key([label, properties, values])`, so the values sit *inside* a List
-encoding, and constructing correct memcomparable range bounds is Load-Bearing
-Invariant #2 territory where a mistake silently returns wrong rows. That belongs
-in its own change with property tests over the bound construction and its own
-adversarial review, not landed unreviewed at a phase boundary.
+**Where these numbers came from, and what has since changed.** The milestone
+security review found that `StoreBackedSource` — the source `Session` actually
+uses — implemented only `nodes_by_index`, and that the lab builds a
+`GraphSnapshot` for *every* case, so **all the rows above were measured against
+the in-memory source, not the shipped read path**. `KeySeek` was wired in
+PR #219 and `IndexRange` in PR #221, so both now reach the product. **The lab
+still measures the in-memory source and `lab/README.md` still does not say so**
+— that disclosure was on `acetone-2ck.14`, which closed with the re-measurement
+half undone, so it is re-homed to `acetone-2ck.2` rather than left on a closed
+bead.
 
-**Not attempted this phase**: `acetone-2ck.2`, costed planning seeds
-(cardinality-informed anchor choice), which the roadmap names in Phase 9's
-paragraph alongside var-length path performance. It is not part of the four
-exit criteria and did not ship; it is re-homed with the rest.
+Wiring the range seek then exposed something the lab could never show, because
+the in-memory source does not pay for it: **a seek does one random point read
+per matching row, while the scan it replaces reads the nodes map sequentially.**
+Past roughly 2.5% selectivity the "optimisation" was *up to 37× slower than no
+index at all*. Declaring an index made ordinary queries dramatically worse.
 
-One further limit, disclosed rather than buried: a key-seek **miss** declines
-and falls back to a scan (matching the in-memory source), and string-typed key
-pins decline entirely to avoid the under-selection described below — so the
-shipped point-lookup speed-up applies to numeric keys that exist.
+The fix is to decline rather than to optimise: past 1024 candidates the source
+returns `None` — the `GraphSource` contract's "cannot serve, scan instead" —
+before paying for a point read in that family. (The budget is checked per
+family, so a numeric range whose int half fits under the cap does those reads
+before the float half can trip the decline.) Measured by PR #221's reviewer on
+a 50,000-node graph with three binaries side
+by side (always-scan `main`, always-seek, and the shipped fix). These are that
+reviewer's own run, not the four-row table in PR #221's description, which used
+a different data shape and a 150.4 ms scan baseline:
 
-So: composite/equality seeks are delivered through the shipped interface;
-point lookups are now delivered for numeric keys; **range seeks are implemented and measured but not
-yet reachable through `Session`**. Under CLAUDE.md's rule that a user-facing
-feature is not delivered until it is reachable through the shipped interface,
-the criterion names **two** seek kinds — index range and composite — and one of
-those two, range, is not reachable through `Session`. (KeySeek, now wired, is
-not named by the criterion at all.) Whether that satisfies the gate is Greg's
-call.
+| rows | always scan | always seek | shipped |
+|---:|---:|---:|---:|
+| 51 | 105.4 ms | 8.2 ms | **8.2 ms** |
+| 494 | 105.0 ms | 53.2 ms | **54.2 ms** |
+| 2,030 | 107.6 ms | 208.4 ms | **100.3 ms** |
+| 24,973 | 117.9 ms | 2570.2 ms | **111.9 ms** |
+
+No regime is slower than the scan, and the selective win is intact.
+
+**And this is where the criterion's judgement call actually sits.** The lab's
+own range case would decline at the shipped cap: `cert_not_after` is `i % 365`
+and the lab runs at 200,000 certificates, so `cert_not_after < 30` matches
+roughly **16,000 rows — sixteen times `MAX_RANGE_CANDIDATES`**. Through
+`Session` that query declines and label-scans, giving **1.0×, not the 13.8×** in
+the table at the top of this section. The 13.8× is real and is what the
+in-memory source does; it is not what the product does for that query.
+
+So the mechanism is delivered and correct, and a *selective* range beats a scan
+on the shipped path. Whether "index range … measurably beat scan on the lab
+graph" is satisfied by a mechanism that declines on the lab's own chosen case is
+a judgement call, and it is Greg's — an earlier draft of this report claimed the
+question had disappeared when it had only moved. **Raising the cap is not the
+answer**: the cap is precisely what stops an unselective seek being 37× slower
+than no index. Nor would `acetone-2ck.2`'s cardinality-informed threshold
+rescue this particular case — and that is the sharper conclusion. 16,438 of
+200,000 rows is **8.2% selectivity**, where the phase's own measured law puts
+break-even at roughly 2% on loose objects and 8% packed; scaled from the
+400k-loose anchor, break-even for a 200,000-row label is about 3,500 rows, so
+the lab's case is some five times beyond it. A perfect cost model declines this
+range too. **The lab's chosen range case is genuinely scan-shaped, and its
+13.8× is an artefact of a source that pays nothing for point reads.** What
+`acetone-2ck.2` fixes is the *class* — it would admit ranges the absolute cap
+wrongly declines on large graphs, such as the 2,000-rows-at-400k case measured
+at 3.4× — not this instance. Re-measuring the lab through `Session` will
+therefore confirm 1.0× permanently, not temporarily.
+
+**Two further open risks fall out of this.** First, the
+cap is absolute where break-even scales with label cardinality (measured: ~1,000
+rows at 50k nodes loose, ~4,000 packed, ~7,000 at 400k), so it is progressively
+conservative on larger graphs. Second — and this one ships on `main` today —
+**the equality-seek path has the same cliff and no cap**: an unselective
+`IndexSeek` measured **1248 ms indexed against 67 ms unindexed, 18× slower**
+(independently reproduced by the amendment's reviewer at 13.7× on a leaner node
+shape). It arrived with PR #123 (`acetone-cbl.11`, lazy store-backed
+`IndexSeek`), not with this phase — an earlier draft of this paragraph blamed
+PR #206, which is *itself Phase 9 work* and would have made the sentence
+self-contradictory. Both are recorded with their measurements on `acetone-2ck.2`
+(costed planning seeds), which the roadmap names in this phase's paragraph and
+which did not ship.
 
 ### Criterion 4 — `fsck` and `merge_base` sub-quadratic on a multi-version repository ✅
 
@@ -286,13 +327,14 @@ reviewer at the merged commit:
   the API-freeze note under *Process notes* below.
 
 Lesser findings are filed — six from the milestone review itself
-(`acetone-7qw.2`–`.6` and `acetone-2ck.14`), plus two from PR #219's own review
-(`acetone-7qw.7`, `acetone-7qw.8`) and the co-tenancy note (`acetone-42d`): `acetone-7qw.2` (quadratic import
+(`acetone-7qw.2`–`.6`), plus two from PR #219's own review
+(`acetone-7qw.7`, `acetone-7qw.8`) and the co-tenancy note (`acetone-42d`):
+`acetone-7qw.2` (quadratic import
 UNIQUE-violation path, executed and measured), `acetone-7qw.3` (schema-driven
 panic), `acetone-7qw.4` (unbounded line length vs ADR-0062's promise),
 `acetone-7qw.5` (the API-freeze gate cannot see enum-variant removals in
-re-exported types), `acetone-7qw.6` (memoise anchor scans), `acetone-2ck.14`
-(IndexRange on the store path), `acetone-7qw.7` (the scan budget's ~40×
+re-exported types), `acetone-7qw.6` (memoise anchor scans), `acetone-7qw.7`
+(the scan budget's ~40×
 under-count) and `acetone-7qw.8` (the byte-payload amplifier), and
 `acetone-42d` (the co-tenancy ref-prefix note).
 
@@ -322,14 +364,24 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
   CI freeze gate cannot see either change** — the same blind spot as
   `acetone-7qw.5`. The options are `#[non_exhaustive]` on both types, or a minor
   version bump; either way it is Greg's ruling, not an agent's.
+- **The review gate leaves no externally auditable trace.** Every PR this phase
+  was reviewed by a fresh subagent with no implementation context, but that
+  review lands in bead close reasons and PR descriptions — not as a GitHub
+  review. An outside checker, or a future agent, cannot reconstruct what a
+  reviewer actually ran or found; they have only the implementer's account of
+  it. That is a durable property of how the gate is operated rather than a fact
+  about any one PR, and it is load-bearing here: parts of the performance table
+  above reach this report through that channel and nothing else.
 - **PR #218 carried a code change** (`tck/src/classify.rs`) alongside the
   document, so it took the **full adversarial path** rather than the lighter
   docs review; the reviewer confirmed count-neutrality empirically across three
   runner runs.
 - **Follow-ups crossing the boundary**, each with its reason: `acetone-2ck.12`
   (SET parenthesised target — surfaced *by* the conformance enumeration at the
-  boundary itself), `acetone-2ck.14` (IndexRange on the store path — deferred
-  deliberately as Invariant #2 work needing its own review), `acetone-s1j`
+  boundary itself), `acetone-2ck.2` (costed planning seeds — carrying the
+  absolute-cap limitation, the pre-existing equality-seek cliff, and the lab
+  re-measurement disclosure inherited from `acetone-2ck.14`, all with
+  measurements), `acetone-s1j`
   (write-query escape — pre-existing, now disclosed), `acetone-hi8` (temporal
   support — a whole feature family, not a defect), `acetone-1qj` (binder
   over-accept), `acetone-taf` (import wall-time), and the seven security beads
@@ -350,7 +402,17 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
 
 ## Gate readiness
 
-All four criteria have evidence; both security blockers are closed. **Criterion
-3 carries the one substantive caveat** — range seeks are not yet reachable
-through `Session` — which is a gate question rather than an engineering one, and
-therefore Greg's to rule on when he closes `acetone-2ck.1`.
+All four criteria have evidence; both security blockers are closed. Criterion 3
+carries one live judgement call, set out in its section above. Criterion 3's
+*reachability* shortfall was closed in PR #221 rather than carried
+across the boundary, which also surfaced and fixed a performance cliff the lab's
+in-memory measurements could never have shown. What remains is narrower and is
+stated in that section: the lab's own range case sits above the cap and would
+decline through `Session`.
+
+Three things therefore remain for Greg rather than for an agent: **whether
+criterion 3 is satisfied** on that reading; the **API-freeze question** ADR-0064
+raises; and the **pre-existing equality-seek cliff** (18× slower than
+no index on an unselective seek) that ships on `main` today, arrived with
+PR #123 rather than this phase, and is now measured and recorded on
+`acetone-2ck.2` with a demonstrated remedy.
