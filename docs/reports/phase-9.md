@@ -11,7 +11,8 @@ to stop assuming everything fits in memory or in one pass (the scale half).
 The headline numbers: **TCK conformance moved from 1602/3897 (41.1%) with 50
 failures to 2185/3897 (56.07%) with zero failures**; import of a source larger
 than memory completes in bounded resident memory; index seeks beat scans by
-4.5×–10⁵× on the lab graph (the low end being an unselective equality seek);
+4.5×–10⁵× **on the lab's in-memory source**, though
+not on the shipped path for the lab's own populated cases (see criterion 3);
 and `fsck` and `merge_base` are verified
 sub-quadratic on multi-version repositories.
 
@@ -145,32 +146,72 @@ a different data shape and a 150.4 ms scan baseline:
 
 No regime is slower than the scan, and the selective win is intact.
 
-**And this is where the criterion's judgement call actually sits.** The lab's
-own range case would decline at the shipped cap: `cert_not_after` is `i % 365`
-and the lab runs at 200,000 certificates, so `cert_not_after < 30` matches
-roughly **16,000 rows — sixteen times `MAX_RANGE_CANDIDATES`**. Through
-`Session` that query declines and label-scans, giving **1.0×, not the 13.8×** in
-the table at the top of this section. The 13.8× is real and is what the
-in-memory source does; it is not what the product does for that query.
+**And this is where the criterion's judgement call actually sits — for both of
+its named seek kinds, not just one.** An earlier version of this section
+caveated only the range seek. Measuring the composite case at the boundary
+showed that understated the problem.
 
-So the mechanism is delivered and correct, and a *selective* range beats a scan
-on the shipped path. Whether "index range … measurably beat scan on the lab
-graph" is satisfied by a mechanism that declines on the lab's own chosen case is
-a judgement call, and it is Greg's — an earlier draft of this report claimed the
-question had disappeared when it had only moved. **Raising the cap is not the
-answer**: the cap is precisely what stops an unselective seek being 37× slower
-than no index. Nor would `acetone-2ck.2`'s cardinality-informed threshold
-rescue this particular case — and that is the sharper conclusion. 16,438 of
-200,000 rows is **8.2% selectivity**, where the phase's own measured law puts
-break-even at roughly 2% on loose objects and 8% packed; scaled from the
-400k-loose anchor, break-even for a 200,000-row label is about 3,500 rows, so
-the lab's case is some five times beyond it. A perfect cost model declines this
-range too. **The lab's chosen range case is genuinely scan-shaped, and its
-13.8× is an artefact of a source that pays nothing for point reads.** What
-`acetone-2ck.2` fixes is the *class* — it would admit ranges the absolute cap
-wrongly declines on large graphs, such as the 2,000-rows-at-400k case measured
-at 3.4× — not this instance. Re-measuring the lab through `Session` will
-therefore confirm 1.0× permanently, not temporarily.
+*The range seek.* The lab's own range case would decline at the shipped cap:
+`cert_not_after` is `i % 365` and the lab runs at 200,000 certificates, so
+`cert_not_after < 30` matches roughly **16,000 rows — sixteen times
+`MAX_RANGE_CANDIDATES`**. Through `Session` that query declines and label-scans,
+giving **1.0×, not the 13.8×** in the table above.
+
+*The composite seek.* The lab's composite bucket is ~1/35 of hosts, i.e. **2.9%
+selectivity**. Reproduced at exactly that ratio on a 50,000-node repository
+(1,429 of 50,000 matching rows), comparing an indexed repository against an
+identical unindexed one, five runs each:
+
+| case, 2.9% selectivity | indexed | unindexed | |
+|---|---:|---:|---|
+| populated bucket, loose objects | 324.9 ms | 88.2 ms | **3.7× slower** |
+| populated bucket, after `gc` | 112.4 ms | 77.2 ms | **1.5× slower** |
+| empty bucket, loose | 29.1 ms | 76.9 ms | 2.6× *faster* |
+
+So the composite seek does not decline — the equality path has no cap, which is
+the pre-existing cliff described below — it fires and **loses**, where the lab
+reports 27.6× faster. The empty-bucket case is the one row of that table that
+survives contact with the store: proving absence really is cheap, because there
+are no candidates to fetch.
+
+*Why both.* A seek on the real store does **one random point read per matching
+row**; the scan reads the nodes map sequentially. In the lab's in-memory source
+a "seek" is a vector lookup that costs nothing, so any selectivity looks like a
+win. On the store, a seek wins only while it is selective — and the lab's own
+parameters, at 2.9% and 8.2%, are not. Nor would `acetone-2ck.2`'s
+cardinality-informed threshold rescue them: break-even is roughly 2% on loose
+objects and 8% packed, so a perfect cost model declines the range case and would
+have to decline the populated composite case too. **These are genuinely
+scan-shaped queries; the lab's speed-ups are artefacts of a source that pays
+nothing for point reads.**
+
+*What is genuinely delivered on the shipped path*, all measured through the CLI:
+a **selective** range (250 of 50,000 rows) at 2.8×; **absence proofs** on an
+empty bucket at 2.6–3.3×; and **point lookups** by primary key. What is not
+delivered is a speed-up on either of the lab's two populated cases.
+
+*A third thing the measurement turned up*: the equality hint attaches only for
+an inline pattern pin. `MATCH (n:H {b: 3})` uses the index (324.9 ms indexed vs
+88.2 ms unindexed — it fires and loses); `MATCH (n:H) WHERE n.b = 3` is
+identical indexed and unindexed (104.7 vs 104.4 ms), i.e. **no seek is used at
+all** for the form most people write. Range predicates in `WHERE` *do* attach a
+hint, so this is specific to equality. Filed as `acetone-7qw.9`, with the note
+that closing it before `acetone-2ck.2` would expose *more* queries to the cliff
+rather than help.
+
+*So the ruling.* Both seek kinds are now **reachable** through `Session`, which
+they were not when this report was first written, and each beats a scan on
+selective inputs. But on the lab's own chosen cases the criterion's literal
+words — "index range + composite seek measurably beat scan on the lab graph at
+the larger envelope" — are **not satisfied on the shipped path**: one declines
+to a scan and the other is slower than no index. An earlier draft of this report
+claimed the question had disappeared, then claimed it applied only to ranges;
+both were wrong, and this is the third and I believe accurate statement of it.
+Raising the cap is not the answer — the cap is what stops an unselective range
+seek being 37× slower than no index. The honest position is that the seek
+machinery is correct and useful, the lab's parameters do not exercise the regime
+where it helps, and the criterion needs either a ruling that reachability plus
+selective-case wins is enough, or re-parameterised lab cases and a re-run.
 
 **Two further open risks fall out of this.** First, the
 cap is absolute where break-even scales with label cardinality (measured: ~1,000
@@ -402,13 +443,18 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
 
 ## Gate readiness
 
-All four criteria have evidence; both security blockers are closed. Criterion 3
-carries one live judgement call, set out in its section above. Criterion 3's
-*reachability* shortfall was closed in PR #221 rather than carried
-across the boundary, which also surfaced and fixed a performance cliff the lab's
-in-memory measurements could never have shown. What remains is narrower and is
-stated in that section: the lab's own range case sits above the cap and would
-decline through `Session`.
+Criteria 1, 2 and 4 are met. Both security blockers are closed. **Criterion 3 is
+the one that needs a ruling**, and the honest summary is stronger than an
+earlier draft of this report gave: its *reachability* shortfall was closed in
+PR #221 rather than carried across the boundary, but on the lab's own two
+populated cases the seeks do not beat a scan through `Session` — the range case
+declines to a scan (1.0×) and the composite case is *slower* than no index
+(1.5–3.7×). Both are genuinely scan-shaped at the lab's parameters, so no cost
+model would change it. What the phase does deliver on the shipped path is
+selective ranges (2.8×), absence proofs (2.6–3.3×) and point lookups. The
+section above sets out the measurements and the two ways forward: rule that
+reachability plus selective-case wins satisfies the criterion, or re-parameterise
+the lab cases and re-run.
 
 Three things therefore remain for Greg rather than for an agent: **whether
 criterion 3 is satisfied** on that reading; the **API-freeze question** ADR-0064
