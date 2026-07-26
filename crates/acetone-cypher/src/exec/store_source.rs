@@ -233,13 +233,31 @@ impl GraphSource for StoreBackedSource<'_> {
                     }
                     alts
                 }
+                // A STRING pin cannot be served: a Bytes/temporal key
+                // value compares equal to its string *rendering* at
+                // runtime (ADR-0038 carriers decay under eq3), and the
+                // stored encodings differ, so a probe on the string
+                // encoding alone would MISS such a node — under-selection,
+                // which candidate-superset semantics forbid. `probe_value`
+                // guards this for indexes via the declared type; keys have
+                // no such guard here, so decline and let the scan answer
+                // (PR #219 review blocker 3 — a wrong-answer regression).
+                Value::String(_) => return None,
+                // A carrier pin has the same hazard from the other side.
+                Value::Stored(_) => return None,
                 other => vec![crate::exec::adapter::model_value_of(other)?],
             };
             per_component.push(alternatives);
         }
-        let combinations: usize = per_component.iter().map(Vec::len).product();
-        if combinations > 16 {
-            return None;
+        // `product()` wraps on overflow in release, so a key of >=64
+        // numeric components made the cap vacuous and the tuple loop
+        // allocate unboundedly (PR #219 review finding 4).
+        let mut combinations: usize = 1;
+        for alternatives in &per_component {
+            combinations = combinations.checked_mul(alternatives.len())?;
+            if combinations > 16 {
+                return None;
+            }
         }
         let mut tuples: Vec<Vec<ModelValue>> = vec![Vec::new()];
         for alternatives in &per_component {

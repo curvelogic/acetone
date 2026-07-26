@@ -3250,6 +3250,7 @@ pub enum acetone_cypher::exec::eval::ResourceLimit
 pub acetone_cypher::exec::eval::ResourceLimit::CollectionLen
 pub acetone_cypher::exec::eval::ResourceLimit::ExpansionSteps
 pub acetone_cypher::exec::eval::ResourceLimit::ResultRows
+pub acetone_cypher::exec::eval::ResourceLimit::ScannedCandidates
 pub acetone_cypher::exec::eval::ResourceLimit::ValueDepth
 pub acetone_cypher::exec::eval::ResourceLimit::WallClock
 pub acetone_cypher::exec::eval::ResourceLimit::WorkUnits
@@ -3420,6 +3421,7 @@ pub struct acetone_cypher::exec::governor::QueryLimits
 pub acetone_cypher::exec::governor::QueryLimits::max_collection_len: u64
 pub acetone_cypher::exec::governor::QueryLimits::max_expansion_steps: u64
 pub acetone_cypher::exec::governor::QueryLimits::max_result_rows: u64
+pub acetone_cypher::exec::governor::QueryLimits::max_scanned_candidates: u64
 pub acetone_cypher::exec::governor::QueryLimits::max_work_units: u64
 pub acetone_cypher::exec::governor::QueryLimits::wall_clock: core::option::Option<core::time::Duration>
 impl acetone_cypher::exec::governor::QueryLimits
@@ -4374,6 +4376,7 @@ pub enum acetone_cypher::exec::ResourceLimit
 pub acetone_cypher::exec::ResourceLimit::CollectionLen
 pub acetone_cypher::exec::ResourceLimit::ExpansionSteps
 pub acetone_cypher::exec::ResourceLimit::ResultRows
+pub acetone_cypher::exec::ResourceLimit::ScannedCandidates
 pub acetone_cypher::exec::ResourceLimit::ValueDepth
 pub acetone_cypher::exec::ResourceLimit::WallClock
 pub acetone_cypher::exec::ResourceLimit::WorkUnits
@@ -4724,6 +4727,7 @@ pub struct acetone_cypher::exec::QueryLimits
 pub acetone_cypher::exec::QueryLimits::max_collection_len: u64
 pub acetone_cypher::exec::QueryLimits::max_expansion_steps: u64
 pub acetone_cypher::exec::QueryLimits::max_result_rows: u64
+pub acetone_cypher::exec::QueryLimits::max_scanned_candidates: u64
 pub acetone_cypher::exec::QueryLimits::max_work_units: u64
 pub acetone_cypher::exec::QueryLimits::wall_clock: core::option::Option<core::time::Duration>
 impl acetone_cypher::exec::governor::QueryLimits

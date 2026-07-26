@@ -106,6 +106,7 @@ pub fn parse(input: &str) -> Result<Query, ParseError> {
         tokens,
         pos: 0,
         depth: 0,
+        chain_expansion: 0,
     };
     let query = parser.query()?;
     parser.expect_end()?;
@@ -139,6 +140,7 @@ pub fn parse_literal(input: &str) -> Result<Value, ParseError> {
         tokens,
         pos: 0,
         depth: 0,
+        chain_expansion: 0,
     };
     let expr = parser.expression()?;
     parser.expect_end()?;
@@ -236,6 +238,10 @@ struct Parser<'a> {
     tokens: Vec<Token>,
     pos: usize,
     depth: usize,
+    /// Total operand size the chained-comparison desugar has committed to
+    /// duplicating in this parse. Cumulative, so sibling chains cannot each
+    /// sit just under the cap and compose (PR #219 review blocker 1).
+    chain_expansion: usize,
 }
 
 impl Parser<'_> {
@@ -1129,11 +1135,15 @@ impl Parser<'_> {
         // level). Refuse before building rather than allocate: parsing happens
         // before any Governor exists, so nothing downstream would catch it
         // (Phase 9 security review).
+        // Cumulative across the whole parse, not per chain: sibling chains
+        // each just under the cap composed to gigabytes otherwise
+        // (PR #219 review blocker 1).
         let duplicated: usize = operands[1..operands.len() - 1]
             .iter()
-            .map(|operand| operand.node_count())
+            .map(|operand| operand.allocated_size())
             .sum();
-        if duplicated > MAX_CHAIN_EXPANSION {
+        self.chain_expansion = self.chain_expansion.saturating_add(duplicated);
+        if self.chain_expansion > MAX_CHAIN_EXPANSION {
             return Err(ParseError::QueryStructure {
                 message: format!(
                     "chained comparison duplicates too large an operand \
