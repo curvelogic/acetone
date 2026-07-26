@@ -30,7 +30,7 @@ The full outcome breakdown:
 
 | Outcome | Count | Meaning |
 |---------|-------|---------|
-| **passed** | 2185 | executed and produced the TCK-expected result |
+| **passed** | 2185 | executed and matched the TCK-expected result — or correctly refused a query the TCK required to be refused (274 of the 2185; see disclosures) |
 | unsupported (deferred syntax) | 1138 | a feature acetone declines by design — mostly at *bind* time, not parse: 1114 of the 1138 parse fine |
 | unsupported (compile classification) | 307 | a compile-time error the TCK expects that acetone classifies differently |
 | unsupported (executor) | 267 | parsed and planned, but the executor lacks the operator |
@@ -44,9 +44,11 @@ bare count. By verdict those 51 split 27 **passed** (the TCK demanded a syntax
 error and got one) and 24 **unsupported**; none is a failure.
 
 "Unsupported" outcomes are **honest declines**, not wrong answers: acetone
-reports a typed "not supported" rather than mis-executing. **Zero failures** is
-the claim that matters most: no scenario in the corpus makes acetone return a
-wrong result or reject a query the TCK requires to be valid.
+reports a typed "not supported" rather than mis-executing. **Zero failures**
+means no scenario in the corpus makes acetone return a wrong result. It does
+not mean nothing is wrong: two scenarios (Set1 [3]/[4]) reject a query the TCK
+requires to be valid, and the harness's write-query escape files them as
+deferrals rather than failures — see the disclosures below.
 
 ## Every residual parse rejection, justified
 
@@ -145,7 +147,9 @@ check in this repository:
   No allow-list, no expected-failure file, no scenario skipped by name; the
   keyword lists in `tck/src/classify.rs` route only *away* from `Passed`. This
   is the strongest structural claim here and it is verifiable by reading that
-  one file.
+  one file. It is not a blanket reassurance: the write-query token test
+  disclosed above routes away from `Failed`, which is the flattering
+  direction.
 - **Every pass-rate-moving change is reviewed adversarially** by a fresh
   reviewer with no implementation context, briefed to hunt over-crediting. The
   record of those reviews lives in the bead trail and PR descriptions, not in
@@ -180,6 +184,7 @@ names suggest, so they are given here by what the queries actually contain.
 | **Temporal types and functions** (`datetime`, `localdatetime`, `duration`, `date`, `time`, `localtime`) | deferred syntax | ~1025 scenarios — 90% of that bucket | `acetone-hi8` |
 | Other unimplemented functions (`rand`, `percentileDisc`/`percentileCont`) | deferred syntax | ~78 scenarios | — |
 | `UNION` / `UNION ALL` and existential subqueries | deferred syntax | 22 scenarios | — |
+| Assorted remainder of that bucket (the two Set1 write-escape scenarios, six that parse but carry a deferred token, five other bind rejections) | deferred syntax | 13 scenarios | — |
 | Compile-time error **classification** differences: acetone raises a typed error, but a different class or detail than the TCK names | compile classification | 307 scenarios | — |
 | Executor operators not yet implemented | executor | 267 scenarios (expressions 130, clauses 118, useCases 19) | — |
 
@@ -187,11 +192,13 @@ Two corrections to the impression the bucket names give. First, "deferred
 syntax" is mostly a *bind-time* decline on unimplemented functions, not a
 parsing gap: 1114 of its 1138 scenarios parse without complaint. Second,
 temporal support — not subquery or CSV syntax — is by a wide margin acetone's
-largest single conformance gap; `CALL {}`, `FOREACH` and `LOAD CSV` do not
-appear anywhere in this corpus, so they cost nothing here despite being the
-headline items in spec §5.1's deferral list.
+largest single conformance gap. `CALL {}` and `FOREACH` — headline items in
+spec §5.1's deferral list — plus `LOAD CSV`, which is simply outside the v0.1
+subset, appear in **zero** files in this corpus, so they cost nothing here.
 
-Of these families, only full temporal arithmetic is an explicit §5.1 deferral.
+Of these families, §5.1 explicitly defers only full temporal *arithmetic*; the
+temporal type constructors (`date()`, `datetime()`, …) that account for most of
+those 1025 scenarios are unimplemented rather than deferred by design.
 The compile-classification and executor buckets are not design decisions: the
 first is a genuine conformance divergence (right to reject, wrong error class),
 the second is simply unimplemented.

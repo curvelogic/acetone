@@ -600,8 +600,10 @@ pub struct ParseStats {
 pub struct ParseRejection {
     pub feature_path: String,
     pub scenario_name: String,
-    /// True when the query uses syntax acetone defers by design
-    /// (spec §5.1); false marks a rejection needing its own reason.
+    /// True when the query uses syntax outside the v0.1 target subset —
+    /// spec §5.1's explicit deferrals plus the wider set
+    /// `uses_deferred_syntax` covers (e.g. `UNION`, `EXISTS { … }`).
+    /// False marks a rejection needing its own reason.
     pub deferred_syntax: bool,
     pub error: String,
 }
