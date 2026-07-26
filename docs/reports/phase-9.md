@@ -170,6 +170,13 @@ worst case where the chunk-set cache never hits.
 | 200 | 0.022 s |
 | 400 | 0.023 s |
 
+These two tables, and the round-2 security magnitudes quoted below (10.6 GB,
+6.4 GB, 0.08 s / 17 MB, 54.7 GB), were **measured in-session on this machine and
+are not reproducible from the repository** — the scripts lived in a scratch
+directory that is now gone. Every other figure in this report is checkable
+against `docs/conformance.md`, `lab/README.md`, a bead close reason, a PR body,
+an ADR or the source.
+
 **Effectively flat** while the history grows fourfold — the linear paint-down
 doing what it was written to do. PR #210's review additionally ran a
 63,724-pair differential against the previous implementation with zero
@@ -278,7 +285,9 @@ reviewer at the merged commit:
 - **`QueryLimits` and `ResourceLimit` gained a public field and variant** — see
   the API-freeze note under *Process notes* below.
 
-Seven lesser findings are filed: `acetone-7qw.2` (quadratic import
+Lesser findings are filed — six from the milestone review itself
+(`acetone-7qw.2`–`.6` and `acetone-2ck.14`), plus two from PR #219's own review
+(`acetone-7qw.7`, `acetone-7qw.8`) and the co-tenancy note (`acetone-42d`): `acetone-7qw.2` (quadratic import
 UNIQUE-violation path, executed and measured), `acetone-7qw.3` (schema-driven
 panic), `acetone-7qw.4` (unbounded line length vs ADR-0062's promise),
 `acetone-7qw.5` (the API-freeze gate cannot see enum-variant removals in
@@ -319,14 +328,16 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
   runner runs.
 - **Follow-ups crossing the boundary**, each with its reason: `acetone-2ck.12`
   (SET parenthesised target — surfaced *by* the conformance enumeration at the
-  boundary itself), `acetone-2ck.13` (IndexRange on the store path — deferred
+  boundary itself), `acetone-2ck.14` (IndexRange on the store path — deferred
   deliberately as Invariant #2 work needing its own review), `acetone-s1j`
   (write-query escape — pre-existing, now disclosed), `acetone-hi8` (temporal
   support — a whole feature family, not a defect), `acetone-1qj` (binder
   over-accept), `acetone-taf` (import wall-time), and the seven security beads
   above. All of these are now re-homed to `acetone-7qw` (the 0.3.x quality and
-  security epic) rather than left under the closed phase. Note that
-  `acetone-2ck` still carries **23 open beads** that predate this phase — they
+  security epic) rather than left under the closed phase — though `acetone-7qw`
+  is itself closed, so this is a move to a better-named home rather than to an
+  open one. Note that
+  `acetone-2ck` still carries **16 open beads** that predate this phase — they
   were parented there during the Phase 8 backlog triage, not surfaced by Phase
   9 — plus the gate bead itself. Deciding whether those move or stay is Greg's,
   not something this phase should have quietly re-filed.

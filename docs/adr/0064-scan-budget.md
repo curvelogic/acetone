@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-07-26
-- Bead: `acetone-2ck.sec` (PR #219); follows the Phase 9 milestone security review
+- Bead: `acetone-2ck.15` (PR #219); follows the Phase 9 milestone security review
 
 ## Context
 

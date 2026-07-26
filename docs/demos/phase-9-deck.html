@@ -287,7 +287,7 @@
       </div>
       <div class="card rule">
         <div class="tag">THE CAVEAT — FOUND BY THE SECURITY REVIEW</div>
-        <p style="margin-top:6px">These were measured against the <b>in-memory source</b>. <code>StoreBackedSource</code> — what <code>Session</code> actually uses — implemented only <code>nodes_by_index</code>, so <b>KeySeek and IndexRange always label-scanned in the product</b>. PR #219 wires KeySeek. <b>IndexRange stays unwired</b>: index keys nest values inside a List encoding, so correct range bounds are Invariant #2 territory where a mistake silently returns wrong rows. Filed P1 (<code>acetone-2ck.13</code>) for its own change and review — not landed unreviewed at a boundary.</p>
+        <p style="margin-top:6px">These were measured against the <b>in-memory source</b>. <code>StoreBackedSource</code> — what <code>Session</code> actually uses — implemented only <code>nodes_by_index</code>, so <b>KeySeek and IndexRange always label-scanned in the product</b>. PR #219 wires KeySeek. <b>IndexRange stays unwired</b>: index keys nest values inside a List encoding, so correct range bounds are Invariant #2 territory where a mistake silently returns wrong rows. Filed P1 (<code>acetone-2ck.14</code>) for its own change and review — not landed unreviewed at a boundary.</p>
       </div>
     </div>
     <p class="num">6</p>
@@ -350,7 +350,7 @@
           <p style="margin-top:8px;color:var(--good)"><b>Fixed:</b> anchor candidates charged uniformly against a <b>dedicated budget</b> (ADR-0064). Two earlier designs were tried and rejected in review — work-only (too loose) and borrowing the expansion budget (rejected ordinary joins).</p>
         </div>
       </div>
-      <p>Seven lesser findings filed as beads. Defences that <strong>held</strong>: <code>prune_loose</code>'s safety floor survived every gc/worktree scenario; ADR-0044 anchors survived a real <code>git gc --prune=now --aggressive</code>; ref-name injection failed closed; 3M mutated queries, no panics; and <strong>no dependency added, bumped or re-featured all phase</strong>.</p>
+      <p>Nine lesser findings filed as beads (six from the milestone review, two from PR #219's own review, one co-tenancy note). Defences that <strong>held</strong>: <code>prune_loose</code>'s safety floor survived every gc/worktree scenario; ADR-0044 anchors survived a real <code>git gc --prune=now --aggressive</code>; ref-name injection failed closed; 3M mutated queries, no panics; and <strong>no dependency added, bumped or re-featured all phase</strong>.</p>
     </div>
     <p class="num">9</p>
   </section>
@@ -425,7 +425,7 @@
         <li><b>Criterion 3's caveat.</b> The criterion names two seek kinds; one of them — range — is implemented and measured but not reachable through <code>Session</code>, and every lab figure was measured on the in-memory source. Under the "not delivered until reachable through the shipped interface" rule, does that satisfy the criterion, or should <code>acetone-2ck.14</code> land first?</li>
         <li><b>The API-freeze question ADR-0064 raises.</b> A public field and enum variant added to types STABILITY.md freezes, in a patch series whose policy is additive-only, and invisible to the freeze gate. <code>#[non_exhaustive]</code> on both, or a minor bump?</li>
         <li><b>The Opus tier substitution.</b> Disclosed, compliant with ADR-0009 as written — but worth your view on whether the policy should say something explicit about capacity exhaustion.</li>
-        <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>2ck.14</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code>, <code>2ck.2</code> and the security beads — all re-homed to <code>7qw</code>. The epic still carries 23 pre-existing beads from the Phase 8 triage; whether those move is yours.</li>
+        <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>2ck.14</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code>, <code>2ck.2</code> and the security beads — all re-homed to <code>7qw</code>. The epic still carries 16 pre-existing beads from the Phase 8 triage; whether those move is yours.</li>
       </ul>
       <div class="chips">
         <span class="chip good"><span class="dot"></span>TCK 2185/3897 · 0 failures</span>
