@@ -35,14 +35,54 @@ The full outcome breakdown:
 | unsupported (executor) | 267 | parsed and planned, but the executor lacks the operator |
 | **failed** | 0 | acetone rejects a query the TCK requires to be valid, or returns a wrong result |
 
-Parser coverage over the queries under test: **3846 / 3897 parse** (22 rejects
-are deferred syntax, 29 are other rejects — each an unsupported classification,
-not a wrong answer).
+Parser coverage over the queries under test: **3846 / 3897 parse**. Every one
+of the 51 residual rejections is accounted for below — the exit criterion for
+this phase required each to be individually listed and justified, so the runner
+emits them by name (`parse.rejections` in the JSON report) rather than as a
+bare count.
 
 "Unsupported" outcomes are **honest declines**, not wrong answers: acetone
 reports a typed "not supported" rather than mis-executing. **Zero failures** is
 the claim that matters most: no scenario in the corpus makes acetone return a
 wrong result or reject a query the TCK requires to be valid.
+
+## Every residual parse rejection, justified
+
+**27 of the 51 are correct rejections**: the scenario's own name begins "Fail
+on…"/"Fail when…"/"Failing on…" — the TCK asks for a syntax error there, and
+acetone produces one. They are rejections *because the query is invalid*.
+
+| Family | Count | What acetone rejects |
+|--------|-------|---------------------|
+| `expressions/literals` Literals8 | 8 | malformed map literals (numeric/symbol/dotted keys, missing keys, unmatched braces) |
+| `expressions/literals` Literals3 | 5 | malformed hexadecimal integers (incomplete, invalid digits, out of range) |
+| `expressions/literals` Literals2 | 4 | malformed decimal integers (out of range, alphabetic or symbol characters) |
+| `expressions/literals` Literals7 | 3 | malformed list literals (stray comma, unmatched brackets, missing commas) |
+| `expressions/literals` Literals4 | 2 | out-of-range octal integers |
+| `expressions/literals` Literals6 | 1 | a truncated unicode escape |
+| `clauses/match` Match4 | 2 | malformed variable-length bounds (missing asterisk, negative bound) |
+| `clauses/call` Call5 | 1 | `YIELD *` in a mid-query `CALL` (legal only in a standalone `CALL`) |
+| `expressions/mathematical` Mathematical3 | 1 | a Unicode en-dash used as a subtraction operator |
+
+**22 are deferred syntax** — whole features acetone does not parse by design
+(spec §5.1, "Explicitly deferred"), each declining cleanly:
+
+| Feature | Count | Scenarios |
+|---------|-------|-----------|
+| `UNION` / `UNION ALL` | 12 | Union1 [1]–[5], Union2 [1]–[5], Union3 [1]–[2] |
+| Existential subqueries (`EXISTS { … }`) | 10 | ExistentialSubquery1 [1]–[4], 2 [1]–[3], 3 [1]–[3] |
+
+**2 are genuine parser gaps**, and are the only entries on this list that
+represent work acetone owes:
+
+| Scenario | Query shape | Bead |
+|----------|-------------|------|
+| `clauses/set` Set1 [3] | `SET (n).name = 'neo4j'` — a parenthesised expression as a `SET` target | `acetone-2ck.12` |
+| `clauses/set` Set1 [4] | the same shape on a relationship | `acetone-2ck.12` |
+
+So of 3897 queries under test, **two** are rejected by a parser limitation
+acetone intends to fix; the rest of the residue is either correct rejection of
+invalid syntax or deliberate deferral.
 
 ## What the measurement does not verify
 
