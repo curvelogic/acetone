@@ -11,7 +11,8 @@ to stop assuming everything fits in memory or in one pass (the scale half).
 The headline numbers: **TCK conformance moved from 1602/3897 (41.1%) with 50
 failures to 2185/3897 (56.07%) with zero failures**; import of a source larger
 than memory completes in bounded resident memory; index seeks beat scans by
-4.5×–10⁵× on the lab graph (the low end being an unselective equality seek); and `fsck` and `merge_base` are verified
+4.5×–10⁵× on the lab graph (the low end being an unselective equality seek);
+and `fsck` and `merge_base` are verified
 sub-quadratic on multi-version repositories.
 
 Everything landed autonomously under the usual gate: per bead a design recorded
@@ -129,7 +130,8 @@ The fix is to decline rather than to optimise: past 1024 candidates the source
 returns `None` — the `GraphSource` contract's "cannot serve, scan instead" —
 before paying for a point read in that family. (The budget is checked per
 family, so a numeric range whose int half fits under the cap does those reads
-before the float half can trip the decline.) Measured by PR #221's reviewer on a 50,000-node graph with three binaries side
+before the float half can trip the decline.) Measured by PR #221's reviewer on
+a 50,000-node graph with three binaries side
 by side (always-scan `main`, always-seek, and the shipped fix). These are that
 reviewer's own run, not the four-row table in PR #221's description, which used
 a different data shape and a 150.4 ms scan baseline:
@@ -143,7 +145,25 @@ a different data shape and a 150.4 ms scan baseline:
 
 No regime is slower than the scan, and the selective win is intact.
 
-**Two open risks fall out of this.** First, the
+**And this is where the criterion's judgement call actually sits.** The lab's
+own range case would decline at the shipped cap: `cert_not_after` is `i % 365`
+and the lab runs at 200,000 certificates, so `cert_not_after < 30` matches
+roughly **16,000 rows — sixteen times `MAX_RANGE_CANDIDATES`**. Through
+`Session` that query declines and label-scans, giving **1.0×, not the 13.8×** in
+the table at the top of this section. The 13.8× is real and is what the
+in-memory source does; it is not what the product does for that query.
+
+So the mechanism is delivered and correct, and a *selective* range beats a scan
+on the shipped path. Whether "index range … measurably beat scan on the lab
+graph" is satisfied by a mechanism that declines on the lab's own chosen case is
+a judgement call, and it is Greg's — an earlier draft of this report claimed the
+question had disappeared when it had only moved. **Raising the cap is not the
+answer**: the cap is precisely what stops an unselective seek being 37× slower
+than no index. The answer is the cardinality-informed threshold on
+`acetone-2ck.2`, which would let a 16,000-row range over a 200,000-node label
+seek rather than decline.
+
+**Two further open risks fall out of this.** First, the
 cap is absolute where break-even scales with label cardinality (measured: ~1,000
 rows at 50k nodes loose, ~4,000 packed, ~7,000 at 400k), so it is progressively
 conservative on larger graphs. Second — and this one ships on `main` today —
@@ -299,11 +319,13 @@ reviewer at the merged commit:
 
 Lesser findings are filed — six from the milestone review itself
 (`acetone-7qw.2`–`.6`), plus two from PR #219's own review
-(`acetone-7qw.7`, `acetone-7qw.8`) and the co-tenancy note (`acetone-42d`): `acetone-7qw.2` (quadratic import
+(`acetone-7qw.7`, `acetone-7qw.8`) and the co-tenancy note (`acetone-42d`):
+`acetone-7qw.2` (quadratic import
 UNIQUE-violation path, executed and measured), `acetone-7qw.3` (schema-driven
 panic), `acetone-7qw.4` (unbounded line length vs ADR-0062's promise),
 `acetone-7qw.5` (the API-freeze gate cannot see enum-variant removals in
-re-exported types), `acetone-7qw.6` (memoise anchor scans), `acetone-7qw.7` (the scan budget's ~40×
+re-exported types), `acetone-7qw.6` (memoise anchor scans), `acetone-7qw.7`
+(the scan budget's ~40×
 under-count) and `acetone-7qw.8` (the byte-payload amplifier), and
 `acetone-42d` (the co-tenancy ref-prefix note).
 
@@ -333,6 +355,14 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
   CI freeze gate cannot see either change** — the same blind spot as
   `acetone-7qw.5`. The options are `#[non_exhaustive]` on both types, or a minor
   version bump; either way it is Greg's ruling, not an agent's.
+- **The review gate leaves no externally auditable trace.** Every PR this phase
+  was reviewed by a fresh subagent with no implementation context, but that
+  review lands in bead close reasons and PR descriptions — not as a GitHub
+  review. An outside checker, or a future agent, cannot reconstruct what a
+  reviewer actually ran or found; they have only the implementer's account of
+  it. That is a durable property of how the gate is operated rather than a fact
+  about any one PR, and it is load-bearing here: parts of the performance table
+  above reach this report through that channel and nothing else.
 - **PR #218 carried a code change** (`tck/src/classify.rs`) alongside the
   document, so it took the **full adversarial path** rather than the lighter
   docs review; the reviewer confirmed count-neutrality empirically across three
@@ -340,7 +370,8 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
 - **Follow-ups crossing the boundary**, each with its reason: `acetone-2ck.12`
   (SET parenthesised target — surfaced *by* the conformance enumeration at the
   boundary itself), `acetone-2ck.2` (costed planning seeds — carrying the
-  absolute-cap limitation and the pre-existing equality-seek cliff, both with
+  absolute-cap limitation, the pre-existing equality-seek cliff, and the lab
+  re-measurement disclosure inherited from `acetone-2ck.14`, all with
   measurements), `acetone-s1j`
   (write-query escape — pre-existing, now disclosed), `acetone-hi8` (temporal
   support — a whole feature family, not a defect), `acetone-1qj` (binder
@@ -363,13 +394,16 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
 ## Gate readiness
 
 All four criteria have evidence; both security blockers are closed. Criterion 3
-carries one live judgement call, described above. Criterion 3's shortfall — range seeks unreachable through `Session` —
-was closed in PR #221 rather than carried across the boundary, which also
-surfaced and fixed a performance cliff the lab's in-memory measurements could
-never have shown.
+carries one live judgement call, set out in its section above. Criterion 3's
+*reachability* shortfall was closed in PR #221 rather than carried
+across the boundary, which also surfaced and fixed a performance cliff the lab's
+in-memory measurements could never have shown. What remains is narrower and is
+stated in that section: the lab's own range case sits above the cap and would
+decline through `Session`.
 
-Two things remain for Greg rather than for an agent: the **API-freeze question**
-ADR-0064 raises, and the **pre-existing equality-seek cliff** (18× slower than
+Three things therefore remain for Greg rather than for an agent: **whether
+criterion 3 is satisfied** on that reading; the **API-freeze question** ADR-0064
+raises; and the **pre-existing equality-seek cliff** (18× slower than
 no index on an unselective seek) that ships on `main` today, arrived with
 PR #123 rather than this phase, and is now measured and recorded on
 `acetone-2ck.2` with a demonstrated remedy.

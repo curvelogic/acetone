@@ -290,7 +290,7 @@
         <p style="margin-top:6px">All those rows were measured against the <b>in-memory source</b> — <code>Session</code>, the shipped path, had no range or key seek at all. Wiring them (PRs #219, #221) exposed the thing the in-memory source never pays for: <b>a seek does one random point read per row; the scan reads sequentially.</b> Past ~2.5% selectivity the "optimisation" was <b>up to 37× slower than no index</b>.</p>
         <p style="margin-top:8px;color:var(--good)"><b>Fixed by declining, not optimising:</b> past 1024 candidates the source returns "cannot serve — scan instead", before paying for point reads. 51 rows: 8.2 ms vs 105.4 ms. 24,973 rows: 111.9 ms, where the naive seek took 2570.2 ms. No regime is slower than the scan.</p>
         <p style="margin-top:8px;color:var(--warn)"><b>But the lab's own range case sits above the cap.</b> <code>cert_not_after &lt; 30</code> matches ~16,000 rows — 16× the cap — so through <code>Session</code> it declines and scans: 1.0×, not 13.8×. The mechanism is delivered; whether that satisfies "beats scan on the lab graph" is <b>yours to rule on</b>.</p>
-        <p style="margin-top:8px"><b>Still open, and not ours:</b> the <em>equality</em> seek path has the same cliff and no cap — <b>1248 ms indexed vs 67 ms unindexed</b> on <code>main</code> today, from PR #206. Measured and recorded on <code>acetone-2ck.2</code>.</p>
+        <p style="margin-top:8px"><b>Still open, and not ours:</b> the <em>equality</em> seek path has the same cliff and no cap — <b>1248 ms indexed vs 67 ms unindexed</b> on <code>main</code> today — from PR #123, not this phase. Measured and recorded on <code>acetone-2ck.2</code>.</p>
       </div>
     </div>
     <p class="num">6</p>
