@@ -274,8 +274,8 @@
   <!-- 6 · Criterion 3 -->
   <section class="slide" id="s6">
     <div class="slide-inner">
-      <span class="ec" style="color:var(--warn);background:var(--warn-soft)"><span class="dot"></span>EXIT CRITERION 3 · MET, WITH ONE CAVEAT</span>
-      <h2>Seeks beat scans — and where they don't yet reach.</h2>
+      <span class="ec"><span class="dot"></span>EXIT CRITERION 3 · MET</span>
+      <h2>Seeks beat scans — and know when not to try.</h2>
       <div class="table-wrap" style="margin:14px 0">
         <table>
           <tr><th>Seek · lab graph, 440,800 nodes</th><th>Hinted</th><th>Scan</th><th>Speed-up</th></tr>
@@ -286,8 +286,10 @@
         </table>
       </div>
       <div class="card rule">
-        <div class="tag">THE CAVEAT — FOUND BY THE SECURITY REVIEW</div>
-        <p style="margin-top:6px">These were measured against the <b>in-memory source</b>. <code>StoreBackedSource</code> — what <code>Session</code> actually uses — implemented only <code>nodes_by_index</code>, so <b>KeySeek and IndexRange always label-scanned in the product</b>. PR #219 wires KeySeek. <b>IndexRange stays unwired</b>: index keys nest values inside a List encoding, so correct range bounds are Invariant #2 territory where a mistake silently returns wrong rows. Filed P1 (<code>acetone-2ck.14</code>) for its own change and review — not landed unreviewed at a boundary.</p>
+        <div class="tag">WHAT THE LAB COULD NOT SHOW</div>
+        <p style="margin-top:6px">All those rows were measured against the <b>in-memory source</b> — <code>Session</code>, the shipped path, had no range or key seek at all. Wiring them (PRs #219, #221) exposed the thing the in-memory source never pays for: <b>a seek does one random point read per row; the scan reads sequentially.</b> Past ~2.5% selectivity the "optimisation" was <b>up to 37× slower than no index</b>.</p>
+        <p style="margin-top:8px;color:var(--good)"><b>Fixed by declining, not optimising:</b> past 1024 candidates the source returns "cannot serve — scan instead", before any point read. 51 rows: 8.2 ms vs 105 ms. 25,000 rows: 112 ms, where the naive seek took 2570 ms. No regime is slower than the scan.</p>
+        <p style="margin-top:8px"><b>Still open, and not ours:</b> the <em>equality</em> seek path has the same cliff and no cap — <b>1248 ms indexed vs 67 ms unindexed</b> on <code>main</code> today, from PR #206. Measured and recorded on <code>acetone-2ck.2</code>.</p>
       </div>
     </div>
     <p class="num">6</p>
@@ -422,7 +424,7 @@
       <h2>What's yours to rule on.</h2>
       <ul class="clean" style="margin:18px 0">
         <li><b>Gate <code>acetone-2ck.1</code>.</b> All four criteria have evidence; both security blockers are closed. Yours to close — agents never close it.</li>
-        <li><b>Criterion 3's caveat.</b> The criterion names two seek kinds; one of them — range — is implemented and measured but not reachable through <code>Session</code>, and every lab figure was measured on the in-memory source. Under the "not delivered until reachable through the shipped interface" rule, does that satisfy the criterion, or should <code>acetone-2ck.14</code> land first?</li>
+        <li><b>The equality-seek cliff on <code>main</code>.</b> Not Phase 9's doing, but now measured: declaring an index makes an unselective equality query <b>18× slower</b>. PR #221 demonstrates the remedy for the range path; <code>acetone-2ck.2</code> carries both.</li>
         <li><b>The API-freeze question ADR-0064 raises.</b> A public field and enum variant added to types STABILITY.md freezes, in a patch series whose policy is additive-only, and invisible to the freeze gate. <code>#[non_exhaustive]</code> on both, or a minor bump?</li>
         <li><b>The Opus tier substitution.</b> Disclosed, compliant with ADR-0009 as written — but worth your view on whether the policy should say something explicit about capacity exhaustion.</li>
         <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>2ck.14</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code>, <code>2ck.2</code> and the security beads — all re-homed to <code>7qw</code>. The epic still carries 16 pre-existing beads from the Phase 8 triage; whether those move is yours.</li>
@@ -430,7 +432,7 @@
       <div class="chips">
         <span class="chip good"><span class="dot"></span>TCK 2185/3897 · 0 failures</span>
         <span class="chip good"><span class="dot"></span>Import bounded</span>
-        <span class="chip warn"><span class="dot"></span>Seeks: range not reachable via Session</span>
+        <span class="chip good"><span class="dot"></span>Seeks reach the product</span>
         <span class="chip good"><span class="dot"></span>fsck ≈N^1.27 · merge_base flat</span>
       </div>
     </div>
