@@ -24,6 +24,48 @@ fn node(label: &str, key: &str) -> NodeKey {
     NodeKey::new(label, vec![Value::String(key.to_owned())]).expect("valid")
 }
 
+const WORKTREE_WORKSPACE_REF_NAME: &str = "refs/worktree/acetone/workspace";
+
+/// Write `manifest` behind `refname` the way a real save does: as a (huo)
+/// workspace TREE anchoring every reachable chunk — so fsck's workspace
+/// anchor-completeness check (acetone-2ck.11) sees a healthy workspace.
+fn write_anchored_workspace(
+    repo: &Repository,
+    manifest: &acetone_model::manifest::Manifest,
+    refname: &str,
+) {
+    let store = repo.store();
+    let params = manifest.chunk_params;
+    let mut anchors: Vec<Hash> = Vec::new();
+    let roots = [
+        &manifest.schema,
+        &manifest.nodes,
+        &manifest.edges_fwd,
+        &manifest.edges_rev,
+    ]
+    .into_iter()
+    .chain(manifest.indexes.values())
+    .chain(manifest.conflicts.iter());
+    for root in roots {
+        let root = root.to_root(params).expect("root");
+        for chunk in reachable_chunks(store, &root).expect("reachable") {
+            anchors.push(chunk);
+        }
+    }
+    anchors.sort();
+    anchors.dedup();
+    let tree = store
+        .write_workspace_tree(&manifest.encode(), &anchors)
+        .expect("workspace tree");
+    // The per-worktree workspace ref already exists (init writes it), so
+    // take the unconditional path a save uses; branch-style refs are new.
+    if refname == WORKTREE_WORKSPACE_REF_NAME {
+        store.overwrite_ref(refname, &tree).expect("overwrite ref");
+    } else {
+        store.write_ref(refname, None, &tree).expect("ref");
+    }
+}
+
 /// Insert `n` nodes and commit, so the `nodes` map is a genuine multi-level
 /// tree with interior nodes and leaves to damage.
 fn commit_many_nodes(repo: &Repository, n: usize) {
@@ -166,6 +208,9 @@ fn logically_corrupt_chunk_spliced_into_manifest_is_corrupt() {
         height: 1,
     };
     let blob = store.put(&manifest.encode()).expect("put manifest");
+    // Deliberately bare-blob: its damaged nodes chunk makes the reachable set uncomputable,
+    // so this fixture cannot be anchored; the anchor check reports an
+    // Unverified advisory for it, which the assertions tolerate.
     store
         .write_ref("refs/acetone/workspaces/logical", None, &blob)
         .expect("ref");
@@ -325,10 +370,7 @@ fn asymmetric_edge_maps_are_an_advisory_not_an_error() {
     let mut manifest = base.clone();
     manifest.edges_fwd = MapRoot::from_root(&fwd);
     manifest.nodes = MapRoot::from_root(&nodes);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/asym", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/asym");
 
     let report = fsck::check(&repo).expect("fsck");
     let advisories: Vec<_> = report.advisories().collect();
@@ -378,10 +420,7 @@ fn undecodable_edge_entries_surface_as_advisory_not_silence() {
     .expect("apply_batch");
     let mut manifest = base.clone();
     manifest.edges_fwd = MapRoot::from_root(&fwd);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/badedge", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/badedge");
 
     let report = fsck::check(&repo).expect("fsck");
     assert!(
@@ -428,6 +467,9 @@ fn shared_root_hash_with_wrong_height_is_not_memoised_clean() {
         height: base.nodes.height + 1,
     };
     let blob = repo.store().put(&bad.encode()).expect("put manifest");
+    // Deliberately bare-blob: the forged height makes the reachable set
+    // uncomputable, so this fixture cannot be anchored; the anchor check
+    // reports an Unverified advisory for it, which the assertions tolerate.
     repo.store()
         .write_ref("refs/acetone/workspaces/zzz-bad", None, &blob)
         .expect("ref");
@@ -465,10 +507,7 @@ fn reverse_only_edge_is_a_missing_forward_advisory() {
     .expect("apply_batch");
     let mut manifest = base.clone();
     manifest.edges_rev = MapRoot::from_root(&rev);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/revonly", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/revonly");
 
     let report = fsck::check(&repo).expect("fsck");
     assert!(
@@ -875,10 +914,7 @@ fn non_canonical_map_is_a_history_independence_error() {
     // (default) chunk parameters, and expose it as a workspace.
     let mut manifest = base.clone();
     manifest.nodes = MapRoot::from_root(&alt_root);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/noncanon", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/noncanon");
 
     let report = fsck::check(&repo).expect("fsck");
     assert!(
@@ -926,7 +962,7 @@ fn a_dangling_edge_is_a_referential_integrity_error() {
         )],
     )
     .expect("apply_batch fwd");
-    // Mirror into edges_rev so the only finding is the dangling edge, not an
+    // Mirror into edges_rev so the only EDGE finding is the dangling edge, not an
     // asymmetry advisory.
     let rev = apply_batch(
         store,
@@ -939,10 +975,7 @@ fn a_dangling_edge_is_a_referential_integrity_error() {
     manifest.nodes = MapRoot::from_root(&nodes);
     manifest.edges_fwd = MapRoot::from_root(&fwd);
     manifest.edges_rev = MapRoot::from_root(&rev);
-    let blob = store.put(&manifest.encode()).expect("put manifest");
-    store
-        .write_ref("refs/acetone/workspaces/dangling", None, &blob)
-        .expect("ref");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/workspaces/dangling");
 
     let report = fsck::check(&repo).expect("fsck");
     let danglers: Vec<_> = report
@@ -1207,5 +1240,237 @@ fn conflicts_map_participates_in_anchor_completeness() {
     assert!(
         matches!(&incomplete[0].origin, fsck::Origin::Commit { commit, .. } if *commit == tip),
         "the finding names the conflicted commit"
+    );
+}
+
+/// acetone-2ck.11 (+ PR #217 review): the workspace side of the
+/// clean-now-gone-later class asks "is anything actually exposed?", not
+/// "does this ref anchor?". A superseded legacy shared ref (bare blob,
+/// pre-ADR-0014, never rewritten by any writer) is an error only when
+/// its chunks are covered by NO worktree's anchors — with a remedy that
+/// works (re-save + delete the superseded ref) — and goes clean once a
+/// worktree anchor tree covers the same set.
+#[test]
+fn legacy_shared_workspace_exposure_and_coverage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "legacy").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+    // Pre-ADR-0014 style: a shared ref naming the manifest blob itself.
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/legacy", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| {
+            f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/legacy")
+        })
+        .collect();
+    assert_eq!(incomplete.len(), 1, "{:?}", report.findings);
+    assert!(
+        incomplete[0].detail.contains("superseded")
+            && incomplete[0].detail.contains("git update-ref -d"),
+        "names the class and a remedy that works: {}",
+        incomplete[0].detail
+    );
+    assert!(report.has_errors());
+
+    // A STALE anchor (its worktree directory is gone) does NOT cover:
+    // `acetone gc` sweeps such anchors, so a chunk kept alive only by
+    // one dies at the next gc — fsck must still name the exposure (PR
+    // #217 review Major, driven to real data loss).
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/wt-removed");
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/legacy")),
+        "a stale anchor must not cover the legacy ref: {:?}",
+        report.findings
+    );
+
+    // A LIVE worktree's anchor does cover it: the legacy ref cannot be
+    // upgraded by any writer, and its chunks genuinely survive gc while
+    // the live peer anchors them (ADR-0063).
+    std::fs::create_dir_all(repo.store().common_dir().join("worktrees").join("wt-live"))
+        .expect("worktree dir");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/wt-live");
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/legacy")),
+        "a live worktree's anchors must cover the legacy ref: {:?}",
+        report.findings
+    );
+}
+
+/// The commonest legacy shape (PR #217 review round 3): a pre-ADR-0014
+/// repository predates linked worktrees, so the only thing anchoring its
+/// chunks is THIS worktree's own workspace tree — whose ref lives in the
+/// common dir and is gc-enumerated. Coverage must include it, or fsck
+/// claims chunks would be pruned that a real `git gc` demonstrably keeps.
+#[test]
+fn live_workspace_tree_covers_a_legacy_shared_ref() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "shared").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+
+    // The live workspace anchors the state (as any save does)…
+    write_anchored_workspace(&repo, &manifest, WORKTREE_WORKSPACE_REF_NAME);
+    // …and a superseded legacy shared ref names the same manifest as a
+    // bare blob. No linked worktrees exist — the ordinary legacy shape.
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .write_ref("refs/acetone/workspaces/legacy", None, &blob)
+        .expect("ref");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete),
+        "the live workspace tree covers the legacy ref: {:?}",
+        report.findings
+    );
+}
+
+/// The narrowing that makes coverage sound (PR #217 review Major): a
+/// LIVE workspace must anchor its own chunks — a peer worktree at the
+/// same state must never mask an anchoring bug in acetone's own
+/// writers, because both would lose the chunks together.
+#[test]
+fn live_workspace_must_anchor_its_own_chunks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "own").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+
+    // A live peer worktree anchoring the FULL set…
+    std::fs::create_dir_all(repo.store().common_dir().join("worktrees").join("peer"))
+        .expect("worktree dir");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/peer");
+    // …must not excuse the live workspace anchoring NOTHING (the
+    // incremental-anchoring bug class this check exists to catch).
+    let tree = store
+        .write_workspace_tree(&manifest.encode(), &[])
+        .expect("unanchored workspace tree");
+    store
+        .overwrite_ref("refs/worktree/acetone/workspace", &tree)
+        .expect("overwrite");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                if reference == "refs/worktree/acetone/workspace")),
+        "a live workspace's own anchoring gap must be reported: {:?}",
+        report.findings
+    );
+}
+
+/// The per-worktree workspace ref in pre-huo shape (bare blob) gets the
+/// re-save remedy — which genuinely works for this ref, as the PR #217
+/// reviewer probed.
+#[test]
+fn pre_huo_worktree_workspace_is_an_anchor_incomplete_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "prehuo").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+    let blob = store.put(&manifest.encode()).expect("put manifest");
+    store
+        .overwrite_ref("refs/worktree/acetone/workspace", &blob)
+        .expect("overwrite");
+
+    let report = fsck::check(&repo).expect("fsck");
+    let incomplete: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::AnchorIncomplete)
+        .collect();
+    assert_eq!(incomplete.len(), 1, "{:?}", report.findings);
+    assert!(
+        incomplete[0].detail.contains("pre-huo")
+            && incomplete[0].detail.contains("saves the workspace"),
+        "names the class and the working remedy: {}",
+        incomplete[0].detail
     );
 }

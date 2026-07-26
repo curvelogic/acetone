@@ -154,6 +154,19 @@ impl std::fmt::Debug for GitStore {
     }
 }
 
+/// What a workspace ref's object offers as gc anchors (acetone-2ck.11).
+#[derive(Debug)]
+pub enum WorkspaceAnchors {
+    /// Pre-huo: the ref names the manifest blob directly — nothing
+    /// anchors its chunks.
+    PreHuoBlob,
+    /// A workspace tree whose `.acetone` has no `chunks/` entry —
+    /// nonconforming (real writers always anchor), anchoring nothing.
+    TreeUnanchored,
+    /// A conforming workspace tree and the chunk set it anchors.
+    Anchored(std::collections::BTreeSet<Hash>),
+}
+
 impl GitStore {
     /// Initialise a new bare git repository at `path` and open it as a
     /// store with default options.
@@ -926,14 +939,47 @@ impl GitStore {
         let data = self.read_object_checked(id, &header, gix::object::Kind::Commit, what)?;
         let commit = gix::objs::CommitRef::from_bytes(&data, self.repo.object_hash())
             .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
-        let tree_hash = Hash::from_oid(commit.tree());
+        self.anchors_under_root_tree(&Hash::from_oid(commit.tree()), what)
+    }
+
+    /// The anchor shape behind a WORKSPACE ref (ADR-0044/huo — the
+    /// workspace-side mirror of [`Self::commit_anchors`], acetone-2ck.11).
+    /// The shape is reported, not collapsed: a pre-huo bare blob and a
+    /// (nonconforming) tree without a `chunks/` entry are different
+    /// failure classes with different remedies.
+    pub fn workspace_anchors(&self, ref_value: &Hash) -> Result<WorkspaceAnchors, StoreError> {
+        let what = "workspace anchor tree";
+        let header = self.find_header(ref_value)?.ok_or_else(|| {
+            StoreError::corrupt(what, "workspace object is absent from the store")
+        })?;
+        match header.kind() {
+            gix::object::Kind::Blob => Ok(WorkspaceAnchors::PreHuoBlob),
+            gix::object::Kind::Tree => match self.anchors_under_root_tree(ref_value, what)? {
+                Some(anchors) => Ok(WorkspaceAnchors::Anchored(anchors)),
+                None => Ok(WorkspaceAnchors::TreeUnanchored),
+            },
+            other => Err(StoreError::corrupt(
+                what,
+                format!("unexpected object kind {other:?}"),
+            )),
+        }
+    }
+
+    /// Read the `.acetone/chunks/` anchor set beneath a root tree — the
+    /// layout commits and (huo) workspace trees share. `Ok(None)` when the
+    /// `.acetone` directory has no `chunks/` entry.
+    fn anchors_under_root_tree(
+        &self,
+        tree_hash: &Hash,
+        what: &'static str,
+    ) -> Result<Option<std::collections::BTreeSet<Hash>>, StoreError> {
         let read_tree = |hash: &Hash| -> Result<Vec<u8>, StoreError> {
             let header = self
                 .find_header(hash)?
                 .ok_or_else(|| StoreError::corrupt(what, "tree object is missing"))?;
             self.read_object_checked(hash, &header, gix::object::Kind::Tree, what)
         };
-        let root_data = read_tree(&tree_hash)?;
+        let root_data = read_tree(tree_hash)?;
         let root = gix::objs::TreeRef::from_bytes(&root_data, self.repo.object_hash())
             .map_err(|e| StoreError::corrupt(what, e.to_string()))?;
         let Some(acetone) = root
