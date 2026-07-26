@@ -1042,6 +1042,83 @@ mod tests {
         assert_eq!(result.identifier_columns, vec![true, false]);
     }
 
+    /// Phase 9 security review, blocker 2: a pattern comprehension may
+    /// introduce a FRESH anchor and is evaluated once per row, so an
+    /// unbound anchor re-scanned the whole node map per row — unbounded
+    /// work at zero governor charge, hanging the process on a one-line
+    /// query. Anchor candidates are now charged, and every scan after the
+    /// first charges expansion, so a runaway re-scan trips a typed error.
+    #[test]
+    fn repeated_anchor_scans_are_governed() {
+        let mut graph = MemoryGraph::new();
+        for i in 0..200 {
+            let mut props = BTreeMap::new();
+            props.insert("i".to_string(), Value::Int(i));
+            graph.add_node(["N"], props);
+        }
+        // Under DEFAULT limits, not a hand-tightened budget: the first
+        // version of this fix passed a lowered-limit test while ordinary
+        // queries regressed at the defaults (PR #219 review finding 7).
+        let err = run_query(
+            "UNWIND range(1, 1000000) AS i RETURN size([(x)-->(y) | 1])",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect_err("a per-row full scan must be governed at default limits");
+        assert!(
+            matches!(err, QueryError::Exec(ExecError::ResourceExceeded { .. })),
+            "{err:?}"
+        );
+
+        // The same governing must hold for a pattern PREDICATE with an
+        // anonymous start node — the sibling path (PR #219 review blocker 2).
+        let err = run_query(
+            "UNWIND range(1, 1000000) AS i WITH i WHERE ()-->() RETURN count(*)",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect_err("an anonymous pattern predicate must be governed too");
+        assert!(
+            matches!(err, QueryError::Exec(ExecError::ResourceExceeded { .. })),
+            "{err:?}"
+        );
+
+        let limits = QueryLimits {
+            max_scanned_candidates: 1_000,
+            ..QueryLimits::default()
+        };
+        let err = run_query_with_limits(
+            "UNWIND range(1, 10000) AS i RETURN size([(x)-->(y) | 1])",
+            &graph,
+            &BTreeMap::new(),
+            &limits,
+        )
+        .expect_err("a per-row full scan must be governed");
+        assert!(
+            matches!(err, QueryError::Exec(ExecError::ResourceExceeded { .. })),
+            "{err:?}"
+        );
+
+        // A single scan of the same graph is untouched: scanning once is
+        // what an ordinary un-anchored MATCH does, and it must not become
+        // an error just because the graph is large.
+        let result = run_query("MATCH (n:N) RETURN count(n) AS c", &graph, &BTreeMap::new())
+            .expect("one scan is not a pathology");
+        assert!(matches!(result.rows[0][0], Value::Int(200)));
+
+        // Nor is an ordinary nested-loop join: 20 driving rows over a
+        // 200-node label examines 4000 candidates, which must stay well
+        // inside the default budget (PR #219 review finding 5 — borrowing
+        // the expansion budget rejected exactly this).
+        let result = run_query(
+            "MATCH (a:N) WITH a LIMIT 20 MATCH (b:N) WHERE b.i = a.i RETURN count(b) AS c",
+            &graph,
+            &BTreeMap::new(),
+        )
+        .expect("an ordinary semi-join must not be governed away");
+        assert!(matches!(result.rows[0][0], Value::Int(20)));
+    }
+
     #[test]
     fn unwind_streams_into_a_following_with_limit() {
         // UNWIND materialises only SKIP+LIMIT rows when the next WITH

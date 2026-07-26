@@ -34,6 +34,11 @@ pub struct QueryLimits {
     pub max_result_rows: u64,
     /// Cumulative variable-length / expansion hops over the whole query.
     pub max_expansion_steps: u64,
+    /// Cumulative anchor candidates examined over the whole query — the
+    /// budget for scanning, kept separate from expansion so a legitimate
+    /// nested-loop join is not rejected by a budget sized for edge
+    /// traversal (PR #219 review).
+    pub max_scanned_candidates: u64,
     /// The largest a single list/collection (e.g. `range()`) may be.
     pub max_collection_len: u64,
     /// Optional wall-clock backstop. `None` (the default) keeps the default
@@ -48,6 +53,7 @@ impl Default for QueryLimits {
     fn default() -> Self {
         QueryLimits {
             max_work_units: 100_000_000,
+            max_scanned_candidates: 20_000_000,
             max_result_rows: 1_000_000,
             max_expansion_steps: 1_000_000,
             max_collection_len: 10_000_000,
@@ -65,6 +71,7 @@ impl QueryLimits {
             max_work_units: u64::MAX,
             max_result_rows: u64::MAX,
             max_expansion_steps: u64::MAX,
+            max_scanned_candidates: u64::MAX,
             max_collection_len: u64::MAX,
             wall_clock: None,
         }
@@ -82,6 +89,8 @@ pub struct Governor {
     limits: QueryLimits,
     work: Cell<u64>,
     expansion: Cell<u64>,
+    /// Anchor candidates examined across the query.
+    scanned: Cell<u64>,
     deadline: Option<Instant>,
     work_at_last_poll: Cell<u64>,
 }
@@ -95,6 +104,7 @@ impl Governor {
             limits,
             work: Cell::new(0),
             expansion: Cell::new(0),
+            scanned: Cell::new(0),
             deadline,
             work_at_last_poll: Cell::new(0),
         }
@@ -173,6 +183,30 @@ impl Governor {
             return Err(Self::exceeded(ResourceLimit::CollectionLen));
         }
         self.charge_work(1)
+    }
+
+    /// Charge examining `candidates` anchor rows — the cost of scanning or
+    /// seeking a pattern's leading node, paid *before* the candidates are
+    /// filtered. Without this an anchor scan is free until it produces a
+    /// result, so a pattern that matches nothing (a comprehension with a
+    /// fresh anchor evaluated per row, say) could rescan the whole node map
+    /// unboundedly at zero charge (Phase 9 security review).
+    ///
+    /// Charged against `max_scanned_candidates` — its OWN budget, not the
+    /// expansion budget. Borrowing expansion (as the first version of this
+    /// fix did) rejected ordinary nested-loop joins: a 20-row semi-join
+    /// over a 100k-node label examines 2M candidates, far inside the work
+    /// budget but 2× the expansion budget, so legitimate work failed
+    /// (PR #219 review finding 5). A false `ResourceExceeded` on ordinary
+    /// work is worse for real users than the pathology it guards against.
+    pub fn scan(&self, candidates: usize) -> Result<(), ExecError> {
+        let candidates = candidates as u64;
+        let scanned = self.scanned.get().saturating_add(candidates);
+        self.scanned.set(scanned);
+        if scanned > self.limits.max_scanned_candidates {
+            return Err(Self::exceeded(ResourceLimit::ScannedCandidates));
+        }
+        self.charge_work(candidates)
     }
 
     /// Total work charged so far. Deterministic for a given query + graph +

@@ -1125,10 +1125,14 @@ pub(crate) fn match_path(
 ) -> Result<Vec<MatchState>, ExecError> {
     // Anchor at the leftmost node: a bound variable pins it; otherwise
     // scan by labels (the heuristic planner's LabelScan/AllNodesScan).
+    let mut pinned = false;
     let anchors: Vec<NodeValue> = match pattern.start.var {
         // Bound variable: pinned (bound null or non-node matches nothing).
         Some(var) if state.row.contains(var) => match state.row.get(var) {
-            Value::Node(node) => vec![node],
+            Value::Node(node) => {
+                pinned = true;
+                vec![node]
+            }
             _ => return Ok(Vec::new()),
         },
         // Fresh or anonymous: a KeySeek/IndexSeek/IndexRange when the
@@ -1141,6 +1145,17 @@ pub(crate) fn match_path(
             None => ctx.graph.nodes_by_labels(&pattern.start.labels),
         },
     };
+    // Examining anchor candidates is work whether or not any survives
+    // filtering. A pattern comprehension may introduce a FRESH anchor and is
+    // evaluated once per row, so an unbound anchor rescans the whole node map
+    // per row — unbounded at zero charge until this call (Phase 9 security
+    // review). Charged for seek results too: a candidate superset still costs
+    // what it costs. A PINNED anchor is a lookup, not a scan: charging it
+    // would let an ordinary row-by-row match burn the scan budget
+    // (PR #219 review finding 6).
+    if !pinned {
+        ctx.governor.scan(anchors.len())?;
+    }
 
     let mut results = Vec::new();
     for anchor in anchors {

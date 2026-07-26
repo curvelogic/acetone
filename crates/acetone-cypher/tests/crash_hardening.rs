@@ -156,3 +156,68 @@ fn range_up_to_i64_max_does_not_overflow() {
         other => panic!("expected a list, got {other:?}"),
     }
 }
+
+/// Phase 9 security review, blocker 1: the chained-comparison desugar
+/// duplicates interior operands, so nested chains doubled the AST per
+/// level — a ~270-byte query reached 53.8 GB and 67 s of parsing, before
+/// any Governor exists. The expansion is now bounded at parse time.
+#[test]
+fn nested_chained_comparisons_cannot_explode_the_ast() {
+    let mut inner = String::from("1");
+    for _ in 0..26 {
+        inner = format!("1 < ({inner}) < 1");
+    }
+    let query = format!("RETURN {inner}");
+    assert!(
+        query.len() < 400,
+        "the bomb is small: {} bytes",
+        query.len()
+    );
+    let start = std::time::Instant::now();
+    let err = acetone_cypher::parse(&query).expect_err("must refuse to expand");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "refusal must be fast, took {:?}",
+        start.elapsed()
+    );
+    assert!(
+        err.to_string().contains("chained comparison"),
+        "explains itself: {err}"
+    );
+
+    // The two shapes the bound is actually about (PR #219 review N3):
+    // pattern STRUCTURE as a multiplier, and sibling chains composing.
+    // Reverting either `pattern_size` or the cumulative counter must turn
+    // these red.
+    let steps = "-->()".repeat(2000);
+    let mut structural = String::from("1");
+    for _ in 0..10 {
+        structural = format!("1 < ([(a){steps} WHERE {structural} | 1][0]) < 1");
+    }
+    let start = std::time::Instant::now();
+    acetone_cypher::parse(&format!("RETURN {structural}"))
+        .expect_err("pattern structure must count toward the bound");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "structural refusal must be fast, took {:?}",
+        start.elapsed()
+    );
+
+    let mut sibling = String::from("1");
+    for _ in 0..6 {
+        sibling = format!(
+            "1 < ([(a){} WHERE {sibling} | 1][0]) < 1",
+            "-->()".repeat(1500)
+        );
+    }
+    acetone_cypher::parse(&format!(
+        "RETURN [{sibling}, {sibling}, {sibling}, {sibling}]"
+    ))
+    .expect_err("the budget must accumulate across sibling chains");
+
+    // Ordinary chains and plain comparisons are unaffected.
+    acetone_cypher::parse("RETURN 1 < 2 < 3").expect("short chain parses");
+    acetone_cypher::parse("RETURN 1 < 2").expect("plain comparison parses");
+    let wide: String = (0..200).map(|i| format!("{i} < ")).collect::<String>();
+    acetone_cypher::parse(&format!("RETURN {wide}999")).expect("wide chain of small operands");
+}

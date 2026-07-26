@@ -32,6 +32,12 @@ pub const MAX_DEPTH: usize = 64;
 /// terms.
 pub const MAX_AST_DEPTH: usize = 256;
 
+/// Cap on the total size of the operands a chained comparison duplicates
+/// (`a < b < c` evaluates `b` in both conjuncts). Without it a ~160-byte
+/// query of nested chains expands to gigabytes of AST *during parsing*,
+/// before any Governor exists (Phase 9 security review).
+pub const MAX_CHAIN_EXPANSION: usize = 4096;
+
 /// Words that cannot be used as variable names, aliases or yield items
 /// unless backquoted. Labels, relationship types, property names, map keys
 /// and procedure names are deliberately not restricted — openCypher keeps
@@ -100,6 +106,7 @@ pub fn parse(input: &str) -> Result<Query, ParseError> {
         tokens,
         pos: 0,
         depth: 0,
+        chain_expansion: 0,
     };
     let query = parser.query()?;
     parser.expect_end()?;
@@ -133,6 +140,7 @@ pub fn parse_literal(input: &str) -> Result<Value, ParseError> {
         tokens,
         pos: 0,
         depth: 0,
+        chain_expansion: 0,
     };
     let expr = parser.expression()?;
     parser.expect_end()?;
@@ -230,6 +238,10 @@ struct Parser<'a> {
     tokens: Vec<Token>,
     pos: usize,
     depth: usize,
+    /// Total operand size the chained-comparison desugar has committed to
+    /// duplicating in this parse. Cumulative, so sibling chains cannot each
+    /// sit just under the cap and compose (PR #219 review blocker 1).
+    chain_expansion: usize,
 }
 
 impl Parser<'_> {
@@ -1104,6 +1116,43 @@ impl Parser<'_> {
         }
         if ops.is_empty() {
             return Ok(operands.pop().expect("one operand parsed"));
+        }
+        if ops.len() == 1 {
+            // A plain comparison duplicates nothing: consume the operands.
+            let rhs = operands.pop().expect("two operands parsed");
+            let lhs = operands.pop().expect("two operands parsed");
+            let span = lhs.span().to(rhs.span());
+            return Ok(Expr::Binary {
+                op: ops[0],
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                span,
+            });
+        }
+        // A genuine chain duplicates every interior operand, so the AST it
+        // builds is bounded by the size of those operands — and nesting
+        // compounds it multiplicatively (`1 < (1 < (…) < 1) < 1` doubles per
+        // level). Refuse before building rather than allocate: parsing happens
+        // before any Governor exists, so nothing downstream would catch it
+        // (Phase 9 security review).
+        // Cumulative across the whole parse, not per chain: sibling chains
+        // each just under the cap composed to gigabytes otherwise
+        // (PR #219 review blocker 1).
+        let duplicated: usize = operands[1..operands.len() - 1]
+            .iter()
+            .map(|operand| operand.allocated_size())
+            .sum();
+        self.chain_expansion = self.chain_expansion.saturating_add(duplicated);
+        if self.chain_expansion > MAX_CHAIN_EXPANSION {
+            return Err(ParseError::QueryStructure {
+                message: format!(
+                    "chained comparisons in this query duplicate more than the \
+                     {MAX_CHAIN_EXPANSION}-node expansion budget (a chain \
+                     evaluates each interior operand twice); bind the shared \
+                     operand with WITH and compare it twice instead"
+                ),
+                span: operands[0].span().to(operands[operands.len() - 1].span()),
+            });
         }
         let mut conjuncts = ops.into_iter().enumerate().map(|(i, op)| {
             let lhs = operands[i].clone();

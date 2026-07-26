@@ -471,6 +471,29 @@ impl Expr {
         }
     }
 
+    /// The **allocated size** of this subtree: expression nodes plus the
+    /// pattern structure hanging off them (path steps, labels, relationship
+    /// types, var-length bounds). Structure must be counted, not just
+    /// expressions: the chained-comparison desugar clones whole
+    /// `PathPattern`s, so a pattern with thousands of steps is a free
+    /// multiplier if only `Expr` nodes are counted — a 100 KB query reached
+    /// 10.6 GB that way (PR #219 review blocker 1). Iterative, so no
+    /// recursion whatever the shape.
+    pub(crate) fn allocated_size(&self) -> usize {
+        let mut stack: Vec<&Expr> = vec![self];
+        let mut n = 0usize;
+        while let Some(expr) = stack.pop() {
+            n = n.saturating_add(1);
+            n = n.saturating_add(match expr {
+                Expr::PatternPredicate { pattern, .. } => pattern_size(pattern),
+                Expr::PatternComprehension { pattern, .. } => pattern_size(pattern),
+                _ => 0,
+            });
+            stack.extend(expr.children());
+        }
+        n
+    }
+
     /// Borrow every direct child expression, including those buried in an
     /// embedded pattern's property maps. Keep in step with
     /// [`Expr::take_children`].
@@ -683,6 +706,19 @@ impl Drop for Expr {
             // iteration finds nothing to recurse into.
         }
     }
+}
+
+/// Structural size of a path pattern: every node and step, with its labels,
+/// relationship types and var-length bounds. Counted because the chain
+/// desugar clones patterns wholesale (see [`Expr::allocated_size`]).
+fn pattern_size(pattern: &PathPattern) -> usize {
+    let node_size = |node: &NodePattern| 1 + node.labels.len() + node.properties.iter().count();
+    let mut n = node_size(&pattern.start);
+    for (rel, node) in &pattern.steps {
+        n = n.saturating_add(1 + rel.types.len() + rel.properties.iter().count());
+        n = n.saturating_add(node_size(node));
+    }
+    n
 }
 
 impl Query {

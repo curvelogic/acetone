@@ -604,9 +604,15 @@ fn cartesian_probes(values: &[&Value]) -> Option<Vec<Vec<u8>>> {
     {
         return Some(Vec::new());
     }
-    let combinations: usize = per_component.iter().map(Vec::len).product();
-    if combinations > 16 {
-        return None;
+    // checked, not `product()`: the latter wraps in release, so a pin with
+    // >=64 dual-probe components made this cap vacuous (PR #219 review
+    // finding 4).
+    let mut combinations: usize = 1;
+    for alternatives in &per_component {
+        combinations = combinations.checked_mul(alternatives.len())?;
+        if combinations > 16 {
+            return None;
+        }
     }
     let mut probes: Vec<Vec<u8>> = vec![Vec::new()];
     for alternatives in &per_component {

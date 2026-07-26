@@ -424,3 +424,117 @@ fn composite_seek_edges_bail_or_empty_per_component() {
             .is_none()
     );
 }
+
+/// Phase 9 security review, finding 7: `StoreBackedSource` implemented
+/// only `nodes_by_index`, so a primary-key pin fell through to the
+/// `GraphSource` default (`None`) and always label-scanned — the seek
+/// existed but was unreachable through `Session`, the shipped read path.
+#[test]
+fn primary_key_pin_is_served_by_the_store_backed_source() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "Host".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        for id in 0..50i64 {
+            txn.put_node(
+                &NodeKey::new("Host", vec![MV::Int(id)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("n".to_owned(), MV::Int(id * 10))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // The key pin is served (Some), not declined (None -> scan).
+    let served = source
+        .nodes_by_key("Host", &[RtValue::Int(7)])
+        .expect("primary key pin must be served by the store");
+    assert_eq!(served.len(), 1, "exactly the pinned node");
+    assert!(
+        matches!(served[0].properties.get("n"), Some(RtValue::Int(70))),
+        "the right node"
+    );
+
+    // 7.0 finds the same node: openCypher equates 3 and 3.0, and the two
+    // encode differently, so both numeric encodings are probed.
+    let by_float = source
+        .nodes_by_key("Host", &[RtValue::Float(7.0)])
+        .expect("integral float pin serves too");
+    assert_eq!(by_float.len(), 1);
+
+    // A pin the seek cannot serve declines (scan), never asserts absence.
+    assert!(
+        source.nodes_by_key("Host", &[RtValue::Null]).is_none(),
+        "a null pin declines rather than claiming nothing matches"
+    );
+}
+
+/// PR #219 review blocker 3: a `Bytes`/temporal key value compares equal
+/// to its string *rendering* at runtime, but the stored encodings differ.
+/// A string pin probing only the string encoding would MISS the
+/// deferred-typed node — under-selection, which candidate-superset
+/// semantics forbid — so the key seek declines string pins and lets the
+/// scan answer. Two spellings of one predicate must never disagree.
+#[test]
+fn string_key_pin_declines_rather_than_under_selecting() {
+    let (_dir, repo1) = repo();
+    {
+        let mut txn = repo1.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "Host".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_node(
+            &NodeKey::new("Host", vec![MV::String("deadbeef".into())]).expect("key"),
+            &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(1))])),
+        )
+        .expect("string-keyed node");
+        txn.save().expect("save");
+    }
+    let snapshot = repo1.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    assert!(
+        source
+            .nodes_by_key("Host", &[RtValue::String("deadbeef".into())])
+            .is_none(),
+        "a string pin must decline (scan) rather than serve a possibly \
+         under-selecting probe set"
+    );
+    // Numeric keys are unaffected — those encodings cannot collide with a
+    // deferred value's rendering.
+    let (_dir2, repo2) = repo();
+    {
+        let mut txn = repo2.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_node(
+            &NodeKey::new("N", vec![MV::Int(5)]).expect("key"),
+            &NodeRecord::new([], BTreeMap::new()),
+        )
+        .expect("node");
+        txn.save().expect("save");
+    }
+    let snap2 = repo2.workspace_snapshot().expect("snapshot");
+    let schema2 = snap2.schema_entries().expect("schema");
+    let source2 = StoreBackedSource::new(&snap2, &schema2);
+    assert_eq!(
+        source2
+            .nodes_by_key("N", &[RtValue::Int(5)])
+            .expect("numeric pin is served")
+            .len(),
+        1
+    );
+}

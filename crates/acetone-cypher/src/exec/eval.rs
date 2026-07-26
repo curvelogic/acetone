@@ -49,6 +49,8 @@ pub enum ResourceLimit {
     ResultRows,
     /// Cumulative variable-length / expansion hops.
     ExpansionSteps,
+    /// Cumulative anchor candidates examined by scans (PR #219 review).
+    ScannedCandidates,
     /// The length of a single list/collection.
     CollectionLen,
     /// The optional wall-clock backstop.
@@ -66,6 +68,7 @@ impl std::fmt::Display for ResourceLimit {
             ResourceLimit::WorkUnits => "work-unit",
             ResourceLimit::ResultRows => "result-row",
             ResourceLimit::ExpansionSteps => "expansion-step",
+            ResourceLimit::ScannedCandidates => "scanned-candidate",
             ResourceLimit::CollectionLen => "collection-size",
             ResourceLimit::WallClock => "wall-clock",
             ResourceLimit::ValueDepth => "value-nesting-depth",
@@ -893,7 +896,16 @@ fn pattern_exists(pattern: &BoundPathPattern, row: &Row, ctx: &EvalCtx) -> Resul
             Value::Null => return Ok(false),
             _ => return Ok(false),
         },
-        None => ctx.graph.nodes_by_labels(&pattern.start.labels),
+        // An ANONYMOUS start node is a fresh anchor in expression
+        // position, and a pattern predicate is evaluated once per row, so
+        // this re-materialises the whole node map per row. Charge it like
+        // any other anchor scan (PR #219 review blocker 2 — the sibling
+        // path the match_path fix missed).
+        None => {
+            let candidates = ctx.graph.nodes_by_labels(&pattern.start.labels);
+            ctx.governor.scan(candidates.len())?;
+            candidates
+        }
     };
     for start in starts {
         if !pattern
@@ -931,6 +943,9 @@ fn probe_steps(
         });
     }
     for (rel_value, neighbour) in ctx.graph.expand(&from.id, rel.direction, &rel.types) {
+        // Every edge considered is an expansion step, here as in
+        // match_path (PR #219 review blocker 2).
+        ctx.governor.hop()?;
         // A bound relationship variable pins the exact relationship.
         if let Some(var) = rel.var {
             match row.get(var) {
