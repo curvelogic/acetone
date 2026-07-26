@@ -629,3 +629,21 @@ fn workspace_anchors_distinguishes_shapes_and_rejects_commits() {
         .expect("commit");
     assert!(store.workspace_anchors(&commit).is_err());
 }
+
+/// A workspace tree whose `.acetone` has no `chunks/` entry is its own
+/// shape — nonconforming, not "pre-huo" (PR #217 review finding 2): real
+/// writers always anchor, so the two need distinct diagnoses.
+#[test]
+fn workspace_tree_without_chunks_entry_is_tree_unanchored() {
+    use acetone_store::WorkspaceAnchors;
+    let (_dir, store) = new_store();
+    // write_workspace_tree omits the chunks/ entry when there are no
+    // anchors — the only way this shape arises from acetone itself.
+    let tree = store
+        .write_workspace_tree(b"manifest bytes", &[])
+        .expect("workspace tree");
+    assert!(matches!(
+        store.workspace_anchors(&tree).expect("shape"),
+        WorkspaceAnchors::TreeUnanchored
+    ));
+}

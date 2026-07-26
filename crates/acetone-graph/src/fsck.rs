@@ -417,31 +417,56 @@ fn check_workspaces(
     // ADR-0044 durability anchors are workspace trees too, and they are
     // the only common-dir-visible record of OTHER worktrees' workspaces —
     // enumerating them closes fsck's cross-worktree blind spot (PR #217
-    // review finding 4) and supplies the coverage sets below.
-    for entry in store.list_refs(WORKTREE_ANCHOR_PREFIX)? {
-        refs.push(entry);
+    // review finding 4). Symbolic ones are resolved like workspace refs:
+    // silence is the sin fsck must avoid.
+    let mut anchor_refs: Vec<(String, Hash)> = store.list_refs(WORKTREE_ANCHOR_PREFIX)?;
+    for (reference, target) in store.list_symbolic_refs(WORKTREE_ANCHOR_PREFIX)? {
+        push_resolved_symref(
+            store,
+            reference,
+            &target,
+            FindingKind::Manifest,
+            &mut anchor_refs,
+            report,
+        );
     }
 
-    // Pass 1: read each workspace object's anchor shape and union every
-    // anchored set into COVERAGE. A superseded legacy shared ref
-    // (`refs/acetone/workspaces/*`, pre-ADR-0014) is a bare blob no
-    // writer ever upgrades; its chunks usually stay alive because the
-    // shadowing worktree trees anchor the same set — so the check must
-    // ask "is anything actually exposed?", not "does this ref anchor?"
-    // (PR #217 review Major).
-    let mut shapes: Vec<Result<WorkspaceAnchors, StoreError>> = Vec::with_capacity(refs.len());
+    // Coverage (ADR-0063) exists for exactly ONE shape: a superseded
+    // legacy shared ref (`refs/acetone/workspaces/*`, pre-ADR-0014) that
+    // no writer can ever upgrade or delete, whose chunks the shadowing
+    // live worktrees do anchor. It is NOT a general relaxation: every
+    // live workspace must anchor its own chunks, or an anchoring bug in
+    // acetone's own writers would hide behind a peer worktree at the same
+    // state, and a chunk kept alive only by a *stale* anchor dies the
+    // moment `acetone gc` sweeps it (PR #217 review Major, driven to real
+    // data loss). So coverage is built only when a legacy ref exists, and
+    // only from anchors that are themselves durable: LIVE worktree
+    // anchors (their `worktrees/<id>` directory still present — the same
+    // staleness test gc uses) and only when this process can see the
+    // whole picture from the common dir.
+    let has_legacy = refs
+        .iter()
+        .any(|(reference, _)| reference.starts_with(WORKSPACE_REF_PREFIX));
     let mut coverage: BTreeSet<Hash> = BTreeSet::new();
-    for (_, ref_hash) in &refs {
-        let shape = store.workspace_anchors(ref_hash);
-        if let Ok(WorkspaceAnchors::Anchored(set)) = &shape {
-            coverage.extend(set.iter().copied());
+    if has_legacy && store.git_dir() == store.common_dir() {
+        let worktrees_dir = store.common_dir().join("worktrees");
+        for (reference, ref_hash) in &anchor_refs {
+            let id = reference
+                .strip_prefix(WORKTREE_ANCHOR_PREFIX)
+                .unwrap_or(reference);
+            if !worktrees_dir.join(id).exists() {
+                continue; // a removed worktree's anchor: gc will sweep it
+            }
+            if let Ok(WorkspaceAnchors::Anchored(set)) = store.workspace_anchors(ref_hash) {
+                coverage.extend(set);
+            }
         }
-        shapes.push(shape);
     }
+    refs.extend(anchor_refs);
 
-    // Pass 2: verify each manifest and its anchor completeness.
-    for ((reference, ref_hash), shape) in refs.into_iter().zip(shapes) {
+    for (reference, ref_hash) in refs {
         let legacy_shared = reference.starts_with(WORKSPACE_REF_PREFIX);
+        let shape = store.workspace_anchors(&ref_hash);
         let origin = Origin::Workspace { reference };
         // The ref points at a workspace tree (huo) whose `manifest` entry is
         // the blob, or — for a pre-huo workspace — the manifest blob
@@ -630,18 +655,11 @@ fn check_commit_tips(
     Ok(())
 }
 
-/// Anchor completeness (acetone-5a8): every chunk a commit's manifest
-/// reaches must appear in the commit's `.acetone/chunks/` anchor tree —
-/// otherwise the version verifies clean today but a foreign `git gc`
-/// may prune the unanchored chunks later (the clean-now-gone-later
-/// class). Chunk sets are cached by the manifest's map-root keys, so a
-/// multi-version history sharing manifests re-verifies cheaply.
 /// Where a version's anchor tree lives: a commit's `.acetone/chunks/`
 /// or a workspace object's. Commits must be SELF-complete (their anchor
-/// tree travels with them); a workspace is local-only, so its chunks
-/// merely need to be anchored SOMEWHERE reachable — its own tree or any
-/// other workspace/anchor tree (`coverage`) — for gc survival
-/// (acetone-2ck.11, PR #217 review).
+/// tree travels with them), and so must every LIVE workspace; only the
+/// un-upgradable legacy shared ref may borrow durability from live
+/// peers' anchors (`coverage`, ADR-0063).
 enum AnchorSource<'a> {
     Commit(Hash),
     Workspace {
@@ -651,6 +669,12 @@ enum AnchorSource<'a> {
     },
 }
 
+/// Anchor completeness (acetone-5a8): every chunk a commit's manifest
+/// reaches must appear in the commit's `.acetone/chunks/` anchor tree —
+/// otherwise the version verifies clean today but a foreign `git gc`
+/// may prune the unanchored chunks later (the clean-now-gone-later
+/// class). Chunk sets are cached by the manifest's map-root keys, so a
+/// multi-version history sharing manifests re-verifies cheaply.
 fn check_anchor_completeness(
     store: &GitStore,
     origin: &Origin,
@@ -704,7 +728,7 @@ fn check_anchor_completeness(
             set
         }
     };
-    let (anchors, shape_note): (BTreeSet<Hash>, Option<&'static str>) = match &source {
+    let (anchors, shape_note): (BTreeSet<Hash>, Option<&WorkspaceAnchors>) = match &source {
         AnchorSource::Commit(commit) => match store.commit_anchors(commit) {
             Ok(Some(anchors)) => (anchors, None),
             Ok(None) => (BTreeSet::new(), None),
@@ -719,12 +743,14 @@ fn check_anchor_completeness(
             }
         },
         AnchorSource::Workspace {
-            shape, coverage, ..
+            shape,
+            coverage,
+            legacy_shared,
         } => {
-            let (own, note) = match shape {
+            let (mut own, note) = match shape {
                 Ok(WorkspaceAnchors::Anchored(set)) => (set.clone(), None),
-                Ok(WorkspaceAnchors::PreHuoBlob) => (BTreeSet::new(), Some("pre-huo")),
-                Ok(WorkspaceAnchors::TreeUnanchored) => (BTreeSet::new(), Some("unanchored-tree")),
+                Ok(shape @ WorkspaceAnchors::PreHuoBlob)
+                | Ok(shape @ WorkspaceAnchors::TreeUnanchored) => (BTreeSet::new(), Some(shape)),
                 Err(err) => {
                     report.push(
                         FindingKind::AnchorIncomplete,
@@ -735,8 +761,11 @@ fn check_anchor_completeness(
                     return;
                 }
             };
-            let mut own = own;
-            own.extend(coverage.iter().copied());
+            // Only the un-upgradable legacy shape borrows durability from
+            // live peers (ADR-0063); every live workspace anchors its own.
+            if *legacy_shared {
+                own.extend(coverage.iter().copied());
+            }
             (own, note)
         }
     };
@@ -751,29 +780,29 @@ fn check_anchor_completeness(
                 legacy_shared: true,
                 ..
             },
-            Some("pre-huo"),
+            Some(WorkspaceAnchors::PreHuoBlob),
         ) => format!(
             "superseded shared workspace ref (pre-worktree layout, ADR-0014) anchors nothing, \
-             and {} reachable chunk(s) are covered by no worktree's anchors either and would \
-             not survive a foreign git gc (e.g. {}) — re-save the workspace from its worktree, \
-             then delete the superseded ref",
+             and {} reachable chunk(s) are covered by no live worktree's anchors either and \
+             would not survive a foreign git gc (e.g. {}) — save from the live worktree to \
+             carry the state over, then remove the superseded ref with `git update-ref -d <ref>`",
             missing.len(),
             sample.join(", "),
         ),
-        (AnchorSource::Workspace { .. }, Some("pre-huo")) => format!(
+        (AnchorSource::Workspace { .. }, Some(WorkspaceAnchors::PreHuoBlob)) => format!(
             "workspace predates anchor trees (bare manifest blob, pre-huo): {} reachable \
              chunk(s) would not survive a foreign git gc (e.g. {}) — any acetone write \
              that saves the workspace upgrades it to an anchored tree",
             missing.len(),
             sample.join(", "),
         ),
-        (AnchorSource::Workspace { .. }, Some(_)) => format!(
+        (AnchorSource::Workspace { .. }, Some(WorkspaceAnchors::TreeUnanchored)) => format!(
             "workspace tree has no chunks/ anchor tree (nonconforming — real writers always \
              anchor): {} reachable chunk(s) would not survive a foreign git gc (e.g. {})",
             missing.len(),
             sample.join(", "),
         ),
-        (AnchorSource::Workspace { .. }, None) => format!(
+        (AnchorSource::Workspace { .. }, _) => format!(
             "{} of {} reachable chunk(s) are not anchored in the workspace tree's chunks/ \
              (nor any other worktree's) and would not survive a foreign git gc (e.g. {})",
             missing.len(),

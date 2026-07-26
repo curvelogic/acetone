@@ -459,6 +459,9 @@ fn shared_root_hash_with_wrong_height_is_not_memoised_clean() {
         height: base.nodes.height + 1,
     };
     let blob = repo.store().put(&bad.encode()).expect("put manifest");
+    // Deliberately bare-blob: the forged height makes the reachable set
+    // uncomputable, so this fixture cannot be anchored; the anchor check
+    // reports an Unverified advisory for it, which the assertions tolerate.
     repo.store()
         .write_ref("refs/acetone/workspaces/zzz-bad", None, &blob)
         .expect("ref");
@@ -1279,23 +1282,96 @@ fn legacy_shared_workspace_exposure_and_coverage() {
     assert_eq!(incomplete.len(), 1, "{:?}", report.findings);
     assert!(
         incomplete[0].detail.contains("superseded")
-            && incomplete[0].detail.contains("delete the superseded ref"),
+            && incomplete[0].detail.contains("git update-ref -d"),
         "names the class and a remedy that works: {}",
         incomplete[0].detail
     );
     assert!(report.has_errors());
 
-    // Coverage: anchor the same manifest under a worktree-anchor ref —
-    // exactly what a shadowing worktree's save maintains — and the
-    // legacy ref's exposure disappears (its chunks WOULD survive gc).
-    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/wt-cover");
+    // A STALE anchor (its worktree directory is gone) does NOT cover:
+    // `acetone gc` sweeps such anchors, so a chunk kept alive only by
+    // one dies at the next gc — fsck must still name the exposure (PR
+    // #217 review Major, driven to real data loss).
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/wt-removed");
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/legacy")),
+        "a stale anchor must not cover the legacy ref: {:?}",
+        report.findings
+    );
+
+    // A LIVE worktree's anchor does cover it: the legacy ref cannot be
+    // upgraded by any writer, and its chunks genuinely survive gc while
+    // the live peer anchors them (ADR-0063).
+    std::fs::create_dir_all(repo.store().common_dir().join("worktrees").join("wt-live"))
+        .expect("worktree dir");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/wt-live");
     let report = fsck::check(&repo).expect("fsck");
     assert!(
         !report
             .findings
             .iter()
-            .any(|f| f.kind == FindingKind::AnchorIncomplete),
-        "covered legacy ref must not be an exposure: {:?}",
+            .any(|f| f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                    if reference == "refs/acetone/workspaces/legacy")),
+        "a live worktree's anchors must cover the legacy ref: {:?}",
+        report.findings
+    );
+}
+
+/// The narrowing that makes coverage sound (PR #217 review Major): a
+/// LIVE workspace must anchor its own chunks — a peer worktree at the
+/// same state must never mask an anchoring bug in acetone's own
+/// writers, because both would lose the chunks together.
+#[test]
+fn live_workspace_must_anchor_its_own_chunks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let store = repo.store();
+    let base = repo.workspace_manifest().expect("manifest");
+    let params = base.chunk_params;
+
+    let nodes = apply_batch(
+        store,
+        &base.nodes.to_root(params).expect("root"),
+        vec![BatchOp::Put(
+            node("Host", "own").encode().expect("encode"),
+            NodeRecord::new([], Default::default())
+                .encode()
+                .expect("record"),
+        )],
+    )
+    .expect("apply_batch");
+    let mut manifest = base.clone();
+    manifest.nodes = MapRoot::from_root(&nodes);
+
+    // A live peer worktree anchoring the FULL set…
+    std::fs::create_dir_all(repo.store().common_dir().join("worktrees").join("peer"))
+        .expect("worktree dir");
+    write_anchored_workspace(&repo, &manifest, "refs/acetone/worktree-anchors/peer");
+    // …must not excuse the live workspace anchoring NOTHING (the
+    // incremental-anchoring bug class this check exists to catch).
+    let tree = store
+        .write_workspace_tree(&manifest.encode(), &[])
+        .expect("unanchored workspace tree");
+    store
+        .overwrite_ref("refs/worktree/acetone/workspace", &tree)
+        .expect("overwrite");
+
+    let report = fsck::check(&repo).expect("fsck");
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::AnchorIncomplete
+                && matches!(&f.origin, fsck::Origin::Workspace { reference }
+                if reference == "refs/worktree/acetone/workspace")),
+        "a live workspace's own anchoring gap must be reported: {:?}",
         report.findings
     );
 }
