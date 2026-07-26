@@ -538,3 +538,254 @@ fn string_key_pin_declines_rather_than_under_selecting() {
         1
     );
 }
+
+/// acetone-2ck.14: `IndexRange` must be served by the STORE-backed source
+/// — the shipped read path — and must agree with a scan exactly. Range
+/// bounds live inside the index key's nested value list, so this is the
+/// parity assertion that matters: over-selection is safe (a later filter
+/// re-checks), under-selection is a wrong answer.
+#[test]
+fn index_range_is_served_by_the_store_and_agrees_with_a_scan() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "M".into(),
+            def: LabelDef::new(
+                vec!["id".into()],
+                BTreeMap::from([("v".to_owned(), PropertyType::Int)]),
+                [],
+                [],
+            )
+            .expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "m_v".into(),
+            def: IndexDef::new("M", vec!["v".into()]).expect("index"),
+        })
+        .expect("index");
+        for id in 0..60i64 {
+            txn.put_node(
+                &NodeKey::new("M", vec![MV::Int(id)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), MV::Int(id))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // Every bound shape, checked against the truth a scan would give.
+    type Bound = Option<(RtValue, bool)>;
+    let cases: Vec<(Bound, Bound)> = vec![
+        (None, Some((RtValue::Int(30), false))), // v < 30
+        (None, Some((RtValue::Int(30), true))),  // v <= 30
+        (Some((RtValue::Int(50), false)), None), // v > 50
+        (Some((RtValue::Int(50), true)), None),  // v >= 50
+        (
+            Some((RtValue::Int(10), true)),
+            Some((RtValue::Int(20), false)),
+        ),
+        (
+            Some((RtValue::Int(20), false)),
+            Some((RtValue::Int(10), true)),
+        ), // inverted
+        (
+            Some((RtValue::Int(-5), true)),
+            Some((RtValue::Int(3), true)),
+        ), // spans zero
+        (Some((RtValue::Int(0), true)), Some((RtValue::Int(0), true))), // single point
+    ];
+    for (lo, hi) in cases {
+        let lo_ref = lo.as_ref().map(|(v, i)| (v, *i));
+        let hi_ref = hi.as_ref().map(|(v, i)| (v, *i));
+        let served = source
+            .nodes_by_index_range("m_v", "v", lo_ref, hi_ref)
+            .unwrap_or_else(|| panic!("store must serve the range {lo:?}..{hi:?}"));
+
+        let expected: Vec<i64> = (0..60i64)
+            .filter(|n| match &lo {
+                Some((RtValue::Int(b), true)) => n >= b,
+                Some((RtValue::Int(b), false)) => n > b,
+                _ => true,
+            })
+            .filter(|n| match &hi {
+                Some((RtValue::Int(b), true)) => n <= b,
+                Some((RtValue::Int(b), false)) => n < b,
+                _ => true,
+            })
+            .collect();
+        let mut got: Vec<i64> = served
+            .iter()
+            .map(|node| match node.properties.get("v") {
+                Some(RtValue::Int(n)) => *n,
+                other => panic!("expected int, got {other:?}"),
+            })
+            .collect();
+        got.sort_unstable();
+        // Over-selection is permitted (a candidate superset); missing a
+        // node the scan would find is not.
+        for want in &expected {
+            assert!(
+                got.contains(want),
+                "range {lo:?}..{hi:?} UNDER-SELECTED: missing {want} (got {got:?})"
+            );
+        }
+        assert!(
+            got.iter().all(|n| expected.contains(n)),
+            "range {lo:?}..{hi:?} returned rows outside it: {got:?} vs {expected:?}"
+        );
+    }
+
+    // A float bound over an int column still agrees (3 == 3.0).
+    let served = source
+        .nodes_by_index_range("m_v", "v", None, Some((&RtValue::Float(5.5), false)))
+        .expect("float bound is served");
+    assert_eq!(served.len(), 6, "v < 5.5 selects 0..=5");
+}
+
+/// PR #221 review finding 6: the parity test above uses only `Int`
+/// values, so it never exercised the deferred-typed hazard the range
+/// code's central comment reasons about, nor floats, extremes, or nodes
+/// missing the property. This one stores every value kind in one indexed
+/// column and asserts the seek never misses a row the predicate accepts.
+#[test]
+fn index_range_over_a_mixed_type_column_never_under_selects() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "X".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "x_v".into(),
+            def: IndexDef::new("X", vec!["v".into()]).expect("index"),
+        })
+        .expect("index");
+        // Every kind that can sit in a property, including ones the index
+        // is blind to (null/NaN) and ones the runtime compares as their
+        // string rendering (Bytes, temporal).
+        let values: Vec<Option<MV>> = vec![
+            Some(MV::Int(i64::MIN)),
+            Some(MV::Int(-1)),
+            Some(MV::Int(0)),
+            Some(MV::Int(1)),
+            Some(MV::Int(9_007_199_254_740_992)), // 2^53
+            Some(MV::Int(i64::MAX)),
+            Some(MV::Float(-0.0)),
+            Some(MV::Float(0.0)),
+            Some(MV::Float(0.5)),
+            Some(MV::Float(f64::MIN_POSITIVE)),
+            Some(MV::Float(f64::INFINITY)),
+            Some(MV::Float(f64::NEG_INFINITY)),
+            Some(MV::String("0".into())),
+            Some(MV::String("zzz".into())),
+            Some(MV::Bool(true)),
+            Some(MV::Bytes(vec![0, 1, 2])),
+            Some(MV::Null),
+            None, // property absent entirely
+        ];
+        for (i, v) in values.iter().enumerate() {
+            let mut props = BTreeMap::new();
+            if let Some(v) = v {
+                props.insert("v".to_owned(), v.clone());
+            }
+            txn.put_node(
+                &NodeKey::new("X", vec![MV::Int(i as i64)]).expect("key"),
+                &NodeRecord::new([], props),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // Numeric bounds over the mixed column. Truth is whatever the scan
+    // would keep: only values that compare as numbers can satisfy these.
+    let all = source.all_nodes();
+    for (lo, hi) in [
+        (None, Some((RtValue::Int(1), false))),
+        (None, Some((RtValue::Int(0), true))),
+        (Some((RtValue::Int(0), true)), None),
+        (
+            Some((RtValue::Int(-1), false)),
+            Some((RtValue::Int(2), true)),
+        ),
+        (
+            Some((RtValue::Float(-0.5), true)),
+            Some((RtValue::Float(0.5), true)),
+        ),
+    ] {
+        let lo_ref = lo.as_ref().map(|(v, i)| (v, *i));
+        let hi_ref = hi.as_ref().map(|(v, i)| (v, *i));
+        let Some(served) = source.nodes_by_index_range("x_v", "v", lo_ref, hi_ref) else {
+            continue; // declined — the scan answers, always correct
+        };
+        // Truth: every node whose value the predicate accepts under
+        // openCypher comparison (a string/bytes/bool/null value never
+        // compares less/greater than a number, so it is excluded).
+        let want: Vec<&RtValue> = all
+            .iter()
+            .filter_map(|n| n.properties.get("v"))
+            .filter(|v| {
+                let num = matches!(v, RtValue::Int(_) | RtValue::Float(_));
+                if !num {
+                    return false;
+                }
+                let as_f = match v {
+                    RtValue::Int(n) => *n as f64,
+                    RtValue::Float(f) => *f,
+                    _ => unreachable!(),
+                };
+                if as_f.is_nan() {
+                    return false;
+                }
+                let lo_ok = match &lo {
+                    Some((RtValue::Int(b), true)) => as_f >= *b as f64,
+                    Some((RtValue::Int(b), false)) => as_f > *b as f64,
+                    Some((RtValue::Float(b), true)) => as_f >= *b,
+                    Some((RtValue::Float(b), false)) => as_f > *b,
+                    _ => true,
+                };
+                let hi_ok = match &hi {
+                    Some((RtValue::Int(b), true)) => as_f <= *b as f64,
+                    Some((RtValue::Int(b), false)) => as_f < *b as f64,
+                    Some((RtValue::Float(b), true)) => as_f <= *b,
+                    Some((RtValue::Float(b), false)) => as_f < *b,
+                    _ => true,
+                };
+                lo_ok && hi_ok
+            })
+            .collect();
+        for w in want {
+            assert!(
+                served.iter().any(|n| n
+                    .properties
+                    .get("v")
+                    .is_some_and(|v| format!("{v:?}") == format!("{w:?}"))),
+                "range {lo:?}..{hi:?} UNDER-SELECTED: missing {w:?}"
+            );
+        }
+    }
+
+    // A non-numeric bound declines outright rather than risk missing a
+    // Bytes/temporal value the runtime would compare as a string.
+    assert!(
+        source
+            .nodes_by_index_range(
+                "x_v",
+                "v",
+                None,
+                Some((&RtValue::String("m".into()), false))
+            )
+            .is_none(),
+        "a string bound must decline"
+    );
+}
