@@ -185,6 +185,36 @@ fn nested_chained_comparisons_cannot_explode_the_ast() {
         "explains itself: {err}"
     );
 
+    // The two shapes the bound is actually about (PR #219 review N3):
+    // pattern STRUCTURE as a multiplier, and sibling chains composing.
+    // Reverting either `pattern_size` or the cumulative counter must turn
+    // these red.
+    let steps = "-->()".repeat(2000);
+    let mut structural = String::from("1");
+    for _ in 0..10 {
+        structural = format!("1 < ([(a){steps} WHERE {structural} | 1][0]) < 1");
+    }
+    let start = std::time::Instant::now();
+    acetone_cypher::parse(&format!("RETURN {structural}"))
+        .expect_err("pattern structure must count toward the bound");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "structural refusal must be fast, took {:?}",
+        start.elapsed()
+    );
+
+    let mut sibling = String::from("1");
+    for _ in 0..6 {
+        sibling = format!(
+            "1 < ([(a){} WHERE {sibling} | 1][0]) < 1",
+            "-->()".repeat(1500)
+        );
+    }
+    acetone_cypher::parse(&format!(
+        "RETURN [{sibling}, {sibling}, {sibling}, {sibling}]"
+    ))
+    .expect_err("the budget must accumulate across sibling chains");
+
     // Ordinary chains and plain comparisons are unaffected.
     acetone_cypher::parse("RETURN 1 < 2 < 3").expect("short chain parses");
     acetone_cypher::parse("RETURN 1 < 2").expect("plain comparison parses");

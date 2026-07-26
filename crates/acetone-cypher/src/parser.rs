@@ -1146,9 +1146,10 @@ impl Parser<'_> {
         if self.chain_expansion > MAX_CHAIN_EXPANSION {
             return Err(ParseError::QueryStructure {
                 message: format!(
-                    "chained comparison duplicates too large an operand \
-                     (limit {MAX_CHAIN_EXPANSION} expression nodes); bind the \
-                     shared operand with WITH and compare it twice instead"
+                    "chained comparisons in this query duplicate more than the \
+                     {MAX_CHAIN_EXPANSION}-node expansion budget (a chain \
+                     evaluates each interior operand twice); bind the shared \
+                     operand with WITH and compare it twice instead"
                 ),
                 span: operands[0].span().to(operands[operands.len() - 1].span()),
             });
