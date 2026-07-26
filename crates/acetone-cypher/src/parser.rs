@@ -32,6 +32,12 @@ pub const MAX_DEPTH: usize = 64;
 /// terms.
 pub const MAX_AST_DEPTH: usize = 256;
 
+/// Cap on the total size of the operands a chained comparison duplicates
+/// (`a < b < c` evaluates `b` in both conjuncts). Without it a ~160-byte
+/// query of nested chains expands to gigabytes of AST *during parsing*,
+/// before any Governor exists (Phase 9 security review).
+pub const MAX_CHAIN_EXPANSION: usize = 4096;
+
 /// Words that cannot be used as variable names, aliases or yield items
 /// unless backquoted. Labels, relationship types, property names, map keys
 /// and procedure names are deliberately not restricted — openCypher keeps
@@ -1104,6 +1110,38 @@ impl Parser<'_> {
         }
         if ops.is_empty() {
             return Ok(operands.pop().expect("one operand parsed"));
+        }
+        if ops.len() == 1 {
+            // A plain comparison duplicates nothing: consume the operands.
+            let rhs = operands.pop().expect("two operands parsed");
+            let lhs = operands.pop().expect("two operands parsed");
+            let span = lhs.span().to(rhs.span());
+            return Ok(Expr::Binary {
+                op: ops[0],
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                span,
+            });
+        }
+        // A genuine chain duplicates every interior operand, so the AST it
+        // builds is bounded by the size of those operands — and nesting
+        // compounds it multiplicatively (`1 < (1 < (…) < 1) < 1` doubles per
+        // level). Refuse before building rather than allocate: parsing happens
+        // before any Governor exists, so nothing downstream would catch it
+        // (Phase 9 security review).
+        let duplicated: usize = operands[1..operands.len() - 1]
+            .iter()
+            .map(|operand| operand.node_count())
+            .sum();
+        if duplicated > MAX_CHAIN_EXPANSION {
+            return Err(ParseError::QueryStructure {
+                message: format!(
+                    "chained comparison duplicates too large an operand \
+                     (limit {MAX_CHAIN_EXPANSION} expression nodes); bind the \
+                     shared operand with WITH and compare it twice instead"
+                ),
+                span: operands[0].span().to(operands[operands.len() - 1].span()),
+            });
         }
         let mut conjuncts = ops.into_iter().enumerate().map(|(i, op)| {
             let lhs = operands[i].clone();

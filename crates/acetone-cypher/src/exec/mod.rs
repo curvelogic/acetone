@@ -1042,6 +1042,49 @@ mod tests {
         assert_eq!(result.identifier_columns, vec![true, false]);
     }
 
+    /// Phase 9 security review, blocker 2: a pattern comprehension may
+    /// introduce a FRESH anchor and is evaluated once per row, so an
+    /// unbound anchor re-scanned the whole node map per row — unbounded
+    /// work at zero governor charge, hanging the process on a one-line
+    /// query. Anchor candidates are now charged, and every scan after the
+    /// first charges expansion, so a runaway re-scan trips a typed error.
+    #[test]
+    fn repeated_anchor_scans_are_governed() {
+        let mut graph = MemoryGraph::new();
+        for i in 0..200 {
+            let mut props = BTreeMap::new();
+            props.insert("i".to_string(), Value::Int(i));
+            graph.add_node(["N"], props);
+        }
+        let limits = QueryLimits {
+            max_expansion_steps: 1_000,
+            ..QueryLimits::default()
+        };
+        let err = run_query_with_limits(
+            "UNWIND range(1, 10000) AS i RETURN size([(x)-->(y) | 1])",
+            &graph,
+            &BTreeMap::new(),
+            &limits,
+        )
+        .expect_err("a per-row full scan must be governed");
+        assert!(
+            matches!(err, QueryError::Exec(ExecError::ResourceExceeded { .. })),
+            "{err:?}"
+        );
+
+        // A single scan of the same graph is untouched: scanning once is
+        // what an ordinary un-anchored MATCH does, and it must not become
+        // an error just because the graph is large.
+        let result = run_query_with_limits(
+            "MATCH (n:N) RETURN count(n) AS c",
+            &graph,
+            &BTreeMap::new(),
+            &limits,
+        )
+        .expect("one scan is not a pathology");
+        assert!(matches!(result.rows[0][0], Value::Int(200)));
+    }
+
     #[test]
     fn unwind_streams_into_a_following_with_limit() {
         // UNWIND materialises only SKIP+LIMIT rows when the next WITH

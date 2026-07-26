@@ -203,6 +203,77 @@ impl GraphSource for StoreBackedSource<'_> {
         }
     }
 
+    fn nodes_by_key(&self, label: &str, key_values: &[Value]) -> Option<Vec<NodeValue>> {
+        // A primary-key pin is an exact lookup in the nodes map — the
+        // cheapest seek there is, and the one the shipped read path was
+        // missing entirely (Phase 9 security review finding 7).
+        //
+        // Candidate-superset semantics as everywhere else: probe both
+        // numeric encodings (3 == 3.0 in openCypher but they encode
+        // differently), and a probe set we cannot form means "cannot
+        // serve" — scan — never "definitively absent".
+        let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(key_values.len());
+        for value in key_values {
+            let alternatives = match value {
+                // Null/NaN can never be a key value (keys are non-null),
+                // so nothing matches — but say "cannot serve" rather than
+                // asserting absence.
+                Value::Null => return None,
+                Value::Float(f) if f.is_nan() => return None,
+                Value::Int(n) => vec![ModelValue::Int(*n), ModelValue::Float(*n as f64)],
+                Value::Float(f) => {
+                    // An integral float >= 2^53 has a non-unique i64
+                    // preimage; a single probe would under-select.
+                    if f.fract() == 0.0 && f.abs() >= 9_007_199_254_740_992.0 {
+                        return None;
+                    }
+                    let mut alts = vec![ModelValue::Float(*f)];
+                    if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
+                        alts.push(ModelValue::Int(*f as i64));
+                    }
+                    alts
+                }
+                other => vec![crate::exec::adapter::model_value_of(other)?],
+            };
+            per_component.push(alternatives);
+        }
+        let combinations: usize = per_component.iter().map(Vec::len).product();
+        if combinations > 16 {
+            return None;
+        }
+        let mut tuples: Vec<Vec<ModelValue>> = vec![Vec::new()];
+        for alternatives in &per_component {
+            let mut next = Vec::with_capacity(tuples.len() * alternatives.len());
+            for prefix in &tuples {
+                for alt in alternatives {
+                    let mut tuple = prefix.clone();
+                    tuple.push(alt.clone());
+                    next.push(tuple);
+                }
+            }
+            tuples = next;
+        }
+        let mut out = Vec::new();
+        let mut served = false;
+        for tuple in tuples {
+            let Ok(key) = acetone_model::graph_keys::NodeKey::new(label, tuple) else {
+                continue;
+            };
+            match self.snapshot.get_node(&key) {
+                Ok(Some(record)) => {
+                    served = true;
+                    out.push(node_value(&key, &record, &self.key_names));
+                }
+                // A well-formed probe that finds nothing is a real answer
+                // for an exact key, but stay conservative and let the
+                // scan confirm rather than assert absence here.
+                Ok(None) => {}
+                Err(e) => return self.fail(e, None),
+            }
+        }
+        if served { Some(out) } else { None }
+    }
+
     fn nodes_by_index(
         &self,
         index_name: &str,

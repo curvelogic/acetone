@@ -82,6 +82,8 @@ pub struct Governor {
     limits: QueryLimits,
     work: Cell<u64>,
     expansion: Cell<u64>,
+    /// Anchor scans performed; the first is free of expansion charge.
+    scans: Cell<u64>,
     deadline: Option<Instant>,
     work_at_last_poll: Cell<u64>,
 }
@@ -95,6 +97,7 @@ impl Governor {
             limits,
             work: Cell::new(0),
             expansion: Cell::new(0),
+            scans: Cell::new(0),
             deadline,
             work_at_last_poll: Cell::new(0),
         }
@@ -173,6 +176,33 @@ impl Governor {
             return Err(Self::exceeded(ResourceLimit::CollectionLen));
         }
         self.charge_work(1)
+    }
+
+    /// Charge examining `candidates` anchor rows — the cost of scanning or
+    /// seeking a pattern's leading node, paid *before* the candidates are
+    /// filtered. Without this an anchor scan is free until it produces a
+    /// result, so a pattern that matches nothing (a comprehension with a
+    /// fresh anchor evaluated per row, say) could rescan the whole node map
+    /// unboundedly at zero charge (Phase 9 security review).
+    ///
+    /// The FIRST anchor scan of a query pays work only: scanning a large
+    /// graph once is what an ordinary un-anchored `MATCH` does, and it must
+    /// not become an error just because the graph is big. Every scan after
+    /// the first also charges the expansion budget, because re-scanning is
+    /// the pathology — and charging it there means the bigger the graph, the
+    /// sooner a runaway re-scan trips, which is the right direction.
+    pub fn scan(&self, candidates: usize) -> Result<(), ExecError> {
+        let candidates = candidates as u64;
+        let scans = self.scans.get().saturating_add(1);
+        self.scans.set(scans);
+        if scans > 1 {
+            let expansion = self.expansion.get().saturating_add(candidates);
+            self.expansion.set(expansion);
+            if expansion > self.limits.max_expansion_steps {
+                return Err(Self::exceeded(ResourceLimit::ExpansionSteps));
+            }
+        }
+        self.charge_work(candidates)
     }
 
     /// Total work charged so far. Deterministic for a given query + graph +

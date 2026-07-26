@@ -474,6 +474,20 @@ impl Expr {
     /// Borrow every direct child expression, including those buried in an
     /// embedded pattern's property maps. Keep in step with
     /// [`Expr::take_children`].
+    /// Total number of expression nodes in this subtree, counted
+    /// iteratively. Used to bound desugars that duplicate operands, so a
+    /// small query cannot expand into an enormous AST (Phase 9 security
+    /// review).
+    pub(crate) fn node_count(&self) -> usize {
+        let mut stack: Vec<&Expr> = vec![self];
+        let mut n = 0usize;
+        while let Some(expr) = stack.pop() {
+            n += 1;
+            stack.extend(expr.children());
+        }
+        n
+    }
+
     pub(crate) fn children(&self) -> Vec<&Expr> {
         let mut out = Vec::new();
         match self {

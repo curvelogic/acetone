@@ -156,3 +156,38 @@ fn range_up_to_i64_max_does_not_overflow() {
         other => panic!("expected a list, got {other:?}"),
     }
 }
+
+/// Phase 9 security review, blocker 1: the chained-comparison desugar
+/// duplicates interior operands, so nested chains doubled the AST per
+/// level — a ~270-byte query reached 53.8 GB and 67 s of parsing, before
+/// any Governor exists. The expansion is now bounded at parse time.
+#[test]
+fn nested_chained_comparisons_cannot_explode_the_ast() {
+    let mut inner = String::from("1");
+    for _ in 0..26 {
+        inner = format!("1 < ({inner}) < 1");
+    }
+    let query = format!("RETURN {inner}");
+    assert!(
+        query.len() < 400,
+        "the bomb is small: {} bytes",
+        query.len()
+    );
+    let start = std::time::Instant::now();
+    let err = acetone_cypher::parse(&query).expect_err("must refuse to expand");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "refusal must be fast, took {:?}",
+        start.elapsed()
+    );
+    assert!(
+        err.to_string().contains("chained comparison"),
+        "explains itself: {err}"
+    );
+
+    // Ordinary chains and plain comparisons are unaffected.
+    acetone_cypher::parse("RETURN 1 < 2 < 3").expect("short chain parses");
+    acetone_cypher::parse("RETURN 1 < 2").expect("plain comparison parses");
+    let wide: String = (0..200).map(|i| format!("{i} < ")).collect::<String>();
+    acetone_cypher::parse(&format!("RETURN {wide}999")).expect("wide chain of small operands");
+}

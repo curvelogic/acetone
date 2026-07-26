@@ -3389,6 +3389,7 @@ pub fn acetone_cypher::exec::governor::Governor::collection_push(&self, usize) -
 pub fn acetone_cypher::exec::governor::Governor::hop(&self) -> core::result::Result<(), acetone_cypher::exec::eval::ExecError>
 pub fn acetone_cypher::exec::governor::Governor::new(acetone_cypher::exec::governor::QueryLimits) -> Self
 pub fn acetone_cypher::exec::governor::Governor::row(&self, usize) -> core::result::Result<(), acetone_cypher::exec::eval::ExecError>
+pub fn acetone_cypher::exec::governor::Governor::scan(&self, usize) -> core::result::Result<(), acetone_cypher::exec::eval::ExecError>
 pub fn acetone_cypher::exec::governor::Governor::work_units(&self) -> u64
 impl !core::marker::Freeze for acetone_cypher::exec::governor::Governor
 impl core::marker::Send for acetone_cypher::exec::governor::Governor
@@ -4521,6 +4522,7 @@ pub fn acetone_cypher::exec::governor::Governor::collection_push(&self, usize) -
 pub fn acetone_cypher::exec::governor::Governor::hop(&self) -> core::result::Result<(), acetone_cypher::exec::eval::ExecError>
 pub fn acetone_cypher::exec::governor::Governor::new(acetone_cypher::exec::governor::QueryLimits) -> Self
 pub fn acetone_cypher::exec::governor::Governor::row(&self, usize) -> core::result::Result<(), acetone_cypher::exec::eval::ExecError>
+pub fn acetone_cypher::exec::governor::Governor::scan(&self, usize) -> core::result::Result<(), acetone_cypher::exec::eval::ExecError>
 pub fn acetone_cypher::exec::governor::Governor::work_units(&self) -> u64
 impl !core::marker::Freeze for acetone_cypher::exec::governor::Governor
 impl core::marker::Send for acetone_cypher::exec::governor::Governor
@@ -5204,6 +5206,7 @@ pub type acetone_cypher::lex::Token::Output = T
 pub fn acetone_cypher::lex::lex(&str) -> core::result::Result<alloc::vec::Vec<acetone_cypher::lex::Token>, acetone_cypher::error::ParseError>
 pub mod acetone_cypher::parser
 pub const acetone_cypher::parser::MAX_AST_DEPTH: usize
+pub const acetone_cypher::parser::MAX_CHAIN_EXPANSION: usize
 pub const acetone_cypher::parser::MAX_DEPTH: usize
 pub fn acetone_cypher::parser::parse(&str) -> core::result::Result<acetone_cypher::ast::Query, acetone_cypher::error::ParseError>
 pub fn acetone_cypher::parser::parse_literal(&str) -> core::result::Result<acetone_cypher::exec::value::Value, acetone_cypher::error::ParseError>

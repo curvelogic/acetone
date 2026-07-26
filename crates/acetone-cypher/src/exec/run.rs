@@ -1141,6 +1141,13 @@ pub(crate) fn match_path(
             None => ctx.graph.nodes_by_labels(&pattern.start.labels),
         },
     };
+    // Examining anchor candidates is work whether or not any survives
+    // filtering. A pattern comprehension may introduce a FRESH anchor and is
+    // evaluated once per row, so an unbound anchor rescans the whole node map
+    // per row — unbounded at zero charge until this call (Phase 9 security
+    // review). Charged for seek results too: a candidate superset still costs
+    // what it costs.
+    ctx.governor.scan(anchors.len())?;
 
     let mut results = Vec::new();
     for anchor in anchors {
