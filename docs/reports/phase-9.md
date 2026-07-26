@@ -159,9 +159,18 @@ graph" is satisfied by a mechanism that declines on the lab's own chosen case is
 a judgement call, and it is Greg's — an earlier draft of this report claimed the
 question had disappeared when it had only moved. **Raising the cap is not the
 answer**: the cap is precisely what stops an unselective seek being 37× slower
-than no index. The answer is the cardinality-informed threshold on
-`acetone-2ck.2`, which would let a 16,000-row range over a 200,000-node label
-seek rather than decline.
+than no index. Nor would `acetone-2ck.2`'s cardinality-informed threshold
+rescue this particular case — and that is the sharper conclusion. 16,438 of
+200,000 rows is **8.2% selectivity**, where the phase's own measured law puts
+break-even at roughly 2% on loose objects and 8% packed; scaled from the
+400k-loose anchor, break-even for a 200,000-row label is about 3,500 rows, so
+the lab's case is some five times beyond it. A perfect cost model declines this
+range too. **The lab's chosen range case is genuinely scan-shaped, and its
+13.8× is an artefact of a source that pays nothing for point reads.** What
+`acetone-2ck.2` fixes is the *class* — it would admit ranges the absolute cap
+wrongly declines on large graphs, such as the 2,000-rows-at-400k case measured
+at 3.4× — not this instance. Re-measuring the lab through `Session` will
+therefore confirm 1.0× permanently, not temporarily.
 
 **Two further open risks fall out of this.** First, the
 cap is absolute where break-even scales with label cardinality (measured: ~1,000
