@@ -351,6 +351,7 @@ mod tests {
             Some(IndexHint::KeySeek {
                 label: "Host".into(),
                 key: vec!["hostname".into()],
+                values: None,
             })
         );
 
@@ -363,7 +364,8 @@ mod tests {
             Some(IndexHint::IndexSeek {
                 name: "host_os".into(),
                 label: "Host".into(),
-                properties: vec!["os".into()]
+                properties: vec!["os".into()],
+                values: None,
             })
         );
 

@@ -1199,41 +1199,89 @@ fn seek_anchor(
     ctx: &EvalCtx,
 ) -> Result<Option<Vec<NodeValue>>, ExecError> {
     match &pattern.index_hint {
-        Some(IndexHint::KeySeek { label, key }) if !key.is_empty() => {
-            let Some(props) = &pattern.properties else {
-                return Ok(None);
-            };
-            let Value::Map(map) = eval(props, row, ctx)? else {
-                return Ok(None);
-            };
+        Some(IndexHint::KeySeek {
+            label,
+            key,
+            values: pinned,
+        }) if !key.is_empty() => {
             let mut key_values = Vec::with_capacity(key.len());
-            for name in key {
-                match map.get(name) {
-                    Some(value) => key_values.push(value.clone()),
-                    // Partial key pin: no point lookup, scan instead.
-                    None => return Ok(None),
+            match pinned {
+                // WHERE-sourced pins carry their own values
+                // (acetone-7qw.9).
+                Some(bounds) => {
+                    for bound in bounds {
+                        match bound {
+                            RangeBound::Literal(l) => key_values.push(literal_value(l)),
+                            RangeBound::Parameter(p) => match ctx.parameters.get(p) {
+                                Some(v) => key_values.push(v.clone()),
+                                None => return Ok(None),
+                            },
+                        }
+                    }
+                }
+                None => {
+                    let Some(props) = &pattern.properties else {
+                        return Ok(None);
+                    };
+                    let Value::Map(map) = eval(props, row, ctx)? else {
+                        return Ok(None);
+                    };
+                    for name in key {
+                        match map.get(name) {
+                            Some(value) => key_values.push(value.clone()),
+                            // Partial key pin: no point lookup, scan instead.
+                            None => return Ok(None),
+                        }
+                    }
                 }
             }
             Ok(ctx.graph.nodes_by_key(label, &key_values))
         }
         Some(IndexHint::KeySeek { .. }) => Ok(None),
         Some(IndexHint::IndexSeek {
-            name, properties, ..
+            name,
+            properties,
+            values: pinned,
+            ..
         }) => {
-            let Some(props) = &pattern.properties else {
-                return Ok(None);
-            };
-            let Value::Map(map) = eval(props, row, ctx)? else {
-                return Ok(None);
-            };
-            let mut values = Vec::with_capacity(properties.len());
-            for property in properties {
-                match map.get(property) {
-                    Some(value) => values.push(value),
-                    // A composite index needs every component pinned.
-                    None => return Ok(None),
+            // WHERE-sourced pins carry their own values (acetone-7qw.9);
+            // pattern-sourced ones read them from the inline map.
+            let resolved: Vec<Value>;
+            let values: Vec<&Value> = match pinned {
+                Some(bounds) => {
+                    let mut out = Vec::with_capacity(bounds.len());
+                    for bound in bounds {
+                        match bound {
+                            RangeBound::Literal(l) => out.push(literal_value(l)),
+                            // A missing parameter falls back to a scan; the
+                            // WHERE evaluation raises the proper error.
+                            RangeBound::Parameter(p) => match ctx.parameters.get(p) {
+                                Some(v) => out.push(v.clone()),
+                                None => return Ok(None),
+                            },
+                        }
+                    }
+                    resolved = out;
+                    resolved.iter().collect()
                 }
-            }
+                None => {
+                    let Some(props) = &pattern.properties else {
+                        return Ok(None);
+                    };
+                    let Value::Map(map) = eval(props, row, ctx)? else {
+                        return Ok(None);
+                    };
+                    let mut values = Vec::with_capacity(properties.len());
+                    for property in properties {
+                        match map.get(property) {
+                            Some(value) => values.push(value),
+                            // A composite index needs every component pinned.
+                            None => return Ok(None),
+                        }
+                    }
+                    return Ok(ctx.graph.nodes_by_index(name, properties, &values));
+                }
+            };
             Ok(ctx.graph.nodes_by_index(name, properties, &values))
         }
         Some(IndexHint::IndexRange {

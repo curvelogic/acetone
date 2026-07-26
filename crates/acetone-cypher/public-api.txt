@@ -1697,9 +1697,11 @@ pub acetone_cypher::bind::bound::IndexHint::IndexSeek
 pub acetone_cypher::bind::bound::IndexHint::IndexSeek::label: alloc::string::String
 pub acetone_cypher::bind::bound::IndexHint::IndexSeek::name: alloc::string::String
 pub acetone_cypher::bind::bound::IndexHint::IndexSeek::properties: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::bind::bound::IndexHint::IndexSeek::values: core::option::Option<alloc::vec::Vec<acetone_cypher::bind::bound::RangeBound>>
 pub acetone_cypher::bind::bound::IndexHint::KeySeek
 pub acetone_cypher::bind::bound::IndexHint::KeySeek::key: alloc::vec::Vec<alloc::string::String>
 pub acetone_cypher::bind::bound::IndexHint::KeySeek::label: alloc::string::String
+pub acetone_cypher::bind::bound::IndexHint::KeySeek::values: core::option::Option<alloc::vec::Vec<acetone_cypher::bind::bound::RangeBound>>
 impl core::clone::Clone for acetone_cypher::bind::bound::IndexHint
 pub fn acetone_cypher::bind::bound::IndexHint::clone(&self) -> acetone_cypher::bind::bound::IndexHint
 impl core::cmp::PartialEq for acetone_cypher::bind::bound::IndexHint
@@ -2873,9 +2875,11 @@ pub acetone_cypher::bind::IndexHint::IndexSeek
 pub acetone_cypher::bind::IndexHint::IndexSeek::label: alloc::string::String
 pub acetone_cypher::bind::IndexHint::IndexSeek::name: alloc::string::String
 pub acetone_cypher::bind::IndexHint::IndexSeek::properties: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::bind::IndexHint::IndexSeek::values: core::option::Option<alloc::vec::Vec<acetone_cypher::bind::bound::RangeBound>>
 pub acetone_cypher::bind::IndexHint::KeySeek
 pub acetone_cypher::bind::IndexHint::KeySeek::key: alloc::vec::Vec<alloc::string::String>
 pub acetone_cypher::bind::IndexHint::KeySeek::label: alloc::string::String
+pub acetone_cypher::bind::IndexHint::KeySeek::values: core::option::Option<alloc::vec::Vec<acetone_cypher::bind::bound::RangeBound>>
 impl core::clone::Clone for acetone_cypher::bind::bound::IndexHint
 pub fn acetone_cypher::bind::bound::IndexHint::clone(&self) -> acetone_cypher::bind::bound::IndexHint
 impl core::cmp::PartialEq for acetone_cypher::bind::bound::IndexHint
@@ -3757,6 +3761,7 @@ impl<T> core::convert::From<T> for acetone_cypher::exec::store_source::StoreBack
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'s>::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::store_source::StoreBackedSource<'s>
 pub type acetone_cypher::exec::store_source::StoreBackedSource<'s>::Output = T
+pub fn acetone_cypher::exec::store_source::candidate_cap(u32) -> usize
 pub mod acetone_cypher::exec::value
 pub enum acetone_cypher::exec::value::Value
 pub acetone_cypher::exec::value::Value::Bool(bool)

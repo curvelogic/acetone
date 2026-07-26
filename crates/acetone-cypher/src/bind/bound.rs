@@ -216,7 +216,14 @@ pub enum IndexHint {
     /// label's full declared key tuple, so the executor can point-look-up
     /// the primary map when every key property is pinned
     /// (acetone-6g5.3.3) and fall back to a scan otherwise.
-    KeySeek { label: String, key: Vec<String> },
+    KeySeek {
+        label: String,
+        key: Vec<String>,
+        /// Pinned key values when the equality came from a `WHERE`
+        /// clause; `None` means read them from the pattern map
+        /// (acetone-7qw.9).
+        values: Option<Vec<RangeBound>>,
+    },
     /// A declared index `name` on `(label, properties)` covers an
     /// equality on every indexed property (single or composite,
     /// ADR-0027/acetone-0c7). `properties` is the index's declared order.
@@ -224,6 +231,11 @@ pub enum IndexHint {
         name: String,
         label: String,
         properties: Vec<String>,
+        /// Pinned values when the equality came from a `WHERE` clause
+        /// rather than the pattern's inline property map (acetone-7qw.9).
+        /// `None` keeps the original behaviour: the executor reads the
+        /// values out of the pattern map.
+        values: Option<Vec<RangeBound>>,
     },
     /// A declared index `name` on `(label, property)` covers WHERE-level
     /// range predicate(s) on the anchor variable (acetone-6g5.3.3). Each

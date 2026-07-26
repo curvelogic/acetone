@@ -194,6 +194,35 @@ impl<'s> StoreBackedSource<'s> {
     }
 }
 
+/// How many candidates a seek may materialise before it should decline and
+/// let the scan answer (acetone-2ck.2).
+///
+/// A seek does one **random** point read per matching row; the scan it
+/// replaces reads the nodes map **sequentially**. Random reads measured
+/// ~50x costlier than sequential on loose objects (~12x packed), so a seek
+/// wins only while it is selective — break-even is roughly 2% of the
+/// label's rows loose, 8% packed. Firing regardless is what made a declared
+/// index make queries *slower*: 3.7x at 2.9% selectivity, 18x at 20%.
+///
+/// The threshold therefore wants label cardinality, which is not cheaply
+/// available: `MapRoot` carries only `(hash, height)`, prolly interior
+/// nodes carry no subtree counts, and counting per query is an O(N) walk
+/// paid on every query. The index map's **height** is free in the manifest
+/// and grows with entry count, so it selects a tier. Measured anchors:
+/// height 3 at ~50k rows with break-even ~1,000; height 4 at ~400k with
+/// break-even ~7,000 — about 8x per level, which is what this reproduces.
+///
+/// Calibrated to the LOOSE configuration, which is both the worse case and
+/// the state of a freshly imported repository before anyone runs `gc`.
+/// Erring low costs a bounded amount — the scan you would have had anyway;
+/// erring high costs unboundedly.
+pub fn candidate_cap(index_height: u32) -> usize {
+    const BASE: usize = 1024;
+    const MAX: usize = 1 << 20;
+    let steps = index_height.saturating_sub(3).min(7);
+    BASE.checked_shl(3 * steps).unwrap_or(MAX).min(MAX)
+}
+
 impl GraphSource for StoreBackedSource<'_> {
     fn all_nodes(&self) -> Vec<NodeValue> {
         match self.snapshot.nodes() {
@@ -337,6 +366,11 @@ impl GraphSource for StoreBackedSource<'_> {
             }
             tuples = next;
         }
+        // The equality/composite path had no budget at all: it fired
+        // however unselective the probe was, which is what made declaring
+        // an index able to make a query slower (acetone-2ck.2, Greg's P1).
+        let max_candidates = candidate_cap(self.snapshot.index_height(index_name)?);
+
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
         let mut out = Vec::new();
         for tuple in tuples {
@@ -346,10 +380,16 @@ impl GraphSource for StoreBackedSource<'_> {
                 // contributes no entries — it indexes nothing.
                 Err(_) => continue,
             };
-            match self.snapshot.index_scan(index_name, &prefix) {
+            let remaining = max_candidates.saturating_sub(seen.len());
+            match self.snapshot.index_scan(index_name, &prefix, remaining) {
                 // Index map absent though the schema declares it: fall back.
                 Ok(None) => return None,
                 Ok(Some(keys)) => {
+                    if keys.len() > remaining {
+                        // Unselective: hand it to the scan before paying
+                        // for a single point read.
+                        return None;
+                    }
                     for key in keys {
                         let Ok(encoded) = key.encode() else { continue };
                         if seen.insert(encoded)
@@ -432,13 +472,9 @@ impl GraphSource for StoreBackedSource<'_> {
         // removes the cliff: `None` is the trait's "cannot serve, scan
         // instead", and the scan is always correct.
         //
-        // The cap is absolute rather than a fraction of the label's
-        // cardinality, which this source cannot learn cheaply. That is
-        // conservative on a large graph — a range selecting 50,000 of ten
-        // million rows would still beat a scan but is declined — and
-        // cardinality-informed thresholds are exactly what
-        // `acetone-2ck.2` (costed planning seeds) is for.
-        const MAX_RANGE_CANDIDATES: usize = 1024;
+        // Sized from the index's height (acetone-2ck.2), so a large graph
+        // is not held to a small graph's budget.
+        let max_candidates = candidate_cap(self.snapshot.index_height(index_name)?);
 
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
         let mut out = Vec::new();
@@ -493,7 +529,7 @@ impl GraphSource for StoreBackedSource<'_> {
             };
             // Budget across families: the int and float halves of one
             // numeric range share the cap, so their sum decides.
-            let remaining = MAX_RANGE_CANDIDATES.saturating_sub(seen.len());
+            let remaining = max_candidates.saturating_sub(seen.len());
             match self.snapshot.index_range(index_name, start, end, remaining) {
                 Ok(None) => return None,
                 Ok(Some(keys)) => {

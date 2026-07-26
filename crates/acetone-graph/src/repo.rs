@@ -2777,6 +2777,15 @@ impl<'s> Snapshot<'s> {
     /// keys of every entry whose key falls inside it (acetone-2ck.14).
     /// The caller builds the bounds in index-key space; this is the range
     /// counterpart of [`Self::index_scan`]'s prefix form.
+    /// The prolly height of a declared index's map, the only cardinality
+    /// signal available without a format change: interior nodes carry
+    /// `(last_key, child_hash)` and no subtree counts, so an exact count
+    /// would cost a full walk. Height grows with entry count, which is
+    /// what makes it usable as a tier selector (acetone-2ck.2).
+    pub fn index_height(&self, name: &str) -> Option<u32> {
+        self.manifest.indexes.get(name).map(|root| root.height)
+    }
+
     /// Stops as soon as `cap + 1` entries have been collected, so a caller
     /// that means to decline an unselective range pays for the walk it
     /// needs and no more.
@@ -2835,10 +2844,14 @@ impl<'s> Snapshot<'s> {
     /// order) the caller still filters, so being over-broad is safe; the scan
     /// stops at the first key past the prefix (index order guarantees no later
     /// key matches). This is the store-backed `IndexSeek` primitive (ADR-0040).
+    /// Stops as soon as `cap + 1` entries have been collected, so a caller
+    /// that means to decline an unselective probe pays for the index walk
+    /// it needs and no point reads at all (acetone-2ck.2).
     pub fn index_scan(
         &self,
         name: &str,
         prefix: &[u8],
+        cap: usize,
     ) -> Result<Option<Vec<NodeKey>>, GraphError> {
         let Some(map_root) = self.manifest.indexes.get(name) else {
             return Ok(None);
@@ -2859,6 +2872,9 @@ impl<'s> Snapshot<'s> {
                     .node()
                     .clone(),
             );
+            if out.len() > cap {
+                break;
+            }
         }
         Ok(Some(out))
     }

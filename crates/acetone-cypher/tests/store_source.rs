@@ -789,3 +789,176 @@ fn index_range_over_a_mixed_type_column_never_under_selects() {
         "a string bound must decline"
     );
 }
+
+/// acetone-2ck.2: the seek must decline when it would lose to a scan.
+/// A seek does one random point read per row where the scan reads
+/// sequentially, so firing on an unselective probe made a declared index
+/// make queries *slower* — 3.7× at the lab's own composite ratio, 18× at
+/// 20% selectivity. Both seek paths now size a budget from the index's
+/// height and hand unselective probes back to the scan.
+#[test]
+fn unselective_seeks_decline_on_both_paths() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "W".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "w_b".into(),
+            def: IndexDef::new("W", vec!["b".into()]).expect("index"),
+        })
+        .expect("index");
+        // 4000 rows in one bucket (unselective) and one row in another
+        // (selective), so a single fixture exercises both directions.
+        for i in 0..4000i64 {
+            txn.put_node(
+                &NodeKey::new("W", vec![MV::Int(i)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("b".to_owned(), MV::Int(0))])),
+            )
+            .expect("node");
+        }
+        txn.put_node(
+            &NodeKey::new("W", vec![MV::Int(9999)]).expect("key"),
+            &NodeRecord::new([], BTreeMap::from([("b".to_owned(), MV::Int(7))])),
+        )
+        .expect("node");
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // Equality: the 4000-row bucket exceeds the budget for this index's
+    // height, so the seek declines rather than paying 4000 point reads.
+    assert!(
+        source
+            .nodes_by_index("w_b", &["b".to_owned()], &[&RtValue::Int(0)])
+            .is_none(),
+        "an unselective equality probe must decline, not fire and lose"
+    );
+    // The selective bucket is still served.
+    let served = source
+        .nodes_by_index("w_b", &["b".to_owned()], &[&RtValue::Int(7)])
+        .expect("a selective probe is served");
+    assert_eq!(served.len(), 1);
+    // An absent value is served too — proving absence is the cheapest
+    // thing a seek does, and the one lab row that survives the store.
+    assert_eq!(
+        source
+            .nodes_by_index("w_b", &["b".to_owned()], &[&RtValue::Int(4242)])
+            .expect("an absent probe is served")
+            .len(),
+        0
+    );
+
+    // Range: the same budget governs, so a range covering everything
+    // declines while a narrow one serves.
+    assert!(
+        source
+            .nodes_by_index_range("w_b", "b", None, Some((&RtValue::Int(100), false)))
+            .is_none(),
+        "an unselective range must decline"
+    );
+    assert_eq!(
+        source
+            .nodes_by_index_range(
+                "w_b",
+                "b",
+                Some((&RtValue::Int(6), false)),
+                Some((&RtValue::Int(8), false))
+            )
+            .expect("a selective range is served")
+            .len(),
+        1
+    );
+}
+
+/// The budget scales with the index's height, which is the only
+/// cardinality signal available without a format change. Height 3 is the
+/// measured ~50k-row anchor (break-even ~1,000); each level up is ~8×,
+/// matching the measured ~7,000 at ~400k rows.
+#[test]
+fn candidate_budget_scales_with_index_height() {
+    use acetone_cypher::exec::store_source::candidate_cap;
+    assert_eq!(candidate_cap(1), 1024, "small indexes get the floor");
+    assert_eq!(candidate_cap(3), 1024, "the ~50k anchor: break-even ~1,000");
+    assert_eq!(
+        candidate_cap(4),
+        8192,
+        "the ~400k anchor: break-even ~7,000"
+    );
+    assert!(
+        candidate_cap(5) > candidate_cap(4) && candidate_cap(9) <= (1 << 20),
+        "monotone and clamped"
+    );
+}
+
+/// acetone-7qw.9: an index must be usable from the form people actually
+/// write. Before this, `MATCH (n:H {b: 3})` used the index while
+/// `MATCH (n:H) WHERE n.b = 3` scanned — ranges in WHERE attached hints,
+/// equality did not, so the hint had no values to seek with.
+#[test]
+fn where_equality_uses_the_index() {
+    use acetone_cypher::bind::bound::IndexHint;
+    use acetone_cypher::{bind, parse};
+
+    let catalogue = {
+        let entries = vec![
+            SchemaEntry::Label {
+                name: "H".into(),
+                def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+            },
+            SchemaEntry::Index {
+                name: "h_b".into(),
+                def: IndexDef::new("H", vec!["b".into()]).expect("index"),
+            },
+        ];
+        acetone_cypher::exec::catalogue_from_schema(entries)
+    };
+    let hint_for = |q: &str| {
+        let parsed = parse(q).expect("parse");
+        let bound = bind::bind(q, &parsed, &catalogue, bind::BindMode::Strict).expect("bind");
+        for clause in &bound.clauses {
+            if let acetone_cypher::bind::bound::BoundClause::Match { patterns, .. } = clause {
+                return patterns[0].start.index_hint.clone();
+            }
+        }
+        None
+    };
+
+    // The WHERE form now attaches an IndexSeek carrying its own value.
+    match hint_for("MATCH (n:H) WHERE n.b = 3 RETURN n") {
+        Some(IndexHint::IndexSeek { name, values, .. }) => {
+            assert_eq!(name, "h_b");
+            assert!(values.is_some(), "the hint must carry the WHERE's value");
+        }
+        other => panic!("expected an IndexSeek from WHERE, got {other:?}"),
+    }
+    // Reversed operand order too.
+    assert!(matches!(
+        hint_for("MATCH (n:H) WHERE 3 = n.b RETURN n"),
+        Some(IndexHint::IndexSeek { .. })
+    ));
+    // A key pin in WHERE becomes a KeySeek, as it does inline.
+    match hint_for("MATCH (n:H) WHERE n.id = 7 RETURN n") {
+        Some(IndexHint::KeySeek { key, values, .. }) => {
+            assert_eq!(key, vec!["id".to_string()]);
+            assert!(values.is_some());
+        }
+        other => panic!("expected a KeySeek from WHERE, got {other:?}"),
+    }
+    // The inline form is unchanged and still reads from the pattern map.
+    match hint_for("MATCH (n:H {b: 3}) RETURN n") {
+        Some(IndexHint::IndexSeek { values, .. }) => {
+            assert!(values.is_none(), "inline pins still read the pattern map")
+        }
+        other => panic!("expected an inline IndexSeek, got {other:?}"),
+    }
+    // A non-constant comparison pins nothing.
+    assert!(hint_for("MATCH (n:H) WHERE n.b = n.id RETURN n").is_none());
+    // OR is not a pin.
+    assert!(hint_for("MATCH (n:H) WHERE n.b = 3 OR n.b = 4 RETURN n").is_none());
+}
