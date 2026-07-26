@@ -1,0 +1,441 @@
+<style>
+  :root {
+    /* slate/ink neutrals with a faint blue bias; one teal accent (house style) */
+    --paper: #f5f7f8;
+    --panel: #ffffff;
+    --ink: #10171c;
+    --muted: #4a5b64;
+    --faint: #7e8f97;
+    --line: #dde5e8;
+    --accent: #0d8f86;
+    --accent-soft: #e2f2f0;
+    --good: #157f57;
+    --good-soft: #e0f0e7;
+    --warn: #9a6a12;
+    --warn-soft: #f6ecd6;
+    --shadow: 0 1px 2px rgba(16, 23, 28, .05), 0 8px 30px rgba(16, 23, 28, .06);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Menlo", "Cascadia Code", monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1215;
+      --panel: #121b20;
+      --ink: #e8eef0;
+      --muted: #9fb0b8;
+      --faint: #6d7f88;
+      --line: #22313a;
+      --accent: #2dd4bf;
+      --accent-soft: #12312e;
+      --good: #4ade9f;
+      --good-soft: #122b22;
+      --warn: #e2b264;
+      --warn-soft: #2e2513;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.36);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#f5f7f8; --panel:#fff; --ink:#10171c; --muted:#4a5b64; --faint:#7e8f97;
+    --line:#dde5e8; --accent:#0d8f86; --accent-soft:#e2f2f0; --good:#157f57; --good-soft:#e0f0e7;
+    --warn:#9a6a12; --warn-soft:#f6ecd6; --shadow:0 1px 2px rgba(16,23,28,.05),0 8px 30px rgba(16,23,28,.06);
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0c1215; --panel:#121b20; --ink:#e8eef0; --muted:#9fb0b8; --faint:#6d7f88;
+    --line:#22313a; --accent:#2dd4bf; --accent-soft:#12312e; --good:#4ade9f; --good-soft:#122b22;
+    --warn:#e2b264; --warn-soft:#2e2513; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.36);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .deck { height: 100vh; overflow-y: auto; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } }
+
+  .slide {
+    scroll-snap-align: start; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(28px, 5vw, 72px); position: relative;
+  }
+  .slide-inner { width: 100%; max-width: 1000px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.02; letter-spacing: -.02em; margin: 0 0 18px; text-wrap: balance; font-weight: 680; }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 22px; text-wrap: balance; font-weight: 660; }
+  h3 { font-size: 16px; margin: 0 0 6px; font-weight: 640; letter-spacing: -.005em; }
+  p { color: var(--muted); margin: 0 0 14px; max-width: 62ch; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 60ch; }
+  strong { color: var(--ink); font-weight: 620; }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--ink); padding: .08em .38em; border-radius: 5px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--muted); background: var(--panel); display: inline-flex; gap: 7px; align-items: center;
+  }
+  .chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+  .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 18px 16px; box-shadow: var(--shadow);
+  }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .card.lead { border-left: 3px solid var(--accent); }
+  .card.rule { border-left: 3px solid var(--warn); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td code { background: none; padding: 0; color: var(--accent); }
+  .pr { font-family: var(--mono); color: var(--faint); }
+
+  /* Terminal box: FIXED dark ground in BOTH themes, so the hard-coded light
+     text always has contrast (a var(--ink) background flips to near-white in
+     dark mode — the pale-on-pale bug from the 0.1.1 deck). */
+  .term {
+    background: #0d141a; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.65; border: 1px solid #22313a;
+  }
+  .term-bar { display: flex; gap: 7px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4750; display: inline-block; }
+  .term-body { padding: 16px 18px; color: #c7d4da; overflow-x: auto; }
+  .term-body .l { white-space: pre; }
+  .term-title { font-family: var(--mono); font-size: 11px; color: #6d7f88; margin-left: auto; letter-spacing: .04em; }
+  .term .p { color: #2dd4bf; }
+  .term .c { color: #e8eef0; }
+  .term .o { color: #8b9aa2; }
+  .term .ok { color: #4ade9f; }
+  .term .no { color: #f0a878; }
+  .term .g { color: #7fb3ff; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    flex: 1 1 130px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; position: relative;
+  }
+  .flow .step:first-child { border-radius: 12px 0 0 12px; }
+  .flow .step:last-child { border-radius: 0 12px 12px 0; }
+  .flow .step + .step { border-left: none; }
+  .flow .step .k { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .06em; }
+  .flow .step .v { font-size: 14px; color: var(--ink); font-weight: 560; margin-top: 3px; }
+  .flow .step .d { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .flow .step { border-radius: 12px !important; border-left: 1px solid var(--line) !important; }
+    .flow { gap: 8px; }
+  }
+
+  .rail { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; z-index: 20; }
+  .rail a { width: 9px; height: 9px; border-radius: 50%; background: var(--line); border: none; padding: 0; cursor: pointer; display: block; transition: background .2s, transform .2s; }
+  .rail a:hover { background: var(--faint); transform: scale(1.25); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 640px) { .rail { display: none; } }
+
+  .foot { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; bottom: clamp(18px,3vw,32px); left: clamp(28px,5vw,72px); }
+  .num { font-family: var(--mono); font-size: 12px; color: var(--faint); position: absolute; top: clamp(18px,3vw,32px); right: clamp(28px,5vw,72px); }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.clean li { display: flex; gap: 11px; font-size: 14.5px; color: var(--muted); align-items: baseline; }
+  ul.clean li::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; transform: translateY(6px); }
+  ul.clean li b { color: var(--ink); font-weight: 600; }
+
+  .risk { display: grid; gap: 8px; }
+  .risk .r { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .risk .r .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .risk .r .t { font-size: 13.5px; color: var(--muted); }
+
+  .ec { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: var(--good); background: var(--good-soft); padding: 4px 10px; border-radius: 999px; margin-bottom: 12px; }
+</style>
+<title>Acetone · Phase 9 sprint demo</title>
+
+<nav class="rail" aria-label="Slides">
+  <a href="#s1" aria-label="Title"></a>
+  <a href="#s2" aria-label="Where we are"></a>
+  <a href="#s3" aria-label="Criterion 1"></a>
+  <a href="#s4" aria-label="Honest conformance"></a>
+  <a href="#s5" aria-label="Criterion 2"></a>
+  <a href="#s6" aria-label="Criterion 3"></a>
+  <a href="#s7" aria-label="Criterion 4"></a>
+  <a href="#s8" aria-label="What review caught"></a>
+  <a href="#s9" aria-label="Security gate"></a>
+  <a href="#s10" aria-label="ADRs"></a>
+  <a href="#s11" aria-label="Live demo"></a>
+  <a href="#s12" aria-label="For Greg"></a>
+</nav>
+
+<main class="deck">
+
+  <!-- 1 · Title -->
+  <section class="slide" id="s1">
+    <div class="slide-inner">
+      <p class="eyebrow">Acetone · Sprint demo · Phase 9 boundary</p>
+      <h1>At scale, and in conformance.</h1>
+      <p class="lede">Phase 9 is where acetone stops being demonstrably correct on small inputs and starts being <strong>measurably correct at size</strong>. Two halves had to land together: the query engine had to stop declining large parts of openCypher, and the storage and verification paths had to stop assuming everything fits in memory or in one pass.</p>
+      <div class="chips" style="margin-top:22px">
+        <span class="chip accent"><span class="dot"></span>epic acetone-2ck</span>
+        <span class="chip good"><span class="dot"></span>TCK 41.1% → 56.07%</span>
+        <span class="chip good"><span class="dot"></span>50 failures → 0</span>
+        <span class="chip good"><span class="dot"></span>Bounded-memory import</span>
+        <span class="chip good"><span class="dot"></span>Sub-quadratic fsck</span>
+      </div>
+    </div>
+    <p class="foot">21 PRs · #199–#219 · every one adversarially reviewed</p>
+  </section>
+
+  <!-- 2 · Where we are -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <p class="eyebrow">Where we are</p>
+      <h2>The number that matters isn't the pass rate.</h2>
+      <p>Conformance went from <strong>1602/3897 (41.1%)</strong> to <strong>2185/3897 (56.07%)</strong>. But the pass rate is the second number. The first is this:</p>
+      <div class="grid cols-3" style="margin:24px 0">
+        <div class="card lead"><div class="tag">FAILURES</div><h3 style="font-size:34px;margin:6px 0 4px">0</h3><p>No scenario makes acetone return a wrong result.</p></div>
+        <div class="card"><div class="tag">WAS</div><h3 style="font-size:34px;margin:6px 0 4px">50</h3><p>Each one a query the TCK requires valid that acetone rejected, or a wrong answer.</p></div>
+        <div class="card"><div class="tag">PARSE</div><h3 style="font-size:34px;margin:6px 0 4px">3846<span style="font-size:18px;color:var(--faint)">/3897</span></h3><p>All 51 residual rejections individually justified.</p></div>
+      </div>
+      <p>An engine that declines cleanly is usable. An engine that quietly returns the wrong rows is not — and that class is now empty.</p>
+    </div>
+    <p class="num">2</p>
+  </section>
+
+  <!-- 3 · Criterion 1 -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <span class="ec"><span class="dot"></span>EXIT CRITERION 1 · MET</span>
+      <h2>Conformance, and every rejection accounted for.</h2>
+      <p>The criterion had a second half that is easy to skip: <em>any deliberate residual rejection is individually listed and justified</em>. A count would not do it, so the runner now emits each rejection by name.</p>
+      <div class="table-wrap" style="margin:18px 0">
+        <table>
+          <tr><th>The 51 queries that don't parse</th><th>Count</th><th>Why</th></tr>
+          <tr><td><b>Correct rejections</b></td><td><code>27</code></td><td>The scenario is named "Fail on…" — the TCK <em>demands</em> a syntax error</td></tr>
+          <tr><td><b>Declined by design</b></td><td><code>22</code></td><td><code>UNION</code> ×12, existential subqueries ×10</td></tr>
+          <tr><td><b>Genuine parser gaps</b></td><td><code>2</code></td><td><code>SET (n).name = …</code> — filed as <code>acetone-2ck.12</code></td></tr>
+        </table>
+      </div>
+      <p>Of 3897 queries under test, <strong>two</strong> are rejected by a limitation we owe work on.</p>
+    </div>
+    <p class="num">3</p>
+  </section>
+
+  <!-- 4 · Honest conformance -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <p class="eyebrow">The uncomfortable slide</p>
+      <h2>What the pass rate doesn't tell you.</h2>
+      <p>The conformance statement went through three review rounds. Every published <em>number</em> was right from the first commit; every finding was in the prose interpreting them. Three claims I wrote were false:</p>
+      <ul class="clean" style="margin:18px 0">
+        <li><b>"Passes execute the query."</b> 274 of 2185 (12.5%) don't — they're credited on a front-end rejection where the TCK expected a compile error. 27 of those verify only that <em>some</em> parse error occurred, not which.</li>
+        <li><b>"No limitation can inflate the count."</b> Three can: the unverified parse-rejection reason; identity-less entity comparison (a structurally identical wrong node passes); and a write-query token escape that files real gaps as deferrals.</li>
+        <li><b>"The biggest gap is subquery and CSV syntax."</b> <code>CALL {}</code>, <code>FOREACH</code> and <code>LOAD CSV</code> appear in <strong>zero</strong> corpus files. The real answer is temporal types — <strong>1025 scenarios, 90%</strong> of that bucket.</li>
+      </ul>
+      <p>All three are now in the published statement, under a heading that says which mechanisms can turn a defect into a pass.</p>
+    </div>
+    <p class="num">4</p>
+  </section>
+
+  <!-- 5 · Criterion 2 -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <span class="ec"><span class="dot"></span>EXIT CRITERION 2 · MET</span>
+      <h2>Import bigger than memory.</h2>
+      <p>Pull-based end to end (ADR-0062): a <code>SourceExtractor</code> yields one record at a time, batches of 8192 stage and flush, and one rewound file descriptor serves both the hash pass and the parse pass.</p>
+      <div class="flow" style="margin:20px 0">
+        <div class="step"><div class="k">SOURCE</div><div class="v">next_record()</div><div class="d">one at a time</div></div>
+        <div class="step"><div class="k">BATCH</div><div class="v">8192 records</div><div class="d">--batch-size</div></div>
+        <div class="step"><div class="k">STAGE</div><div class="v">apply + save</div><div class="d">flush, release</div></div>
+        <div class="step"><div class="k">FAIL</div><div class="v">reset to HEAD</div><div class="d">workspace untouched</div></div>
+      </div>
+      <p><strong>4× source size → 1.54× peak RSS.</strong> Two scopings we wrote down rather than glossed: the bound is unconditional only for UNIQUE-free imports (with unique constraints the tracker is O(nodes of those labels)), and wall-time is superlinear because each save re-anchors the whole chunk set — <code>acetone-taf</code>.</p>
+    </div>
+    <p class="num">5</p>
+  </section>
+
+  <!-- 6 · Criterion 3 -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <span class="ec" style="color:var(--warn);background:var(--warn-soft)"><span class="dot"></span>EXIT CRITERION 3 · MET, WITH ONE CAVEAT</span>
+      <h2>Seeks beat scans — and where they don't yet reach.</h2>
+      <div class="table-wrap" style="margin:14px 0">
+        <table>
+          <tr><th>Seek · lab graph, 440,800 nodes</th><th>Hinted</th><th>Scan</th><th>Speed-up</th></tr>
+          <tr><td>IndexRange <code>cert_not_after &lt; 30</code></td><td>24.4 ms</td><td>337.8 ms</td><td><b>13.8×</b></td></tr>
+          <tr><td>Composite seek (populated)</td><td>7.7 ms</td><td>213.1 ms</td><td><b>27.6×</b></td></tr>
+          <tr><td>Composite seek (empty bucket)</td><td>0.001 ms</td><td>208.2 ms</td><td>~10⁵×</td></tr>
+          <tr><td>KeySeek (primary key)</td><td>0.002 ms</td><td>201.0 ms</td><td>~10⁵×</td></tr>
+        </table>
+      </div>
+      <div class="card rule">
+        <div class="tag">THE CAVEAT — FOUND BY THE SECURITY REVIEW</div>
+        <p style="margin-top:6px">These were measured against the <b>in-memory source</b>. <code>StoreBackedSource</code> — what <code>Session</code> actually uses — implemented only <code>nodes_by_index</code>, so <b>KeySeek and IndexRange always label-scanned in the product</b>. PR #219 wires KeySeek. <b>IndexRange stays unwired</b>: index keys nest values inside a List encoding, so correct range bounds are Invariant #2 territory where a mistake silently returns wrong rows. Filed P1 (<code>acetone-2ck.14</code>) for its own change and review — not landed unreviewed at a boundary.</p>
+      </div>
+    </div>
+    <p class="num">6</p>
+  </section>
+
+  <!-- 7 · Criterion 4 -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <span class="ec"><span class="dot"></span>EXIT CRITERION 4 · MET</span>
+      <h2>Verification that scales with history.</h2>
+      <div class="grid cols-2" style="margin:18px 0">
+        <div class="card">
+          <div class="tag">FSCK · LINEAR HISTORY</div>
+          <table style="margin-top:8px"><tr><td>200 commits</td><td><code>0.193 s</code></td></tr><tr><td>400 commits</td><td><code>0.412 s</code></td></tr><tr><td>800 commits</td><td><code>1.125 s</code></td></tr></table>
+          <p style="margin-top:10px">≈<b>N^1.27</b> — comfortably sub-quadratic. Chunk sets memoised by map-root keys, so histories sharing manifests re-verify cheaply.</p>
+        </div>
+        <div class="card">
+          <div class="tag">MERGE_BASE · DIVERGENT CHAINS</div>
+          <table style="margin-top:8px"><tr><td>100 per side</td><td><code>0.021 s</code></td></tr><tr><td>200 per side</td><td><code>0.022 s</code></td></tr><tr><td>400 per side</td><td><code>0.023 s</code></td></tr></table>
+          <p style="margin-top:10px"><b>Effectively flat</b> while history grows 4×. The paint-down doing what it was written to do; verified against a 63,724-pair differential with zero divergences.</p>
+        </div>
+      </div>
+      <p>Both also gained new checks this phase: <code>fsck</code> now catches the <em>clean-now-gone-later</em> class — a version that verifies clean today but loses chunks to a later foreign <code>git gc</code> — for commits <em>and</em> workspaces.</p>
+    </div>
+    <p class="num">7</p>
+  </section>
+
+  <!-- 8 · What review caught -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <p class="eyebrow">The gate earned its keep</p>
+      <h2>Four things that would have shipped.</h2>
+      <div class="risk" style="margin-top:16px">
+        <div class="r"><span class="id">#217</span><span class="t"><b>Four rounds, and real data loss.</b> My first anchor-completeness rule failed every legacy repo forever with unworkable advice. My second — "safe if <em>any</em> tree anchors it" — the reviewer drove to an actual <code>missing chunk</code>: fsck clean → <code>acetone gc</code> → <code>git gc</code> → gone, because the covering anchor was one gc itself deletes. My third made the claim false again on the commonest shape. <b>ADR-0063 exists because of that sequence.</b></span></div>
+        <div class="r"><span class="id">#218</span><span class="t"><b>Three rounds on honesty.</b> All 14 published figures correct; every finding in the prose. See slide 4.</span></div>
+        <div class="r"><span class="id">#206</span><span class="t"><b>Silent row drops.</b> Cross-type key pins dropped rows, and the hints were dead on the main path.</span></div>
+        <div class="r"><span class="id">#208</span><span class="t"><b>A UNIQUE breach admitted.</b> CBOR claim keys let <code>-0.0</code> and <code>0.0</code> collide and falsely rejected NaN — fixed by using the memcomparable key encoding.</span></div>
+      </div>
+      <p style="margin-top:18px">The common thread: every one was found by a reviewer <em>executing</em> the untested path, not by reading the diff.</p>
+    </div>
+    <p class="num">8</p>
+  </section>
+
+  <!-- 9 · Security gate -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <p class="eyebrow">Milestone security review · 19 PRs, 48 files, ~7000 insertions</p>
+      <h2>Two blockers. Both closed.</h2>
+      <div class="grid cols-2" style="margin:16px 0">
+        <div class="card rule">
+          <div class="tag">BLOCKER 1 · PARSER</div>
+          <h3 style="margin-top:6px">268 bytes → 53.8 GB</h3>
+          <p style="margin-top:6px">Chained comparisons cloned interior operands, so nesting <b>doubled the AST per level</b> — 67 s and 53.8 GB inside <code>parse()</code>, before any governor exists, and equally from any library consumer.</p>
+          <p style="margin-top:8px;color:var(--good)"><b>Fixed:</b> the same bomb errors in <b>0.03 s at 5.6 MB</b>.</p>
+        </div>
+        <div class="card rule">
+          <div class="tag">BLOCKER 2 · EXECUTOR</div>
+          <h3 style="margin-top:6px">One line, hangs forever</h3>
+          <p style="margin-top:6px">A pattern comprehension with a fresh anchor is evaluated per row and re-scanned the whole node map at <b>zero governor charge</b>.</p>
+          <p style="margin-top:8px;color:var(--good)"><b>Fixed:</b> anchor candidates charged uniformly against a <b>dedicated budget</b> (ADR-0064). Two earlier designs were tried and rejected in review — work-only (too loose) and borrowing the expansion budget (rejected ordinary joins).</p>
+        </div>
+      </div>
+      <p>Nine lesser findings filed as beads (six from the milestone review, two from PR #219's own review, one co-tenancy note). Defences that <strong>held</strong>: <code>prune_loose</code>'s safety floor survived every gc/worktree scenario; ADR-0044 anchors survived a real <code>git gc --prune=now --aggressive</code>; ref-name injection failed closed; 3M mutated queries, no panics; and <strong>no dependency added, bumped or re-featured all phase</strong>.</p>
+    </div>
+    <p class="num">9</p>
+  </section>
+
+  <!-- 10 · ADRs -->
+  <section class="slide" id="s10">
+    <div class="slide-inner">
+      <p class="eyebrow">Decisions taken</p>
+      <h2>Three ADRs for the agenda.</h2>
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card lead">
+          <div class="tag">ADR-0062</div>
+          <h3 style="margin-top:6px">Streaming import</h3>
+          <p style="margin-top:6px">Pull-based extraction, batched staging, statement/stored UNIQUE layers, workspace reset on failure. Includes the honest memory scoping rather than a flat "bounded memory" claim.</p>
+        </div>
+        <div class="card lead">
+          <div class="tag">ADR-0063</div>
+          <h3 style="margin-top:6px">Workspace anchor coverage</h3>
+          <p style="margin-top:6px">Self-anchoring mandatory for every live version; borrowed coverage for exactly one shape — a superseded pre-ADR-0014 ref no writer can upgrade — and only from durable, gc-enumerable sources. Written <em>because</em> the first rule was unsound.</p>
+        </div>
+      </div>
+      <div class="card lead" style="margin-top:16px">
+        <div class="tag">ADR-0064</div>
+        <h3 style="margin-top:6px">Scanning gets its own budget</h3>
+        <p style="margin-top:6px"><code>max_scanned_candidates</code>, not the expansion budget — borrowing that one rejected ordinary nested-loop joins. <b>Adds a public field to <code>QueryLimits</code> and a variant to <code>ResourceLimit</code></b>, both in the frozen surface, inside a 0.3.x "additive only" series — and the CI freeze gate cannot see either, since <code>public-api.txt</code> records only the re-export line. Needs your ruling.</p>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="tag">PROCESS · DISCLOSED DEVIATION</div>
+        <p style="margin-top:6px">Fable 5 capacity was exhausted partway through. PR #217 rounds 2–4, PR #218, the security review and PR #219 ran at <b>Opus</b> — the strongest tier the session could reach — rather than downgrading silently or skipping the gate. Recorded on the beads as well as in the report. Compliant with ADR-0009's definition, but a change from previous phases.</p>
+      </div>
+    </div>
+    <p class="num">10</p>
+  </section>
+
+  <!-- 11 · Live demo -->
+  <section class="slide" id="s11">
+    <div class="slide-inner">
+      <p class="eyebrow">Live demo · step by step, one step per turn</p>
+      <h2>What we'll drive.</h2>
+      <div class="term" style="margin:14px 0">
+        <div class="term-bar"><i></i><i></i><i></i><span class="term-title">acetone · phase 9 demo</span></div>
+        <div class="term-body">
+<div class="l"><span class="p">$</span> <span class="c">cargo run --release -p acetone-tck --bin tck_runner</span></div>
+<div class="l"><span class="ok">  passed:  2185  (56.07%)   failed: 0  (0.0%)</span></div>
+<div class="l"><span class="o">  # the conformance number, live</span></div>
+<div class="l"> </div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query "RETURN 1 &lt; (((…))) &lt; 1"</span>  <span class="o"># the 268-byte bomb</span></div>
+<div class="l"><span class="no">  error: chained comparisons in this query duplicate more than the 4096-node…</span></div>
+<div class="l"><span class="o">  # 0.03 s — was 67 s and 53.8 GB</span></div>
+<div class="l"> </div>
+<div class="l"><span class="p">$</span> <span class="c">acetone query "UNWIND range(1,1000000) AS i RETURN size([(x)--&gt;(y)|1])"</span></div>
+<div class="l"><span class="no">  error: query exceeded the scanned-candidate resource limit</span></div>
+<div class="l"><span class="o">  # was: hangs indefinitely</span></div>
+<div class="l"> </div>
+<div class="l"><span class="p">$</span> <span class="c">acetone import big.csv --label Host --batch-size 8192</span></div>
+<div class="l"><span class="p">$</span> <span class="c">acetone fsck</span>   <span class="o"># anchor completeness, commits + workspaces</span></div>
+<div class="l"><span class="ok">  fsck: clean</span></div>
+        </div>
+      </div>
+      <p>Plus the seek measurements through the lab, and an <code>fsck</code> exposure fabricated on purpose so you can see it named rather than take "clean" on trust.</p>
+    </div>
+    <p class="num">11</p>
+  </section>
+
+  <!-- 12 · For Greg -->
+  <section class="slide" id="s12">
+    <div class="slide-inner">
+      <p class="eyebrow">For the boundary review</p>
+      <h2>What's yours to rule on.</h2>
+      <ul class="clean" style="margin:18px 0">
+        <li><b>Gate <code>acetone-2ck.1</code>.</b> All four criteria have evidence; both security blockers are closed. Yours to close — agents never close it.</li>
+        <li><b>Criterion 3's caveat.</b> The criterion names two seek kinds; one of them — range — is implemented and measured but not reachable through <code>Session</code>, and every lab figure was measured on the in-memory source. Under the "not delivered until reachable through the shipped interface" rule, does that satisfy the criterion, or should <code>acetone-2ck.14</code> land first?</li>
+        <li><b>The API-freeze question ADR-0064 raises.</b> A public field and enum variant added to types STABILITY.md freezes, in a patch series whose policy is additive-only, and invisible to the freeze gate. <code>#[non_exhaustive]</code> on both, or a minor bump?</li>
+        <li><b>The Opus tier substitution.</b> Disclosed, compliant with ADR-0009 as written — but worth your view on whether the policy should say something explicit about capacity exhaustion.</li>
+        <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>2ck.14</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code>, <code>2ck.2</code> and the security beads — all re-homed to <code>7qw</code>. The epic still carries 16 pre-existing beads from the Phase 8 triage; whether those move is yours.</li>
+      </ul>
+      <div class="chips">
+        <span class="chip good"><span class="dot"></span>TCK 2185/3897 · 0 failures</span>
+        <span class="chip good"><span class="dot"></span>Import bounded</span>
+        <span class="chip warn"><span class="dot"></span>Seeks: range not reachable via Session</span>
+        <span class="chip good"><span class="dot"></span>fsck ≈N^1.27 · merge_base flat</span>
+      </div>
+    </div>
+    <p class="foot">docs/reports/phase-9.md · docs/conformance.md · ADR-0062, ADR-0063, ADR-0064</p>
+    <p class="num">12</p>
+  </section>
+
+</main>
