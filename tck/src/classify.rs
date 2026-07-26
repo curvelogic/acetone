@@ -588,6 +588,24 @@ pub struct ParseStats {
     pub parse_ok: usize,
     pub parse_err_deferred: usize,
     pub parse_err_other: usize,
+    /// Every residual rejection, named. The Phase 9 exit criterion
+    /// requires each one to be individually listed and justified in the
+    /// conformance statement, which a bare count cannot support.
+    pub rejections: Vec<ParseRejection>,
+}
+
+/// One query the parser declines, with enough identity to look it up in
+/// the corpus and enough of the error to justify the decline.
+#[derive(Debug, serde::Serialize)]
+pub struct ParseRejection {
+    pub feature_path: String,
+    pub scenario_name: String,
+    /// True when the query uses syntax outside the v0.1 target subset —
+    /// spec §5.1's explicit deferrals plus the wider set
+    /// `uses_deferred_syntax` covers (e.g. `UNION`, `EXISTS { … }`).
+    /// False marks a rejection needing its own reason.
+    pub deferred_syntax: bool,
+    pub error: String,
 }
 
 pub fn parse_stats(plans: &[ScenarioPlan]) -> ParseStats {
@@ -597,8 +615,20 @@ pub fn parse_stats(plans: &[ScenarioPlan]) -> ParseStats {
         stats.queries += 1;
         match acetone_cypher::parse(query) {
             Ok(_) => stats.parse_ok += 1,
-            Err(_) if uses_deferred_syntax(query) => stats.parse_err_deferred += 1,
-            Err(_) => stats.parse_err_other += 1,
+            Err(err) => {
+                let deferred_syntax = uses_deferred_syntax(query);
+                if deferred_syntax {
+                    stats.parse_err_deferred += 1;
+                } else {
+                    stats.parse_err_other += 1;
+                }
+                stats.rejections.push(ParseRejection {
+                    feature_path: plan.feature_path.clone(),
+                    scenario_name: plan.scenario_name.clone(),
+                    deferred_syntax,
+                    error: err.to_string(),
+                });
+            }
         }
     }
     stats
