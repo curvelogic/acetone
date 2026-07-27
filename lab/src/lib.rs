@@ -87,14 +87,27 @@ pub fn build(
     build_with(repo, shape, true)
 }
 
-/// Whether two manifests describe the **same graph** — the precondition of
-/// every seek-versus-scan ratio the lab publishes.
+/// Whether two manifests are a valid **measurement pair** — the precondition
+/// of every seek-versus-scan ratio the lab publishes.
 ///
-/// Identical map contents yield identical prolly-tree roots regardless of
-/// operation order (load-bearing invariant 1), so comparing the `nodes`,
-/// `edges_fwd` and `edges_rev` roots is exact: equal roots mean equal graphs.
-/// Declaring an index must not perturb any of the three — it adds `idx/*`
-/// maps and changes `schema`, and nothing else.
+/// That takes two things, and both are load-bearing:
+///
+/// **The same graph.** Identical map contents yield identical prolly-tree
+/// roots regardless of operation order (load-bearing invariant 1), so
+/// comparing the `nodes`, `edges_fwd` and `edges_rev` roots is exact: equal
+/// roots mean equal graphs. Declaring an index must not perturb any of the
+/// three — it adds `idx/*` maps and changes `schema`, and nothing else.
+///
+/// **Different indexes.** One side must declare indexes and the other must
+/// declare none. Nothing else checks this: the plain side's lack of indexes
+/// rests entirely on a literal `false` passed to `build_with` in the `lab`
+/// binary. Flip or parameterise that — a debug flag, a refactor that defaults
+/// it to `true` — and both repositories become identical in every respect. A
+/// graph-only check would return `Ok`, and the harness would publish a full
+/// table of ~1.00x ratios that reads exactly like the story the README tells
+/// for its five unselective rows: "unselective seeks decline to parity, and
+/// that is the designed behaviour". Silent, and plausible enough to be
+/// believed — the precise hazard this harness exists to eliminate.
 ///
 /// This lives here, rather than inline in the `lab` binary, so that a test
 /// can pin it. A binary's `run()` is unreachable from an integration test, so
@@ -114,21 +127,35 @@ pub fn twins_match(
     .into_iter()
     .filter_map(|(name, differs)| differs.then_some(name))
     .collect();
-    if mismatches.is_empty() {
-        return Ok(());
+    if !mismatches.is_empty() {
+        return Err(format!(
+            "the twins do not hold the identical graph — {} differ\n  \
+             indexed: nodes {:?}, edges_fwd {:?}, edges_rev {:?}\n  \
+             plain:   nodes {:?}, edges_fwd {:?}, edges_rev {:?}",
+            mismatches.join(", "),
+            indexed.nodes,
+            indexed.edges_fwd,
+            indexed.edges_rev,
+            plain.nodes,
+            plain.edges_fwd,
+            plain.edges_rev
+        ));
     }
-    Err(format!(
-        "the twins do not hold the identical graph — {} differ\n  \
-         indexed: nodes {:?}, edges_fwd {:?}, edges_rev {:?}\n  \
-         plain:   nodes {:?}, edges_fwd {:?}, edges_rev {:?}",
-        mismatches.join(", "),
-        indexed.nodes,
-        indexed.edges_fwd,
-        indexed.edges_rev,
-        plain.nodes,
-        plain.edges_fwd,
-        plain.edges_rev
-    ))
+    if indexed.indexes.is_empty() {
+        return Err(
+            "the indexed side declares no indexes — every ratio would compare \
+             a scan against a scan"
+                .to_string(),
+        );
+    }
+    if !plain.indexes.is_empty() {
+        return Err(format!(
+            "the plain side declares indexes ({}) — it is not an unindexed \
+             twin, and every ratio would compare like with like",
+            plain.indexes.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    Ok(())
 }
 
 /// [`build`], optionally omitting the secondary index declarations.

@@ -245,14 +245,12 @@ fn the_unindexed_twin_holds_an_identical_graph() {
 /// accepts everything also does).
 #[test]
 fn twins_match_rejects_a_divergent_graph() {
-    // Only the SHAPE varies. Both sides declare indexes, so a difference can
-    // only come from the graph's content — otherwise this could not tell
-    // "roots track content" from "roots track index declaration".
-    let manifest_of = |scale: usize| {
+    let manifest_of = |scale: usize, indexes: bool| {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo =
             Repository::init(&dir.path().join("r.git"), InitOptions::default()).expect("init");
-        acetone_lab::build_with(&repo, acetone_lab::Shape::from_scale(scale), true).expect("build");
+        acetone_lab::build_with(&repo, acetone_lab::Shape::from_scale(scale), indexes)
+            .expect("build");
         let snapshot = repo.workspace_snapshot().expect("snapshot");
         // `Manifest` is not `Copy`; clone it out before the tempdir goes.
         let manifest = snapshot.manifest().clone();
@@ -261,8 +259,11 @@ fn twins_match_rejects_a_divergent_graph() {
         manifest
     };
 
-    let reference = manifest_of(200);
-    let divergent = manifest_of(300);
+    // Only the SHAPE varies between these two: both declare indexes, so a
+    // rejection can only come from the graph's content — otherwise this could
+    // not tell "roots track content" from "roots track index declaration".
+    let reference = manifest_of(200, true);
+    let divergent = manifest_of(300, true);
 
     let rejected = acetone_lab::twins_match(&reference, &divergent)
         .expect_err("twins_match accepted two differently-shaped graphs as twins");
@@ -277,7 +278,29 @@ fn twins_match_rejects_a_divergent_graph() {
         summary.contains("nodes, edges_fwd, edges_rev differ"),
         "the rejection summary must name every diverging map, got: {summary}"
     );
-    // And it still accepts a genuine twin, so the rejection above is not
-    // simply a function that refuses everything.
-    assert_eq!(acetone_lab::twins_match(&reference, &reference), Ok(()));
+    // Same graph, but BOTH sides indexed: not a measurement pair. Nothing
+    // else in the harness catches this — the plain side's lack of indexes
+    // rests on a single literal `false` in the binary — and if it went
+    // unchecked the run would publish a table of ~1.00x ratios that reads
+    // exactly like the designed-decline story the README tells.
+    let not_a_twin = acetone_lab::twins_match(&reference, &reference)
+        .expect_err("twins_match accepted two INDEXED repositories as a measurement pair");
+    assert!(
+        not_a_twin.contains("plain side declares indexes"),
+        "expected an index-asymmetry rejection, got: {not_a_twin}"
+    );
+
+    // The mirror case: neither side indexed, so every ratio would be a scan
+    // against a scan.
+    let plain_200 = manifest_of(200, false);
+    let neither = acetone_lab::twins_match(&plain_200, &plain_200)
+        .expect_err("twins_match accepted two UNINDEXED repositories as a measurement pair");
+    assert!(
+        neither.contains("indexed side declares no indexes"),
+        "expected a missing-index rejection, got: {neither}"
+    );
+
+    // And it accepts a genuine measurement pair, so the rejections above are
+    // not simply a function that refuses everything.
+    assert_eq!(acetone_lab::twins_match(&reference, &plain_200), Ok(()));
 }
