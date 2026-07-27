@@ -21,8 +21,13 @@ fn main() -> ExitCode {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--scale" => match args.next().and_then(|s| s.parse().ok()) {
-                Some(n) => scale = n,
-                None => return usage("--scale needs a positive integer"),
+                // Zero is rejected, not merely unparseable: `--scale 0` built
+                // an empty graph whose KeySeek case probed a nonexistent
+                // `host-0`, so the hinted side fell back to a scan and the
+                // run silently measured scan-versus-scan — the exact trap the
+                // shape-derived key exists to prevent.
+                Some(n) if n > 0 => scale = n,
+                _ => return usage("--scale needs a positive integer"),
             },
             other if !other.starts_with('-') && repo_path.is_none() => {
                 repo_path = Some(PathBuf::from(other));
@@ -45,6 +50,23 @@ fn main() -> ExitCode {
 
 fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
     let shape = acetone_lab::Shape::from_scale(scale);
+
+    // The criterion-3 comparison needs a second repository beside the first.
+    // Its path is checked HERE, before the expensive build, because
+    // `Repository::init` refuses a non-empty directory: discovering a
+    // leftover twin only after the indexed build has completed throws away
+    // minutes of work at the larger scales.
+    let plain_path = twin_path(repo_path);
+    if plain_path.exists() {
+        return Err(format!(
+            "the unindexed twin path {} already exists; remove it (and {}) \
+             before re-running",
+            plain_path.display(),
+            repo_path.display()
+        )
+        .into());
+    }
+
     println!(
         "Generating lab graph: {} hosts, {} software, {} suppliers, {} certificates ({} nodes)…",
         shape.hosts,
@@ -123,13 +145,6 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
     // An identical graph WITHOUT the secondary indexes, so seek-versus-scan
     // can be measured on the shipped read path rather than between two
     // schemas over one in-memory snapshot (acetone-2ck.16).
-    let plain_path = repo_path.with_file_name(format!(
-        "{}-unindexed",
-        repo_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "lab".to_string())
-    ));
     println!(
         "\nBuilding an identical unindexed twin at {} for the shipped-path comparison…",
         plain_path.display()
@@ -141,12 +156,31 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
         "Built {twin_nodes} nodes, {twin_edges} edges in {:.2}s.",
         twin_start.elapsed().as_secs_f64()
     );
-    // The comparison is only meaningful if the twins hold the same graph.
-    assert_eq!(
-        (twin_nodes, twin_edges),
-        (nodes, edges),
-        "the unindexed twin must hold the identical graph"
-    );
+    // The comparison is only meaningful if the twins hold the same graph —
+    // and this must be checked against what was STORED. Comparing the
+    // returned counts would be vacuous: `build_with` derives them from the
+    // `Shape` and a seeded counter without reading the repository, so both
+    // calls return the same constants even if a store error, a partial
+    // commit or a stale directory left the two repositories holding
+    // different graphs.
+    //
+    // The map roots are the exact check: identical contents yield identical
+    // prolly-tree roots regardless of operation order (load-bearing
+    // invariant 1), so equal roots mean equal graphs, and declaring an index
+    // must not perturb the node and edge maps at all.
+    let (indexed_snapshot, plain_snapshot) =
+        (repo.workspace_snapshot()?, plain.workspace_snapshot()?);
+    let (a, b) = (indexed_snapshot.manifest(), plain_snapshot.manifest());
+    if (a.nodes, a.edges_fwd, a.edges_rev) != (b.nodes, b.edges_fwd, b.edges_rev) {
+        return Err(format!(
+            "the unindexed twin does not hold the identical graph: \
+             nodes {:?} vs {:?}, edges_fwd {:?} vs {:?}, edges_rev {:?} vs {:?} \
+             ({nodes} nodes / {edges} edges expected, twin reported \
+             {twin_nodes} / {twin_edges})",
+            a.nodes, b.nodes, a.edges_fwd, b.edges_fwd, a.edges_rev, b.edges_rev
+        )
+        .into());
+    }
 
     criterion_3_measurements(&repo, &plain, shape)?;
     Ok(())
@@ -198,7 +232,7 @@ fn index_vs_scan_demo(
 
     let best = |bound: &_, graph: &GraphSnapshot| -> Result<f64, Box<dyn std::error::Error>> {
         let mut best = f64::INFINITY;
-        for _ in 0..7 {
+        for _ in 0..RUNS {
             let start = Instant::now();
             let _ = execute(bound, graph, params)?;
             best = best.min(start.elapsed().as_secs_f64() * 1000.0);
@@ -274,17 +308,6 @@ fn criterion_3_measurements(
             expectation: "unselective: should decline to ~parity",
         },
         SeekCase {
-            name: "KeySeek, one host by primary key",
-            // Derived from the shape so the key EXISTS at every scale: a
-            // missing key makes the hinted side fall back to a scan and
-            // silently measures scan-vs-scan (PR #209 review).
-            cypher: format!(
-                "MATCH (h:Host {{hostname: 'host-{}'}}) RETURN count(*) AS n",
-                hosts.saturating_sub(1)
-            ),
-            expectation: "point lookup: seek should win outright",
-        },
-        SeekCase {
             name: "Composite seek, empty bucket",
             // i%5==0 and i%7==6 first coincide at i=20, so an in-range
             // pair is populated at any real scale; use an out-of-range
@@ -351,6 +374,50 @@ fn criterion_3_measurements(
             case.expectation
         );
     }
+
+    key_seek_measurement(indexed, plain, shape)?;
+    Ok(())
+}
+
+/// The primary-key point lookup, reported **separately from the table above
+/// and without a ratio**, because the twin ratio here is uninformative by
+/// construction.
+///
+/// `KeySeek` is emitted from the label's declared KEY alone: the binder
+/// returns the hint before it ever consults the index catalogue, so a
+/// declared index plays no part. Both twins declare `Host` with the same
+/// `hostname` key, so both bind and execute the identical plan and the ratio
+/// is pinned at ~1.00x whether key seeks work perfectly or not at all. An
+/// earlier version of this harness printed that 1.00x in the ratio column
+/// and read a discovered gap out of it; the number could not have shown
+/// either outcome.
+///
+/// What *is* evidence is the absolute time against the size of the scan it
+/// should be avoiding (`acetone-2ck.17`).
+fn key_seek_measurement(
+    indexed: &Repository,
+    plain: &Repository,
+    shape: acetone_lab::Shape,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Derived from the shape so the key EXISTS at every scale: a missing key
+    // makes the hinted side fall back to a scan (PR #209 review).
+    let cypher = format!(
+        "MATCH (h:Host {{hostname: 'host-{}'}}) RETURN count(*) AS n",
+        shape.hosts.saturating_sub(1)
+    );
+    let (indexed_ms, plain_ms) = interleaved(indexed, plain, &cypher)?;
+    println!("\n  Point lookup by primary key — NOT an index A/B:");
+    println!("    {cypher}");
+    println!(
+        "    {indexed_ms:.2} ms (twin without indexes: {plain_ms:.2} ms — the same plan; \
+         KeySeek comes from the declared key, not from an index)"
+    );
+    println!(
+        "    Compare against a full scan of {} nodes. A point lookup that costs \
+         a scan is not seeking: acetone-2ck.17 (string key pins are declined \
+         outright), blocked on acetone-2ck.18 (no CLI property types).",
+        shape.nodes()
+    );
     Ok(())
 }
 
@@ -359,10 +426,16 @@ fn criterion_3_measurements(
 const RUNS: usize = 7;
 
 /// Time `cypher` against both repositories, **alternating** them so machine
-/// drift lands on both sides, and assert they return the same rows.
+/// drift lands on both sides, and check they return the same result on every
+/// iteration.
 ///
-/// The parity assertion is the load-bearing part: an "acceleration" that
-/// returned different rows would otherwise be reported as a speed-up.
+/// The parity check is the load-bearing part: an "acceleration" that returned
+/// a different answer would otherwise be reported as a speed-up. Note its
+/// exact strength — every criterion-3 case projects `count(*)`, so this
+/// compares a **cardinality oracle**, with the unindexed scan as the
+/// reference answer. It would catch a seek that under- or over-selects, which
+/// is the hazard that matters here; it would not catch a seek that returned
+/// the right number of wrong nodes.
 fn interleaved(
     indexed: &Repository,
     plain: &Repository,
@@ -370,23 +443,49 @@ fn interleaved(
 ) -> Result<(f64, f64), Box<dyn std::error::Error>> {
     let (a, b) = (Session::new(indexed), Session::new(plain));
     let (mut best_indexed, mut best_plain) = (f64::INFINITY, f64::INFINITY);
-    let (mut rows_indexed, mut rows_plain) = (String::new(), String::new());
-    for _ in 0..RUNS {
-        let start = Instant::now();
-        let out = a.run(cypher)?;
-        best_indexed = best_indexed.min(start.elapsed().as_secs_f64() * 1000.0);
-        rows_indexed = format!("{out:?}");
-
-        let start = Instant::now();
-        let out = b.run(cypher)?;
-        best_plain = best_plain.min(start.elapsed().as_secs_f64() * 1000.0);
-        rows_plain = format!("{out:?}");
+    for i in 0..RUNS {
+        let time = |session: &Session<'_>| -> Result<(f64, String), Box<dyn std::error::Error>> {
+            let start = Instant::now();
+            let out = session.run(cypher)?;
+            Ok((start.elapsed().as_secs_f64() * 1000.0, format!("{out:?}")))
+        };
+        // Swap the order every other iteration. Alternation alone does not
+        // cancel a systematic WITHIN-iteration effect — the second query
+        // always running with the first's working set resident — because the
+        // same side is always second. Swapping does.
+        let ((indexed_ms, rows_indexed), (plain_ms, rows_plain)) = if i % 2 == 0 {
+            let first = time(&a)?;
+            (first, time(&b)?)
+        } else {
+            let first = time(&b)?;
+            (time(&a)?, first)
+        };
+        best_indexed = best_indexed.min(indexed_ms);
+        best_plain = best_plain.min(plain_ms);
+        // Checked every iteration, not once after the loop: comparing only
+        // the values left by the final iteration would leave the other
+        // RUNS-1 answers unexamined.
+        if rows_indexed != rows_plain {
+            return Err(format!(
+                "indexed and unindexed disagree for: {cypher}\n  \
+                 indexed:   {rows_indexed}\n  unindexed: {rows_plain}"
+            )
+            .into());
+        }
     }
-    assert_eq!(
-        rows_indexed, rows_plain,
-        "indexed and unindexed must agree for: {cypher}"
-    );
     Ok((best_indexed, best_plain))
+}
+
+/// Where the unindexed twin is built: `<repo>-unindexed`, beside the
+/// repository under measurement.
+fn twin_path(repo_path: &std::path::Path) -> PathBuf {
+    repo_path.with_file_name(format!(
+        "{}-unindexed",
+        repo_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "lab".to_string())
+    ))
 }
 
 fn usage(problem: &str) -> ExitCode {

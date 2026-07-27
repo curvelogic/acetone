@@ -183,18 +183,38 @@ fn the_unindexed_twin_holds_an_identical_graph() {
         "the twins must hold identical node and edge counts"
     );
 
-    // Identical content, not merely identical counts: the nodes map root
-    // hash is history-independent (load-bearing invariant 1), so declaring
-    // an index must not perturb it.
+    // Identical CONTENT, not merely identical counts. Counts are the weak
+    // check twice over: `build_with` derives its return value from the
+    // `Shape` and a seeded counter without reading the repository, and even
+    // a snapshot-derived count cannot see a divergence that preserves
+    // cardinality — a property value differing between the two builds, or a
+    // record written under a different encoding.
+    //
+    // The map roots are the exact check: identical map contents yield
+    // identical prolly-tree roots regardless of operation order (load-bearing
+    // invariant 1). So equal roots mean equal graphs, and declaring an index
+    // must not perturb the node or edge maps at all.
     let a = indexed.workspace_snapshot().expect("snapshot");
     let b = plain.workspace_snapshot().expect("snapshot");
+    let (ma, mb) = (a.manifest(), b.manifest());
     assert_eq!(
-        a.nodes().expect("nodes").len(),
-        b.nodes().expect("nodes").len()
+        ma.nodes, mb.nodes,
+        "declaring an index perturbed the nodes map root"
     );
     assert_eq!(
-        a.edges().expect("edges").len(),
-        b.edges().expect("edges").len()
+        ma.edges_fwd, mb.edges_fwd,
+        "declaring an index perturbed the edges_fwd map root"
+    );
+    assert_eq!(
+        ma.edges_rev, mb.edges_rev,
+        "declaring an index perturbed the edges_rev map root"
+    );
+    // The schema roots MUST differ — that is the one intended difference,
+    // and equal schema roots would mean the twin was built with indexes
+    // after all, making every measured ratio a comparison of like with like.
+    assert_ne!(
+        ma.schema, mb.schema,
+        "the twins must differ in their declared schema"
     );
 
     // And the twin genuinely has no indexes to seek with.
@@ -212,5 +232,44 @@ fn the_unindexed_twin_holds_an_identical_graph() {
             .iter()
             .any(|e| matches!(e, SchemaEntry::Index { .. })),
         "the indexed side must declare indexes"
+    );
+}
+
+/// The twin check above is only worth having if it can FAIL. The assertion it
+/// replaced could not: it compared `build_with`'s return value, which is
+/// derived from the `Shape` and a seeded counter without reading the
+/// repository, so it held whatever the two repositories actually contained.
+///
+/// Pin the sensitivity directly: a twin built from a different shape must
+/// diverge at the map roots. Without this, a future change that made the
+/// roots constant — or compared the wrong field — would leave the criterion-3
+/// harness silently comparing two different graphs again.
+#[test]
+fn the_twin_check_detects_a_divergent_graph() {
+    let build = |scale: usize, indexes: bool| {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo =
+            Repository::init(&dir.path().join("r.git"), InitOptions::default()).expect("init");
+        acetone_lab::build_with(&repo, acetone_lab::Shape::from_scale(scale), indexes)
+            .expect("build");
+        let snapshot = repo.workspace_snapshot().expect("snapshot");
+        let manifest = snapshot.manifest();
+        // `MapRoot` is `Copy`, so the roots outlive the snapshot and `dir`.
+        let roots = (manifest.nodes, manifest.edges_fwd);
+        drop(snapshot);
+        drop(dir);
+        roots
+    };
+
+    let (ref_nodes, ref_edges) = build(200, true);
+    let (div_nodes, div_edges) = build(300, false);
+
+    assert_ne!(
+        ref_nodes, div_nodes,
+        "a differently-shaped graph must not share the reference's nodes root"
+    );
+    assert_ne!(
+        ref_edges, div_edges,
+        "a differently-shaped graph must not share the reference's edges_fwd root"
     );
 }
