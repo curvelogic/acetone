@@ -199,6 +199,20 @@ enforced, so unenforced types are conformant as written. §2 is amended to say
 declared types are enforced on the same footing. Recorded here rather than
 changed silently.
 
+**Four public enums gain a variant, and only one was visible to the freeze
+gate.** `PersistError::WrongType` (acetone-cypher) tripped the ADR-0046
+snapshot and was deliberately re-blessed. `GraphError::PropertyTypeViolation`,
+`ConstraintViolation::WrongType` and `GraphViolation::WrongType` did **not**:
+`crates/acetone-core/public-api.txt` records only the re-export line for
+`acetone_core::graph`, not the variants behind it, so the gate is blind to
+them (`acetone-7qw.5`, which this work turned from a removals concern into a
+demonstrated additions one too). None of the four enums is
+`#[non_exhaustive]`, so each addition breaks a downstream exhaustive match —
+permitted within a patch series by STABILITY.md's additive-only rule, but
+worth stating plainly rather than resting on a green gate that could not have
+failed. `acetone-fht` proposes `#[non_exhaustive]` for `GraphError` at the
+next minor boundary.
+
 **Previously-accepted writes may now be rejected.** A graph that declared
 types through the library and then wrote contradicting values through Cypher
 was already relying on undefined behaviour — and, if the property was
