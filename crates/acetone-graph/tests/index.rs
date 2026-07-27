@@ -846,7 +846,7 @@ fn index_scan_returns_the_node_keys_for_an_equality_prefix() {
     let prefix = index_value_prefix("Host", &["region".into()], &[Value::String("eu".into())])
         .expect("prefix");
     let mut got: Vec<String> = snap
-        .index_scan("host_region", &prefix, usize::MAX)
+        .index_scan("host_region", &prefix)
         .expect("scan")
         .expect("index present")
         .into_iter()
@@ -862,7 +862,7 @@ fn index_scan_returns_the_node_keys_for_an_equality_prefix() {
     let none = index_value_prefix("Host", &["region".into()], &[Value::String("ap".into())])
         .expect("prefix");
     assert!(
-        snap.index_scan("host_region", &none, usize::MAX)
+        snap.index_scan("host_region", &none)
             .expect("scan")
             .expect("present")
             .is_empty()
@@ -870,7 +870,7 @@ fn index_scan_returns_the_node_keys_for_an_equality_prefix() {
 
     // An undeclared index is absent, so the caller can fall back to a scan.
     assert!(
-        snap.index_scan("no_such_index", &prefix, usize::MAX)
+        snap.index_scan("no_such_index", &prefix)
             .expect("scan")
             .is_none()
     );

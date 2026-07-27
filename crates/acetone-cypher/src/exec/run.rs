@@ -1198,7 +1198,27 @@ fn seek_anchor(
     row: &Row,
     ctx: &EvalCtx,
 ) -> Result<Option<Vec<NodeValue>>, ExecError> {
-    match &pattern.index_hint {
+    // Hints are ordered candidates, not a single choice: a hint that
+    // DECLINES at runtime (the cost model judged it unselective) falls
+    // through to the next rather than losing the plan entirely. Before
+    // this, an equality hint that declined discarded a far more selective
+    // range that the binder had skipped attaching — measured 80-91x worse
+    // than no hint at all (PR #224 review blocker 2).
+    for hint in &pattern.index_hints {
+        if let Some(nodes) = seek_with(hint, pattern, row, ctx)? {
+            return Ok(Some(nodes));
+        }
+    }
+    Ok(None)
+}
+
+fn seek_with(
+    hint: &IndexHint,
+    pattern: &BoundNodePattern,
+    row: &Row,
+    ctx: &EvalCtx,
+) -> Result<Option<Vec<NodeValue>>, ExecError> {
+    match Some(hint) {
         Some(IndexHint::KeySeek {
             label,
             key,
@@ -1309,12 +1329,12 @@ fn seek_anchor(
             let upper = resolve(upper);
             if (lower.is_none()
                 && matches!(
-                    &pattern.index_hint,
+                    Some(hint),
                     Some(IndexHint::IndexRange { lower: Some(_), .. })
                 ))
                 || (upper.is_none()
                     && matches!(
-                        &pattern.index_hint,
+                        Some(hint),
                         Some(IndexHint::IndexRange { upper: Some(_), .. })
                     ))
             {

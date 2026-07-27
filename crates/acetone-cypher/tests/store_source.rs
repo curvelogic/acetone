@@ -876,23 +876,27 @@ fn unselective_seeks_decline_on_both_paths() {
     );
 }
 
-/// The budget scales with the index's height, which is the only
-/// cardinality signal available without a format change. Height 3 is the
-/// measured ~50k-row anchor (break-even ~1,000); each level up is ~8×,
-/// matching the measured ~7,000 at ~400k rows.
+/// The budget is a fraction of what a scan would cost, sampled from the
+/// nodes map rather than tiered on the index's height — height changes
+/// once per fanout, so one tier spans ~10× in cardinality and cannot be
+/// calibrated to both ends (PR #224 review blocker 1).
 #[test]
-fn candidate_budget_scales_with_index_height() {
+fn candidate_budget_tracks_estimated_scan_cost() {
     use acetone_cypher::exec::store_source::candidate_cap;
-    assert_eq!(candidate_cap(1), 1024, "small indexes get the floor");
-    assert_eq!(candidate_cap(3), 1024, "the ~50k anchor: break-even ~1,000");
+    // 2% of the rows a scan would visit, with a floor so point-lookup
+    // shapes still work on tiny graphs (where a scan is cheap anyway).
+    assert_eq!(candidate_cap(1_000_000), 20_000);
+    assert_eq!(candidate_cap(50_000), 1_000, "the measured ~50k anchor");
+    assert_eq!(candidate_cap(5_000), 100);
     assert_eq!(
-        candidate_cap(4),
-        8192,
-        "the ~400k anchor: break-even ~7,000"
+        candidate_cap(1_100),
+        32,
+        "small labels get the floor, not 1024"
     );
+    assert_eq!(candidate_cap(0), 32);
     assert!(
-        candidate_cap(5) > candidate_cap(4) && candidate_cap(9) <= (1 << 20),
-        "monotone and clamped"
+        candidate_cap(200_000) > candidate_cap(50_000),
+        "monotone in the scan cost it is competing with"
     );
 }
 
@@ -923,7 +927,7 @@ fn where_equality_uses_the_index() {
         let bound = bind::bind(q, &parsed, &catalogue, bind::BindMode::Strict).expect("bind");
         for clause in &bound.clauses {
             if let acetone_cypher::bind::bound::BoundClause::Match { patterns, .. } = clause {
-                return patterns[0].start.index_hint.clone();
+                return patterns[0].start.index_hints.first().cloned();
             }
         }
         None
@@ -961,4 +965,117 @@ fn where_equality_uses_the_index() {
     assert!(hint_for("MATCH (n:H) WHERE n.b = n.id RETURN n").is_none());
     // OR is not a pin.
     assert!(hint_for("MATCH (n:H) WHERE n.b = 3 OR n.b = 4 RETURN n").is_none());
+}
+
+/// PR #224 review blocker 2: hints are ordered CANDIDATES. An equality
+/// hint that declines at runtime must fall through to a range hint that
+/// would serve — before this, the binder attached only one hint, so a
+/// declining equality discarded a far more selective range and the query
+/// ran 80–91× slower than with no hint at all.
+#[test]
+fn a_declining_hint_falls_through_to_the_next() {
+    use acetone_cypher::bind::bound::IndexHint;
+    use acetone_cypher::{bind, parse};
+
+    let entries = vec![
+        SchemaEntry::Label {
+            name: "H".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        },
+        SchemaEntry::Index {
+            name: "h_b".into(),
+            def: IndexDef::new("H", vec!["b".into()]).expect("index"),
+        },
+        SchemaEntry::Index {
+            name: "h_u".into(),
+            def: IndexDef::new("H", vec!["u".into()]).expect("index"),
+        },
+    ];
+    let catalogue = acetone_cypher::exec::catalogue_from_schema(entries);
+    let q = "MATCH (n:H) WHERE n.b = 0 AND n.u > 49990 RETURN n";
+    let parsed = parse(q).expect("parse");
+    let bound = bind::bind(q, &parsed, &catalogue, bind::BindMode::Strict).expect("bind");
+    let acetone_cypher::bind::bound::BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
+        panic!("expected a MATCH")
+    };
+    let hints = &patterns[0].start.index_hints;
+    assert_eq!(
+        hints.len(),
+        2,
+        "both the equality and the range must be offered: {hints:?}"
+    );
+    assert!(
+        matches!(hints[0], IndexHint::IndexSeek { .. }),
+        "equality is tried first"
+    );
+    assert!(
+        matches!(hints[1], IndexHint::IndexRange { .. }),
+        "the range remains available when the equality declines"
+    );
+}
+
+/// PR #224 review finding 6: nothing in the suite exercised the cap
+/// boundary itself. A result of `cap` or fewer entries must be a COMPLETE
+/// walk — serving a truncated set would be silent under-selection — and
+/// `cap + 1` must decline. Pinned on both paths at the exact edges.
+#[test]
+fn the_cap_boundary_is_exact() {
+    use acetone_cypher::exec::store_source::candidate_cap;
+
+    // Build a graph whose bucket sizes straddle the cap for its own size.
+    let (_dir, repo) = repo();
+    let rows = 4_000i64;
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "B".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "b_v".into(),
+            def: IndexDef::new("B", vec!["v".into()]).expect("index"),
+        })
+        .expect("index");
+        for i in 0..rows {
+            // v = 0 for a big bucket; v = 1 for a single row.
+            let v = if i == 0 { 1 } else { 0 };
+            txn.put_node(
+                &NodeKey::new("B", vec![MV::Int(i)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), MV::Int(v))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let estimate = snapshot.estimate_nodes().expect("estimate");
+    let cap = candidate_cap(estimate);
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // The big bucket is (rows - 1); assert the fixture actually straddles
+    // the cap, so this test cannot silently stop testing the boundary.
+    assert!(
+        (rows as usize - 1) > cap,
+        "fixture must exceed the cap ({} rows vs cap {cap}, estimate {estimate})",
+        rows - 1
+    );
+    assert!(
+        source
+            .nodes_by_index("b_v", &["v".to_owned()], &[&RtValue::Int(0)])
+            .is_none(),
+        "a bucket past the cap declines"
+    );
+    // Under the cap: served, and COMPLETE — a truncated serve would be a
+    // wrong answer, so compare against the scan's own count.
+    let served = source
+        .nodes_by_index("b_v", &["v".to_owned()], &[&RtValue::Int(1)])
+        .expect("a one-row bucket is served");
+    let truth = source
+        .all_nodes()
+        .iter()
+        .filter(|n| matches!(n.properties.get("v"), Some(RtValue::Int(1))))
+        .count();
+    assert_eq!(served.len(), truth, "a served set must be complete");
 }

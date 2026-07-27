@@ -16,6 +16,23 @@ fine.)
 
 ## [Unreleased]
 
+### Changed
+
+- **Indexes are now chosen by estimated cost** (ADR-0065). A seek does one
+  random point read per matching row where a scan reads sequentially, so a
+  seek only wins while selective. Both the equality/composite and range
+  paths now estimate what the scan would cost, spend a fixed fraction of it,
+  and otherwise decline to the scan. Declaring an index no longer makes a
+  query slower — measured at parity where it was 53x slower — while
+  selective queries still gain.
+- **`WHERE` equality predicates use indexes.** `MATCH (n:L) WHERE n.p = 1`
+  previously scanned; only the inline form `MATCH (n:L {p: 1})` used an
+  index. Seek hints now carry their own pinned values, so both forms plan
+  the same way.
+- Seek hints are an ordered candidate list rather than a single choice, so a
+  hint the cost model declines at runtime falls through to the next instead
+  of discarding a usable plan.
+
 ## [0.3.1] - 2026-07-24
 
 A **quality, security, and documentation** release. No new headline capability

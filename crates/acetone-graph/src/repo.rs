@@ -2773,22 +2773,24 @@ impl<'s> Snapshot<'s> {
         Ok(out)
     }
 
+    /// Estimated number of nodes, for planning only (acetone-2ck.2).
+    ///
+    /// This is what a label scan would cost, and therefore what a seek is
+    /// competing against. Sampled from the nodes map in `height` chunk
+    /// reads rather than counted, since an exact count is a full walk and
+    /// a stored count would be a format change. Never a correctness
+    /// input: a wrong estimate can only pick a slower plan.
+    pub fn estimate_nodes(&self) -> Option<usize> {
+        let root = self.root(&self.manifest.nodes).ok()?;
+        acetone_prolly::estimate_entries(self.store, &root).ok()
+    }
+
     /// Scan an index map over an explicit byte range, returning the node
     /// keys of every entry whose key falls inside it (acetone-2ck.14).
     /// The caller builds the bounds in index-key space; this is the range
-    /// counterpart of [`Self::index_scan`]'s prefix form.
-    /// The prolly height of a declared index's map, the only cardinality
-    /// signal available without a format change: interior nodes carry
-    /// `(last_key, child_hash)` and no subtree counts, so an exact count
-    /// would cost a full walk. Height grows with entry count, which is
-    /// what makes it usable as a tier selector (acetone-2ck.2).
-    pub fn index_height(&self, name: &str) -> Option<u32> {
-        self.manifest.indexes.get(name).map(|root| root.height)
-    }
-
-    /// Stops as soon as `cap + 1` entries have been collected, so a caller
-    /// that means to decline an unselective range pays for the walk it
-    /// needs and no more.
+    /// counterpart of [`Self::index_scan`]'s prefix form. Stops as soon as
+    /// `cap + 1` entries have been collected, so a caller that means to
+    /// decline an unselective range pays for the walk it needs and no more.
     pub fn index_range(
         &self,
         name: &str,
@@ -2844,10 +2846,20 @@ impl<'s> Snapshot<'s> {
     /// order) the caller still filters, so being over-broad is safe; the scan
     /// stops at the first key past the prefix (index order guarantees no later
     /// key matches). This is the store-backed `IndexSeek` primitive (ADR-0040).
-    /// Stops as soon as `cap + 1` entries have been collected, so a caller
-    /// that means to decline an unselective probe pays for the index walk
-    /// it needs and no point reads at all (acetone-2ck.2).
     pub fn index_scan(
+        &self,
+        name: &str,
+        prefix: &[u8],
+    ) -> Result<Option<Vec<NodeKey>>, GraphError> {
+        self.index_scan_capped(name, prefix, usize::MAX)
+    }
+
+    /// [`Self::index_scan`], stopping as soon as `cap + 1` entries have
+    /// been collected — so a caller that means to decline an unselective
+    /// probe pays for the index walk it needs and no point reads at all
+    /// (acetone-2ck.2). A result of `cap` or fewer entries is therefore a
+    /// COMPLETE walk; more means the caller should decline.
+    pub fn index_scan_capped(
         &self,
         name: &str,
         prefix: &[u8],

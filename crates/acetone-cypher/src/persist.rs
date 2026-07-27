@@ -481,7 +481,7 @@ impl<'a> UniqueChecker<'a> {
         // query optimisation. A capped walk could miss a colliding entry
         // and admit a duplicate, so uniqueness must see every match
         // however many there are (acetone-2ck.2).
-        match self.base.index_scan(name, &prefix, usize::MAX)? {
+        match self.base.index_scan(name, &prefix)? {
             // Declared but missing index map: fall back to the scan.
             None => Ok(None),
             Some(keys) => Ok(Some(keys)),

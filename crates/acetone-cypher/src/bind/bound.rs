@@ -206,7 +206,10 @@ pub struct BoundNodePattern {
     /// Planner hint: an equality the primary key map can seek on
     /// (`label` key-prefix property equated to a literal/parameter in the
     /// pattern's property map), or a declared secondary index.
-    pub index_hint: Option<IndexHint>,
+    /// Ordered seek candidates. The executor tries each in turn and falls
+    /// through when one declines, so a hint the cost model rejects at
+    /// runtime does not discard a usable alternative (acetone-2ck.2).
+    pub index_hints: Vec<IndexHint>,
     pub span: Span,
 }
 

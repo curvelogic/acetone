@@ -872,7 +872,7 @@ impl<'a> Binder<'a> {
             var,
             labels: node.labels.clone(),
             properties,
-            index_hint,
+            index_hints: index_hint.into_iter().collect(),
             span: node.span,
         })
     }
@@ -1432,9 +1432,6 @@ fn attach_equality_hints(
     }
     for pattern in patterns {
         let start = &mut pattern.start;
-        if start.index_hint.is_some() {
-            continue;
-        }
         let Some(var) = start.var else { continue };
         let [label] = start.labels.as_slice() else {
             continue;
@@ -1455,7 +1452,7 @@ fn attach_equality_hints(
             if !key.is_empty() && key.iter().all(|k| pinned.iter().any(|p| p == k)) {
                 let values: Option<Vec<RangeBound>> = key.iter().map(|k| value_of(k)).collect();
                 if let Some(values) = values {
-                    start.index_hint = Some(IndexHint::KeySeek {
+                    start.index_hints.push(IndexHint::KeySeek {
                         label: label.clone(),
                         key: key.to_vec(),
                         values: Some(values),
@@ -1468,7 +1465,7 @@ fn attach_equality_hints(
             let properties = def.properties().to_vec();
             let values: Option<Vec<RangeBound>> = properties.iter().map(|p| value_of(p)).collect();
             if let Some(values) = values {
-                start.index_hint = Some(IndexHint::IndexSeek {
+                start.index_hints.push(IndexHint::IndexSeek {
                     name: name.to_string(),
                     label: label.clone(),
                     properties,
@@ -1519,6 +1516,10 @@ fn collect_equality_pins(
     }
 }
 
+/// Attach an `IndexRange` candidate from a `WHERE` clause's range
+/// predicates on the anchor variable. Appends rather than replaces: hints
+/// are ordered candidates, so a declining equality falls through to this
+/// (ADR-0065).
 fn attach_range_hints(
     patterns: &mut [crate::bind::bound::BoundPathPattern],
     pred: &BoundExpr,
@@ -1532,9 +1533,6 @@ fn attach_range_hints(
     }
     for pattern in patterns {
         let start = &mut pattern.start;
-        if start.index_hint.is_some() {
-            continue;
-        }
         let Some(var) = start.var else { continue };
         let [label] = start.labels.as_slice() else {
             continue;
@@ -1544,7 +1542,7 @@ fn attach_range_hints(
                 continue;
             }
             if let Some((name, _)) = catalogue.index_on(label.as_str(), property) {
-                start.index_hint = Some(IndexHint::IndexRange {
+                start.index_hints.push(IndexHint::IndexRange {
                     name: name.to_string(),
                     label: label.to_string(),
                     property: property.clone(),

@@ -199,28 +199,26 @@ impl<'s> StoreBackedSource<'s> {
 ///
 /// A seek does one **random** point read per matching row; the scan it
 /// replaces reads the nodes map **sequentially**. Random reads measured
-/// ~50x costlier than sequential on loose objects (~12x packed), so a seek
-/// wins only while it is selective — break-even is roughly 2% of the
-/// label's rows loose, 8% packed. Firing regardless is what made a declared
-/// index make queries *slower*: 3.7x at 2.9% selectivity, 18x at 20%.
+/// ~50x costlier than sequential on loose objects, so a seek wins only
+/// while it is selective — break-even is roughly 2% of the rows a scan
+/// would visit. Firing regardless is what made a declared index make
+/// queries *slower*: 3.7x at 2.9% selectivity, 18x at 20%, and up to 53x
+/// on a small label.
 ///
-/// The threshold therefore wants label cardinality, which is not cheaply
-/// available: `MapRoot` carries only `(hash, height)`, prolly interior
-/// nodes carry no subtree counts, and counting per query is an O(N) walk
-/// paid on every query. The index map's **height** is free in the manifest
-/// and grows with entry count, so it selects a tier. Measured anchors:
-/// height 3 at ~50k rows with break-even ~1,000; height 4 at ~400k with
-/// break-even ~7,000 — about 8x per level, which is what this reproduces.
+/// The threshold is therefore a **fraction of the scan's own cost**, not a
+/// constant. An earlier version tiered on the index's prolly height, which
+/// fails structurally: height changes once per fanout (~10x in entries), so
+/// one tier spans a 10x range of cardinalities — calibrate to the top and
+/// small labels still lose, calibrate to the bottom and large ones are
+/// needlessly declined. `estimate_nodes` samples the actual cardinality in
+/// `height` chunk reads instead.
 ///
-/// Calibrated to the LOOSE configuration, which is both the worse case and
-/// the state of a freshly imported repository before anyone runs `gc`.
-/// Erring low costs a bounded amount — the scan you would have had anyway;
-/// erring high costs unboundedly.
-pub fn candidate_cap(index_height: u32) -> usize {
-    const BASE: usize = 1024;
-    const MAX: usize = 1 << 20;
-    let steps = index_height.saturating_sub(3).min(7);
-    BASE.checked_shl(3 * steps).unwrap_or(MAX).min(MAX)
+/// The floor keeps point-lookup-shaped queries working on tiny graphs,
+/// where a scan is cheap anyway so a wrong choice costs little.
+pub fn candidate_cap(estimated_rows: usize) -> usize {
+    const BREAK_EVEN_PERCENT: usize = 2;
+    const FLOOR: usize = 32;
+    (estimated_rows * BREAK_EVEN_PERCENT / 100).max(FLOOR)
 }
 
 impl GraphSource for StoreBackedSource<'_> {
@@ -368,11 +366,15 @@ impl GraphSource for StoreBackedSource<'_> {
         }
         // The equality/composite path had no budget at all: it fired
         // however unselective the probe was, which is what made declaring
-        // an index able to make a query slower (acetone-2ck.2, Greg's P1).
-        let max_candidates = candidate_cap(self.snapshot.index_height(index_name)?);
+        // an index able to make a query slower (acetone-2ck.2).
+        let max_candidates = candidate_cap(self.snapshot.estimate_nodes()?);
 
+        // Collect every probe's keys FIRST and decide on the total: an
+        // earlier version tested per probe, so a composite whose rows split
+        // across probes paid the point reads for the first probe before
+        // declining on the second (PR #224 review finding 5).
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-        let mut out = Vec::new();
+        let mut candidates: Vec<NodeKey> = Vec::new();
         for tuple in tuples {
             let prefix = match index_value_prefix(&info.label, properties, &tuple) {
                 Ok(prefix) => prefix,
@@ -381,7 +383,10 @@ impl GraphSource for StoreBackedSource<'_> {
                 Err(_) => continue,
             };
             let remaining = max_candidates.saturating_sub(seen.len());
-            match self.snapshot.index_scan(index_name, &prefix, remaining) {
+            match self
+                .snapshot
+                .index_scan_capped(index_name, &prefix, remaining)
+            {
                 // Index map absent though the schema declares it: fall back.
                 Ok(None) => return None,
                 Ok(Some(keys)) => {
@@ -392,14 +397,20 @@ impl GraphSource for StoreBackedSource<'_> {
                     }
                     for key in keys {
                         let Ok(encoded) = key.encode() else { continue };
-                        if seen.insert(encoded)
-                            && let Some(node) = self.node_from_key(&key)
-                        {
-                            out.push(node);
+                        if seen.insert(encoded) {
+                            candidates.push(key);
                         }
                     }
                 }
                 Err(e) => return self.fail(e, None),
+            }
+        }
+        // Only now, with the whole candidate set known to be under budget,
+        // pay for the point reads.
+        let mut out = Vec::with_capacity(candidates.len());
+        for key in &candidates {
+            if let Some(node) = self.node_from_key(key) {
+                out.push(node);
             }
         }
         Some(out)
@@ -472,12 +483,11 @@ impl GraphSource for StoreBackedSource<'_> {
         // removes the cliff: `None` is the trait's "cannot serve, scan
         // instead", and the scan is always correct.
         //
-        // Sized from the index's height (acetone-2ck.2), so a large graph
-        // is not held to a small graph's budget.
-        let max_candidates = candidate_cap(self.snapshot.index_height(index_name)?);
+        // Sized from the estimated scan cost (acetone-2ck.2).
+        let max_candidates = candidate_cap(self.snapshot.estimate_nodes()?);
 
         let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-        let mut out = Vec::new();
+        let mut candidates: Vec<NodeKey> = Vec::new();
         for (start, end) in families {
             let lifted = |bytes: &[u8]| {
                 let mut k = head.clone();
@@ -540,14 +550,19 @@ impl GraphSource for StoreBackedSource<'_> {
                     }
                     for key in keys {
                         let Ok(encoded) = key.encode() else { continue };
-                        if seen.insert(encoded)
-                            && let Some(node) = self.node_from_key(&key)
-                        {
-                            out.push(node);
+                        if seen.insert(encoded) {
+                            candidates.push(key);
                         }
                     }
                 }
                 Err(e) => return self.fail(e, None),
+            }
+        }
+        // Point reads only once the whole set is known to be under budget.
+        let mut out = Vec::with_capacity(candidates.len());
+        for key in &candidates {
+            if let Some(node) = self.node_from_key(key) {
+                out.push(node);
             }
         }
         Some(out)

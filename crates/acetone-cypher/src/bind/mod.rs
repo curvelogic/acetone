@@ -347,7 +347,7 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            patterns[0].start.index_hint,
+            patterns[0].start.index_hints.first().cloned(),
             Some(IndexHint::KeySeek {
                 label: "Host".into(),
                 key: vec!["hostname".into()],
@@ -360,7 +360,7 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            patterns[0].start.index_hint,
+            patterns[0].start.index_hints.first().cloned(),
             Some(IndexHint::IndexSeek {
                 name: "host_os".into(),
                 label: "Host".into(),
@@ -374,7 +374,7 @@ mod tests {
         let BoundClause::Match { patterns, .. } = &bound.clauses[1] else {
             panic!()
         };
-        assert_eq!(patterns[0].start.index_hint, None);
+        assert!(patterns[0].start.index_hints.is_empty());
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            patterns[0].start.index_hint,
+            patterns[0].start.index_hints.first().cloned(),
             Some(IndexHint::IndexRange {
                 name: "host_os".into(),
                 label: "Host".into(),
@@ -408,7 +408,7 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            patterns[0].start.index_hint,
+            patterns[0].start.index_hints.first().cloned(),
             Some(IndexHint::IndexRange {
                 name: "host_os".into(),
                 label: "Host".into(),
@@ -422,12 +422,12 @@ mod tests {
         let BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
             panic!()
         };
-        assert_eq!(patterns[0].start.index_hint, None);
+        assert!(patterns[0].start.index_hints.is_empty());
         let bound = bind_strict("MATCH (h:Host) WHERE h.os > 'a' OR h.os < 'x' RETURN h").unwrap();
         let BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
             panic!()
         };
-        assert_eq!(patterns[0].start.index_hint, None);
+        assert!(patterns[0].start.index_hints.is_empty());
     }
 
     #[test]
