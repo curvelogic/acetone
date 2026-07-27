@@ -789,3 +789,408 @@ fn index_range_over_a_mixed_type_column_never_under_selects() {
         "a string bound must decline"
     );
 }
+
+/// acetone-2ck.2: the seek must decline when it would lose to a scan.
+/// A seek does one random point read per row where the scan reads
+/// sequentially, so firing on an unselective probe made a declared index
+/// make queries *slower* — 3.7× at the lab's own composite ratio, 18× at
+/// 20% selectivity. Both seek paths now size a budget from the index's
+/// height and hand unselective probes back to the scan.
+#[test]
+fn unselective_seeks_decline_on_both_paths() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "W".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "w_b".into(),
+            def: IndexDef::new("W", vec!["b".into()]).expect("index"),
+        })
+        .expect("index");
+        // 4000 rows in one bucket (unselective) and one row in another
+        // (selective), so a single fixture exercises both directions.
+        for i in 0..4000i64 {
+            txn.put_node(
+                &NodeKey::new("W", vec![MV::Int(i)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("b".to_owned(), MV::Int(0))])),
+            )
+            .expect("node");
+        }
+        txn.put_node(
+            &NodeKey::new("W", vec![MV::Int(9999)]).expect("key"),
+            &NodeRecord::new([], BTreeMap::from([("b".to_owned(), MV::Int(7))])),
+        )
+        .expect("node");
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // Equality: the 4000-row bucket exceeds the budget for this index's
+    // height, so the seek declines rather than paying 4000 point reads.
+    assert!(
+        source
+            .nodes_by_index("w_b", &["b".to_owned()], &[&RtValue::Int(0)])
+            .is_none(),
+        "an unselective equality probe must decline, not fire and lose"
+    );
+    // The selective bucket is still served.
+    let served = source
+        .nodes_by_index("w_b", &["b".to_owned()], &[&RtValue::Int(7)])
+        .expect("a selective probe is served");
+    assert_eq!(served.len(), 1);
+    // An absent value is served too — proving absence is the cheapest
+    // thing a seek does, and the one lab row that survives the store.
+    assert_eq!(
+        source
+            .nodes_by_index("w_b", &["b".to_owned()], &[&RtValue::Int(4242)])
+            .expect("an absent probe is served")
+            .len(),
+        0
+    );
+
+    // Range: the same budget governs, so a range covering everything
+    // declines while a narrow one serves.
+    assert!(
+        source
+            .nodes_by_index_range("w_b", "b", None, Some((&RtValue::Int(100), false)))
+            .is_none(),
+        "an unselective range must decline"
+    );
+    assert_eq!(
+        source
+            .nodes_by_index_range(
+                "w_b",
+                "b",
+                Some((&RtValue::Int(6), false)),
+                Some((&RtValue::Int(8), false))
+            )
+            .expect("a selective range is served")
+            .len(),
+        1
+    );
+}
+
+/// An over-budget probe declines outright on both paths, including on a
+/// shape where the two numeric family probes overlap.
+///
+/// This guards a hazard rather than a demonstrated bug. Probes are
+/// de-duplicated across numeric families and composite tuples, so a walk
+/// that stopped early can in principle yield FEWER distinct keys than the
+/// cap; were "over budget" inferred from `len > cap`, the caller would read
+/// that as a complete walk and return the short set — under-selection, a
+/// wrong answer rather than a slow one. `Candidates::OverBudget` makes the
+/// two states distinct so the inference cannot be made. No query was found
+/// that reaches the bad case today (the first family trips the budget
+/// first), so this test pins the declining behaviour, not the near miss.
+#[test]
+fn a_truncated_walk_is_never_mistaken_for_a_complete_one() {
+    let (_dir, repo) = repo();
+    let rows = 4_000i64;
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "D".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "d_v".into(),
+            def: IndexDef::new("D", vec!["v".into()]).expect("index"),
+        })
+        .expect("index");
+        for i in 0..rows {
+            txn.put_node(
+                &NodeKey::new("D", vec![MV::Int(i)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), MV::Float(1.0))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // An unselective range over a column whose int and float probes both
+    // reach every row: decline outright, never a partial answer.
+    let got = source.nodes_by_index_range(
+        "d_v",
+        "v",
+        Some((&RtValue::Int(0), true)),
+        Some((&RtValue::Int(2), true)),
+    );
+    assert!(
+        got.is_none(),
+        "an over-budget range must decline, not return {} of {rows} rows",
+        got.map_or(0, |g| g.len())
+    );
+
+    // And the equality path, whose int/float probes are separate tuples.
+    let got = source.nodes_by_index("d_v", &["v".to_owned()], &[&RtValue::Int(1)]);
+    assert!(
+        got.is_none(),
+        "an over-budget equality must decline, not return {} of {rows} rows",
+        got.map_or(0, |g| g.len())
+    );
+}
+
+/// The budget is a fraction of what a scan would cost, sampled from the
+/// nodes map rather than tiered on the index's height — height changes
+/// once per fanout, so one tier spans ~10× in cardinality and cannot be
+/// calibrated to both ends (PR #224 review blocker 1).
+#[test]
+fn candidate_budget_tracks_estimated_scan_cost() {
+    use acetone_cypher::exec::store_source::candidate_cap;
+
+    // 0.5% of the rows a scan would visit. Measured break-even is 0.28-0.61%
+    // on the raw primitives and nearer 1% end to end (2% ran 1.9x SLOWER on
+    // a small-record shape — PR #224 review finding 4), and the cardinality
+    // estimate feeding this is itself accurate only to ~1.4x in the
+    // dangerous direction. Half of break-even absorbs that.
+    assert_eq!(candidate_cap(1_000_000), 5_000);
+    assert_eq!(candidate_cap(50_000), 250, "the measured ~50k anchor");
+    assert_eq!(candidate_cap(10_000), 50);
+
+    // A floor, so point-lookup shapes still work on tiny graphs — where a
+    // scan is cheap anyway, so a wrong choice costs little.
+    assert_eq!(
+        candidate_cap(1_100),
+        32,
+        "small labels get the floor, not 1024"
+    );
+    assert_eq!(candidate_cap(0), 32);
+
+    assert!(
+        candidate_cap(200_000) > candidate_cap(50_000),
+        "monotone in the scan cost it is competing with"
+    );
+
+    // A saturated estimate must not panic. `estimate_entries` multiplies
+    // mean fanouts as an `f64` and casts with `as usize`, which saturates,
+    // so a pathological tree can present usize::MAX here — and this runs in
+    // debug in every test and CI build (PR #224 review finding 1).
+    assert_eq!(candidate_cap(usize::MAX), usize::MAX / 200);
+}
+
+/// acetone-7qw.9: an index must be usable from the form people actually
+/// write. Before this, `MATCH (n:H {b: 3})` used the index while
+/// `MATCH (n:H) WHERE n.b = 3` scanned — ranges in WHERE attached hints,
+/// equality did not, so the hint had no values to seek with.
+#[test]
+fn where_equality_uses_the_index() {
+    use acetone_cypher::bind::bound::IndexHint;
+    use acetone_cypher::{bind, parse};
+
+    let catalogue = {
+        let entries = vec![
+            SchemaEntry::Label {
+                name: "H".into(),
+                def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+            },
+            SchemaEntry::Index {
+                name: "h_b".into(),
+                def: IndexDef::new("H", vec!["b".into()]).expect("index"),
+            },
+        ];
+        acetone_cypher::exec::catalogue_from_schema(entries)
+    };
+    let hint_for = |q: &str| {
+        let parsed = parse(q).expect("parse");
+        let bound = bind::bind(q, &parsed, &catalogue, bind::BindMode::Strict).expect("bind");
+        for clause in &bound.clauses {
+            if let acetone_cypher::bind::bound::BoundClause::Match { patterns, .. } = clause {
+                return patterns[0].start.index_hints.first().cloned();
+            }
+        }
+        None
+    };
+
+    // The WHERE form now attaches an IndexSeek carrying its own value.
+    match hint_for("MATCH (n:H) WHERE n.b = 3 RETURN n") {
+        Some(IndexHint::IndexSeek { name, values, .. }) => {
+            assert_eq!(name, "h_b");
+            assert!(values.is_some(), "the hint must carry the WHERE's value");
+        }
+        other => panic!("expected an IndexSeek from WHERE, got {other:?}"),
+    }
+    // Reversed operand order too.
+    assert!(matches!(
+        hint_for("MATCH (n:H) WHERE 3 = n.b RETURN n"),
+        Some(IndexHint::IndexSeek { .. })
+    ));
+    // A key pin in WHERE becomes a KeySeek, as it does inline.
+    match hint_for("MATCH (n:H) WHERE n.id = 7 RETURN n") {
+        Some(IndexHint::KeySeek { key, values, .. }) => {
+            assert_eq!(key, vec!["id".to_string()]);
+            assert!(values.is_some());
+        }
+        other => panic!("expected a KeySeek from WHERE, got {other:?}"),
+    }
+    // The inline form is unchanged and still reads from the pattern map.
+    match hint_for("MATCH (n:H {b: 3}) RETURN n") {
+        Some(IndexHint::IndexSeek { values, .. }) => {
+            assert!(values.is_none(), "inline pins still read the pattern map")
+        }
+        other => panic!("expected an inline IndexSeek, got {other:?}"),
+    }
+    // A non-constant comparison pins nothing.
+    assert!(hint_for("MATCH (n:H) WHERE n.b = n.id RETURN n").is_none());
+    // OR is not a pin.
+    assert!(hint_for("MATCH (n:H) WHERE n.b = 3 OR n.b = 4 RETURN n").is_none());
+}
+
+/// PR #224 review blocker 2: hints are ordered CANDIDATES. An equality
+/// hint that declines at runtime must fall through to a range hint that
+/// would serve — before this, the binder attached only one hint, so a
+/// declining equality discarded a far more selective range and the query
+/// ran 80–91× slower than with no hint at all.
+#[test]
+fn a_declining_hint_falls_through_to_the_next() {
+    use acetone_cypher::bind::bound::IndexHint;
+    use acetone_cypher::{bind, parse};
+
+    let entries = vec![
+        SchemaEntry::Label {
+            name: "H".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        },
+        SchemaEntry::Index {
+            name: "h_b".into(),
+            def: IndexDef::new("H", vec!["b".into()]).expect("index"),
+        },
+        SchemaEntry::Index {
+            name: "h_u".into(),
+            def: IndexDef::new("H", vec!["u".into()]).expect("index"),
+        },
+    ];
+    let catalogue = acetone_cypher::exec::catalogue_from_schema(entries);
+    let q = "MATCH (n:H) WHERE n.b = 0 AND n.u > 49990 RETURN n";
+    let parsed = parse(q).expect("parse");
+    let bound = bind::bind(q, &parsed, &catalogue, bind::BindMode::Strict).expect("bind");
+    let acetone_cypher::bind::bound::BoundClause::Match { patterns, .. } = &bound.clauses[0] else {
+        panic!("expected a MATCH")
+    };
+    let hints = &patterns[0].start.index_hints;
+    assert_eq!(
+        hints.len(),
+        2,
+        "both the equality and the range must be offered: {hints:?}"
+    );
+    assert!(
+        matches!(hints[0], IndexHint::IndexSeek { .. }),
+        "equality is tried first"
+    );
+    assert!(
+        matches!(hints[1], IndexHint::IndexRange { .. }),
+        "the range remains available when the equality declines"
+    );
+}
+
+/// PR #224 review finding 6: nothing in the suite exercised the cap
+/// boundary itself. A result of `cap` or fewer entries must be a COMPLETE
+/// walk — serving a truncated set would be silent under-selection — and
+/// `cap + 1` must decline. Pinned on both paths at the exact edges.
+#[test]
+fn the_cap_boundary_is_exact() {
+    use acetone_cypher::exec::store_source::candidate_cap;
+
+    // Build a graph whose bucket sizes straddle the cap for its own size.
+    let (_dir, repo) = repo();
+    let rows = 4_000i64;
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "B".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "b_v".into(),
+            def: IndexDef::new("B", vec!["v".into()]).expect("index"),
+        })
+        .expect("index");
+        for i in 0..rows {
+            // v = 0 for a big bucket; v = 1 for a single row.
+            let v = if i == 0 { 1 } else { 0 };
+            txn.put_node(
+                &NodeKey::new("B", vec![MV::Int(i)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), MV::Int(v))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let estimate = snapshot.estimate_nodes().expect("estimate");
+    let cap = candidate_cap(estimate);
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // The big bucket is (rows - 1); assert the fixture actually straddles
+    // the cap, so this test cannot silently stop testing the boundary.
+    assert!(
+        (rows as usize - 1) > cap,
+        "fixture must exceed the cap ({} rows vs cap {cap}, estimate {estimate})",
+        rows - 1
+    );
+
+    // The primitive's contract AT the boundary, since the end-to-end
+    // assertions below straddle it by thousands and would not catch an
+    // off-by-one (PR #224 review finding 5). `index_scan_capped` stops at
+    // cap + 1, so "cap or fewer" must mean a COMPLETE walk — that is the
+    // property the decline logic rests on.
+    let bucket = (rows - 1) as usize;
+    let prefix =
+        acetone_model::graph_keys::index_value_prefix("B", &["v".to_owned()], &[MV::Int(0)])
+            .expect("prefix");
+    for (cap_under_test, expected) in [
+        (bucket - 2, bucket - 1), // truncated at cap + 1
+        (bucket - 1, bucket),     // the last cap that still signals decline
+        (bucket, bucket),         // exactly the bucket: complete
+        (usize::MAX, bucket),     // uncapped: complete
+    ] {
+        let got = snapshot
+            .index_scan_capped("b_v", &prefix, cap_under_test)
+            .expect("scan")
+            .expect("index exists");
+        assert_eq!(
+            got.len(),
+            expected,
+            "cap {cap_under_test} over a {bucket}-entry bucket"
+        );
+        // The contract the decline logic rests on, as an implication: a
+        // result within the cap is a COMPLETE walk. (The converse does not
+        // hold — a complete walk of exactly cap + 1 entries reports as
+        // over-budget, which is conservative and therefore safe.)
+        if got.len() <= cap_under_test {
+            assert_eq!(
+                got.len(),
+                bucket,
+                "'cap or fewer' must mean a complete walk, at cap {cap_under_test}"
+            );
+        }
+    }
+    assert!(
+        source
+            .nodes_by_index("b_v", &["v".to_owned()], &[&RtValue::Int(0)])
+            .is_none(),
+        "a bucket past the cap declines"
+    );
+    // Under the cap: served, and COMPLETE — a truncated serve would be a
+    // wrong answer, so compare against the scan's own count.
+    let served = source
+        .nodes_by_index("b_v", &["v".to_owned()], &[&RtValue::Int(1)])
+        .expect("a one-row bucket is served");
+    let truth = source
+        .all_nodes()
+        .iter()
+        .filter(|n| matches!(n.properties.get("v"), Some(RtValue::Int(1))))
+        .count();
+    assert_eq!(served.len(), truth, "a served set must be complete");
+}

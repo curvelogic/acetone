@@ -1198,51 +1198,119 @@ fn seek_anchor(
     row: &Row,
     ctx: &EvalCtx,
 ) -> Result<Option<Vec<NodeValue>>, ExecError> {
-    match &pattern.index_hint {
-        Some(IndexHint::KeySeek { label, key }) if !key.is_empty() => {
-            let Some(props) = &pattern.properties else {
-                return Ok(None);
-            };
-            let Value::Map(map) = eval(props, row, ctx)? else {
-                return Ok(None);
-            };
+    // Hints are ordered candidates, not a single choice: a hint that
+    // DECLINES at runtime (the cost model judged it unselective) falls
+    // through to the next rather than losing the plan entirely. Before
+    // this, an equality hint that declined discarded a far more selective
+    // range that the binder had skipped attaching — measured 80-91x worse
+    // than no hint at all (PR #224 review blocker 2).
+    for hint in &pattern.index_hints {
+        if let Some(nodes) = seek_with(hint, pattern, row, ctx)? {
+            return Ok(Some(nodes));
+        }
+    }
+    Ok(None)
+}
+
+fn seek_with(
+    hint: &IndexHint,
+    pattern: &BoundNodePattern,
+    row: &Row,
+    ctx: &EvalCtx,
+) -> Result<Option<Vec<NodeValue>>, ExecError> {
+    match hint {
+        IndexHint::KeySeek {
+            label,
+            key,
+            values: pinned,
+        } if !key.is_empty() => {
             let mut key_values = Vec::with_capacity(key.len());
-            for name in key {
-                match map.get(name) {
-                    Some(value) => key_values.push(value.clone()),
-                    // Partial key pin: no point lookup, scan instead.
-                    None => return Ok(None),
+            match pinned {
+                // WHERE-sourced pins carry their own values
+                // (acetone-7qw.9).
+                Some(bounds) => {
+                    for bound in bounds {
+                        match bound {
+                            RangeBound::Literal(l) => key_values.push(literal_value(l)),
+                            RangeBound::Parameter(p) => match ctx.parameters.get(p) {
+                                Some(v) => key_values.push(v.clone()),
+                                None => return Ok(None),
+                            },
+                        }
+                    }
+                }
+                None => {
+                    let Some(props) = &pattern.properties else {
+                        return Ok(None);
+                    };
+                    let Value::Map(map) = eval(props, row, ctx)? else {
+                        return Ok(None);
+                    };
+                    for name in key {
+                        match map.get(name) {
+                            Some(value) => key_values.push(value.clone()),
+                            // Partial key pin: no point lookup, scan instead.
+                            None => return Ok(None),
+                        }
+                    }
                 }
             }
             Ok(ctx.graph.nodes_by_key(label, &key_values))
         }
-        Some(IndexHint::KeySeek { .. }) => Ok(None),
-        Some(IndexHint::IndexSeek {
-            name, properties, ..
-        }) => {
-            let Some(props) = &pattern.properties else {
-                return Ok(None);
-            };
-            let Value::Map(map) = eval(props, row, ctx)? else {
-                return Ok(None);
-            };
-            let mut values = Vec::with_capacity(properties.len());
-            for property in properties {
-                match map.get(property) {
-                    Some(value) => values.push(value),
-                    // A composite index needs every component pinned.
-                    None => return Ok(None),
+        IndexHint::KeySeek { .. } => Ok(None),
+        IndexHint::IndexSeek {
+            name,
+            properties,
+            values: pinned,
+            ..
+        } => {
+            // WHERE-sourced pins carry their own values (acetone-7qw.9);
+            // pattern-sourced ones read them from the inline map.
+            let resolved: Vec<Value>;
+            let values: Vec<&Value> = match pinned {
+                Some(bounds) => {
+                    let mut out = Vec::with_capacity(bounds.len());
+                    for bound in bounds {
+                        match bound {
+                            RangeBound::Literal(l) => out.push(literal_value(l)),
+                            // A missing parameter falls back to a scan; the
+                            // WHERE evaluation raises the proper error.
+                            RangeBound::Parameter(p) => match ctx.parameters.get(p) {
+                                Some(v) => out.push(v.clone()),
+                                None => return Ok(None),
+                            },
+                        }
+                    }
+                    resolved = out;
+                    resolved.iter().collect()
                 }
-            }
+                None => {
+                    let Some(props) = &pattern.properties else {
+                        return Ok(None);
+                    };
+                    let Value::Map(map) = eval(props, row, ctx)? else {
+                        return Ok(None);
+                    };
+                    let mut values = Vec::with_capacity(properties.len());
+                    for property in properties {
+                        match map.get(property) {
+                            Some(value) => values.push(value),
+                            // A composite index needs every component pinned.
+                            None => return Ok(None),
+                        }
+                    }
+                    return Ok(ctx.graph.nodes_by_index(name, properties, &values));
+                }
+            };
             Ok(ctx.graph.nodes_by_index(name, properties, &values))
         }
-        Some(IndexHint::IndexRange {
+        IndexHint::IndexRange {
             name,
             property,
             lower,
             upper,
             ..
-        }) => {
+        } => {
             let resolve = |bound: &Option<(RangeBound, bool)>| -> Option<(Value, bool)> {
                 match bound {
                     None => None,
@@ -1256,20 +1324,15 @@ fn seek_anchor(
                 }
             };
             // A missing parameter falls back to a scan here; the WHERE
-            // evaluation raises the MissingParameter error properly.
+            // evaluation raises the MissingParameter error properly. A bound
+            // that was declared but did not resolve must NOT silently widen
+            // the range — that would over-select, which is safe, but it would
+            // also do the work of a scan while claiming to be a seek.
+            let declared_lower = lower.is_some();
+            let declared_upper = upper.is_some();
             let lower = resolve(lower);
             let upper = resolve(upper);
-            if (lower.is_none()
-                && matches!(
-                    &pattern.index_hint,
-                    Some(IndexHint::IndexRange { lower: Some(_), .. })
-                ))
-                || (upper.is_none()
-                    && matches!(
-                        &pattern.index_hint,
-                        Some(IndexHint::IndexRange { upper: Some(_), .. })
-                    ))
-            {
+            if (lower.is_none() && declared_lower) || (upper.is_none() && declared_upper) {
                 return Ok(None);
             }
             Ok(ctx.graph.nodes_by_index_range(
@@ -1279,7 +1342,6 @@ fn seek_anchor(
                 upper.as_ref().map(|(v, i)| (v, *i)),
             ))
         }
-        None => Ok(None),
     }
 }
 

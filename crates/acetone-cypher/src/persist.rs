@@ -477,6 +477,10 @@ impl<'a> UniqueChecker<'a> {
             // Unencodable value: indexes nothing, collides with nothing.
             return Ok(Some(Vec::new()));
         };
+        // UNCAPPED deliberately: this is constraint enforcement, not a
+        // query optimisation. A capped walk could miss a colliding entry
+        // and admit a duplicate, so uniqueness must see every match
+        // however many there are (acetone-2ck.2).
         match self.base.index_scan(name, &prefix)? {
             // Declared but missing index map: fall back to the scan.
             None => Ok(None),

@@ -2773,13 +2773,24 @@ impl<'s> Snapshot<'s> {
         Ok(out)
     }
 
+    /// Estimated number of nodes, for planning only (acetone-2ck.2).
+    ///
+    /// This is what a label scan would cost, and therefore what a seek is
+    /// competing against. Sampled from the nodes map rather than counted,
+    /// since an exact count is a full walk and a stored count would be a
+    /// format change (`acetone_prolly::estimate_entries`). Never a
+    /// correctness input: a wrong estimate can only pick a slower plan.
+    pub fn estimate_nodes(&self) -> Option<usize> {
+        let root = self.root(&self.manifest.nodes).ok()?;
+        acetone_prolly::estimate_entries(self.store, &root).ok()
+    }
+
     /// Scan an index map over an explicit byte range, returning the node
     /// keys of every entry whose key falls inside it (acetone-2ck.14).
     /// The caller builds the bounds in index-key space; this is the range
-    /// counterpart of [`Self::index_scan`]'s prefix form.
-    /// Stops as soon as `cap + 1` entries have been collected, so a caller
-    /// that means to decline an unselective range pays for the walk it
-    /// needs and no more.
+    /// counterpart of [`Self::index_scan`]'s prefix form. Stops as soon as
+    /// `cap + 1` entries have been collected, so a caller that means to
+    /// decline an unselective range pays for the walk it needs and no more.
     pub fn index_range(
         &self,
         name: &str,
@@ -2840,6 +2851,20 @@ impl<'s> Snapshot<'s> {
         name: &str,
         prefix: &[u8],
     ) -> Result<Option<Vec<NodeKey>>, GraphError> {
+        self.index_scan_capped(name, prefix, usize::MAX)
+    }
+
+    /// [`Self::index_scan`], stopping as soon as `cap + 1` entries have
+    /// been collected — so a caller that means to decline an unselective
+    /// probe pays for the index walk it needs and no point reads at all
+    /// (acetone-2ck.2). A result of `cap` or fewer entries is therefore a
+    /// COMPLETE walk; more means the caller should decline.
+    pub fn index_scan_capped(
+        &self,
+        name: &str,
+        prefix: &[u8],
+        cap: usize,
+    ) -> Result<Option<Vec<NodeKey>>, GraphError> {
         let Some(map_root) = self.manifest.indexes.get(name) else {
             return Ok(None);
         };
@@ -2859,6 +2884,9 @@ impl<'s> Snapshot<'s> {
                     .node()
                     .clone(),
             );
+            if out.len() > cap {
+                break;
+            }
         }
         Ok(Some(out))
     }

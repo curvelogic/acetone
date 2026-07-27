@@ -63,7 +63,7 @@ pub use merge::{Conflict, MergeOutcome, merge};
 pub use scan::{Scan, scan, scan_rev};
 pub use tree::{apply_batch, apply_batch_recording, bulk_load, empty, get};
 pub use verify::{ChunkFault, ChunkFaultKind, verify_reachable};
-pub use walk::{collect_reachable_chunks, reachable_chunks};
+pub use walk::{collect_reachable_chunks, estimate_entries, reachable_chunks};
 
 /// Maximum tree height (levels). Fan-out keeps real trees in single
 /// digits; the bound exists so descents over hostile roots terminate.

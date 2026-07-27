@@ -22,9 +22,9 @@
 //!
 //! **Raw stored keys vs. rendered scan matches.** The stored index keys the
 //! *raw typed* value, but a scan matches a `Bytes`/temporal property by its
-//! *string rendering* (the [`Value::Stored`](crate::exec::value::Value::Stored)
-//! carrier decays to a string under `eq3`). A raw-keyed probe would miss those,
-//! under-selecting. So [`Self::nodes_by_index`] only serves a pin when a raw
+//! *string rendering* (the [`Value::Stored`] carrier decays to a string under
+//! `eq3`). A raw-keyed probe would miss those,
+//! under-selecting. So `nodes_by_index` only serves a pin when a raw
 //! probe cannot miss: numeric and boolean pins always (they never cross-type
 //! match a rendering), a string pin only when the indexed property's declared
 //! type is a non-deferred scalar; otherwise it falls back to a scan (`None`).
@@ -66,6 +66,12 @@ pub struct StoreBackedSource<'s> {
     indexes: HashMap<String, IndexInfo>,
     /// The first store read error hit during a query, surfaced by the caller.
     error: Cell<Option<GraphError>>,
+    /// Memoised nodes-map cardinality estimate. The snapshot is immutable
+    /// for the source's lifetime, so this is sampled once rather than once
+    /// per incoming row — recomputing it charged the estimator's chunk reads
+    /// to every re-anchored seek, +43% on the per-row point-seek path
+    /// (PR #224 review finding 3).
+    node_count: Cell<Option<usize>>,
 }
 
 impl<'s> StoreBackedSource<'s> {
@@ -108,6 +114,7 @@ impl<'s> StoreBackedSource<'s> {
             key_names,
             indexes,
             error: Cell::new(None),
+            node_count: Cell::new(None),
         }
     }
 
@@ -124,6 +131,23 @@ impl<'s> StoreBackedSource<'s> {
         let first = self.error.take().or(Some(error));
         self.error.set(first);
         fallback
+    }
+
+    /// How many candidates a seek over this snapshot may materialise before
+    /// declining, sampling the nodes map at most once per source.
+    ///
+    /// `None` means the nodes map could not be sampled, which the callers
+    /// treat as "cannot serve" — a scan is always a correct answer.
+    fn candidate_budget(&self) -> Option<usize> {
+        let rows = match self.node_count.get() {
+            Some(cached) => cached,
+            None => {
+                let sampled = self.snapshot.estimate_nodes()?;
+                self.node_count.set(Some(sampled));
+                sampled
+            }
+        };
+        Some(candidate_cap(rows))
     }
 
     /// Fetch and build one node by its stored key, recording any read error.
@@ -193,6 +217,67 @@ impl<'s> StoreBackedSource<'s> {
         }
     }
 }
+
+/// How many candidates a seek may materialise before it should decline and
+/// let the scan answer (acetone-2ck.2).
+///
+/// A seek does one **random** point read per matching row; the scan it
+/// replaces reads the nodes map **sequentially**. Firing regardless is what
+/// made a declared index able to make a query *slower*: 3.7x at 2.9%
+/// selectivity, 18x at 20%, and up to 53x on a small label. So the budget is
+/// a **fraction of the scan's own cost**, not a constant.
+///
+/// `BREAK_EVEN_PERMILLE` is that fraction, measured on this project's
+/// loose-object store by timing the two primitives directly — a full
+/// sequential read of the nodes map against a batch of random point reads —
+/// across node sizes from 29 to 1036 bytes per row and 50k to 200k rows:
+///
+/// ```text
+///   29 bytes/row,   50k rows:  scan  28.4ms, point read 201us -> 0.28%
+///   235 bytes/row,  50k rows:  scan  23.5ms, point read 150us -> 0.31%
+///   1036 bytes/row, 50k rows:  scan  56.1ms, point read 185us -> 0.61%
+///   29 bytes/row,  200k rows:  scan 179.9ms, point read 249us -> 0.36%
+/// ```
+///
+/// An earlier version of this model made the fraction proportional to bytes
+/// per row, reasoning that a scan over fat records costs more and so buys
+/// the seek more room. **The measurement above refutes that**: 36x the bytes
+/// moves break-even by about 2x, because a point read is dominated by
+/// per-object overhead rather than by size, and a scan by per-entry decoding.
+/// The fraction is near enough constant, so the model is a constant, and the
+/// `SizeEstimate`-carrying variant was abandoned rather than shipped.
+///
+/// End to end, a query costs more than these primitives on both sides, which
+/// dilutes the ratio: measured that way break-even is nearer 1%. That is the
+/// number to calibrate to, since it is what a user experiences — but 2% ran
+/// 1.9x *slower* than the scan on a small-record shape (PR #224 review
+/// finding 4), so it is the ceiling of the range and not its middle. Packed
+/// stores make random reads cheaper still, so calibrating on loose objects is
+/// the conservative direction.
+///
+/// The floor keeps point-lookup-shaped queries working on tiny graphs, where
+/// a scan is cheap anyway so a wrong choice costs little.
+///
+/// An earlier version tiered on the index's prolly height, which fails
+/// structurally: height changes once per fanout (~10x in entries), so one
+/// tier spans a 10x range of cardinalities.
+/// Dividing rather than multiplying-then-dividing is deliberate: the estimate
+/// is an `f64` product cast with `as usize`, which **saturates**, so a
+/// pathological tree can present `usize::MAX` here. `rows * 5 / 1000`
+/// overflows above `usize::MAX / 5` — a debug-build panic on a crafted
+/// repository (PR #224 review finding 1). `rows / 200` is the same 0.5% and
+/// cannot overflow.
+pub fn candidate_cap(estimated_rows: usize) -> usize {
+    const BREAK_EVEN_ONE_IN: usize = 200; // 0.5%
+    (estimated_rows / BREAK_EVEN_ONE_IN).max(CANDIDATE_FLOOR)
+}
+
+/// Candidates a seek may always materialise, whatever the graph's size.
+///
+/// A result this small beats a scan on any graph large enough for the
+/// question to matter, so it is served without sampling the nodes map at
+/// all — which is also what keeps the estimator off the point-lookup path.
+pub const CANDIDATE_FLOOR: usize = 32;
 
 impl GraphSource for StoreBackedSource<'_> {
     fn all_nodes(&self) -> Vec<NodeValue> {
@@ -337,29 +422,18 @@ impl GraphSource for StoreBackedSource<'_> {
             }
             tuples = next;
         }
-        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for tuple in tuples {
-            let prefix = match index_value_prefix(&info.label, properties, &tuple) {
-                Ok(prefix) => prefix,
-                // A value that cannot encode (e.g. a NaN nested somewhere)
-                // contributes no entries — it indexes nothing.
-                Err(_) => continue,
-            };
-            match self.snapshot.index_scan(index_name, &prefix) {
-                // Index map absent though the schema declares it: fall back.
-                Ok(None) => return None,
-                Ok(Some(keys)) => {
-                    for key in keys {
-                        let Ok(encoded) = key.encode() else { continue };
-                        if seen.insert(encoded)
-                            && let Some(node) = self.node_from_key(&key)
-                        {
-                            out.push(node);
-                        }
-                    }
-                }
-                Err(e) => return self.fail(e, None),
+        // The equality/composite path had no budget at all: it fired
+        // however unselective the probe was, which is what made declaring
+        // an index able to make a query slower (acetone-2ck.2).
+        let candidates = self.within_budget(|cap| {
+            self.equality_candidates(index_name, &info.label, properties, &tuples, cap)
+        })?;
+        // Only now, with the whole candidate set known to be under budget,
+        // pay for the point reads.
+        let mut out = Vec::with_capacity(candidates.len());
+        for key in &candidates {
+            if let Some(node) = self.node_from_key(key) {
+                out.push(node);
             }
         }
         Some(out)
@@ -432,86 +506,14 @@ impl GraphSource for StoreBackedSource<'_> {
         // removes the cliff: `None` is the trait's "cannot serve, scan
         // instead", and the scan is always correct.
         //
-        // The cap is absolute rather than a fraction of the label's
-        // cardinality, which this source cannot learn cheaply. That is
-        // conservative on a large graph — a range selecting 50,000 of ten
-        // million rows would still beat a scan but is declined — and
-        // cardinality-informed thresholds are exactly what
-        // `acetone-2ck.2` (costed planning seeds) is for.
-        const MAX_RANGE_CANDIDATES: usize = 1024;
-
-        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for (start, end) in families {
-            let lifted = |bytes: &[u8]| {
-                let mut k = head.clone();
-                k.extend_from_slice(bytes);
-                k
-            };
-            // Inclusivity is expressed against the *value region*: a key
-            // for value v continues past v's encoding (list terminator,
-            // then the node key), so an inclusive upper bound must run to
-            // the successor of that region, and an exclusive lower bound
-            // must start there.
-            //
-            // INVARIANT (PR #221 review finding 5): the two arms that
-            // apply `prefix_successor` — exclusive lower, inclusive upper
-            // — require a COMPLETE value encoding. `range_families` also
-            // emits bare family-tag sentinels (`[0x04]`, `[0x05]`, …),
-            // and those only ever appear on the inclusive-lower and
-            // exclusive-upper arms, which pass the bytes through
-            // untouched. If that ever changed, `prefix_successor` on a
-            // lone `[0x04]` would yield `[0x05]` and silently skip the
-            // whole int family — under-selection, while the in-memory
-            // source stayed correct. The debug assertion below pins it.
-            debug_assert!(
-                !matches!(&start, Bound::Excluded(v) if v.len() == 1),
-                "a bare family sentinel must not reach the exclusive-lower arm"
-            );
-            debug_assert!(
-                !matches!(&end, Bound::Included(v) if v.len() == 1),
-                "a bare family sentinel must not reach the inclusive-upper arm"
-            );
-            let start = match &start {
-                Bound::Included(v) => Bound::Included(lifted(v)),
-                Bound::Excluded(v) => match prefix_successor(&lifted(v)) {
-                    Some(next) => Bound::Included(next),
-                    None => continue,
-                },
-                Bound::Unbounded => Bound::Included(head.clone()),
-            };
-            let end = match &end {
-                Bound::Included(v) => match prefix_successor(&lifted(v)) {
-                    Some(next) => Bound::Excluded(next),
-                    None => Bound::Unbounded,
-                },
-                Bound::Excluded(v) => Bound::Excluded(lifted(v)),
-                Bound::Unbounded => match prefix_successor(&head) {
-                    Some(next) => Bound::Excluded(next),
-                    None => Bound::Unbounded,
-                },
-            };
-            // Budget across families: the int and float halves of one
-            // numeric range share the cap, so their sum decides.
-            let remaining = MAX_RANGE_CANDIDATES.saturating_sub(seen.len());
-            match self.snapshot.index_range(index_name, start, end, remaining) {
-                Ok(None) => return None,
-                Ok(Some(keys)) => {
-                    if keys.len() > remaining {
-                        // Unselective: hand the work back to the scan
-                        // before paying for a single point read.
-                        return None;
-                    }
-                    for key in keys {
-                        let Ok(encoded) = key.encode() else { continue };
-                        if seen.insert(encoded)
-                            && let Some(node) = self.node_from_key(&key)
-                        {
-                            out.push(node);
-                        }
-                    }
-                }
-                Err(e) => return self.fail(e, None),
+        // Sized from the estimated scan cost (acetone-2ck.2).
+        let candidates =
+            self.within_budget(|cap| self.range_candidates(index_name, &head, &families, cap))?;
+        // Point reads only once the whole set is known to be under budget.
+        let mut out = Vec::with_capacity(candidates.len());
+        for key in &candidates {
+            if let Some(node) = self.node_from_key(key) {
+                out.push(node);
             }
         }
         Some(out)
@@ -571,5 +573,180 @@ impl GraphSource for StoreBackedSource<'_> {
     fn node(&self, id: &EntityId) -> Option<NodeValue> {
         let key = self.key_of(id)?;
         self.node_from_key(&key)
+    }
+}
+
+/// One half-open byte range over an index map, as
+/// [`range_families`](crate::exec::adapter::range_families) emits them: a
+/// numeric predicate yields one per numeric family (int, float).
+type ByteRange = (Bound<Vec<u8>>, Bound<Vec<u8>>);
+
+/// The outcome of collecting a probe's candidates under a budget.
+///
+/// Over-budget is its own variant rather than a length the caller compares,
+/// because the two are not equivalent: probes are de-duplicated across
+/// families and composite tuples, so a walk that stopped early can still
+/// yield *fewer* than `cap` distinct keys. Reporting that by length would
+/// let the caller mistake a truncated walk for a complete one and return a
+/// short answer — under-selection, which is a wrong answer, not a slow one.
+enum Candidates {
+    /// Every candidate the probe matches.
+    Complete(Vec<NodeKey>),
+    /// The probe matches more than the budget allows.
+    OverBudget,
+}
+
+impl StoreBackedSource<'_> {
+    /// The candidate keys of a numeric range, stopping once more than `cap`
+    /// have been walked. `None` means the index is missing or a read failed.
+    fn range_candidates(
+        &self,
+        index_name: &str,
+        head: &[u8],
+        families: &[ByteRange],
+        cap: usize,
+    ) -> Option<Candidates> {
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        let mut candidates: Vec<NodeKey> = Vec::new();
+        for (start, end) in families {
+            let lifted = |bytes: &[u8]| {
+                let mut k = head.to_vec();
+                k.extend_from_slice(bytes);
+                k
+            };
+            // Inclusivity is expressed against the *value region*: a key
+            // for value v continues past v's encoding (list terminator,
+            // then the node key), so an inclusive upper bound must run to
+            // the successor of that region, and an exclusive lower bound
+            // must start there.
+            //
+            // INVARIANT (PR #221 review finding 5): the two arms that
+            // apply `prefix_successor` — exclusive lower, inclusive upper
+            // — require a COMPLETE value encoding. `range_families` also
+            // emits bare family-tag sentinels (`[0x04]`, `[0x05]`, …),
+            // and those only ever appear on the inclusive-lower and
+            // exclusive-upper arms, which pass the bytes through
+            // untouched. If that ever changed, `prefix_successor` on a
+            // lone `[0x04]` would yield `[0x05]` and silently skip the
+            // whole int family — under-selection, while the in-memory
+            // source stayed correct. The debug assertion below pins it.
+            debug_assert!(
+                !matches!(&start, Bound::Excluded(v) if v.len() == 1),
+                "a bare family sentinel must not reach the exclusive-lower arm"
+            );
+            debug_assert!(
+                !matches!(&end, Bound::Included(v) if v.len() == 1),
+                "a bare family sentinel must not reach the inclusive-upper arm"
+            );
+            let start = match start {
+                Bound::Included(v) => Bound::Included(lifted(v)),
+                Bound::Excluded(v) => match prefix_successor(&lifted(v)) {
+                    Some(next) => Bound::Included(next),
+                    None => continue,
+                },
+                Bound::Unbounded => Bound::Included(head.to_vec()),
+            };
+            let end = match end {
+                Bound::Included(v) => match prefix_successor(&lifted(v)) {
+                    Some(next) => Bound::Excluded(next),
+                    None => Bound::Unbounded,
+                },
+                Bound::Excluded(v) => Bound::Excluded(lifted(v)),
+                Bound::Unbounded => match prefix_successor(head) {
+                    Some(next) => Bound::Excluded(next),
+                    None => Bound::Unbounded,
+                },
+            };
+            // Budget across families: the int and float halves of one
+            // numeric range share the cap, so their sum decides.
+            let remaining = cap.saturating_sub(seen.len());
+            match self.snapshot.index_range(index_name, start, end, remaining) {
+                Ok(None) => return None,
+                Ok(Some(keys)) => {
+                    if keys.len() > remaining {
+                        return Some(Candidates::OverBudget);
+                    }
+                    for key in keys {
+                        let Ok(encoded) = key.encode() else { continue };
+                        if seen.insert(encoded) {
+                            candidates.push(key);
+                        }
+                    }
+                }
+                Err(e) => return self.fail(e, None),
+            }
+        }
+        Some(Candidates::Complete(candidates))
+    }
+
+    /// The candidate keys of an equality/composite probe set, stopping once
+    /// more than `cap` have been walked. Every probe's keys are gathered
+    /// before the total is judged: an earlier version tested per probe, so a
+    /// composite whose rows split across probes paid the point reads for the
+    /// first probe before declining on the second (PR #224 review finding 5).
+    fn equality_candidates(
+        &self,
+        index_name: &str,
+        label: &str,
+        properties: &[String],
+        tuples: &[Vec<ModelValue>],
+        cap: usize,
+    ) -> Option<Candidates> {
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        let mut candidates: Vec<NodeKey> = Vec::new();
+        for tuple in tuples {
+            let prefix = match index_value_prefix(label, properties, tuple) {
+                Ok(prefix) => prefix,
+                // A value that cannot encode (e.g. a NaN nested somewhere)
+                // contributes no entries — it indexes nothing.
+                Err(_) => continue,
+            };
+            let remaining = cap.saturating_sub(seen.len());
+            match self
+                .snapshot
+                .index_scan_capped(index_name, &prefix, remaining)
+            {
+                // Index map absent though the schema declares it: fall back.
+                Ok(None) => return None,
+                Ok(Some(keys)) => {
+                    if keys.len() > remaining {
+                        return Some(Candidates::OverBudget);
+                    }
+                    for key in keys {
+                        let Ok(encoded) = key.encode() else { continue };
+                        if seen.insert(encoded) {
+                            candidates.push(key);
+                        }
+                    }
+                }
+                Err(e) => return self.fail(e, None),
+            }
+        }
+        Some(Candidates::Complete(candidates))
+    }
+
+    /// Run `collect` under the seek budget, returning its candidates only if
+    /// they fit.
+    ///
+    /// Two phases, so that a selective seek never pays for the estimator.
+    /// A result no larger than [`CANDIDATE_FLOOR`] beats a scan on any graph
+    /// big enough for the question to matter, so it is served without
+    /// sampling the nodes map at all — which keeps ~50 chunk reads off the
+    /// point-lookup path, the very case an index exists for. Only a probe
+    /// that clears the floor is worth costing properly.
+    fn within_budget<F>(&self, collect: F) -> Option<Vec<NodeKey>>
+    where
+        F: Fn(usize) -> Option<Candidates>,
+    {
+        if let Candidates::Complete(keys) = collect(CANDIDATE_FLOOR)? {
+            return Some(keys);
+        }
+        let budget = self.candidate_budget()?;
+        match collect(budget)? {
+            Candidates::Complete(keys) => Some(keys),
+            // Unselective: hand the work back to the scan before paying
+            // for a single point read.
+            Candidates::OverBudget => None,
+        }
     }
 }

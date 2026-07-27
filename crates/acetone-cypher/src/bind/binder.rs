@@ -521,6 +521,9 @@ impl<'a> Binder<'a> {
         // executor range-scan the index instead of label-scanning. The
         // WHERE still evaluates afterwards — the hint only prunes.
         if let Some(pred) = &where_clause {
+            // Equality first: it is generally the more selective of the
+            // two when a query offers both (acetone-7qw.9).
+            attach_equality_hints(&mut patterns, pred, self.catalogue);
             attach_range_hints(&mut patterns, pred, self.catalogue);
         }
         Ok(BoundClause::Match {
@@ -869,7 +872,7 @@ impl<'a> Binder<'a> {
             var,
             labels: node.labels.clone(),
             properties,
-            index_hint,
+            index_hints: index_hint.into_iter().collect(),
             span: node.span,
         })
     }
@@ -1025,6 +1028,7 @@ impl<'a> Binder<'a> {
                 return Some(IndexHint::KeySeek {
                     label: label.clone(),
                     key: key.to_vec(),
+                    values: None,
                 });
             }
         }
@@ -1033,6 +1037,7 @@ impl<'a> Binder<'a> {
                 name: name.to_string(),
                 label: label.clone(),
                 properties: def.properties().to_vec(),
+                values: None,
             });
         }
         None
@@ -1407,6 +1412,144 @@ impl<'a> Binder<'a> {
 /// declared index on `(label, prop)` becomes a range hint. Bounds are
 /// constant-ish only (literals, parameters); the predicate itself still
 /// evaluates after matching, so the hint can only prune, never widen.
+/// Attach an equality seek from a `WHERE` clause (acetone-7qw.9).
+///
+/// Only pattern property maps used to pin an index, so `MATCH (n:H {b: 3})`
+/// used the index while `MATCH (n:H) WHERE n.b = 3` — the form most people
+/// write — scanned. Ranges in `WHERE` already attached hints; equality did
+/// not. Runs BEFORE the range pass, since an equality is generally the more
+/// selective of the two when both are available.
+fn attach_equality_hints(
+    patterns: &mut [crate::bind::bound::BoundPathPattern],
+    pred: &BoundExpr,
+    catalogue: &Catalogue,
+) {
+    use std::collections::BTreeMap;
+    let mut pins: BTreeMap<(u32, String), RangeBound> = BTreeMap::new();
+    collect_equality_pins(pred, &mut pins);
+    if pins.is_empty() {
+        return;
+    }
+    for pattern in patterns {
+        let start = &mut pattern.start;
+        let Some(var) = start.var else { continue };
+        let [label] = start.labels.as_slice() else {
+            continue;
+        };
+        let pinned: Vec<&str> = pins
+            .keys()
+            .filter(|(v, _)| *v == var.0)
+            .map(|(_, p)| p.as_str())
+            .collect();
+        if pinned.is_empty() {
+            continue;
+        }
+        let value_of = |property: &str| pins.get(&(var.0, property.to_owned())).cloned();
+        // `MATCH (n:H {b: 0}) WHERE n.b = 0` spells one predicate twice.
+        // Without this, both spellings attach a hint on the same target and
+        // an unselective probe walks the index to the cap twice before
+        // declining (PR #224 review nit 6). The inline pin is already
+        // attached by the time this pass runs, so first-wins is the inline
+        // one — which is the same seek whenever the two spellings agree, and
+        // when they contradict each other neither can match anyway.
+        //
+        // Labels and index names live in separate namespaces, so they are
+        // tested separately: comparing one against the other let an index
+        // sharing a label's name suppress a legitimate `KeySeek` (PR #224
+        // review nit 4).
+        let keyseek_on = |hints: &[IndexHint], label: &str| {
+            hints
+                .iter()
+                .any(|h| matches!(h, IndexHint::KeySeek { label: l, .. } if l == label))
+        };
+        let index_seek_on = |hints: &[IndexHint], name: &str| {
+            hints.iter().any(|h| {
+                matches!(
+                    h,
+                    IndexHint::IndexSeek { name: n, .. } | IndexHint::IndexRange { name: n, .. }
+                        if n == name
+                )
+            })
+        };
+        // KeySeek only when EVERY key property is pinned, mirroring the
+        // pattern-map path's rule.
+        if let Some(def) = catalogue.label(label) {
+            let key = def.key();
+            if !key.is_empty() && key.iter().all(|k| pinned.iter().any(|p| p == k)) {
+                let values: Option<Vec<RangeBound>> = key.iter().map(|k| value_of(k)).collect();
+                if let Some(values) = values {
+                    if !keyseek_on(&start.index_hints, label) {
+                        start.index_hints.push(IndexHint::KeySeek {
+                            label: label.clone(),
+                            key: key.to_vec(),
+                            values: Some(values),
+                        });
+                    }
+                    continue;
+                }
+            }
+        }
+        if let Some((name, def)) = catalogue.seek_index_on(label, &pinned) {
+            let properties = def.properties().to_vec();
+            let values: Option<Vec<RangeBound>> = properties.iter().map(|p| value_of(p)).collect();
+            if let Some(values) = values
+                && !index_seek_on(&start.index_hints, name)
+            {
+                start.index_hints.push(IndexHint::IndexSeek {
+                    name: name.to_string(),
+                    label: label.clone(),
+                    properties,
+                    values: Some(values),
+                });
+            }
+        }
+    }
+}
+
+/// Walk a WHERE's AND-conjuncts collecting `var.prop = const` pins (either
+/// operand order).
+fn collect_equality_pins(
+    expr: &BoundExpr,
+    out: &mut std::collections::BTreeMap<(u32, String), RangeBound>,
+) {
+    let as_prop = |e: &BoundExpr| -> Option<(u32, String)> {
+        let BoundExpr::Property { base, key, .. } = e else {
+            return None;
+        };
+        let BoundExpr::Variable { id, .. } = &**base else {
+            return None;
+        };
+        Some((id.0, key.clone()))
+    };
+    let as_const = |e: &BoundExpr| -> Option<RangeBound> {
+        match e {
+            BoundExpr::Literal { value, .. } => Some(RangeBound::Literal(value.clone())),
+            BoundExpr::Parameter { name, .. } => Some(RangeBound::Parameter(name.clone())),
+            _ => None,
+        }
+    };
+    if let BoundExpr::Binary { op, lhs, rhs, .. } = expr {
+        match op {
+            crate::ast::BinaryOp::And => {
+                collect_equality_pins(lhs, out);
+                collect_equality_pins(rhs, out);
+            }
+            crate::ast::BinaryOp::Eq => {
+                if let (Some(prop), Some(value)) = (as_prop(lhs), as_const(rhs)) {
+                    out.insert(prop, value);
+                } else if let (Some(prop), Some(value)) = (as_prop(rhs), as_const(lhs)) {
+                    out.insert(prop, value);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Attach an `IndexRange` candidate from a `WHERE` clause's range
+/// predicates on the anchor variable. Appends rather than replaces: hints
+/// are ordered candidates, so a declining equality falls through to this
+/// (ADR-0065).
 fn attach_range_hints(
     patterns: &mut [crate::bind::bound::BoundPathPattern],
     pred: &BoundExpr,
@@ -1420,9 +1563,6 @@ fn attach_range_hints(
     }
     for pattern in patterns {
         let start = &mut pattern.start;
-        if start.index_hint.is_some() {
-            continue;
-        }
         let Some(var) = start.var else { continue };
         let [label] = start.labels.as_slice() else {
             continue;
@@ -1432,7 +1572,7 @@ fn attach_range_hints(
                 continue;
             }
             if let Some((name, _)) = catalogue.index_on(label.as_str(), property) {
-                start.index_hint = Some(IndexHint::IndexRange {
+                start.index_hints.push(IndexHint::IndexRange {
                     name: name.to_string(),
                     label: label.to_string(),
                     property: property.clone(),
