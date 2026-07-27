@@ -30,7 +30,7 @@ use acetone_model::Value;
 use acetone_model::display::{format_label, format_node_key, format_value};
 use acetone_model::graph_keys::NodeKey;
 use acetone_model::records::{NodeRecord, RecordEncodeError};
-use acetone_model::schema::LabelDef;
+use acetone_model::schema::{LabelDef, PropertyType};
 use acetone_model::values::encode_value;
 
 use crate::error::GraphError;
@@ -48,6 +48,18 @@ pub enum ConstraintViolation {
         node: NodeKey,
         /// The absent required property.
         property: String,
+    },
+    /// A node holds a value contradicting the type its label declares for
+    /// that property (ADR-0066).
+    WrongType {
+        /// The violating node.
+        node: NodeKey,
+        /// The mistyped property.
+        property: String,
+        /// The type the label declares.
+        declared: PropertyType,
+        /// The type the stored value actually has.
+        actual: PropertyType,
     },
     /// Two or more nodes of `label` share a value for a UNIQUE property.
     Unique {
@@ -70,6 +82,19 @@ impl fmt::Display for ConstraintViolation {
                 "node {} is missing required property {}",
                 format_node_key(node),
                 format_label(property)
+            ),
+            ConstraintViolation::WrongType {
+                node,
+                property,
+                declared,
+                actual,
+            } => write!(
+                f,
+                "node {} property {} is declared {} but holds a {} value",
+                format_node_key(node),
+                format_label(property),
+                declared.as_str(),
+                actual.as_str()
             ),
             ConstraintViolation::Unique {
                 label,
@@ -162,6 +187,32 @@ pub fn check_nodes(
                 });
             }
         }
+        // Declared types (ADR-0066), in declared-property order. A declared
+        // type is a constraint on the same footing as REQUIRE and UNIQUE, not
+        // an annotation: `store_source`'s seek guard serves a raw string probe
+        // only when the declared type rules out a deferred value, so a false
+        // declaration makes a seek UNDER-select — rows that exist and match
+        // are never visited.
+        //
+        // Absent and null values conform: that is existence's business
+        // (ADR-0061), not the type system's.
+        for (property, declared) in def.types() {
+            let Some(value) = record.properties().get(property) else {
+                continue;
+            };
+            if declared.matches(value) {
+                continue;
+            }
+            let Some(actual) = PropertyType::of(value) else {
+                continue;
+            };
+            violations.push(ConstraintViolation::WrongType {
+                node: key.clone(),
+                property: property.clone(),
+                declared: *declared,
+                actual,
+            });
+        }
     }
 
     // UNIQUE: group by (label, property, canonical value encoding) — the
@@ -243,7 +294,11 @@ pub fn check_label(
     label: &str,
     def: &LabelDef,
 ) -> Result<Vec<ConstraintViolation>, GraphError> {
-    if def.exists().is_empty() && def.unique().is_empty() {
+    // `types` counts here as much as `exists`/`unique` do (ADR-0066):
+    // without it, a declaration that only declares TYPES — the whole point of
+    // `declare-label --type` — would skip the scan and be accepted over data
+    // that already contradicts it.
+    if def.exists().is_empty() && def.unique().is_empty() && def.types().is_empty() {
         return Ok(Vec::new());
     }
     let mut nodes = NodeSet::new();

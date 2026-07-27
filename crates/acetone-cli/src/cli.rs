@@ -241,6 +241,15 @@ pub enum Command {
         /// A key property name; repeat for a composite key, in order.
         #[arg(long = "key", required = true)]
         key: Vec<String>,
+        /// Declare a property's type as `<property>:<type>`; repeat.
+        ///
+        /// Types: bool, int, float, string, bytes, date, time, datetime,
+        /// duration, list. A declared type is enforced on write and checked
+        /// against existing data at declare time (ADR-0066), and it is what
+        /// lets an index seek serve a string equality pin: without it such a
+        /// query declines to a scan.
+        #[arg(long = "type", value_name = "PROPERTY:TYPE")]
+        r#type: Vec<String>,
         /// A property that must be present (existence constraint); repeat.
         #[arg(long = "require")]
         require: Vec<String>,

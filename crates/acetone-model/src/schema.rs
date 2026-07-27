@@ -131,6 +131,66 @@ impl PropertyType {
             other => return Err(SchemaError::UnknownType(other.to_owned())),
         })
     }
+
+    /// Every type name, in declaration order, for error messages and CLI
+    /// help. Kept beside [`PropertyType::parse`] so the two cannot drift.
+    pub fn names() -> &'static [&'static str] {
+        &[
+            "bool", "int", "float", "string", "bytes", "date", "time", "datetime", "duration",
+            "list",
+        ]
+    }
+
+    /// Whether `value` satisfies this declared type (ADR-0066).
+    ///
+    /// `Null` satisfies every type: an absent or null property is existence's
+    /// business (`REQUIRE`, ADR-0061), not the type system's, and a type
+    /// declaration is a statement about the values a property takes when it
+    /// has one.
+    ///
+    /// A `List` is satisfied by any list; v0.1 does not constrain the element
+    /// type (see the [`PropertyType::List`] docs), so neither does this.
+    ///
+    /// This is the single definition of type conformance. The write path
+    /// (`persist`), the declare-time backfill check and the merge validator
+    /// all call it, so a value accepted by one is accepted by all three — and
+    /// so the seek guard in `store_source` can rely on the declaration.
+    pub fn matches(self, value: &crate::Value) -> bool {
+        use crate::Value;
+        matches!(
+            (self, value),
+            (_, Value::Null)
+                | (PropertyType::Bool, Value::Bool(_))
+                | (PropertyType::Int, Value::Int(_))
+                | (PropertyType::Float, Value::Float(_))
+                | (PropertyType::String, Value::String(_))
+                | (PropertyType::Bytes, Value::Bytes(_))
+                | (PropertyType::Date, Value::Date(_))
+                | (PropertyType::Time, Value::Time(_))
+                | (PropertyType::DateTime, Value::DateTime(_))
+                | (PropertyType::Duration, Value::Duration(_))
+                | (PropertyType::List, Value::List(_))
+        )
+    }
+
+    /// The type name of a stored value, for error messages. `None` for
+    /// `Null`, which conforms to every declaration.
+    pub fn of(value: &crate::Value) -> Option<Self> {
+        use crate::Value;
+        Some(match value {
+            Value::Null => return None,
+            Value::Bool(_) => PropertyType::Bool,
+            Value::Int(_) => PropertyType::Int,
+            Value::Float(_) => PropertyType::Float,
+            Value::String(_) => PropertyType::String,
+            Value::Bytes(_) => PropertyType::Bytes,
+            Value::Date(_) => PropertyType::Date,
+            Value::Time(_) => PropertyType::Time,
+            Value::DateTime(_) => PropertyType::DateTime,
+            Value::Duration(_) => PropertyType::Duration,
+            Value::List(_) => PropertyType::List,
+        })
+    }
 }
 
 fn normalise_names(
@@ -641,6 +701,7 @@ fn read_types(reader: &mut Reader) -> Result<BTreeMap<String, PropertyType>, Sch
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Date, DateTime, Duration, Time};
 
     fn label_entry() -> SchemaEntry {
         SchemaEntry::Label {
@@ -759,5 +820,109 @@ mod tests {
             SchemaEntry::decode(&entry.map_key(), &value),
             Err(SchemaError::Cbor(ValueDecodeError::TrailingBytes))
         ));
+    }
+
+    /// Every variant, so a new one cannot be added without appearing here.
+    const ALL_TYPES: &[PropertyType] = &[
+        PropertyType::Bool,
+        PropertyType::Int,
+        PropertyType::Float,
+        PropertyType::String,
+        PropertyType::Bytes,
+        PropertyType::Date,
+        PropertyType::Time,
+        PropertyType::DateTime,
+        PropertyType::Duration,
+        PropertyType::List,
+    ];
+
+    fn a_value_of(ty: PropertyType) -> Value {
+        match ty {
+            PropertyType::Bool => Value::Bool(true),
+            PropertyType::Int => Value::Int(7),
+            PropertyType::Float => Value::Float(1.5),
+            PropertyType::String => Value::String("s".into()),
+            PropertyType::Bytes => Value::Bytes(vec![1, 2]),
+            PropertyType::Date => Value::Date(Date { days: 19_000 }),
+            PropertyType::Time => Value::Time(Time { nanos: 1 }),
+            PropertyType::DateTime => Value::DateTime(DateTime {
+                epoch_nanos: 1_700_000_000,
+                offset_minutes: 0,
+            }),
+            PropertyType::Duration => Value::Duration(Duration {
+                months: 1,
+                days: 2,
+                nanos: 3,
+            }),
+            PropertyType::List => Value::List(vec![Value::Int(1)]),
+        }
+    }
+
+    #[test]
+    fn type_names_round_trip_and_names_is_complete() {
+        for ty in ALL_TYPES {
+            assert_eq!(
+                PropertyType::parse(ty.as_str()).expect("parse"),
+                *ty,
+                "{ty:?} must round-trip through its stored name"
+            );
+            assert!(
+                PropertyType::names().contains(&ty.as_str()),
+                "{ty:?} is missing from PropertyType::names()"
+            );
+        }
+        assert_eq!(
+            PropertyType::names().len(),
+            ALL_TYPES.len(),
+            "names() and the variant list have diverged"
+        );
+        assert!(matches!(
+            PropertyType::parse("nosuchtype"),
+            Err(SchemaError::UnknownType(_))
+        ));
+    }
+
+    /// `matches` accepts a value of its own type and rejects every other
+    /// type's — the property the seek guard leans on (ADR-0066). Checked
+    /// over the full cross product rather than a sample, so a new variant
+    /// landing in the wrong `match` arm fails here.
+    #[test]
+    fn matches_accepts_exactly_its_own_type() {
+        for declared in ALL_TYPES {
+            for actual in ALL_TYPES {
+                let value = a_value_of(*actual);
+                assert_eq!(
+                    declared.matches(&value),
+                    declared == actual,
+                    "{declared:?}.matches({value:?}) should be {}",
+                    declared == actual
+                );
+            }
+        }
+    }
+
+    /// Null conforms to every declaration: an absent value is existence's
+    /// business (REQUIRE, ADR-0061), not the type system's.
+    #[test]
+    fn null_matches_every_declared_type() {
+        for ty in ALL_TYPES {
+            assert!(ty.matches(&Value::Null), "{ty:?} must admit Null");
+        }
+        assert_eq!(PropertyType::of(&Value::Null), None);
+    }
+
+    /// `of` and `matches` must agree, or an error message could name a type
+    /// that would in fact have been accepted.
+    #[test]
+    fn of_agrees_with_matches() {
+        for ty in ALL_TYPES {
+            let value = a_value_of(*ty);
+            assert_eq!(PropertyType::of(&value), Some(*ty));
+            let reported = PropertyType::of(&value).expect("non-null");
+            assert!(
+                reported.matches(&value),
+                "of() reported {reported:?} for {value:?}, which does not match it"
+            );
+        }
     }
 }

@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord, RecordEncodeError};
-use acetone_model::schema::{LabelDef, SchemaEntry};
+use acetone_model::schema::{LabelDef, PropertyType, SchemaEntry};
 use acetone_model::values::encode_value;
 use acetone_prolly::{
     BatchOp, ChunkParams, Root, apply_batch, diff as prolly_diff, empty, get,
@@ -147,6 +147,20 @@ pub enum GraphViolation {
         /// The required property that is absent.
         property: String,
     },
+    /// A merged node holds a value contradicting the type its primary label
+    /// declares for that property (spec §2, ADR-0066). Either side may have
+    /// been legal alone: one branch retypes a property, the other writes a
+    /// value of the old type, and only the merged state breaches.
+    WrongType {
+        /// The offending node's key (encoded).
+        node: Vec<u8>,
+        /// The mistyped property.
+        property: String,
+        /// The type the merged schema declares.
+        declared: PropertyType,
+        /// The type the merged value actually has.
+        actual: PropertyType,
+    },
     /// Two or more merged nodes of `label` share a value for a UNIQUE
     /// property (spec §2). `nodes` are the colliding node keys (encoded),
     /// in key order.
@@ -210,6 +224,21 @@ impl std::fmt::Display for GraphViolation {
                     display_edge_key(edge),
                     role.role_name(),
                     display_node_key(endpoint)
+                )
+            }
+            GraphViolation::WrongType {
+                node,
+                property,
+                declared,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "node {} property {} is declared {} but the merged value is of type {}",
+                    display_node_key(node),
+                    format_label(property),
+                    declared.as_str(),
+                    actual.as_str()
                 )
             }
             GraphViolation::MissingRequired { node, property } => {
@@ -643,6 +672,45 @@ pub(crate) fn validate_merged<S: ChunkStore>(
                 violations.push(GraphViolation::MissingRequired {
                     node: key_enc.clone(),
                     property: property.clone(),
+                });
+            }
+        }
+    }
+
+    // Declared types (ADR-0066), on the same footing and with the same
+    // responsibility rule as existence above: report a breach when the node
+    // changed, or when the merged schema newly declares (or retypes) the
+    // property, which is the tightening a pre-existing node may not satisfy.
+    //
+    // The merge-specific case this catches is the one neither side can see
+    // alone: `ours` retypes `port` to int while `theirs` writes `port:
+    // "8080"`. Both commits are individually legal; only the merged state
+    // breaches, so the write-time check in `persist` cannot have caught it.
+    for (key, record) in &all_nodes {
+        let Some(def) = labels.get(key.label()) else {
+            continue;
+        };
+        let key_enc = key.encode()?;
+        let changed = changed_nodes.contains(&key_enc);
+        for (property, declared) in def.types() {
+            let Some(value) = record.properties().get(property) else {
+                continue;
+            };
+            if declared.matches(value) {
+                continue;
+            }
+            let Some(actual) = PropertyType::of(value) else {
+                continue;
+            };
+            let newly_declared = base_labels
+                .get(key.label())
+                .is_none_or(|b| b.types().get(property) != Some(declared));
+            if changed || newly_declared {
+                violations.push(GraphViolation::WrongType {
+                    node: key_enc.clone(),
+                    property: property.clone(),
+                    declared: *declared,
+                    actual,
                 });
             }
         }

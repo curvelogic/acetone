@@ -172,6 +172,60 @@ An `ON_HOST` edge *is* referentially guarded: delete the host and the merge
 and commit machinery will flag the dangling edge, exactly as in the
 [history chapter](history-branch-merge.md).
 
+## Property types
+
+`--require` says a property must be *there*; `--type` says what it must *be*.
+It takes `<property>:<type>`, repeats, and accepts `bool`, `int`, `float`,
+`string`, `bytes`, `date`, `time`, `datetime`, `duration` and `list`:
+
+```console
+$ acetone declare-label Interface --key host --key name \
+    --type mtu:int --type mac:string --require mtu --unique mac
+declared label "Interface" key ["host", "name"]
+```
+
+`acetone schema` shows what a label declares:
+
+```console
+$ acetone schema
+Labels
+  "Interface"  key ("host", "name")  types ("mac": string, "mtu": int)  required ("mtu")  unique ("mac")
+```
+
+Types are enforced at write time, like the other constraints. An MTU that
+arrives as a string — the classic shape of a bad CSV column or a JSON field
+that lost its quoting rules — is refused rather than stored:
+
+```console
+$ acetone query 'CREATE (:Interface {host: "db1", name: "eth1", mtu: "9000", mac: "02:42:0a:00:00:02"})'
+error: property "mtu" of "Interface" ["db1", "eth1"] is declared int but the value written is of type string. A declared type is enforced (ADR-0066) because index seeks rely on it: a value contradicting the declaration would make a seek on this property silently return too few rows. Write a value of type int, or redeclare the property's type.
+```
+
+A property that is absent, or explicitly null, satisfies any declared type —
+presence is `--require`'s business, not the type's. And as with the other
+constraints, declaring a type over data that already contradicts it is
+refused with the offending nodes named, so backfill comes first.
+
+### Why this is not just tidiness
+
+A declared type is the reason an index can serve an equality match on a
+string at all.
+
+Some values — `bytes` and the temporal types — are stored in one form but
+*compare* equal to their text rendering when a query looks at them. So when
+you write `MATCH (i:Interface {mac: "02:42:0a:00:00:01"})`, acetone cannot
+know from the pin alone whether a matching node holds that string or a
+`bytes` value that merely renders as it. Probing the index for the string
+would miss the second kind — and a seek that returns *fewer* rows than the
+equivalent scan is the one failure a query engine must never have.
+
+Without a declared type, acetone resolves that safely and pessimistically: it
+declines the index and scans. Correct, and as slow as having no index.
+Declare `mac` a `string` and the ambiguity is gone, so the seek is taken.
+
+That is also why the type is enforced rather than advisory. The planner
+trusts the declaration; enforcement is what makes the trust sound.
+
 ## Changing schema on a populated graph
 
 Schema declarations are ordinary workspace writes: they take effect

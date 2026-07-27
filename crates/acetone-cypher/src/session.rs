@@ -667,6 +667,34 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                         node_col,
                                     ]);
                                 }
+                                GraphViolation::WrongType {
+                                    node,
+                                    property,
+                                    declared,
+                                    actual,
+                                } => {
+                                    let node_key =
+                                        NodeKey::decode(&node).map_err(|e| e.to_string())?;
+                                    let node_col = workspace_node(&node_key)?;
+                                    rows.push(vec![
+                                        Value::String("wrong-type".into()),
+                                        Value::String(node_key.label().to_string()),
+                                        Value::String(acetone_model::display::format_node_key(
+                                            &node_key,
+                                        )),
+                                        Value::String(property),
+                                        // `base`/`ours`/`theirs` describe a
+                                        // cell conflict's three sides; a type
+                                        // breach is a property of the merged
+                                        // state, so the declared and actual
+                                        // types go in the two that read as
+                                        // "expected" and "found".
+                                        Value::String(declared.as_str().to_string()),
+                                        Value::String(actual.as_str().to_string()),
+                                        Value::Null,
+                                        node_col,
+                                    ]);
+                                }
                                 GraphViolation::UniqueViolation {
                                     label,
                                     property,

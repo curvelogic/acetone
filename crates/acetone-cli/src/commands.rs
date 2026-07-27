@@ -76,9 +76,10 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         Command::DeclareLabel {
             label,
             key,
+            r#type,
             require,
             unique,
-        } => declare_label(repo_path, &label, &key, &require, &unique),
+        } => declare_label(repo_path, &label, &key, &r#type, &require, &unique),
         Command::DeclareRelType { rtype } => declare_rel_type(repo_path, &rtype),
         Command::DeclareIndex {
             name,
@@ -726,21 +727,59 @@ fn single_key(label: &str, key: &str) -> Result<NodeKey> {
         .with_context(|| format!("building key for label {label:?}"))
 }
 
+/// Parse the repeatable `--type <property>:<type>` flag.
+///
+/// Splits on the LAST colon, so a property name may contain one; the type
+/// name never does. A property named twice is an error rather than
+/// last-wins: two contradicting declarations in one command line is a
+/// mistake, and silently picking one would leave the user believing the
+/// other took effect.
+fn parse_property_types(
+    specs: &[String],
+) -> Result<BTreeMap<String, acetone_core::model::schema::PropertyType>> {
+    use acetone_core::model::schema::PropertyType;
+    let mut types = BTreeMap::new();
+    for spec in specs {
+        let (property, type_name) = spec.rsplit_once(':').with_context(|| {
+            format!(
+                "--type expects <property>:<type>, got {}; types are {}",
+                format_label(spec),
+                PropertyType::names().join(", ")
+            )
+        })?;
+        if property.is_empty() {
+            bail!("--type {} names an empty property", format_label(spec));
+        }
+        let ty = PropertyType::parse(type_name).with_context(|| {
+            format!(
+                "--type {}: unknown type {}; types are {}",
+                format_label(spec),
+                format_label(type_name),
+                PropertyType::names().join(", ")
+            )
+        })?;
+        if types.insert(property.to_owned(), ty).is_some() {
+            bail!(
+                "--type declares property {} more than once",
+                format_label(property)
+            );
+        }
+    }
+    Ok(types)
+}
+
 pub(crate) fn declare_label(
     repo_path: &Path,
     label: &str,
     key: &[String],
+    types: &[String],
     require: &[String],
     unique: &[String],
 ) -> Result<()> {
     use acetone_core::model::schema::{LabelDef, SchemaEntry};
-    let def = LabelDef::new(
-        key.to_vec(),
-        BTreeMap::new(),
-        require.to_vec(),
-        unique.to_vec(),
-    )
-    .with_context(|| format!("declaring schema for label {label:?}"))?;
+    let types = parse_property_types(types)?;
+    let def = LabelDef::new(key.to_vec(), types, require.to_vec(), unique.to_vec())
+        .with_context(|| format!("declaring schema for label {label:?}"))?;
     let repo = open(repo_path)?;
     // Backfill check (acetone-9gw): a `--require`/`--unique` set declared
     // over existing data the data already violates is refused with the
@@ -878,6 +917,12 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
                 json!({
                     "name": name,
                     "key": strings(def.key()),
+                    "types": Json::Object(
+                        def.types()
+                            .iter()
+                            .map(|(p, t)| (p.clone(), Json::String(t.as_str().to_owned())))
+                            .collect(),
+                    ),
                     "required": strings(def.exists()),
                     "unique": strings(def.unique()),
                     "surrogate": def.is_surrogate(),
@@ -934,6 +979,17 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
             let mut clauses = vec![format!("key {}", name_list(def.key()))];
             if def.is_surrogate() {
                 clauses.push("surrogate".to_owned());
+            }
+            if !def.types().is_empty() {
+                // `property: type` pairs, in the def's canonical order. The
+                // type name is acetone's own; the property name is
+                // schema-controlled, so it goes through format_label.
+                let pairs: Vec<String> = def
+                    .types()
+                    .iter()
+                    .map(|(property, ty)| format!("{}: {}", format_label(property), ty.as_str()))
+                    .collect();
+                clauses.push(format!("types ({})", pairs.join(", ")));
             }
             if !def.exists().is_empty() {
                 clauses.push(format!("required {}", name_list(def.exists())));

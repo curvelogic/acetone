@@ -147,6 +147,20 @@ fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
                     push_field(&mut key, property.as_bytes());
                     push_field(&mut key, node);
                 }
+                GraphViolation::WrongType {
+                    node,
+                    property,
+                    declared,
+                    ..
+                } => {
+                    key.push(3);
+                    push_field(&mut key, property.as_bytes());
+                    // The declared type distinguishes two violations on the
+                    // same (node, property) across a retyping merge; `actual`
+                    // is a function of the stored value, so it adds nothing.
+                    push_field(&mut key, declared.as_str().as_bytes());
+                    push_field(&mut key, node);
+                }
                 GraphViolation::UniqueViolation {
                     label,
                     property,

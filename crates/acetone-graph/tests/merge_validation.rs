@@ -13,7 +13,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+use acetone_model::schema::{IndexDef, LabelDef, PropertyType, SchemaEntry};
 use acetone_prolly::{BatchOp, apply_batch, scan};
 use acetone_store::GitStore;
 use std::collections::BTreeMap;
@@ -752,4 +752,104 @@ fn resolving_a_cell_conflict_on_an_indexed_property_keeps_the_index_consistent()
         1,
         "one resolved index entry, got {entries:?}"
     );
+}
+
+#[test]
+fn schema_retyping_flags_a_node_whose_value_contradicts_the_new_type() {
+    // The merge-specific type breach neither side can catch alone (ADR-0066):
+    // ours writes `port` as a string (legal — the base schema declares no
+    // type); theirs retypes `port` to int. Each commit is valid on its own,
+    // so the write-time check in `persist` never saw a violation; only the
+    // merged state breaches.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let untyped = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("untyped");
+    let typed = LabelDef::new(
+        vec!["id".to_string()],
+        BTreeMap::from([("port".to_string(), PropertyType::Int)]),
+        [],
+        [],
+    )
+    .expect("typed");
+    let (b, o, t) = diverge(
+        &repo,
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".to_string(),
+                def: untyped.clone(),
+            })
+            .expect("schema");
+        },
+        // ours: a string port, valid under the untyped base schema.
+        |tx| {
+            tx.put_node(&node(1), &record(&[("port", Value::String("8080".into()))]))
+                .expect("put");
+        },
+        // theirs: declare port an int.
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".to_string(),
+                def: typed.clone(),
+            })
+            .expect("schema");
+        },
+    );
+
+    let vs = violations(merge(&repo, &b, &o, &t));
+    assert_eq!(vs.len(), 1, "one wrong-type, got {vs:?}");
+    match &vs[0] {
+        GraphViolation::WrongType {
+            node: n,
+            property,
+            declared,
+            actual,
+        } => {
+            assert_eq!(*n, node(1).encode().expect("enc"));
+            assert_eq!(property, "port");
+            assert_eq!(*declared, PropertyType::Int);
+            assert_eq!(*actual, PropertyType::String);
+        }
+        other => panic!("expected WrongType, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_conforming_value_under_a_retyped_property_merges_cleanly() {
+    // The mirror of the test above: the same retyping merge, but the node's
+    // value already satisfies the new declaration. Without this, a validator
+    // that flagged every retyped property regardless of value would pass the
+    // test above and still be wrong.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let untyped = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("untyped");
+    let typed = LabelDef::new(
+        vec!["id".to_string()],
+        BTreeMap::from([("port".to_string(), PropertyType::Int)]),
+        [],
+        [],
+    )
+    .expect("typed");
+    let (b, o, t) = diverge(
+        &repo,
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".to_string(),
+                def: untyped.clone(),
+            })
+            .expect("schema");
+        },
+        |tx| {
+            tx.put_node(&node(1), &record(&[("port", Value::Int(8080))]))
+                .expect("put");
+        },
+        |tx| {
+            tx.put_schema(&SchemaEntry::Label {
+                name: "N".to_string(),
+                def: typed.clone(),
+            })
+            .expect("schema");
+        },
+    );
+
+    assert!(matches!(merge(&repo, &b, &o, &t), ManifestMerge::Clean(_)));
 }
