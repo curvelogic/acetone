@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use acetone_cypher::bind::{BindMode, bind};
 use acetone_cypher::exec::{GraphSnapshot, catalogue_from_schema, execute};
+use acetone_cypher::session::Session;
 use acetone_graph::{InitOptions, Repository};
 
 fn main() -> ExitCode {
@@ -20,8 +21,13 @@ fn main() -> ExitCode {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--scale" => match args.next().and_then(|s| s.parse().ok()) {
-                Some(n) => scale = n,
-                None => return usage("--scale needs a positive integer"),
+                // Zero is rejected, not merely unparseable: `--scale 0` built
+                // an empty graph whose KeySeek case probed a nonexistent
+                // `host-0`, so the hinted side fell back to a scan and the
+                // run silently measured scan-versus-scan — the exact trap the
+                // shape-derived key exists to prevent.
+                Some(n) if n > 0 => scale = n,
+                _ => return usage("--scale needs a positive integer"),
             },
             other if !other.starts_with('-') && repo_path.is_none() => {
                 repo_path = Some(PathBuf::from(other));
@@ -44,6 +50,28 @@ fn main() -> ExitCode {
 
 fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
     let shape = acetone_lab::Shape::from_scale(scale);
+
+    // The criterion-3 comparison needs a second repository beside the first.
+    // Its path is checked HERE, before the expensive build, because
+    // `Repository::init` refuses a non-empty directory: discovering a
+    // leftover twin only after the indexed build has completed throws away
+    // minutes of work at the larger scales.
+    //
+    // `symlink_metadata`, not `exists()`: the latter follows symlinks and so
+    // reports false for a broken one, which would slip past this check and
+    // fail late in `Repository::init` — the failure the check exists to move
+    // forward.
+    let plain_path = twin_path(repo_path);
+    if plain_path.symlink_metadata().is_ok() {
+        return Err(format!(
+            "the unindexed twin path {} already exists; remove it \
+             (and {}, if it exists) before re-running",
+            plain_path.display(),
+            repo_path.display()
+        )
+        .into());
+    }
+
     println!(
         "Generating lab graph: {} hosts, {} software, {} suppliers, {} certificates ({} nodes)…",
         shape.hosts,
@@ -117,21 +145,56 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
         }
     }
 
-    index_vs_scan_demo(
-        &graph,
-        &node_records,
-        &edge_records,
-        &schema,
-        &params,
-        shape.hosts,
+    index_vs_scan_demo(&graph, &node_records, &edge_records, &schema, &params)?;
+
+    // An identical graph WITHOUT the secondary indexes, so seek-versus-scan
+    // can be measured on the shipped read path rather than between two
+    // schemas over one in-memory snapshot (acetone-2ck.16).
+    println!(
+        "\nBuilding an identical unindexed twin at {} for the shipped-path comparison…",
+        plain_path.display()
+    );
+    let plain = Repository::init(&plain_path, InitOptions::default())?;
+    let twin_start = Instant::now();
+    let (twin_nodes, twin_edges) = acetone_lab::build_with(&plain, shape, false)?;
+    println!(
+        "Built {twin_nodes} nodes, {twin_edges} edges in {:.2}s.",
+        twin_start.elapsed().as_secs_f64()
+    );
+    // The comparison is only meaningful if the twins hold the same graph —
+    // and this must be checked against what was STORED. Comparing the
+    // returned counts would be vacuous: `build_with` derives them from the
+    // `Shape` and a seeded counter without reading the repository, so both
+    // calls return the same constants even if a store error, a partial
+    // commit or a stale directory left the two repositories holding
+    // different graphs.
+    //
+    // `twins_match` is in the library, not inline here, precisely so a test
+    // can pin THIS check rather than reimplement it beside the binary.
+    let (indexed_snapshot, plain_snapshot) =
+        (repo.workspace_snapshot()?, plain.workspace_snapshot()?);
+    acetone_lab::twins_match(indexed_snapshot.manifest(), plain_snapshot.manifest()).map_err(
+        |e| {
+            format!(
+                "{e}\n  ({nodes} nodes / {edges} edges expected, twin reported \
+                 {twin_nodes} / {twin_edges})"
+            )
+        },
     )?;
+
+    criterion_3_measurements(&repo, &plain, shape)?;
     Ok(())
 }
 
-/// Demonstrate IndexSeek acceleration (acetone-6g5.3.2): the same pinned
-/// equality on the indexed `Host.os`, served by an IndexSeek (the declared
-/// `host_os` index) versus a LabelScan+filter (the identical graph with the
-/// index removed from the schema). Reports the best of several runs each.
+/// Demonstrate IndexSeek acceleration (acetone-6g5.3.2) against the
+/// **in-memory** `GraphSnapshot`: the same pinned equality on the indexed
+/// `Host.os`, served by an IndexSeek versus a LabelScan+filter. Best of
+/// several runs each.
+///
+/// This measures the in-memory source, where a seek costs a vector lookup
+/// and pays nothing for a point read, so its speed-up is an upper bound
+/// rather than what a user sees. `criterion_3_measurements` is the
+/// shipped-path number (`acetone-2ck.16`).
 fn index_vs_scan_demo(
     indexed: &GraphSnapshot,
     node_records: &[(
@@ -144,7 +207,6 @@ fn index_vs_scan_demo(
     )],
     schema: &[acetone_model::schema::SchemaEntry],
     params: &BTreeMap<String, acetone_cypher::exec::Value>,
-    hosts: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use acetone_model::schema::SchemaEntry;
 
@@ -170,7 +232,7 @@ fn index_vs_scan_demo(
 
     let best = |bound: &_, graph: &GraphSnapshot| -> Result<f64, Box<dyn std::error::Error>> {
         let mut best = f64::INFINITY;
-        for _ in 0..7 {
+        for _ in 0..RUNS {
             let start = Instant::now();
             let _ = execute(bound, graph, params)?;
             best = best.min(start.elapsed().as_secs_f64() * 1000.0);
@@ -180,99 +242,250 @@ fn index_vs_scan_demo(
 
     let seek_ms = best(&bound_indexed, indexed)?;
     let scan_ms = best(&bound_scan, &scan_graph)?;
-    println!("\nIndex acceleration ({cypher}):");
+    println!("\nIndex acceleration, IN-MEMORY source ({cypher}):");
     println!("  IndexSeek (host_os):      {seek_ms:>8.3} ms");
     println!("  LabelScan + filter:       {scan_ms:>8.3} ms");
     if seek_ms > 0.0 {
         println!("  speedup:                  {:>8.1}x", scan_ms / seek_ms);
     }
 
-    // The Phase 9 criterion-3 measurements (acetone-2ck.10): range,
-    // composite and primary-key seeks against their scan equivalents.
-    // Each hinted run binds Strict against the full schema; each scan
-    // run binds against the schema with indexes stripped (range,
-    // composite) or Lenient against an empty catalogue (key seek — the
-    // primary key map exists whenever the schema does, so the scan
-    // comparison must drop the schema entirely).
-    // Case selection against the generator's distributions: `not_after`
-    // is `i % 365`, so `< 30` selects ~8% of certificates (a selective
-    // range); `os` (modulus 5) and `criticality` (modulus 7) are
-    // decorrelated, so a composite bucket holds ~1/35 of hosts. An
-    // EMPTY composite bucket is measured too: proving absence without a
-    // scan is half the point of a seek.
-    let keyseek_query = format!(
-        "MATCH (h:Host {{hostname: 'host-{}'}}) RETURN count(*) AS n",
-        hosts - 1
-    );
-    let cases: [(&str, &str); 4] = [
-        (
-            "IndexRange (cert_not_after < 30)",
-            "MATCH (c:Certificate) WHERE c.not_after < 30 RETURN count(*) AS n",
-        ),
-        (
-            "Composite seek (populated bucket)",
-            // os uses modulus 5 and criticality modulus 7, so this
-            // bucket holds ~1/35 of hosts — genuinely narrower than
-            // the os prefix alone.
-            "MATCH (h:Host {os: 'debian', criticality: 0}) RETURN count(*) AS n",
-        ),
-        (
-            "Composite seek (empty bucket)",
-            // i%5==0 and i%7==6 first coincide at i=20 — populated too
-            // at any real scale; use an out-of-range criticality for a
-            // structurally empty bucket instead.
-            "MATCH (h:Host {os: 'debian', criticality: 9}) RETURN count(*) AS n",
-        ),
-        (
-            "KeySeek (Host primary key)",
-            // Derived from the shape so the key EXISTS at every scale:
-            // a missing key makes the hinted side fall back to a scan
-            // and silently measures scan-vs-scan (PR #209 review).
-            &keyseek_query,
-        ),
+    Ok(())
+}
+
+/// One criterion-3 case: what it measures and why its selectivity matters.
+struct SeekCase {
+    name: &'static str,
+    cypher: String,
+    /// What the case is meant to show, printed alongside the result so a
+    /// reader can tell a designed decline from a disappointing win.
+    expectation: &'static str,
+}
+
+/// Phase 9 criterion 3, measured on the **shipped read path**
+/// (`acetone-2ck.16`).
+///
+/// The previous version of this ran every case against a `GraphSnapshot`
+/// built in memory, where a "seek" is a vector lookup that costs nothing —
+/// so any selectivity looked like a win and the published speed-ups
+/// (13.8x range, 27.6x composite) were artefacts of the harness. On a real
+/// store a seek does one **random point read per matching row** against a
+/// **sequential** scan, so it wins only while selective.
+///
+/// This compares two real repositories built from the identical
+/// deterministic generator, differing only in whether the secondary indexes
+/// are declared, queried through `Session` — the same path the CLI uses.
+/// Runs are **interleaved**: non-interleaved timing on this codebase once
+/// invented a 2x difference that vanished entirely under interleaving.
+fn criterion_3_measurements(
+    indexed: &Repository,
+    plain: &Repository,
+    shape: acetone_lab::Shape,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let certificates = shape.certificates;
+    let hosts = shape.hosts;
+
+    // Selectivities are stated against the generator's own distributions:
+    // `not_after` is `i % 365`, `os` is `i % 5` and `criticality` is
+    // `i % 7` (decorrelated, so an (os, criticality) bucket is ~1/35).
+    let cases = vec![
+        SeekCase {
+            name: "IndexRange, expiring tomorrow (0.27%)",
+            cypher: "MATCH (c:Certificate) WHERE c.not_after < 1 RETURN count(*) AS n".into(),
+            expectation: "selective: seek should win",
+        },
+        SeekCase {
+            name: "IndexRange, expiring this week (1.9%)",
+            cypher: "MATCH (c:Certificate) WHERE c.not_after < 7 RETURN count(*) AS n".into(),
+            expectation: "near break-even",
+        },
+        SeekCase {
+            name: "IndexRange, expiring in 30 days (8.2%)",
+            // The lab's ORIGINAL range case, kept deliberately. It reported
+            // 13.8x against the in-memory source; on the store it is
+            // genuinely scan-shaped, and the point of keeping it is to show
+            // the cost model DECLINING to parity rather than losing 37x.
+            cypher: "MATCH (c:Certificate) WHERE c.not_after < 30 RETURN count(*) AS n".into(),
+            expectation: "unselective: should decline to ~parity",
+        },
+        SeekCase {
+            name: "Composite seek, empty bucket",
+            // i%5==0 and i%7==6 first coincide at i=20, so an in-range
+            // pair is populated at any real scale; use an out-of-range
+            // criticality for a structurally empty bucket.
+            cypher: "MATCH (h:Host {os: 'debian', criticality: 9}) RETURN count(*) AS n".into(),
+            expectation: "absence proof: seek should win outright",
+        },
+        SeekCase {
+            name: "Composite seek, populated bucket (2.9%)",
+            // The lab's ORIGINAL composite case, also kept: it reported
+            // 27.6x in memory and 3.7x SLOWER on the store before the cost
+            // model existed.
+            cypher: "MATCH (h:Host {os: 'debian', criticality: 0}) RETURN count(*) AS n".into(),
+            expectation: "unselective: should decline to ~parity",
+        },
+        SeekCase {
+            name: "IndexSeek equality on os (20%)",
+            cypher: "MATCH (h:Host {os: 'debian'}) RETURN count(*) AS n".into(),
+            expectation: "unselective: should decline to ~parity",
+        },
+        SeekCase {
+            name: "WHERE equality on os (20%)",
+            // acetone-7qw.9: this form did not reach an index at all before
+            // PR #224, so indexed and unindexed were identical.
+            cypher: "MATCH (h:Host) WHERE h.os = 'debian' RETURN count(*) AS n".into(),
+            expectation: "unselective: should decline to ~parity",
+        },
     ];
-    println!("\nPhase 9 criterion-3 measurements (hinted vs scan):");
-    for (name, cypher) in cases {
-        let parsed = acetone_cypher::parse(cypher)?;
-        let hinted = bind(cypher, &parsed, &cat_indexed, BindMode::Strict)?;
-        let scanned = if name.starts_with("KeySeek") {
-            bind(
-                cypher,
-                &parsed,
-                &acetone_cypher::bind::Catalogue::empty(),
-                BindMode::Lenient,
-            )?
+
+    // The planner's own inputs, printed because they are not stable across
+    // rebuilds: the cardinality estimator is sampled, and measurably
+    // bimodal on skewed trees (PR #224 review). A lab timing without the
+    // estimate beside it is not comparable run to run.
+    let snapshot = indexed.workspace_snapshot()?;
+    let estimate = snapshot.estimate_nodes();
+    let true_nodes = shape.nodes();
+    println!("\nPhase 9 criterion 3 — seek vs scan on the SHIPPED path (Session):");
+    match estimate {
+        Some(rows) => println!(
+            "  planner inputs: nodes estimated {rows} (true {true_nodes}, ratio {:.2}), \
+             candidate budget {}",
+            rows as f64 / true_nodes as f64,
+            acetone_cypher::exec::store_source::candidate_cap(rows)
+        ),
+        None => println!("  planner inputs: nodes map could not be sampled"),
+    }
+    println!(
+        "  {certificates} certificates, {hosts} hosts; indexed vs an identical \
+         unindexed repository, interleaved, best of {RUNS}"
+    );
+
+    for case in &cases {
+        let (indexed_ms, plain_ms) = interleaved(indexed, plain, &case.cypher)?;
+        let ratio = if indexed_ms > 0.0 {
+            plain_ms / indexed_ms
         } else {
-            bind(cypher, &parsed, &cat_scan, BindMode::Strict)?
+            f64::INFINITY
         };
-        let hinted_result = execute(&hinted, indexed, params)?;
-        let scanned_graph: &GraphSnapshot = if name.starts_with("KeySeek") {
-            indexed
-        } else {
-            &scan_graph
-        };
-        let scanned_result = execute(&scanned, scanned_graph, params)?;
-        // Parity first: the acceleration must not change the answer.
-        // (Debug-format comparison assumes the single-row count(*) shape
-        // of these cases; a multi-row case would need order-insensitive
-        // comparison.)
-        assert_eq!(
-            format!("{:?}", hinted_result.rows),
-            format!("{:?}", scanned_result.rows),
-            "hinted and scanned rows must match for {name}"
-        );
-        let hinted_ms = best(&hinted, indexed)?;
-        let scanned_ms = best(&scanned, scanned_graph)?;
+        // A ratio ABOVE 1 is a speed-up; below 1 the index cost us.
         println!(
-            "  {name:<40} hinted {hinted_ms:>8.3} ms   scan {scanned_ms:>8.3} ms   speedup {:>6.1}x",
-            if hinted_ms > 0.0 {
-                scanned_ms / hinted_ms
-            } else {
-                f64::INFINITY
-            }
+            "  {:<40} indexed {indexed_ms:>8.2} ms   unindexed {plain_ms:>8.2} ms   {:>7}   ({})",
+            case.name,
+            format!("{ratio:.2}x"),
+            case.expectation
         );
     }
+
+    key_seek_measurement(indexed, plain, shape)?;
     Ok(())
+}
+
+/// The primary-key point lookup, reported **separately from the table above
+/// and without a ratio**, because the twin ratio here is uninformative by
+/// construction.
+///
+/// `KeySeek` is emitted from the label's declared KEY alone: the binder
+/// returns the hint before it ever consults the index catalogue, so a
+/// declared index plays no part. Both twins declare `Host` with the same
+/// `hostname` key, so both bind and execute the identical plan and the ratio
+/// is pinned at ~1.00x whether key seeks work perfectly or not at all. An
+/// earlier version of this harness printed that 1.00x in the ratio column
+/// and read a discovered gap out of it; the number could not have shown
+/// either outcome.
+///
+/// What *is* evidence is the absolute time against the size of the scan it
+/// should be avoiding (`acetone-2ck.17`).
+fn key_seek_measurement(
+    indexed: &Repository,
+    plain: &Repository,
+    shape: acetone_lab::Shape,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Derived from the shape so the key EXISTS at every scale: a missing key
+    // makes the hinted side fall back to a scan (PR #209 review).
+    let cypher = format!(
+        "MATCH (h:Host {{hostname: 'host-{}'}}) RETURN count(*) AS n",
+        shape.hosts.saturating_sub(1)
+    );
+    let (indexed_ms, plain_ms) = interleaved(indexed, plain, &cypher)?;
+    println!("\n  Point lookup by primary key — NOT an index A/B:");
+    println!("    {cypher}");
+    println!(
+        "    {indexed_ms:.2} ms (twin without indexes: {plain_ms:.2} ms — the same plan; \
+         KeySeek comes from the declared key, not from an index)"
+    );
+    println!(
+        "    Compare against a full scan of {} nodes. A point lookup that costs \
+         a scan is not seeking: acetone-2ck.17 (string key pins are declined \
+         outright), blocked on acetone-2ck.18 (no CLI property types).",
+        shape.nodes()
+    );
+    Ok(())
+}
+
+/// Runs to take the best of. The minimum is the right statistic here: it is
+/// the run least disturbed by other work on the machine.
+const RUNS: usize = 7;
+
+/// Time `cypher` against both repositories, **alternating** them so machine
+/// drift lands on both sides, and check they return the same result on every
+/// iteration.
+///
+/// The parity check is the load-bearing part: an "acceleration" that returned
+/// a different answer would otherwise be reported as a speed-up. Note its
+/// exact strength — every criterion-3 case projects `count(*)`, so this
+/// compares a **cardinality oracle**, with the unindexed scan as the
+/// reference answer. It would catch a seek that under- or over-selects, which
+/// is the hazard that matters here; it would not catch a seek that returned
+/// the right number of wrong nodes.
+fn interleaved(
+    indexed: &Repository,
+    plain: &Repository,
+    cypher: &str,
+) -> Result<(f64, f64), Box<dyn std::error::Error>> {
+    let (a, b) = (Session::new(indexed), Session::new(plain));
+    let (mut best_indexed, mut best_plain) = (f64::INFINITY, f64::INFINITY);
+    for i in 0..RUNS {
+        let time = |session: &Session<'_>| -> Result<(f64, String), Box<dyn std::error::Error>> {
+            let start = Instant::now();
+            let out = session.run(cypher)?;
+            Ok((start.elapsed().as_secs_f64() * 1000.0, format!("{out:?}")))
+        };
+        // Swap the order every other iteration. Alternation alone does not
+        // cancel a systematic WITHIN-iteration effect — the second query
+        // always running with the first's working set resident — because the
+        // same side is always second. Swapping does.
+        let ((indexed_ms, rows_indexed), (plain_ms, rows_plain)) = if i % 2 == 0 {
+            let first = time(&a)?;
+            (first, time(&b)?)
+        } else {
+            let first = time(&b)?;
+            (time(&a)?, first)
+        };
+        best_indexed = best_indexed.min(indexed_ms);
+        best_plain = best_plain.min(plain_ms);
+        // Checked every iteration, not once after the loop: comparing only
+        // the values left by the final iteration would leave the other
+        // RUNS-1 answers unexamined.
+        if rows_indexed != rows_plain {
+            return Err(format!(
+                "indexed and unindexed disagree for: {cypher}\n  \
+                 indexed:   {rows_indexed}\n  unindexed: {rows_plain}"
+            )
+            .into());
+        }
+    }
+    Ok((best_indexed, best_plain))
+}
+
+/// Where the unindexed twin is built: `<repo>-unindexed`, beside the
+/// repository under measurement.
+fn twin_path(repo_path: &std::path::Path) -> PathBuf {
+    repo_path.with_file_name(format!(
+        "{}-unindexed",
+        repo_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "lab".to_string())
+    ))
 }
 
 fn usage(problem: &str) -> ExitCode {

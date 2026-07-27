@@ -160,3 +160,147 @@ fn strict_binding_rejects_an_undeclared_label() {
     // The same query binds fine leniently.
     assert!(bind(cypher, &parsed, &catalogue, BindMode::Lenient).is_ok());
 }
+
+/// The seek-versus-scan comparison is only meaningful if the two
+/// repositories hold the same graph, so pin that rather than trusting the
+/// generator to be deterministic across two calls (`acetone-2ck.16`).
+#[test]
+fn the_unindexed_twin_holds_an_identical_graph() {
+    let shape = acetone_lab::Shape::from_scale(200);
+
+    let indexed_dir = tempfile::tempdir().expect("tempdir");
+    let indexed =
+        Repository::init(&indexed_dir.path().join("a.git"), InitOptions::default()).expect("init");
+    let with_indexes = acetone_lab::build_with(&indexed, shape, true).expect("build");
+
+    let plain_dir = tempfile::tempdir().expect("tempdir");
+    let plain =
+        Repository::init(&plain_dir.path().join("b.git"), InitOptions::default()).expect("init");
+    let without_indexes = acetone_lab::build_with(&plain, shape, false).expect("build");
+
+    assert_eq!(
+        with_indexes, without_indexes,
+        "the twins must hold identical node and edge counts"
+    );
+
+    // Identical CONTENT, not merely identical counts. Counts are the weak
+    // check twice over: `build_with` derives its return value from the
+    // `Shape` and a seeded counter without reading the repository, and even
+    // a snapshot-derived count cannot see a divergence that preserves
+    // cardinality — a property value differing between the two builds, or a
+    // record written under a different encoding.
+    //
+    // The map roots are the exact check: identical map contents yield
+    // identical prolly-tree roots regardless of operation order (load-bearing
+    // invariant 1). So equal roots mean equal graphs, and declaring an index
+    // must not perturb the node or edge maps at all.
+    //
+    // Checked through `twins_match`, the same function the criterion-3
+    // harness calls, so this test constrains the real check rather than a
+    // copy of it.
+    let a = indexed.workspace_snapshot().expect("snapshot");
+    let b = plain.workspace_snapshot().expect("snapshot");
+    let (ma, mb) = (a.manifest(), b.manifest());
+    assert_eq!(
+        acetone_lab::twins_match(ma, mb),
+        Ok(()),
+        "declaring an index perturbed the node or edge maps"
+    );
+    // The schema roots MUST differ — that is the one intended difference,
+    // and equal schema roots would mean the twin was built with indexes
+    // after all, making every measured ratio a comparison of like with like.
+    assert_ne!(
+        ma.schema, mb.schema,
+        "the twins must differ in their declared schema"
+    );
+
+    // And the twin genuinely has no indexes to seek with.
+    use acetone_model::schema::SchemaEntry;
+    assert!(
+        !b.schema_entries()
+            .expect("schema")
+            .iter()
+            .any(|e| matches!(e, SchemaEntry::Index { .. })),
+        "the unindexed twin must declare no indexes"
+    );
+    assert!(
+        a.schema_entries()
+            .expect("schema")
+            .iter()
+            .any(|e| matches!(e, SchemaEntry::Index { .. })),
+        "the indexed side must declare indexes"
+    );
+}
+
+/// `twins_match` is only worth having if it can FAIL. The assertion it
+/// replaced could not: it compared `build_with`'s return value, which is
+/// derived from the `Shape` and a seeded counter without reading the
+/// repository, so it held whatever the two repositories actually contained.
+///
+/// This calls `twins_match` itself — the same function the criterion-3
+/// harness calls — and requires it to reject a pair that is not a twin. A
+/// refactor that pointed it at fields equal for both repositories would fail
+/// here, which is the property the test above cannot establish on its own
+/// (it can only show the function accepts a true twin, which a function that
+/// accepts everything also does).
+#[test]
+fn twins_match_rejects_a_divergent_graph() {
+    let manifest_of = |scale: usize, indexes: bool| {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo =
+            Repository::init(&dir.path().join("r.git"), InitOptions::default()).expect("init");
+        acetone_lab::build_with(&repo, acetone_lab::Shape::from_scale(scale), indexes)
+            .expect("build");
+        let snapshot = repo.workspace_snapshot().expect("snapshot");
+        // `Manifest` is not `Copy`; clone it out before the tempdir goes.
+        let manifest = snapshot.manifest().clone();
+        drop(snapshot);
+        drop(dir);
+        manifest
+    };
+
+    // Only the SHAPE varies between these two: both declare indexes, so a
+    // rejection can only come from the graph's content — otherwise this could
+    // not tell "roots track content" from "roots track index declaration".
+    let reference = manifest_of(200, true);
+    let divergent = manifest_of(300, true);
+
+    let rejected = acetone_lab::twins_match(&reference, &divergent)
+        .expect_err("twins_match accepted two differently-shaped graphs as twins");
+    // Assert against the SUMMARY line, not the whole message: the detail
+    // block below it prints all three map names unconditionally, so
+    // `rejected.contains("nodes")` is satisfied by boilerplate and would
+    // still hold if a field were dropped from the comparison entirely.
+    // These two graphs differ in all three maps, so the summary must name
+    // all three — which pins the field set, not just that some check fired.
+    let summary = rejected.lines().next().unwrap_or_default();
+    assert!(
+        summary.contains("nodes, edges_fwd, edges_rev differ"),
+        "the rejection summary must name every diverging map, got: {summary}"
+    );
+    // Same graph, but BOTH sides indexed: not a measurement pair. Nothing
+    // else in the harness catches this — the plain side's lack of indexes
+    // rests on a single literal `false` in the binary — and if it went
+    // unchecked the run would publish a table of ~1.00x ratios that reads
+    // exactly like the designed-decline story the README tells.
+    let not_a_twin = acetone_lab::twins_match(&reference, &reference)
+        .expect_err("twins_match accepted two INDEXED repositories as a measurement pair");
+    assert!(
+        not_a_twin.contains("plain side declares indexes"),
+        "expected an index-asymmetry rejection, got: {not_a_twin}"
+    );
+
+    // The mirror case: neither side indexed, so every ratio would be a scan
+    // against a scan.
+    let plain_200 = manifest_of(200, false);
+    let neither = acetone_lab::twins_match(&plain_200, &plain_200)
+        .expect_err("twins_match accepted two UNINDEXED repositories as a measurement pair");
+    assert!(
+        neither.contains("indexed side declares no indexes"),
+        "expected a missing-index rejection, got: {neither}"
+    );
+
+    // And it accepts a genuine measurement pair, so the rejections above are
+    // not simply a function that refuses everything.
+    assert_eq!(acetone_lab::twins_match(&reference, &plain_200), Ok(()));
+}
