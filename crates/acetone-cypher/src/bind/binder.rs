@@ -1450,13 +1450,25 @@ fn attach_equality_hints(
         // an unselective probe walks the index to the cap twice before
         // declining (PR #224 review nit 6). The inline pin is already
         // attached by the time this pass runs, so first-wins is the inline
-        // one — the same seek either way.
-        let already_targets = |hints: &[IndexHint], target: &str| {
-            hints.iter().any(|h| match h {
-                IndexHint::KeySeek { label, .. } => label == target,
-                IndexHint::IndexSeek { name, .. } | IndexHint::IndexRange { name, .. } => {
-                    name == target
-                }
+        // one — which is the same seek whenever the two spellings agree, and
+        // when they contradict each other neither can match anyway.
+        //
+        // Labels and index names live in separate namespaces, so they are
+        // tested separately: comparing one against the other let an index
+        // sharing a label's name suppress a legitimate `KeySeek` (PR #224
+        // review nit 4).
+        let keyseek_on = |hints: &[IndexHint], label: &str| {
+            hints
+                .iter()
+                .any(|h| matches!(h, IndexHint::KeySeek { label: l, .. } if l == label))
+        };
+        let index_seek_on = |hints: &[IndexHint], name: &str| {
+            hints.iter().any(|h| {
+                matches!(
+                    h,
+                    IndexHint::IndexSeek { name: n, .. } | IndexHint::IndexRange { name: n, .. }
+                        if n == name
+                )
             })
         };
         // KeySeek only when EVERY key property is pinned, mirroring the
@@ -1466,7 +1478,7 @@ fn attach_equality_hints(
             if !key.is_empty() && key.iter().all(|k| pinned.iter().any(|p| p == k)) {
                 let values: Option<Vec<RangeBound>> = key.iter().map(|k| value_of(k)).collect();
                 if let Some(values) = values {
-                    if !already_targets(&start.index_hints, label) {
+                    if !keyseek_on(&start.index_hints, label) {
                         start.index_hints.push(IndexHint::KeySeek {
                             label: label.clone(),
                             key: key.to_vec(),
@@ -1481,7 +1493,7 @@ fn attach_equality_hints(
             let properties = def.properties().to_vec();
             let values: Option<Vec<RangeBound>> = properties.iter().map(|p| value_of(p)).collect();
             if let Some(values) = values
-                && !already_targets(&start.index_hints, name)
+                && !index_seek_on(&start.index_hints, name)
             {
                 start.index_hints.push(IndexHint::IndexSeek {
                     name: name.to_string(),

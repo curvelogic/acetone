@@ -45,8 +45,10 @@ use crate::node::{Node, read_node};
 /// [`LEVEL_SAMPLES`] nodes spread across each level instead brings the worst
 /// observed error to well under 2x, in both directions.
 ///
-/// Costs roughly `LEVEL_SAMPLES * height` chunk reads — a dozen or two — so
-/// callers should sample once per query rather than once per row.
+/// Costs `LEVEL_SAMPLES * height` chunk reads at most: two dozen or so on a
+/// real tree, which is height 2–4, and bounded above by
+/// `LEVEL_SAMPLES * MAX_HEIGHT` on any tree the format admits. Callers
+/// should still sample once per query rather than once per row.
 ///
 /// It is a planner input, never a correctness input: a wrong estimate can
 /// only make the planner choose a slower plan, never a wrong answer.

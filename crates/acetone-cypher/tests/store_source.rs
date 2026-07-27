@@ -970,6 +970,12 @@ fn candidate_budget_tracks_estimated_scan_cost() {
         candidate_cap(200_000) > candidate_cap(50_000),
         "monotone in the scan cost it is competing with"
     );
+
+    // A saturated estimate must not panic. `estimate_entries` multiplies
+    // mean fanouts as an `f64` and casts with `as usize`, which saturates,
+    // so a pathological tree can present usize::MAX here — and this runs in
+    // debug in every test and CI build (PR #224 review finding 1).
+    assert_eq!(candidate_cap(usize::MAX), usize::MAX / 200);
 }
 
 /// acetone-7qw.9: an index must be usable from the form people actually

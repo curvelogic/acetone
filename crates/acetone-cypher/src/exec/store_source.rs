@@ -261,9 +261,15 @@ impl<'s> StoreBackedSource<'s> {
 /// An earlier version tiered on the index's prolly height, which fails
 /// structurally: height changes once per fanout (~10x in entries), so one
 /// tier spans a 10x range of cardinalities.
+/// Dividing rather than multiplying-then-dividing is deliberate: the estimate
+/// is an `f64` product cast with `as usize`, which **saturates**, so a
+/// pathological tree can present `usize::MAX` here. `rows * 5 / 1000`
+/// overflows above `usize::MAX / 5` — a debug-build panic on a crafted
+/// repository (PR #224 review finding 1). `rows / 200` is the same 0.5% and
+/// cannot overflow.
 pub fn candidate_cap(estimated_rows: usize) -> usize {
-    const BREAK_EVEN_PERMILLE: usize = 5;
-    (estimated_rows * BREAK_EVEN_PERMILLE / 1000).max(CANDIDATE_FLOOR)
+    const BREAK_EVEN_ONE_IN: usize = 200; // 0.5%
+    (estimated_rows / BREAK_EVEN_ONE_IN).max(CANDIDATE_FLOOR)
 }
 
 /// Candidates a seek may always materialise, whatever the graph's size.

@@ -113,18 +113,37 @@ exactly.
   interleaved on the shipped `Session` path: the 53.7× regression is at
   1.23×, the 12.5× adversarial counterexample at 1.04×, and `WHERE` at
   1.01×, while selective cases win outright (0.16–0.24×). The residual is a
-  **constant**, not a cliff: a seek that declines has still paid for its
-  index probe and one cardinality sample, about 0.2 ms. On a graph small
-  enough for the whole scan to take a millisecond that shows up as ~1.2×.
+  **constant**, not a cliff: a seek that declines has still paid for *two*
+  index probes — the floor probe and the budgeted one — plus one cardinality
+  sample, about 0.2 ms. (Two probes is the price of the floor fast path, and
+  worth it: it is what keeps the estimator off the point-lookup path.) On a
+  graph small enough for the whole scan to take a millisecond that shows up
+  as ~1.2×.
   The honest statement is *bounded near parity in the worst case, a large
   win in the selective case* — not *never slower*.
 - The estimator is approximate, and its error is **not** symmetric in cost,
   which the first draft of this ADR got wrong. Over-estimating scales the
-  authorised seek linearly; under-estimating only forfeits a win. Worst
-  observed error across six tree shapes and four sizes is 1.37× high and
-  0.31× low; the 0.5% fraction is set so that even the high end lands at or
-  under measured break-even. Improving the estimator (sampling more
-  cheaply, or weighting by subtree size) is `acetone-7qw.11`.
+  authorised seek linearly; under-estimating only forfeits a win. Across
+  fifteen tree shapes and four sizes — including shapes built by review
+  specifically to defeat a per-level mean — the worst error is **1.96×
+  high** and **0.02× low**. The 0.5% fraction is set so that even the high
+  end composes to at or under break-even: 0.5% × 1.96 = 0.98% of true rows,
+  and a seek served at that point still measured 0.42× (a win), not a loss.
+  - The low end costs more than it looks. On a `tail-fat` tree — the last
+    10% of the key space carrying large records, an entirely ordinary shape
+    — the estimate runs 0.08–0.11×, so a 50,000-row label gets the floor of
+    32 (0.06%) and a 500-row bucket that would have won comfortably is
+    declined. Safe and bounded, but a real forfeit.
+  - It is also **bimodal on narrow-band shapes**: two builds of the same
+    logical dataset estimated 426 and 23,520 — 55× apart — depending on
+    whether the fat band happened to fall on the sampled frontier. Both
+    outcomes were safe, but a planner input that varies 55× between builds
+    of identical data makes performance non-reproducible, which matters to
+    anyone benchmarking against it.
+  - Improving the estimator (weighting samples by subtree size, sampling by
+    observed variance, or reading a level outright when it is narrow) is
+    `acetone-7qw.11`, and would buy back the margin currently spent
+    absorbing this.
 - **Candidates are tried in order, not costed.** A hint that *serves*
   short-circuits the list even if a later one would be far more selective —
   measured 65× off the best available plan where an equality just barely
