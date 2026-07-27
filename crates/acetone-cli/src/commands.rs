@@ -801,6 +801,17 @@ pub(crate) fn declare_label(
             );
         }
     }
+    // Rendered before `def` moves into the entry.
+    let declared_types = if def.types().is_empty() {
+        String::new()
+    } else {
+        let pairs: Vec<String> = def
+            .types()
+            .iter()
+            .map(|(property, ty)| format!("{}: {}", format_label(property), ty.as_str()))
+            .collect();
+        format!(" types ({})", pairs.join(", "))
+    };
     let entry = SchemaEntry::Label {
         name: label.to_owned(),
         def,
@@ -818,9 +829,14 @@ pub(crate) fn declare_label(
             .join(", ")
     };
     outln!(
-        "declared label {} key [{}]",
+        "declared label {} key [{}]{}",
         format_label(label),
-        escaped(key)
+        escaped(key),
+        // Echo the types too. A declaration is now enforced (ADR-0066), so
+        // confirming what was actually recorded matters more than it did for
+        // a purely advisory annotation — and `--type` is easy to mistype in a
+        // way that still parses (`os:string` vs `so:string`).
+        declared_types
     );
     Ok(())
 }

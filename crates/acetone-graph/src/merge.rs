@@ -558,10 +558,18 @@ fn rebuild_reverse<S: ChunkStore>(
 
 /// Validate a map-clean merged manifest against `base` (acetone-14c.3):
 /// referential integrity (no dangling edges) and schema constraints
-/// (existence, UNIQUE), re-checked over the keys the merge changed. Returns
-/// the violations in category order (dangling edges, then existence, then
-/// UNIQUE), each category in key order — deterministic, so the merge stays
-/// a pure function of its inputs (Invariant #4).
+/// (existence, declared types, UNIQUE), re-checked over the keys the merge
+/// changed. Returns the violations in category order (dangling edges, then
+/// existence, then declared types, then UNIQUE), each category in key order —
+/// deterministic, so the merge stays a pure function of its inputs
+/// (Invariant #4).
+///
+/// Note the persisted conflicts map sorts `WrongType` *last* rather than
+/// third: its entry-key tag is 3, assigned after UNIQUE's 2 so existing
+/// conflict keys did not move. Both orders are deterministic, so Invariant #4
+/// holds either way, but `GraphError::MergeViolations` and
+/// `CALL acetone.conflicts()` therefore list the same merge's categories in
+/// different orders.
 ///
 /// Only **merge-introduced** breaches are reported: a violation is attributed
 /// to the merge when it arises from a key the merge changed (an added edge, a
@@ -692,24 +700,18 @@ pub(crate) fn validate_merged<S: ChunkStore>(
         };
         let key_enc = key.encode()?;
         let changed = changed_nodes.contains(&key_enc);
-        for (property, declared) in def.types() {
-            let Some(value) = record.properties().get(property) else {
-                continue;
-            };
-            if declared.matches(value) {
-                continue;
-            }
-            let Some(actual) = PropertyType::of(value) else {
-                continue;
-            };
+        // Shared with the declare-time and save-time checks, so all three
+        // agree by construction — including on key properties, whose values
+        // live in the node key rather than the record.
+        for (property, declared, actual) in crate::constraints::type_violations(key, record, def) {
             let newly_declared = base_labels
                 .get(key.label())
-                .is_none_or(|b| b.types().get(property) != Some(declared));
+                .is_none_or(|b| b.types().get(&property) != Some(&declared));
             if changed || newly_declared {
                 violations.push(GraphViolation::WrongType {
                     node: key_enc.clone(),
-                    property: property.clone(),
-                    declared: *declared,
+                    property,
+                    declared,
                     actual,
                 });
             }

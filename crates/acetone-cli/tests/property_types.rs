@@ -171,9 +171,14 @@ fn a_write_contradicting_a_declared_type_is_rejected() {
         ],
     );
     assert!(!bad_create.status.success(), "mistyped CREATE must fail");
+    // Assert the PERSIST path's own wording, not just "declared int": the
+    // save-time chokepoint refuses this too, and its message contains that
+    // substring as well — so a weaker assertion passed with the persist check
+    // disabled entirely (PR #226 review, S2). `persist` is the earlier and
+    // friendlier of the two, and the only one that sees runtime values.
     assert!(
-        stderr(&bad_create).contains("declared int"),
-        "expected a type error naming the declaration, got:\n{}",
+        stderr(&bad_create).contains("the value written is of type string"),
+        "expected the persist-path type error, got:\n{}",
         stderr(&bad_create)
     );
 
@@ -389,5 +394,241 @@ fn the_shell_declare_label_form_takes_types_too() {
     assert!(
         text.contains("\"os\": string"),
         "the shell form must declare types too, got:\n{text}"
+    );
+}
+
+#[test]
+fn put_node_cannot_bypass_a_declared_type() {
+    // The Cypher write path is not the only writer. `put-node` stages a node
+    // record straight onto a `Transaction`, never touching `persist.rs`, so
+    // enforcing types only there left this path able to store a value
+    // contradicting its declaration — and `probe_value` decides a raw string
+    // index probe is safe from the declaration ALONE, so one unchecked writer
+    // is enough to make a seek under-select.
+    //
+    // Enforcement therefore lives at `save`, the chokepoint every writer
+    // passes through (ADR-0066).
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = repo_with_host(&dir, &["cores:int"]);
+
+    let bad = acetone(
+        &repo,
+        &["put-node", "Host", "h1", "--prop", "cores=\"eight\""],
+    );
+    assert!(
+        !bad.status.success(),
+        "put-node must not bypass the declared type"
+    );
+    assert!(
+        stderr(&bad).contains("declared int"),
+        "expected a type error naming the declaration, got:\n{}",
+        stderr(&bad)
+    );
+
+    // The conforming form still works, and nothing from the refusal landed.
+    assert!(
+        acetone(&repo, &["put-node", "Host", "h2", "--prop", "cores=8"])
+            .status
+            .success()
+    );
+    let rows = stdout(&acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) RETURN h.hostname AS n ORDER BY n",
+            "--format",
+            "csv",
+        ],
+    ));
+    assert!(rows.contains("h2"), "the conforming node must be stored");
+    assert!(
+        !rows.contains("h1"),
+        "the refused put-node must not have landed:\n{rows}"
+    );
+}
+
+#[test]
+fn declaring_a_type_and_writing_conforming_values_in_one_transaction_succeeds() {
+    // The save-time check reads the schema AFTER this transaction's own schema
+    // ops are applied. If it read the pre-transaction schema instead, this
+    // would still pass (no type declared yet); if it read the post-transaction
+    // schema but applied it in the wrong order, a declare-then-write shell
+    // session would fail spuriously. Pinned through the shell, where both
+    // land in one workspace before any commit.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    use std::io::Write;
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "shell"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn shell");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(
+            b":declare-label Host --key hostname --type cores:int\n\
+              CREATE (h:Host {hostname: 'h1', cores: 4})\n\
+              MATCH (h:Host) RETURN h.cores AS c\n",
+        )
+        .expect("write");
+    let out = child.wait_with_output().expect("wait");
+    let text = stdout(&out);
+    assert!(
+        text.contains('4'),
+        "declaring a type and writing a conforming value in one session must \
+         succeed, got:\n{text}\nstderr:\n{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_key_property_type_is_enforced_and_backfill_checked() {
+    // Key properties are the subtle half (PR #226 review, B2). A node's key
+    // values live in its NodeKey, not its NodeRecord, so the declare-time,
+    // save-time and merge-time checks — all of which read
+    // `record.properties()` — silently exempted exactly the properties whose
+    // type matters most. `acetone-2ck.17` extends the seek guard's trust to
+    // key properties, where a missed row is a missed identity.
+    //
+    // An earlier version of this suite asserted that declaring
+    // `hostname:string` over string data is ACCEPTED. That assertion was
+    // vacuous: it passed for any declared type, including a contradicting
+    // one, because nothing looked at key values at all.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = repo_with_host(&dir, &[]);
+    assert!(
+        acetone(&repo, &["query", "CREATE (h:Host {hostname:'h1'})"])
+            .status
+            .success()
+    );
+
+    // Declaring a key type the stored keys contradict must be refused.
+    let refused = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Host",
+            "--key",
+            "hostname",
+            "--type",
+            "hostname:int",
+        ],
+    );
+    assert!(
+        !refused.status.success(),
+        "a key-property type the data contradicts must be refused"
+    );
+    assert!(
+        stderr(&refused).contains("hostname") && stderr(&refused).contains("declared int"),
+        "the refusal must name the key property and declaration, got:\n{}",
+        stderr(&refused)
+    );
+
+    // And the truthful declaration is still accepted — the positive case,
+    // now meaningful because the negative one above can fail.
+    assert!(
+        acetone(
+            &repo,
+            &[
+                "declare-label",
+                "Host",
+                "--key",
+                "hostname",
+                "--type",
+                "hostname:string",
+            ],
+        )
+        .status
+        .success(),
+        "a key-property type the data satisfies must be accepted"
+    );
+
+    // put-node must not be able to write a contradicting key value either.
+    let dir2 = tempfile::tempdir().expect("tmp");
+    let repo2 = repo_with_host(&dir2, &["hostname:int"]);
+    let bad = acetone(&repo2, &["put-node", "Host", "h3", "--prop", "os=x"]);
+    assert!(
+        !bad.status.success(),
+        "put-node must not write a key value contradicting its declared type"
+    );
+}
+
+#[test]
+fn fsck_reports_a_declared_type_violation() {
+    // fsck is the only tool that surfaces a violation the write path did not
+    // catch — and ADR-0066 accepts that such violations exist, since the
+    // format is unchanged and merge deliberately leaves untouched
+    // pre-existing breaches alone. Its fast path skipped the whole check
+    // unless a label declared REQUIRE or UNIQUE, so a types-only
+    // declaration — exactly what `declare-label --type` produces — made fsck
+    // report "clean" over a graph whose index could under-select (review B1).
+    //
+    // Reached here through a retyping merge, which is a legal way to arrive
+    // at a violating workspace.
+    // The branch forks BEFORE the violating node exists, so each side is
+    // individually legal — the retyping branch has nothing to contradict it,
+    // and the node's branch has no type declared. Only the merge breaches.
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = repo_with_host(&dir, &[]);
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "retype"]).status.success());
+
+    // The retyping side: declare os:int over an empty graph.
+    assert!(acetone(&repo, &["checkout", "retype"]).status.success());
+    assert!(
+        acetone(
+            &repo,
+            &[
+                "declare-label",
+                "Host",
+                "--key",
+                "hostname",
+                "--type",
+                "os:int"
+            ],
+        )
+        .status
+        .success(),
+        "declaring os:int on the branch (no nodes here contradict it yet)"
+    );
+    assert!(acetone(&repo, &["commit", "-m", "retype"]).status.success());
+
+    // The data side: a string `os`, legal under the untyped base schema.
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    assert!(
+        acetone(
+            &repo,
+            &["query", "CREATE (h:Host {hostname:'h1', os:'debian'})"]
+        )
+        .status
+        .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "data"]).status.success());
+
+    // The merge reports the breach as a conflict...
+    let merged = acetone(&repo, &["merge", "retype", "-m", "merge"]);
+    let merge_text = format!("{}{}", stdout(&merged), stderr(&merged));
+    assert!(
+        merge_text.contains("declared int"),
+        "the merge must report the type breach, got:\n{merge_text}"
+    );
+
+    // ...and fsck must not call the resulting workspace clean.
+    let fsck = acetone(&repo, &["fsck"]);
+    let text = format!("{}{}", stdout(&fsck), stderr(&fsck));
+    assert!(
+        !text.contains("fsck: clean"),
+        "fsck must not report clean over a declared-type violation, got:\n{text}"
+    );
+    assert!(
+        text.contains("declared int") || text.contains("os"),
+        "fsck must name the violation, got:\n{text}"
     );
 }

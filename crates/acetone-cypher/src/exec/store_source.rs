@@ -463,10 +463,15 @@ impl GraphSource for StoreBackedSource<'_> {
         // is left out. A non-numeric bound has no such guarantee, so it
         // declines and the scan answers.
         //
-        // Gating on the *bounds* rather than on a declared property type
-        // matters: `declare-label` does not take property types, so a
-        // declared-type test declines on ordinary graphs and the seek
-        // never fires — measured, not assumed.
+        // Gating on the *bounds* rather than on a declared property type is
+        // still the right call, though no longer for the original reason:
+        // that argument was "`declare-label` does not take property types, so
+        // a declared-type test declines on ordinary graphs and the seek never
+        // fires". `acetone-2ck.18` gave `declare-label` a `--type` flag, so
+        // that premise is gone. What remains is the substantive half — the
+        // bounds are what the range actually walks, and an untyped property
+        // holding numerics is a perfectly ordinary graph a bounds test serves
+        // and a declared-type test would not.
         let numeric_bound = |b: &Option<(&Value, bool)>| {
             b.is_none_or(|(v, _)| matches!(v, Value::Int(_) | Value::Float(_)))
         };

@@ -52,7 +52,50 @@ the flag alone moves CLI users from "string seeks always decline and scan" to
 ## Decision
 
 **A declared property type is a constraint, enforced like `UNIQUE` and
-existence, at the same three points.**
+existence — at their three points, plus a fourth that is the load-bearing
+one.**
+
+**0. Save time — the universal chokepoint.**
+`Transaction::save_in_place` validates every staged node record against the
+transaction's final schema (`check_staged_node_types`), raising
+`GraphError::PropertyTypeViolation`. This is listed first because it is what
+makes the claim below true: the Cypher write path is *not* the only writer.
+`acetone put-node`, `rekey`, import, `resolve` and any library caller stage
+records straight onto a `Transaction`. Enforcing only in `persist` left
+`put-node` able to store a value contradicting its declaration — found and
+fixed within this bead, and the reason this entry exists.
+
+`apply_map`, which writes the `nodes` map, is called only from
+`save_in_place`, which is reached only from `save()` and `commit()`, so every
+`Transaction`-side write is covered. The merge path writes a merged manifest
+directly rather than through a `Transaction`, which is exactly why it needs
+its own validator (3). The schema map is applied *before* the node map so the
+check sees the transaction's own schema ops — declaring a type and writing
+conforming values in one session must work.
+
+Staged ops are validated by reference before being consumed, so a large
+batched import allocates nothing extra (ADR-0062's bounded-memory promise
+holds). The schema scan is skipped when no node put is staged, and record
+decoding is skipped when no label declares a type.
+
+**Cost, measured rather than asserted** — a phase whose subject is a seek cost
+model should not add an unmeasured per-write cost. Importing 20,000 CSV rows,
+comparing a label declaring a type on a property the data never carries
+(identical stored records, so this isolates the schema scan and the
+per-record decode) against the same label with no declaration: the declared
+side was **not slower in any run**, and the difference sat below run-to-run
+variance — the same configuration varied 0.18 s to 0.86 s across batches on a
+loaded machine, swamping any effect. The work is O(staged) + O(schema), and
+the schema map is a handful of entries, so this is the expected result rather
+than a surprising one. It is not a claim that the cost is zero; it is a claim
+that it is not measurable at this scale by this method.
+
+One extension point is deliberately outside this: `migrate::FormatTransform`
+is a public trait that rewrites manifests without a `Transaction`. Today's
+`Rechunk` copies entries verbatim so it cannot introduce a breach, but a
+future transform could.
+
+The three points that mirror the existing constraints:
 
 1. **Write time.** `cypher/persist.rs` rejects a `CREATE`/`SET` that would
    store a value whose runtime type contradicts the label's declared type,
@@ -91,6 +134,44 @@ Null is not a type violation: an absent property is existence's business
 checked against the type it carries, not against its string rendering —
 the rendering is a presentation detail of ADR-0038, and rejecting a carrier
 that round-trips its own declared type would break write-back.
+
+**One widening is allowed: `float` admits an integer.** It is lossless, and
+it is what the import path already does — `import::coerce` turns an `Int`
+into a `Float` for a `float` declaration rather than failing. Without it the
+two enforcement paths would disagree about the same value: `SET n.ratio = 1`
+refused on a `float` property while importing that same `1` succeeded.
+Integer literals for float-valued properties are ordinary Cypher, so refusing
+them would be a wart with no soundness benefit — the seek probes both numeric
+encodings regardless (`probe_value`), so nothing downstream depends on a
+`float`-declared property holding only floats.
+
+The reverse is **not** allowed. Narrowing a float to an integer is lossy
+(`80.5` has no integer form), import rejects it, and admitting it here would
+reintroduce the disagreement in the other direction.
+
+A consequence worth stating: mixed `Int`/`Float` values under one property
+remain reachable under a **`float`** declaration (by the widening above) and
+under **no** declaration, but not under `int`. The store-backed seek must
+still probe both numeric encodings in both of those cases, and the
+`store_source` composite fixture — which seeds `Int(80)` and `Float(80.0)`
+under one property — was retargeted from `int` onto an untyped property to
+stay legal.
+
+That retargeting is a **larger loosening than enforcement required**:
+declaring the property `float` would have kept the mixed values legal *and*
+kept a declared type on the component. It also leaves one arm uncovered — a
+string pin on a declared component at a non-zero position, the positive case
+of the guard `probe_value` applies per component. Recorded here rather than
+silently accepted; the follow-up is `acetone-2ck.20`.
+
+**Key properties are covered too, and they are the subtle half.** A node's key
+values live in its `NodeKey`, not its `NodeRecord`, so the three record-based
+checks (0, 2, 3) initially exempted exactly the properties whose type matters
+most — `acetone-2ck.17` extends the seek guard's trust to key properties,
+where a missed row is a missed identity. All three now share
+`constraints::type_violations`, which reads a key property's value from the
+key tuple by position and everything else from the record, so they cannot
+diverge. The existence check has the same shape for the same reason.
 
 ## Consequences
 

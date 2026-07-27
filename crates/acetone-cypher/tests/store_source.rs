@@ -23,15 +23,20 @@ fn repo() -> (tempfile::TempDir, Repository) {
 }
 
 fn host_label() -> SchemaEntry {
-    // `id` key (string), `region` typed String (seek-safe), `port` typed Int.
+    // `id` key (string), `region` typed String (seek-safe), `port` UNTYPED.
+    //
+    // `port` is deliberately untyped: the composite tests below seed it with
+    // both `Int(80)` and `Float(80.0)` to exercise per-component numeric
+    // cross-typing on the stored map, and since ADR-0066 made declared types
+    // enforced at save, a property declared `int` can no longer hold a float.
+    // Mixed numerics under one property are now reachable only where no type
+    // is declared — which is exactly the state these tests need to cover,
+    // because the seek must still probe both encodings there.
     SchemaEntry::Label {
         name: "Host".into(),
         def: LabelDef::new(
             vec!["id".into()],
-            BTreeMap::from([
-                ("region".to_owned(), PropertyType::String),
-                ("port".to_owned(), PropertyType::Int),
-            ]),
+            BTreeMap::from([("region".to_owned(), PropertyType::String)]),
             [],
             [],
         )

@@ -8,6 +8,9 @@
 //!
 //! - **existence**: a required property is present iff it is a key property
 //!   (always present, by identity) or appears in the node record;
+//! - **declared types**: a property's value matches the type its label
+//!   declares (ADR-0066), reading a key property's value from the key tuple
+//!   and everything else from the record;
 //! - **UNIQUE**: two distinct nodes of the same label sharing a canonical
 //!   value encoding for a UNIQUE property collide. Node identity is the
 //!   encoded node key, so re-asserting the same node with the same value is
@@ -151,10 +154,60 @@ impl fmt::Display for ConstraintViolations {
 /// in deterministic (memcomparable) order.
 pub type NodeSet = BTreeMap<Vec<u8>, (NodeKey, NodeRecord)>;
 
+/// Every declared-type breach in one node — `(property, declared, actual)`,
+/// in declared-property order (ADR-0066).
+///
+/// **Key properties are checked too, and they are the subtle half.** A node's
+/// key values live in its [`NodeKey`], not in its [`NodeRecord`] — "the record
+/// stores only the non-key properties (the key is the key)" — so a check that
+/// consults `record.properties()` alone silently exempts exactly the
+/// properties whose type matters most: `acetone-2ck.17` extends the seek
+/// guard's trust to key properties, where a missed row is a missed identity.
+/// The existence check above has the same shape for the same reason.
+///
+/// A declared type is a constraint on the same footing as `REQUIRE` and
+/// `UNIQUE`, not an annotation: `store_source`'s seek guard serves a raw
+/// string probe only when the declared type rules out a deferred value, so a
+/// false declaration makes a seek UNDER-select — rows that exist and match are
+/// never visited.
+///
+/// Absent and null values conform: presence is existence's business
+/// (ADR-0061), not the type system's.
+pub(crate) fn type_violations(
+    key: &NodeKey,
+    record: &NodeRecord,
+    def: &LabelDef,
+) -> Vec<(String, PropertyType, PropertyType)> {
+    if def.types().is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (property, declared) in def.types() {
+        // A key property's value comes from the key tuple, by position;
+        // anything else from the record.
+        let value = match def.key().iter().position(|k| k == property) {
+            Some(i) => key.key().get(i),
+            None => record.properties().get(property),
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        if declared.matches(value) {
+            continue;
+        }
+        // `None` is Null, which conforms to every declaration.
+        let Some(actual) = PropertyType::of(value) else {
+            continue;
+        };
+        out.push((property.clone(), *declared, actual));
+    }
+    out
+}
+
 /// Check `nodes` (a final node state) against the label definitions in
 /// `labels`, returning every violation in deterministic order: existence
-/// breaches in node-key order first, then UNIQUE collisions in
-/// (label, property, value) order.
+/// breaches in node-key order first, then declared-type breaches, then
+/// UNIQUE collisions in (label, property, value) order.
 ///
 /// With `focus` set, only violations *involving* a focus key are reported: an
 /// existence breach on a focus node, or a UNIQUE group containing at least
@@ -187,29 +240,11 @@ pub fn check_nodes(
                 });
             }
         }
-        // Declared types (ADR-0066), in declared-property order. A declared
-        // type is a constraint on the same footing as REQUIRE and UNIQUE, not
-        // an annotation: `store_source`'s seek guard serves a raw string probe
-        // only when the declared type rules out a deferred value, so a false
-        // declaration makes a seek UNDER-select — rows that exist and match
-        // are never visited.
-        //
-        // Absent and null values conform: that is existence's business
-        // (ADR-0061), not the type system's.
-        for (property, declared) in def.types() {
-            let Some(value) = record.properties().get(property) else {
-                continue;
-            };
-            if declared.matches(value) {
-                continue;
-            }
-            let Some(actual) = PropertyType::of(value) else {
-                continue;
-            };
+        for (property, declared, actual) in type_violations(key, record, def) {
             violations.push(ConstraintViolation::WrongType {
                 node: key.clone(),
-                property: property.clone(),
-                declared: *declared,
+                property,
+                declared,
                 actual,
             });
         }
@@ -271,7 +306,13 @@ pub fn check_upsert(
     // Fast path: an undeclared or unconstrained label has nothing to check —
     // plumbing writes to schema-less labels stay raw, like `put_node` itself.
     match labels.get(key.label()) {
-        Some(def) if !def.exists().is_empty() || !def.unique().is_empty() => {}
+        // `types` counts as a constraint (ADR-0066) — the third place this
+        // term was missed. Without it the error a caller sees for the same
+        // breach depended on whether the label happened to declare something
+        // unrelated: the save-time refusal when it did not, this richer
+        // violation list when it did.
+        Some(def)
+            if !def.exists().is_empty() || !def.unique().is_empty() || !def.types().is_empty() => {}
         _ => return Ok(Vec::new()),
     }
     let mut nodes = NodeSet::new();

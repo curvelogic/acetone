@@ -151,10 +151,20 @@ impl PropertyType {
     /// A `List` is satisfied by any list; v0.1 does not constrain the element
     /// type (see the [`PropertyType::List`] docs), so neither does this.
     ///
+    /// **`float` admits an integer**, the one widening allowed. It is
+    /// lossless, it matches what the import path already does (`import::coerce`
+    /// turns an `Int` into a `Float` for a `float` declaration rather than
+    /// failing), and without it `SET n.ratio = 1` would be refused on a
+    /// `float` property while importing the same `1` succeeded — two
+    /// enforcement paths disagreeing about the same value. The reverse is not
+    /// allowed: narrowing a float to an integer is lossy, and import rejects
+    /// it too.
+    ///
     /// This is the single definition of type conformance. The write path
-    /// (`persist`), the declare-time backfill check and the merge validator
-    /// all call it, so a value accepted by one is accepted by all three — and
-    /// so the seek guard in `store_source` can rely on the declaration.
+    /// (`persist`), the save-time chokepoint (`repo`), the declare-time
+    /// backfill check and the merge validator all call it, so a value accepted
+    /// by one is accepted by all — and so the seek guard in `store_source` can
+    /// rely on the declaration.
     pub fn matches(self, value: &crate::Value) -> bool {
         use crate::Value;
         matches!(
@@ -162,7 +172,7 @@ impl PropertyType {
             (_, Value::Null)
                 | (PropertyType::Bool, Value::Bool(_))
                 | (PropertyType::Int, Value::Int(_))
-                | (PropertyType::Float, Value::Float(_))
+                | (PropertyType::Float, Value::Float(_) | Value::Int(_))
                 | (PropertyType::String, Value::String(_))
                 | (PropertyType::Bytes, Value::Bytes(_))
                 | (PropertyType::Date, Value::Date(_))
@@ -891,14 +901,28 @@ mod tests {
         for declared in ALL_TYPES {
             for actual in ALL_TYPES {
                 let value = a_value_of(*actual);
+                // The one permitted widening: `float` admits an integer,
+                // losslessly and consistently with `import::coerce`.
+                let widening = *declared == PropertyType::Float && *actual == PropertyType::Int;
+                let expected = declared == actual || widening;
                 assert_eq!(
                     declared.matches(&value),
-                    declared == actual,
-                    "{declared:?}.matches({value:?}) should be {}",
-                    declared == actual
+                    expected,
+                    "{declared:?}.matches({value:?}) should be {expected}"
                 );
             }
         }
+    }
+
+    /// The widening is one-directional. Narrowing a float to an integer is
+    /// lossy (80.5 has no int form), so a `float` value must not satisfy an
+    /// `int` declaration — import rejects it too, and admitting it here would
+    /// let the two paths disagree.
+    #[test]
+    fn int_does_not_admit_a_float() {
+        assert!(PropertyType::Float.matches(&Value::Int(80)));
+        assert!(!PropertyType::Int.matches(&Value::Float(80.0)));
+        assert!(!PropertyType::Int.matches(&Value::Float(80.5)));
     }
 
     /// Null conforms to every declaration: an absent value is existence's
