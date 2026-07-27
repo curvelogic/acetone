@@ -248,7 +248,7 @@ fn twins_match_rejects_a_divergent_graph() {
     // Only the SHAPE varies. Both sides declare indexes, so a difference can
     // only come from the graph's content — otherwise this could not tell
     // "roots track content" from "roots track index declaration".
-    let roots = |scale: usize| {
+    let manifest_of = |scale: usize| {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo =
             Repository::init(&dir.path().join("r.git"), InitOptions::default()).expect("init");
@@ -261,15 +261,21 @@ fn twins_match_rejects_a_divergent_graph() {
         manifest
     };
 
-    let reference = roots(200);
-    let divergent = roots(300);
+    let reference = manifest_of(200);
+    let divergent = manifest_of(300);
 
     let rejected = acetone_lab::twins_match(&reference, &divergent)
         .expect_err("twins_match accepted two differently-shaped graphs as twins");
-    // Name the maps that diverged, so a failing run says which.
+    // Assert against the SUMMARY line, not the whole message: the detail
+    // block below it prints all three map names unconditionally, so
+    // `rejected.contains("nodes")` is satisfied by boilerplate and would
+    // still hold if a field were dropped from the comparison entirely.
+    // These two graphs differ in all three maps, so the summary must name
+    // all three — which pins the field set, not just that some check fired.
+    let summary = rejected.lines().next().unwrap_or_default();
     assert!(
-        rejected.contains("nodes") && rejected.contains("edges_fwd"),
-        "the rejection must name the diverging maps, got: {rejected}"
+        summary.contains("nodes, edges_fwd, edges_rev differ"),
+        "the rejection summary must name every diverging map, got: {summary}"
     );
     // And it still accepts a genuine twin, so the rejection above is not
     // simply a function that refuses everything.
