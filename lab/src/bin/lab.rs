@@ -56,11 +56,16 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
     // `Repository::init` refuses a non-empty directory: discovering a
     // leftover twin only after the indexed build has completed throws away
     // minutes of work at the larger scales.
+    //
+    // `symlink_metadata`, not `exists()`: the latter follows symlinks and so
+    // reports false for a broken one, which would slip past this check and
+    // fail late in `Repository::init` — the failure the check exists to move
+    // forward.
     let plain_path = twin_path(repo_path);
-    if plain_path.exists() {
+    if plain_path.symlink_metadata().is_ok() {
         return Err(format!(
-            "the unindexed twin path {} already exists; remove it (and {}) \
-             before re-running",
+            "the unindexed twin path {} already exists; remove it \
+             (and {}, if it exists) before re-running",
             plain_path.display(),
             repo_path.display()
         )
@@ -164,23 +169,18 @@ fn run(repo_path: &std::path::Path, scale: usize) -> Result<(), Box<dyn std::err
     // commit or a stale directory left the two repositories holding
     // different graphs.
     //
-    // The map roots are the exact check: identical contents yield identical
-    // prolly-tree roots regardless of operation order (load-bearing
-    // invariant 1), so equal roots mean equal graphs, and declaring an index
-    // must not perturb the node and edge maps at all.
+    // `twins_match` is in the library, not inline here, precisely so a test
+    // can pin THIS check rather than reimplement it beside the binary.
     let (indexed_snapshot, plain_snapshot) =
         (repo.workspace_snapshot()?, plain.workspace_snapshot()?);
-    let (a, b) = (indexed_snapshot.manifest(), plain_snapshot.manifest());
-    if (a.nodes, a.edges_fwd, a.edges_rev) != (b.nodes, b.edges_fwd, b.edges_rev) {
-        return Err(format!(
-            "the unindexed twin does not hold the identical graph: \
-             nodes {:?} vs {:?}, edges_fwd {:?} vs {:?}, edges_rev {:?} vs {:?} \
-             ({nodes} nodes / {edges} edges expected, twin reported \
-             {twin_nodes} / {twin_edges})",
-            a.nodes, b.nodes, a.edges_fwd, b.edges_fwd, a.edges_rev, b.edges_rev
-        )
-        .into());
-    }
+    acetone_lab::twins_match(indexed_snapshot.manifest(), plain_snapshot.manifest()).map_err(
+        |e| {
+            format!(
+                "{e}\n  ({nodes} nodes / {edges} edges expected, twin reported \
+                 {twin_nodes} / {twin_edges})"
+            )
+        },
+    )?;
 
     criterion_3_measurements(&repo, &plain, shape)?;
     Ok(())

@@ -194,20 +194,17 @@ fn the_unindexed_twin_holds_an_identical_graph() {
     // identical prolly-tree roots regardless of operation order (load-bearing
     // invariant 1). So equal roots mean equal graphs, and declaring an index
     // must not perturb the node or edge maps at all.
+    //
+    // Checked through `twins_match`, the same function the criterion-3
+    // harness calls, so this test constrains the real check rather than a
+    // copy of it.
     let a = indexed.workspace_snapshot().expect("snapshot");
     let b = plain.workspace_snapshot().expect("snapshot");
     let (ma, mb) = (a.manifest(), b.manifest());
     assert_eq!(
-        ma.nodes, mb.nodes,
-        "declaring an index perturbed the nodes map root"
-    );
-    assert_eq!(
-        ma.edges_fwd, mb.edges_fwd,
-        "declaring an index perturbed the edges_fwd map root"
-    );
-    assert_eq!(
-        ma.edges_rev, mb.edges_rev,
-        "declaring an index perturbed the edges_rev map root"
+        acetone_lab::twins_match(ma, mb),
+        Ok(()),
+        "declaring an index perturbed the node or edge maps"
     );
     // The schema roots MUST differ — that is the one intended difference,
     // and equal schema roots would mean the twin was built with indexes
@@ -235,41 +232,46 @@ fn the_unindexed_twin_holds_an_identical_graph() {
     );
 }
 
-/// The twin check above is only worth having if it can FAIL. The assertion it
+/// `twins_match` is only worth having if it can FAIL. The assertion it
 /// replaced could not: it compared `build_with`'s return value, which is
 /// derived from the `Shape` and a seeded counter without reading the
 /// repository, so it held whatever the two repositories actually contained.
 ///
-/// Pin the sensitivity directly: a twin built from a different shape must
-/// diverge at the map roots. Without this, a future change that made the
-/// roots constant — or compared the wrong field — would leave the criterion-3
-/// harness silently comparing two different graphs again.
+/// This calls `twins_match` itself — the same function the criterion-3
+/// harness calls — and requires it to reject a pair that is not a twin. A
+/// refactor that pointed it at fields equal for both repositories would fail
+/// here, which is the property the test above cannot establish on its own
+/// (it can only show the function accepts a true twin, which a function that
+/// accepts everything also does).
 #[test]
-fn the_twin_check_detects_a_divergent_graph() {
-    let build = |scale: usize, indexes: bool| {
+fn twins_match_rejects_a_divergent_graph() {
+    // Only the SHAPE varies. Both sides declare indexes, so a difference can
+    // only come from the graph's content — otherwise this could not tell
+    // "roots track content" from "roots track index declaration".
+    let roots = |scale: usize| {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo =
             Repository::init(&dir.path().join("r.git"), InitOptions::default()).expect("init");
-        acetone_lab::build_with(&repo, acetone_lab::Shape::from_scale(scale), indexes)
-            .expect("build");
+        acetone_lab::build_with(&repo, acetone_lab::Shape::from_scale(scale), true).expect("build");
         let snapshot = repo.workspace_snapshot().expect("snapshot");
-        let manifest = snapshot.manifest();
-        // `MapRoot` is `Copy`, so the roots outlive the snapshot and `dir`.
-        let roots = (manifest.nodes, manifest.edges_fwd);
+        // `Manifest` is not `Copy`; clone it out before the tempdir goes.
+        let manifest = snapshot.manifest().clone();
         drop(snapshot);
         drop(dir);
-        roots
+        manifest
     };
 
-    let (ref_nodes, ref_edges) = build(200, true);
-    let (div_nodes, div_edges) = build(300, false);
+    let reference = roots(200);
+    let divergent = roots(300);
 
-    assert_ne!(
-        ref_nodes, div_nodes,
-        "a differently-shaped graph must not share the reference's nodes root"
+    let rejected = acetone_lab::twins_match(&reference, &divergent)
+        .expect_err("twins_match accepted two differently-shaped graphs as twins");
+    // Name the maps that diverged, so a failing run says which.
+    assert!(
+        rejected.contains("nodes") && rejected.contains("edges_fwd"),
+        "the rejection must name the diverging maps, got: {rejected}"
     );
-    assert_ne!(
-        ref_edges, div_edges,
-        "a differently-shaped graph must not share the reference's edges_fwd root"
-    );
+    // And it still accepts a genuine twin, so the rejection above is not
+    // simply a function that refuses everything.
+    assert_eq!(acetone_lab::twins_match(&reference, &reference), Ok(()));
 }

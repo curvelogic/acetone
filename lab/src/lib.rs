@@ -87,6 +87,50 @@ pub fn build(
     build_with(repo, shape, true)
 }
 
+/// Whether two manifests describe the **same graph** — the precondition of
+/// every seek-versus-scan ratio the lab publishes.
+///
+/// Identical map contents yield identical prolly-tree roots regardless of
+/// operation order (load-bearing invariant 1), so comparing the `nodes`,
+/// `edges_fwd` and `edges_rev` roots is exact: equal roots mean equal graphs.
+/// Declaring an index must not perturb any of the three — it adds `idx/*`
+/// maps and changes `schema`, and nothing else.
+///
+/// This lives here, rather than inline in the `lab` binary, so that a test
+/// can pin it. A binary's `run()` is unreachable from an integration test, so
+/// a check written inline could only ever be *reimplemented* by a test
+/// standing beside it — which would then keep passing if the real one were
+/// refactored into something vacuous (exactly the defect this comparison
+/// replaced).
+pub fn twins_match(
+    indexed: &acetone_model::manifest::Manifest,
+    plain: &acetone_model::manifest::Manifest,
+) -> Result<(), String> {
+    let mismatches: Vec<&str> = [
+        ("nodes", indexed.nodes != plain.nodes),
+        ("edges_fwd", indexed.edges_fwd != plain.edges_fwd),
+        ("edges_rev", indexed.edges_rev != plain.edges_rev),
+    ]
+    .into_iter()
+    .filter_map(|(name, differs)| differs.then_some(name))
+    .collect();
+    if mismatches.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "the twins do not hold the identical graph — {} differ\n  \
+         indexed: nodes {:?}, edges_fwd {:?}, edges_rev {:?}\n  \
+         plain:   nodes {:?}, edges_fwd {:?}, edges_rev {:?}",
+        mismatches.join(", "),
+        indexed.nodes,
+        indexed.edges_fwd,
+        indexed.edges_rev,
+        plain.nodes,
+        plain.edges_fwd,
+        plain.edges_rev
+    ))
+}
+
 /// [`build`], optionally omitting the secondary index declarations.
 ///
 /// An unindexed twin of the same graph is what makes an honest seek-versus-
