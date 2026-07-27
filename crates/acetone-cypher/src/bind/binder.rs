@@ -1445,6 +1445,20 @@ fn attach_equality_hints(
             continue;
         }
         let value_of = |property: &str| pins.get(&(var.0, property.to_owned())).cloned();
+        // `MATCH (n:H {b: 0}) WHERE n.b = 0` spells one predicate twice.
+        // Without this, both spellings attach a hint on the same target and
+        // an unselective probe walks the index to the cap twice before
+        // declining (PR #224 review nit 6). The inline pin is already
+        // attached by the time this pass runs, so first-wins is the inline
+        // one — the same seek either way.
+        let already_targets = |hints: &[IndexHint], target: &str| {
+            hints.iter().any(|h| match h {
+                IndexHint::KeySeek { label, .. } => label == target,
+                IndexHint::IndexSeek { name, .. } | IndexHint::IndexRange { name, .. } => {
+                    name == target
+                }
+            })
+        };
         // KeySeek only when EVERY key property is pinned, mirroring the
         // pattern-map path's rule.
         if let Some(def) = catalogue.label(label) {
@@ -1452,11 +1466,13 @@ fn attach_equality_hints(
             if !key.is_empty() && key.iter().all(|k| pinned.iter().any(|p| p == k)) {
                 let values: Option<Vec<RangeBound>> = key.iter().map(|k| value_of(k)).collect();
                 if let Some(values) = values {
-                    start.index_hints.push(IndexHint::KeySeek {
-                        label: label.clone(),
-                        key: key.to_vec(),
-                        values: Some(values),
-                    });
+                    if !already_targets(&start.index_hints, label) {
+                        start.index_hints.push(IndexHint::KeySeek {
+                            label: label.clone(),
+                            key: key.to_vec(),
+                            values: Some(values),
+                        });
+                    }
                     continue;
                 }
             }
@@ -1464,7 +1480,9 @@ fn attach_equality_hints(
         if let Some((name, def)) = catalogue.seek_index_on(label, &pinned) {
             let properties = def.properties().to_vec();
             let values: Option<Vec<RangeBound>> = properties.iter().map(|p| value_of(p)).collect();
-            if let Some(values) = values {
+            if let Some(values) = values
+                && !already_targets(&start.index_hints, name)
+            {
                 start.index_hints.push(IndexHint::IndexSeek {
                     name: name.to_string(),
                     label: label.clone(),

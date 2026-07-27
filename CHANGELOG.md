@@ -22,9 +22,13 @@ fine.)
   random point read per matching row where a scan reads sequentially, so a
   seek only wins while selective. Both the equality/composite and range
   paths now estimate what the scan would cost, spend a fixed fraction of it,
-  and otherwise decline to the scan. Declaring an index no longer makes a
-  query slower — measured at parity where it was 53x slower — while
-  selective queries still gain.
+  and otherwise decline to the scan. The cliff this removes was severe:
+  cases measured at 53x, 18x and 12.5x slower than no index at all now run
+  within 1.04-1.23x of a scan, while selective queries gain outright
+  (0.16-0.24x). The residual is a constant — a declining seek has still paid
+  for its index probe and one cardinality sample — so on a graph small
+  enough for the whole scan to take a millisecond, an unhelpful index still
+  costs about 20%.
 - **`WHERE` equality predicates use indexes.** `MATCH (n:L) WHERE n.p = 1`
   previously scanned; only the inline form `MATCH (n:L {p: 1})` used an
   index. Seek hints now carry their own pinned values, so both forms plan

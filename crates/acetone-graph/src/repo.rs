@@ -2776,10 +2776,10 @@ impl<'s> Snapshot<'s> {
     /// Estimated number of nodes, for planning only (acetone-2ck.2).
     ///
     /// This is what a label scan would cost, and therefore what a seek is
-    /// competing against. Sampled from the nodes map in `height` chunk
-    /// reads rather than counted, since an exact count is a full walk and
-    /// a stored count would be a format change. Never a correctness
-    /// input: a wrong estimate can only pick a slower plan.
+    /// competing against. Sampled from the nodes map rather than counted,
+    /// since an exact count is a full walk and a stored count would be a
+    /// format change (`acetone_prolly::estimate_entries`). Never a
+    /// correctness input: a wrong estimate can only pick a slower plan.
     pub fn estimate_nodes(&self) -> Option<usize> {
         let root = self.root(&self.manifest.nodes).ok()?;
         acetone_prolly::estimate_entries(self.store, &root).ok()

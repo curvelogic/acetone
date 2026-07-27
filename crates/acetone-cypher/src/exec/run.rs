@@ -1218,12 +1218,12 @@ fn seek_with(
     row: &Row,
     ctx: &EvalCtx,
 ) -> Result<Option<Vec<NodeValue>>, ExecError> {
-    match Some(hint) {
-        Some(IndexHint::KeySeek {
+    match hint {
+        IndexHint::KeySeek {
             label,
             key,
             values: pinned,
-        }) if !key.is_empty() => {
+        } if !key.is_empty() => {
             let mut key_values = Vec::with_capacity(key.len());
             match pinned {
                 // WHERE-sourced pins carry their own values
@@ -1257,13 +1257,13 @@ fn seek_with(
             }
             Ok(ctx.graph.nodes_by_key(label, &key_values))
         }
-        Some(IndexHint::KeySeek { .. }) => Ok(None),
-        Some(IndexHint::IndexSeek {
+        IndexHint::KeySeek { .. } => Ok(None),
+        IndexHint::IndexSeek {
             name,
             properties,
             values: pinned,
             ..
-        }) => {
+        } => {
             // WHERE-sourced pins carry their own values (acetone-7qw.9);
             // pattern-sourced ones read them from the inline map.
             let resolved: Vec<Value>;
@@ -1304,13 +1304,13 @@ fn seek_with(
             };
             Ok(ctx.graph.nodes_by_index(name, properties, &values))
         }
-        Some(IndexHint::IndexRange {
+        IndexHint::IndexRange {
             name,
             property,
             lower,
             upper,
             ..
-        }) => {
+        } => {
             let resolve = |bound: &Option<(RangeBound, bool)>| -> Option<(Value, bool)> {
                 match bound {
                     None => None,
@@ -1324,20 +1324,15 @@ fn seek_with(
                 }
             };
             // A missing parameter falls back to a scan here; the WHERE
-            // evaluation raises the MissingParameter error properly.
+            // evaluation raises the MissingParameter error properly. A bound
+            // that was declared but did not resolve must NOT silently widen
+            // the range — that would over-select, which is safe, but it would
+            // also do the work of a scan while claiming to be a seek.
+            let declared_lower = lower.is_some();
+            let declared_upper = upper.is_some();
             let lower = resolve(lower);
             let upper = resolve(upper);
-            if (lower.is_none()
-                && matches!(
-                    Some(hint),
-                    Some(IndexHint::IndexRange { lower: Some(_), .. })
-                ))
-                || (upper.is_none()
-                    && matches!(
-                        Some(hint),
-                        Some(IndexHint::IndexRange { upper: Some(_), .. })
-                    ))
-            {
+            if (lower.is_none() && declared_lower) || (upper.is_none() && declared_upper) {
                 return Ok(None);
             }
             Ok(ctx.graph.nodes_by_index_range(
@@ -1347,7 +1342,6 @@ fn seek_with(
                 upper.as_ref().map(|(v, i)| (v, *i)),
             ))
         }
-        None => Ok(None),
     }
 }
 

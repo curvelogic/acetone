@@ -3761,6 +3761,7 @@ impl<T> core::convert::From<T> for acetone_cypher::exec::store_source::StoreBack
 pub fn acetone_cypher::exec::store_source::StoreBackedSource<'s>::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::store_source::StoreBackedSource<'s>
 pub type acetone_cypher::exec::store_source::StoreBackedSource<'s>::Output = T
+pub const acetone_cypher::exec::store_source::CANDIDATE_FLOOR: usize
 pub fn acetone_cypher::exec::store_source::candidate_cap(usize) -> usize
 pub mod acetone_cypher::exec::value
 pub enum acetone_cypher::exec::value::Value

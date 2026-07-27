@@ -24,57 +24,92 @@ use crate::Root;
 use crate::error::ProllyError;
 use crate::node::{Node, read_node};
 
-/// Estimate how many entries a tree holds, by descending ONE path and
-/// multiplying the fanout seen at each level (acetone-2ck.2).
+/// Estimate how many entries a tree holds, by sampling each level
+/// (acetone-2ck.2).
 ///
-/// Costs `height` chunk reads — three or four in practice — where an exact
-/// count is a full walk and a stored count would be an on-disk format
-/// change. Prolly's chunking is probabilistic, so fanout varies; this
-/// samples the middle child at each level rather than the leftmost (whose
-/// size is a boundary artefact) and averages a few leaves at the bottom,
-/// which keeps the estimate within a small factor. It is a planner input,
-/// never a correctness input: a wrong estimate can only make the planner
-/// choose a slower plan, never a wrong answer.
+/// An exact count is a full walk, and a stored count would be an on-disk
+/// format change — interior nodes carry `(last_key, child_hash)` and nothing
+/// else. So this walks down the tree estimating the **mean fanout at each
+/// level** from a handful of nodes on that level, and multiplies: the node
+/// count at each level is the product of the mean fanouts above it, and the
+/// entry count is the leaf count times the mean leaf occupancy.
+///
+/// Sampling per level, rather than following one path, is what makes it
+/// robust. A single path multiplies *that path's* fanout at every level as
+/// though the whole level looked like it — so a tree with a fat region has
+/// its high local fanout extrapolated over the whole level. Measured, that
+/// over-estimated by **8.4x** on a tree whose middle third carried a large
+/// property, and since the caller spends a *fraction* of the estimate, an
+/// over-estimate scales the seek it authorises linearly: that one ran 12.5x
+/// slower than the scan it replaced (PR #224 review blocker 1). Sampling
+/// [`LEVEL_SAMPLES`] nodes spread across each level instead brings the worst
+/// observed error to well under 2x, in both directions.
+///
+/// Costs roughly `LEVEL_SAMPLES * height` chunk reads — a dozen or two — so
+/// callers should sample once per query rather than once per row.
+///
+/// It is a planner input, never a correctness input: a wrong estimate can
+/// only make the planner choose a slower plan, never a wrong answer.
 pub fn estimate_entries<S: ChunkStore>(store: &S, root: &Root) -> Result<usize, ProllyError> {
-    let mut fanout_product: usize = 1;
-    let mut hash = root.hash();
+    /// Nodes to read per level. More reads buy a better mean; the whole
+    /// walk is a fixed cost per query, so a dozen or two is cheap.
+    const LEVEL_SAMPLES: usize = 8;
+
     let mut level = root.top_level();
-    let mut claim: Option<Bytes> = None;
+    // (hash, parent's last-key claim) of the nodes sampled at `level`, and
+    // how many nodes that level is estimated to hold in total.
+    let mut frontier: Vec<(Hash, Option<Bytes>)> = vec![(root.hash(), None)];
+    let mut level_width: f64 = 1.0;
 
     while level > 0 {
-        let Node::Inner(refs) = read_node(store, &hash, level, claim.as_deref(), None)? else {
-            unreachable!("level > 0 is checked by read_node")
-        };
-        if refs.is_empty() {
-            return Ok(0);
-        }
-        fanout_product = fanout_product.saturating_mul(refs.len());
-        if level == 1 {
-            // Bottom inner level: average a few leaves rather than trust
-            // one, since leaf sizes vary most.
-            let sample = refs.len().min(3);
-            let mut total = 0usize;
-            for r in refs.iter().take(sample) {
-                let Node::Leaf(entries) = read_node(store, &r.hash, 0, Some(&r.last_key), None)?
-                else {
-                    unreachable!("level 0 is a leaf")
-                };
-                total += entries.len();
+        let mut fanout_total = 0usize;
+        let mut sampled = 0usize;
+        let mut children: Vec<(Hash, Option<Bytes>)> = Vec::new();
+        for (hash, claim) in &frontier {
+            let Node::Inner(refs) = read_node(store, hash, level, claim.as_deref(), None)? else {
+                unreachable!("level > 0 is checked by read_node")
+            };
+            if refs.is_empty() {
+                return Ok(0);
             }
-            let mean_leaf = total.div_ceil(sample.max(1));
-            return Ok(fanout_product.saturating_mul(mean_leaf));
+            fanout_total += refs.len();
+            sampled += 1;
+            // Spread the descent across each sampled node's children, so
+            // the next level's sample is spread across the whole tree
+            // rather than clustered under one parent.
+            for i in spread(refs.len(), LEVEL_SAMPLES.div_ceil(frontier.len())) {
+                children.push((refs[i].hash, Some(refs[i].last_key.clone())));
+            }
         }
-        let mid = &refs[refs.len() / 2];
-        hash = mid.hash;
-        claim = Some(mid.last_key.clone());
+        level_width *= fanout_total as f64 / sampled.max(1) as f64;
+        children.truncate(LEVEL_SAMPLES);
+        frontier = children;
         level -= 1;
     }
 
-    // The root is itself a leaf.
-    let Node::Leaf(entries) = read_node(store, &hash, 0, claim.as_deref(), None)? else {
-        unreachable!("level 0 is a leaf")
-    };
-    Ok(entries.len())
+    // `frontier` is now leaves, and `level_width` their estimated count.
+    let mut entries_total = 0usize;
+    let mut sampled = 0usize;
+    for (hash, claim) in &frontier {
+        let Node::Leaf(entries) = read_node(store, hash, 0, claim.as_deref(), None)? else {
+            unreachable!("level 0 is a leaf")
+        };
+        entries_total += entries.len();
+        sampled += 1;
+    }
+    let mean_leaf = entries_total as f64 / sampled.max(1) as f64;
+    Ok((level_width * mean_leaf) as usize)
+}
+
+/// Up to `want` indices spread evenly across `len`, avoiding the extremes
+/// when there is a choice — a node's first and last children are boundary
+/// artefacts of chunking, not representative of it.
+fn spread(len: usize, want: usize) -> Vec<usize> {
+    let want = want.max(1);
+    if len <= want {
+        return (0..len).collect();
+    }
+    (1..=want).map(|i| i * len / (want + 1)).collect()
 }
 
 /// Add every chunk reachable from `root` (the root chunk, all internal

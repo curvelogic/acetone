@@ -876,6 +876,70 @@ fn unselective_seeks_decline_on_both_paths() {
     );
 }
 
+/// An over-budget probe declines outright on both paths, including on a
+/// shape where the two numeric family probes overlap.
+///
+/// This guards a hazard rather than a demonstrated bug. Probes are
+/// de-duplicated across numeric families and composite tuples, so a walk
+/// that stopped early can in principle yield FEWER distinct keys than the
+/// cap; were "over budget" inferred from `len > cap`, the caller would read
+/// that as a complete walk and return the short set — under-selection, a
+/// wrong answer rather than a slow one. `Candidates::OverBudget` makes the
+/// two states distinct so the inference cannot be made. No query was found
+/// that reaches the bad case today (the first family trips the budget
+/// first), so this test pins the declining behaviour, not the near miss.
+#[test]
+fn a_truncated_walk_is_never_mistaken_for_a_complete_one() {
+    let (_dir, repo) = repo();
+    let rows = 4_000i64;
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "D".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Index {
+            name: "d_v".into(),
+            def: IndexDef::new("D", vec!["v".into()]).expect("index"),
+        })
+        .expect("index");
+        for i in 0..rows {
+            txn.put_node(
+                &NodeKey::new("D", vec![MV::Int(i)]).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), MV::Float(1.0))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let schema = snapshot.schema_entries().expect("schema");
+    let source = StoreBackedSource::new(&snapshot, &schema);
+
+    // An unselective range over a column whose int and float probes both
+    // reach every row: decline outright, never a partial answer.
+    let got = source.nodes_by_index_range(
+        "d_v",
+        "v",
+        Some((&RtValue::Int(0), true)),
+        Some((&RtValue::Int(2), true)),
+    );
+    assert!(
+        got.is_none(),
+        "an over-budget range must decline, not return {} of {rows} rows",
+        got.map_or(0, |g| g.len())
+    );
+
+    // And the equality path, whose int/float probes are separate tuples.
+    let got = source.nodes_by_index("d_v", &["v".to_owned()], &[&RtValue::Int(1)]);
+    assert!(
+        got.is_none(),
+        "an over-budget equality must decline, not return {} of {rows} rows",
+        got.map_or(0, |g| g.len())
+    );
+}
+
 /// The budget is a fraction of what a scan would cost, sampled from the
 /// nodes map rather than tiered on the index's height — height changes
 /// once per fanout, so one tier spans ~10× in cardinality and cannot be
@@ -883,17 +947,25 @@ fn unselective_seeks_decline_on_both_paths() {
 #[test]
 fn candidate_budget_tracks_estimated_scan_cost() {
     use acetone_cypher::exec::store_source::candidate_cap;
-    // 2% of the rows a scan would visit, with a floor so point-lookup
-    // shapes still work on tiny graphs (where a scan is cheap anyway).
-    assert_eq!(candidate_cap(1_000_000), 20_000);
-    assert_eq!(candidate_cap(50_000), 1_000, "the measured ~50k anchor");
-    assert_eq!(candidate_cap(5_000), 100);
+
+    // 0.5% of the rows a scan would visit. Measured break-even is 0.28-0.61%
+    // on the raw primitives and nearer 1% end to end (2% ran 1.9x SLOWER on
+    // a small-record shape — PR #224 review finding 4), and the cardinality
+    // estimate feeding this is itself accurate only to ~1.4x in the
+    // dangerous direction. Half of break-even absorbs that.
+    assert_eq!(candidate_cap(1_000_000), 5_000);
+    assert_eq!(candidate_cap(50_000), 250, "the measured ~50k anchor");
+    assert_eq!(candidate_cap(10_000), 50);
+
+    // A floor, so point-lookup shapes still work on tiny graphs — where a
+    // scan is cheap anyway, so a wrong choice costs little.
     assert_eq!(
         candidate_cap(1_100),
         32,
         "small labels get the floor, not 1024"
     );
     assert_eq!(candidate_cap(0), 32);
+
     assert!(
         candidate_cap(200_000) > candidate_cap(50_000),
         "monotone in the scan cost it is competing with"
@@ -1061,6 +1133,43 @@ fn the_cap_boundary_is_exact() {
         "fixture must exceed the cap ({} rows vs cap {cap}, estimate {estimate})",
         rows - 1
     );
+
+    // The primitive's contract AT the boundary, since the end-to-end
+    // assertions below straddle it by thousands and would not catch an
+    // off-by-one (PR #224 review finding 5). `index_scan_capped` stops at
+    // cap + 1, so "cap or fewer" must mean a COMPLETE walk — that is the
+    // property the decline logic rests on.
+    let bucket = (rows - 1) as usize;
+    let prefix =
+        acetone_model::graph_keys::index_value_prefix("B", &["v".to_owned()], &[MV::Int(0)])
+            .expect("prefix");
+    for (cap_under_test, expected) in [
+        (bucket - 2, bucket - 1), // truncated at cap + 1
+        (bucket - 1, bucket),     // the last cap that still signals decline
+        (bucket, bucket),         // exactly the bucket: complete
+        (usize::MAX, bucket),     // uncapped: complete
+    ] {
+        let got = snapshot
+            .index_scan_capped("b_v", &prefix, cap_under_test)
+            .expect("scan")
+            .expect("index exists");
+        assert_eq!(
+            got.len(),
+            expected,
+            "cap {cap_under_test} over a {bucket}-entry bucket"
+        );
+        // The contract the decline logic rests on, as an implication: a
+        // result within the cap is a COMPLETE walk. (The converse does not
+        // hold — a complete walk of exactly cap + 1 entries reports as
+        // over-budget, which is conservative and therefore safe.)
+        if got.len() <= cap_under_test {
+            assert_eq!(
+                got.len(),
+                bucket,
+                "'cap or fewer' must mean a complete walk, at cap {cap_under_test}"
+            );
+        }
+    }
     assert!(
         source
             .nodes_by_index("b_v", &["v".to_owned()], &[&RtValue::Int(0)])
