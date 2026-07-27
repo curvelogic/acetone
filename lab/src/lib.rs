@@ -84,9 +84,25 @@ pub fn build(
     repo: &Repository,
     shape: Shape,
 ) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+    build_with(repo, shape, true)
+}
+
+/// [`build`], optionally omitting the secondary index declarations.
+///
+/// An unindexed twin of the same graph is what makes an honest seek-versus-
+/// scan measurement possible: the generator is deterministic, so both
+/// repositories hold identical nodes and edges and differ only in whether a
+/// seek is available (`acetone-2ck.16`). Comparing two *schemas* over one
+/// in-memory snapshot — what the lab did before — cannot measure the shipped
+/// read path at all.
+pub fn build_with(
+    repo: &Repository,
+    shape: Shape,
+    declare_indexes: bool,
+) -> Result<(usize, usize), Box<dyn std::error::Error>> {
     let mut tx = repo.begin_write()?;
 
-    for entry in schema() {
+    for entry in schema_with(declare_indexes) {
         tx.put_schema(&entry)?;
     }
 
@@ -198,6 +214,12 @@ fn country(i: usize) -> &'static str {
 /// The registry schema: keyed labels, relationship types, and a secondary
 /// index on `Host.os` (exercises the binder's IndexSeek planning hint).
 pub fn schema() -> Vec<SchemaEntry> {
+    schema_with(true)
+}
+
+/// [`schema`], optionally without the secondary indexes — the unindexed twin
+/// used for seek-versus-scan measurement (`acetone-2ck.16`).
+pub fn schema_with(declare_indexes: bool) -> Vec<SchemaEntry> {
     let mut host_types = BTreeMap::new();
     host_types.insert("os".to_string(), PropertyType::String);
     host_types.insert("criticality".to_string(), PropertyType::Int);
@@ -215,7 +237,7 @@ pub fn schema() -> Vec<SchemaEntry> {
     cert_types.insert("cn".to_string(), PropertyType::String);
     cert_types.insert("not_after".to_string(), PropertyType::Int);
 
-    vec![
+    let mut entries = vec![
         SchemaEntry::Label {
             name: "Host".into(),
             def: LabelDef::new(vec!["hostname".into()], host_types, [], []).expect("valid"),
@@ -248,22 +270,27 @@ pub fn schema() -> Vec<SchemaEntry> {
             name: "HAS_CERT".into(),
             def: RelTypeDef::new(None, BTreeMap::new(), []).expect("valid"),
         },
-        SchemaEntry::Index {
-            name: "host_os".into(),
-            def: IndexDef::new("Host", vec!["os".into()]).expect("valid"),
-        },
-        // Range measurements (acetone-2ck.10): the expiry sweep's natural
-        // predicate is `not_after < t`.
-        SchemaEntry::Index {
-            name: "cert_not_after".into(),
-            def: IndexDef::new("Certificate", vec!["not_after".into()]).expect("valid"),
-        },
-        // Composite seek measurements (ADR-0027, acetone-0c7).
-        SchemaEntry::Index {
-            name: "host_os_criticality".into(),
-            def: IndexDef::new("Host", vec!["os".into(), "criticality".into()]).expect("valid"),
-        },
-    ]
+    ];
+    if declare_indexes {
+        entries.extend([
+            SchemaEntry::Index {
+                name: "host_os".into(),
+                def: IndexDef::new("Host", vec!["os".into()]).expect("valid"),
+            },
+            // Range measurements (acetone-2ck.10): the expiry sweep's
+            // natural predicate is `not_after < t`.
+            SchemaEntry::Index {
+                name: "cert_not_after".into(),
+                def: IndexDef::new("Certificate", vec!["not_after".into()]).expect("valid"),
+            },
+            // Composite seek measurements (ADR-0027, acetone-0c7).
+            SchemaEntry::Index {
+                name: "host_os_criticality".into(),
+                def: IndexDef::new("Host", vec!["os".into(), "criticality".into()]).expect("valid"),
+            },
+        ]);
+    }
+    entries
 }
 
 /// The realistic asset-registry queries (name, cypher) the roadmap names.

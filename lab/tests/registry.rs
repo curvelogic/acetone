@@ -160,3 +160,57 @@ fn strict_binding_rejects_an_undeclared_label() {
     // The same query binds fine leniently.
     assert!(bind(cypher, &parsed, &catalogue, BindMode::Lenient).is_ok());
 }
+
+/// The seek-versus-scan comparison is only meaningful if the two
+/// repositories hold the same graph, so pin that rather than trusting the
+/// generator to be deterministic across two calls (`acetone-2ck.16`).
+#[test]
+fn the_unindexed_twin_holds_an_identical_graph() {
+    let shape = acetone_lab::Shape::from_scale(200);
+
+    let indexed_dir = tempfile::tempdir().expect("tempdir");
+    let indexed =
+        Repository::init(&indexed_dir.path().join("a.git"), InitOptions::default()).expect("init");
+    let with_indexes = acetone_lab::build_with(&indexed, shape, true).expect("build");
+
+    let plain_dir = tempfile::tempdir().expect("tempdir");
+    let plain =
+        Repository::init(&plain_dir.path().join("b.git"), InitOptions::default()).expect("init");
+    let without_indexes = acetone_lab::build_with(&plain, shape, false).expect("build");
+
+    assert_eq!(
+        with_indexes, without_indexes,
+        "the twins must hold identical node and edge counts"
+    );
+
+    // Identical content, not merely identical counts: the nodes map root
+    // hash is history-independent (load-bearing invariant 1), so declaring
+    // an index must not perturb it.
+    let a = indexed.workspace_snapshot().expect("snapshot");
+    let b = plain.workspace_snapshot().expect("snapshot");
+    assert_eq!(
+        a.nodes().expect("nodes").len(),
+        b.nodes().expect("nodes").len()
+    );
+    assert_eq!(
+        a.edges().expect("edges").len(),
+        b.edges().expect("edges").len()
+    );
+
+    // And the twin genuinely has no indexes to seek with.
+    use acetone_model::schema::SchemaEntry;
+    assert!(
+        !b.schema_entries()
+            .expect("schema")
+            .iter()
+            .any(|e| matches!(e, SchemaEntry::Index { .. })),
+        "the unindexed twin must declare no indexes"
+    );
+    assert!(
+        a.schema_entries()
+            .expect("schema")
+            .iter()
+            .any(|e| matches!(e, SchemaEntry::Index { .. })),
+        "the indexed side must declare indexes"
+    );
+}
