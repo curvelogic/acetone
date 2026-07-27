@@ -25,13 +25,18 @@ fn repo() -> (tempfile::TempDir, Repository) {
 fn host_label() -> SchemaEntry {
     // `id` key (string), `region` typed String (seek-safe), `port` UNTYPED.
     //
-    // `port` is deliberately untyped: the composite tests below seed it with
-    // both `Int(80)` and `Float(80.0)` to exercise per-component numeric
+    // `port` is untyped because the composite tests below seed it with both
+    // `Int(80)` and `Float(80.0)` to exercise per-component numeric
     // cross-typing on the stored map, and since ADR-0066 made declared types
     // enforced at save, a property declared `int` can no longer hold a float.
-    // Mixed numerics under one property are now reachable only where no type
-    // is declared — which is exactly the state these tests need to cover,
-    // because the seek must still probe both encodings there.
+    //
+    // Untyped is NOT the only state that would work: `float` admits an
+    // integer (ADR-0066's one widening), so declaring `port: float` would
+    // keep both values legal AND keep a declared type on the component. This
+    // fixture covers a genuinely reachable state, but it is a larger
+    // loosening than enforcement required, and it leaves no composite fixture
+    // with a declared type at a non-zero component — so the positive arm of
+    // `probe_value`'s per-component guard is uncovered. `acetone-2ck.20`.
     SchemaEntry::Label {
         name: "Host".into(),
         def: LabelDef::new(

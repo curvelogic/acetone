@@ -177,7 +177,19 @@ diverge. The existence check has the same shape for the same reason.
 
 **The seek guard becomes sound rather than hopeful.** `probe_value`'s
 reliance on the declared type is now backed by enforcement at every path that
-can write a property. This is the precondition for `acetone-2ck.17`.
+can *write* a property. This is the precondition for `acetone-2ck.17`.
+
+**One readable state is still not covered, and it is a read, not a write.** A
+merge that produces graph-level violations persists the merged manifest as the
+workspace and rebuilds its indexes over the merged nodes before
+`validate_merged` runs. Commit is refused, so nothing reaches history — but
+that workspace is queryable, and a seek over an index on the violating
+property can under-select there. Conflicts are data rather than errors
+(ADR-0007), so no write-time check gates it by construction; closing it means
+changing the *read* path, which is out of this bead's scope. Filed as
+`acetone-7qw.14` with the options set out. Until then, "enforcement at every
+path that can write a property" should be read literally: it is a claim about
+writers, not about every state a reader can observe.
 
 **This is a deliberate spec change, not a bug fix.** Spec §2 says a label
 "MAY additionally declare property types and constraints (v0.1 supports
