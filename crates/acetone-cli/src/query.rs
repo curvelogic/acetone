@@ -890,14 +890,17 @@ fn handle_meta(
             let (pos, flags) = parse_meta_args(rest);
             let label = pos
                 .first()
-                .context("usage: :declare-label <LABEL> --key <prop>...")?;
+                .context("usage: :declare-label <LABEL> --key <prop>... [--type <prop>:<type>] [--require <prop>] [--unique <prop>]")?;
             let key = flags.get("key").cloned().unwrap_or_default();
             if key.is_empty() {
-                anyhow::bail!("usage: :declare-label <LABEL> --key <prop>...");
+                anyhow::bail!(
+                    "usage: :declare-label <LABEL> --key <prop>... [--type <prop>:<type>] [--require <prop>] [--unique <prop>]"
+                );
             }
+            let types = flags.get("type").cloned().unwrap_or_default();
             let require = flags.get("require").cloned().unwrap_or_default();
             let unique = flags.get("unique").cloned().unwrap_or_default();
-            crate::commands::declare_label(repo_path, label, &key, &require, &unique)?;
+            crate::commands::declare_label(repo_path, label, &key, &types, &require, &unique)?;
         }
         "declare-rel-type" => {
             if rest.is_empty() {

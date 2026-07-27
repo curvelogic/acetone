@@ -178,6 +178,11 @@ Options:
           
           [default: .]
 
+      --type <PROPERTY:TYPE>
+          Declare a property's type as `<property>:<type>`; repeat.
+          
+          Types: bool, int, float, string, bytes, date, time, datetime, duration, list. A declared type is enforced on write and checked against existing data at declare time (ADR-0066), and it is what lets an index seek serve a string equality pin: without it such a query declines to a scan.
+
       --require <REQUIRE>
           A property that must be present (existence constraint); repeat
 

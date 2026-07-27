@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord, RecordEncodeError};
-use acetone_model::schema::{LabelDef, SchemaEntry};
+use acetone_model::schema::{LabelDef, PropertyType, SchemaEntry};
 use acetone_model::values::encode_value;
 use acetone_prolly::{
     BatchOp, ChunkParams, Root, apply_batch, diff as prolly_diff, empty, get,
@@ -147,6 +147,20 @@ pub enum GraphViolation {
         /// The required property that is absent.
         property: String,
     },
+    /// A merged node holds a value contradicting the type its primary label
+    /// declares for that property (spec §2, ADR-0066). Either side may have
+    /// been legal alone: one branch retypes a property, the other writes a
+    /// value of the old type, and only the merged state breaches.
+    WrongType {
+        /// The offending node's key (encoded).
+        node: Vec<u8>,
+        /// The mistyped property.
+        property: String,
+        /// The type the merged schema declares.
+        declared: PropertyType,
+        /// The type the merged value actually has.
+        actual: PropertyType,
+    },
     /// Two or more merged nodes of `label` share a value for a UNIQUE
     /// property (spec §2). `nodes` are the colliding node keys (encoded),
     /// in key order.
@@ -210,6 +224,21 @@ impl std::fmt::Display for GraphViolation {
                     display_edge_key(edge),
                     role.role_name(),
                     display_node_key(endpoint)
+                )
+            }
+            GraphViolation::WrongType {
+                node,
+                property,
+                declared,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "node {} property {} is declared {} but the merged value is of type {}",
+                    display_node_key(node),
+                    format_label(property),
+                    declared.as_str(),
+                    actual.as_str()
                 )
             }
             GraphViolation::MissingRequired { node, property } => {
@@ -529,10 +558,18 @@ fn rebuild_reverse<S: ChunkStore>(
 
 /// Validate a map-clean merged manifest against `base` (acetone-14c.3):
 /// referential integrity (no dangling edges) and schema constraints
-/// (existence, UNIQUE), re-checked over the keys the merge changed. Returns
-/// the violations in category order (dangling edges, then existence, then
-/// UNIQUE), each category in key order — deterministic, so the merge stays
-/// a pure function of its inputs (Invariant #4).
+/// (existence, declared types, UNIQUE), re-checked over the keys the merge
+/// changed. Returns the violations in category order (dangling edges, then
+/// existence, then declared types, then UNIQUE), each category in key order —
+/// deterministic, so the merge stays a pure function of its inputs
+/// (Invariant #4).
+///
+/// Note the persisted conflicts map sorts `WrongType` *last* rather than
+/// third: its entry-key tag is 3, assigned after UNIQUE's 2 so existing
+/// conflict keys did not move. Both orders are deterministic, so Invariant #4
+/// holds either way, but `GraphError::MergeViolations` and
+/// `CALL acetone.conflicts()` therefore list the same merge's categories in
+/// different orders.
 ///
 /// Only **merge-introduced** breaches are reported: a violation is attributed
 /// to the merge when it arises from a key the merge changed (an added edge, a
@@ -643,6 +680,39 @@ pub(crate) fn validate_merged<S: ChunkStore>(
                 violations.push(GraphViolation::MissingRequired {
                     node: key_enc.clone(),
                     property: property.clone(),
+                });
+            }
+        }
+    }
+
+    // Declared types (ADR-0066), on the same footing and with the same
+    // responsibility rule as existence above: report a breach when the node
+    // changed, or when the merged schema newly declares (or retypes) the
+    // property, which is the tightening a pre-existing node may not satisfy.
+    //
+    // The merge-specific case this catches is the one neither side can see
+    // alone: `ours` retypes `port` to int while `theirs` writes `port:
+    // "8080"`. Both commits are individually legal; only the merged state
+    // breaches, so the write-time check in `persist` cannot have caught it.
+    for (key, record) in &all_nodes {
+        let Some(def) = labels.get(key.label()) else {
+            continue;
+        };
+        let key_enc = key.encode()?;
+        let changed = changed_nodes.contains(&key_enc);
+        // Shared with the declare-time and save-time checks, so all three
+        // agree by construction — including on key properties, whose values
+        // live in the node key rather than the record.
+        for (property, declared, actual) in crate::constraints::type_violations(key, record, def) {
+            let newly_declared = base_labels
+                .get(key.label())
+                .is_none_or(|b| b.types().get(&property) != Some(&declared));
+            if changed || newly_declared {
+                violations.push(GraphViolation::WrongType {
+                    node: key_enc.clone(),
+                    property,
+                    declared,
+                    actual,
                 });
             }
         }

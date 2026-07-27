@@ -35,6 +35,7 @@ use acetone_model::Value as ModelValue;
 use acetone_model::display::{format_key_tuple, format_label, format_labels, format_node_identity};
 use acetone_model::graph_keys::{EdgeKey, GraphKeyError, NodeKey};
 use acetone_model::records::{EdgeRecord, NodeRecord};
+use acetone_model::schema::PropertyType;
 
 use crate::bind::Catalogue;
 use crate::exec::WriteChanges;
@@ -92,6 +93,24 @@ pub enum PersistError {
         "UNIQUE constraint on {label:?}.{property:?} violated: value already used by another node"
     )]
     UniqueViolation { label: String, property: String },
+    #[error(
+        "property {property:?} of {label:?} {key} is declared {declared} but the value written is \
+         of type {actual}. A declared type is enforced (ADR-0066) because index seeks rely on it: \
+         a value contradicting the declaration would make a seek on this property silently return \
+         too few rows. Write a value of type {declared}, or redeclare the property's type."
+    )]
+    WrongType {
+        /// The primary label declaring the type.
+        label: String,
+        /// The node's key tuple, rendered.
+        key: String,
+        /// The mistyped property.
+        property: String,
+        /// The declared type name.
+        declared: &'static str,
+        /// The written value's type name.
+        actual: &'static str,
+    },
     #[error("cannot persist a {0} as a stored property value")]
     Value(&'static str),
     #[error(
@@ -400,6 +419,39 @@ impl<'a> UniqueChecker<'a> {
                     property: property.clone(),
                 });
             }
+        }
+        // Declared types are enforced here, before the workspace ref advances,
+        // on the same footing as REQUIRE and UNIQUE (ADR-0066). This is what
+        // makes the declaration something `store_source`'s seek guard may
+        // rely on: it serves a raw string probe only when the declared type
+        // rules out a deferred value, so an unenforced declaration would let a
+        // seek UNDER-select — the rows that exist and match but are never
+        // visited.
+        //
+        // Checked against the CONVERTED value, which is what will actually be
+        // stored: an ADR-0038 carrier round-trips to its original typed value,
+        // so an untouched `Bytes` property re-written by an unrelated `SET`
+        // satisfies a `bytes` declaration rather than failing as the string it
+        // renders as.
+        for (property, declared) in def.types() {
+            let Some(value) = node.properties.get(property) else {
+                continue;
+            };
+            let stored = convert_value(value)?;
+            if declared.matches(&stored) {
+                continue;
+            }
+            // `None` is Null, which conforms to every declaration.
+            let Some(actual) = PropertyType::of(&stored) else {
+                continue;
+            };
+            return Err(PersistError::WrongType {
+                label: key.label().to_string(),
+                key: format_key_tuple(key.key()),
+                property: property.clone(),
+                declared: declared.as_str(),
+                actual: actual.as_str(),
+            });
         }
         let wanted: Vec<(&str, ModelValue)> = def
             .unique()

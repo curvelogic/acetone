@@ -56,7 +56,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_model::schema::{IndexDef, SchemaEntry};
+use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
 use acetone_prolly::{BatchOp, ChunkParams, Root, collect_reachable_chunks};
 use acetone_store::{
     ChunkStore, Commit, CommitStore, ConsolidateOptions, ConsolidateStats, GitStore,
@@ -1968,6 +1968,73 @@ impl<'r> Transaction<'r> {
             && self.edges_rev.is_empty())
     }
 
+    /// Enforce declared property types over the node records staged in this
+    /// transaction (spec §2, ADR-0066).
+    ///
+    /// This is the universal chokepoint: `cypher/persist.rs` enforces the same
+    /// rule earlier and with a friendlier message for Cypher writes, but
+    /// `put-node`, `rekey`, import and any library caller reach storage
+    /// through a `Transaction` without passing through it. Because
+    /// `store_source::probe_value` decides a raw string index probe is safe
+    /// from the *declaration alone*, one unchecked writer is enough to make a
+    /// seek under-select — return fewer rows than the equivalent scan.
+    ///
+    /// Only staged `Put`s are examined (deletes carry no values, and existing
+    /// records are the declare-time check's business), so the cost is
+    /// proportional to the write, not to the graph. The schema read is skipped
+    /// entirely when nothing was staged.
+    fn check_staged_node_types(
+        store: &GitStore,
+        params: ChunkParams,
+        schema: &MapRoot,
+        staged: &[BatchOp],
+    ) -> Result<(), GraphError> {
+        if staged.iter().all(|op| matches!(op, BatchOp::Delete(_))) {
+            return Ok(());
+        }
+        let mut typed_labels: BTreeMap<String, LabelDef> = BTreeMap::new();
+        let schema_root = schema.to_root(params)?;
+        for item in acetone_prolly::scan(store, &schema_root, ..)? {
+            let (key, value) = item?;
+            if let SchemaEntry::Label { name, def } = SchemaEntry::decode(&key, &value)?
+                && !def.types().is_empty()
+            {
+                typed_labels.insert(name, def);
+            }
+        }
+        // No label declares a type: nothing to enforce, and no record decoding.
+        if typed_labels.is_empty() {
+            return Ok(());
+        }
+        for op in staged {
+            let BatchOp::Put(key, value) = op else {
+                continue;
+            };
+            let node = NodeKey::decode(key)?;
+            let Some(def) = typed_labels.get(node.label()) else {
+                continue;
+            };
+            let record = NodeRecord::decode(value)?;
+            // Shared with the declare-time and merge-time checks, so all
+            // three agree by construction — and so key properties, whose
+            // values live in the node key rather than the record, are covered
+            // here too.
+            if let Some((property, declared, actual)) =
+                crate::constraints::type_violations(&node, &record, def)
+                    .into_iter()
+                    .next()
+            {
+                return Err(GraphError::PropertyTypeViolation {
+                    node: acetone_model::display::format_node_key(&node),
+                    property,
+                    declared: declared.as_str(),
+                    actual: actual.as_str(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Apply staged ops to one map, returning the new root and the
     /// `(new_chunk, predecessor)` base hints the splice discovered — recorded
     /// for a later `gc` so rewritten chunks delta against their predecessors
@@ -2076,14 +2143,33 @@ impl<'r> Transaction<'r> {
                 BatchOp::Put(..) => None,
             })
             .collect();
+        // The schema map is applied first and on its own, so the declared-type
+        // check below sees THIS transaction's schema changes (declaring a type
+        // and writing conforming values in one save must succeed).
+        let new_schema = Self::apply_map(
+            store,
+            params,
+            &self.manifest.schema,
+            std::mem::take(&mut self.schema),
+        )?;
+        // Declared property types are enforced HERE — at the one chokepoint
+        // every writer passes through — rather than only in the Cypher write
+        // path (ADR-0066). `cypher/persist.rs` checks them too, earlier and
+        // with a better message, but it is not the only way a node record is
+        // written: `acetone put-node`, `rekey`, import and any library caller
+        // stage records straight onto a `Transaction`. A single unchecked
+        // writer would be enough to falsify a declaration, and
+        // `cypher/exec/store_source.rs probe_value` RELIES on declarations
+        // being true to serve a raw string index probe — so a bypass here
+        // means a seek can silently return fewer rows than the equivalent
+        // scan.
+        //
+        // Staged ops are validated by reference before they are consumed, so
+        // this costs no extra allocation on a large batched import.
+        Self::check_staged_node_types(store, params, &new_schema, &self.nodes)?;
         let mut manifest = Manifest {
             chunk_params: params,
-            schema: Self::apply_map(
-                store,
-                params,
-                &self.manifest.schema,
-                std::mem::take(&mut self.schema),
-            )?,
+            schema: new_schema,
             nodes: Self::apply_map(
                 store,
                 params,

@@ -107,11 +107,16 @@ pub enum FindingKind {
     /// ref). The sin fsck must avoid is silence, so the ref is named rather
     /// than skipped.
     Unverified,
-    /// Advisory: a node breaches a declared schema constraint (existence or
-    /// UNIQUE, spec §2). The write and import paths now enforce these
-    /// (acetone-9gw), but a repository written before enforcement — or by a
-    /// foreign tool — may carry breaches; fsck names them without failing,
-    /// because the data is structurally intact.
+    /// Advisory: a node breaches a declared schema constraint (existence,
+    /// declared property type, or UNIQUE, spec §2). The write and import paths
+    /// now enforce these (acetone-9gw, ADR-0066), but a repository written
+    /// before enforcement — or by a foreign tool — may carry breaches; fsck
+    /// names them without failing, because the data is structurally intact.
+    ///
+    /// A declared-type breach is the one worth seeking out: `store_source`'s
+    /// seek guard trusts the declaration, so a node contradicting it can make
+    /// an index seek return fewer rows than the equivalent scan. `fsck` is the
+    /// only tool that surfaces such a breach once it exists.
     ConstraintViolation,
 }
 
@@ -1196,9 +1201,18 @@ fn check_constraint_violations(
         }
     }
     // Fast path: no declared constraints, nothing to materialise.
+    //
+    // `types` counts as a constraint here (ADR-0066). Without that term a
+    // repository declaring ONLY types — exactly what `declare-label --type`
+    // produces — skipped this check entirely, and `fsck` is the one tool that
+    // surfaces a violation the write path did not catch: the format is
+    // unchanged so a pre-PR repository keeps any breach it already had, and
+    // merge's responsibility rule deliberately leaves an untouched
+    // pre-existing breach alone. Reporting "clean" over an index that
+    // under-selects is the worst answer available here.
     if labels
         .values()
-        .all(|def| def.exists().is_empty() && def.unique().is_empty())
+        .all(|def| def.exists().is_empty() && def.unique().is_empty() && def.types().is_empty())
     {
         return;
     }

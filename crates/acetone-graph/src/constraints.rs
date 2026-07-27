@@ -8,6 +8,9 @@
 //!
 //! - **existence**: a required property is present iff it is a key property
 //!   (always present, by identity) or appears in the node record;
+//! - **declared types**: a property's value matches the type its label
+//!   declares (ADR-0066), reading a key property's value from the key tuple
+//!   and everything else from the record;
 //! - **UNIQUE**: two distinct nodes of the same label sharing a canonical
 //!   value encoding for a UNIQUE property collide. Node identity is the
 //!   encoded node key, so re-asserting the same node with the same value is
@@ -30,7 +33,7 @@ use acetone_model::Value;
 use acetone_model::display::{format_label, format_node_key, format_value};
 use acetone_model::graph_keys::NodeKey;
 use acetone_model::records::{NodeRecord, RecordEncodeError};
-use acetone_model::schema::LabelDef;
+use acetone_model::schema::{LabelDef, PropertyType};
 use acetone_model::values::encode_value;
 
 use crate::error::GraphError;
@@ -48,6 +51,18 @@ pub enum ConstraintViolation {
         node: NodeKey,
         /// The absent required property.
         property: String,
+    },
+    /// A node holds a value contradicting the type its label declares for
+    /// that property (ADR-0066).
+    WrongType {
+        /// The violating node.
+        node: NodeKey,
+        /// The mistyped property.
+        property: String,
+        /// The type the label declares.
+        declared: PropertyType,
+        /// The type the stored value actually has.
+        actual: PropertyType,
     },
     /// Two or more nodes of `label` share a value for a UNIQUE property.
     Unique {
@@ -70,6 +85,19 @@ impl fmt::Display for ConstraintViolation {
                 "node {} is missing required property {}",
                 format_node_key(node),
                 format_label(property)
+            ),
+            ConstraintViolation::WrongType {
+                node,
+                property,
+                declared,
+                actual,
+            } => write!(
+                f,
+                "node {} property {} is declared {} but holds a {} value",
+                format_node_key(node),
+                format_label(property),
+                declared.as_str(),
+                actual.as_str()
             ),
             ConstraintViolation::Unique {
                 label,
@@ -126,10 +154,60 @@ impl fmt::Display for ConstraintViolations {
 /// in deterministic (memcomparable) order.
 pub type NodeSet = BTreeMap<Vec<u8>, (NodeKey, NodeRecord)>;
 
+/// Every declared-type breach in one node — `(property, declared, actual)`,
+/// in declared-property order (ADR-0066).
+///
+/// **Key properties are checked too, and they are the subtle half.** A node's
+/// key values live in its [`NodeKey`], not in its [`NodeRecord`] — "the record
+/// stores only the non-key properties (the key is the key)" — so a check that
+/// consults `record.properties()` alone silently exempts exactly the
+/// properties whose type matters most: `acetone-2ck.17` extends the seek
+/// guard's trust to key properties, where a missed row is a missed identity.
+/// The existence check above has the same shape for the same reason.
+///
+/// A declared type is a constraint on the same footing as `REQUIRE` and
+/// `UNIQUE`, not an annotation: `store_source`'s seek guard serves a raw
+/// string probe only when the declared type rules out a deferred value, so a
+/// false declaration makes a seek UNDER-select — rows that exist and match are
+/// never visited.
+///
+/// Absent and null values conform: presence is existence's business
+/// (ADR-0061), not the type system's.
+pub(crate) fn type_violations(
+    key: &NodeKey,
+    record: &NodeRecord,
+    def: &LabelDef,
+) -> Vec<(String, PropertyType, PropertyType)> {
+    if def.types().is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (property, declared) in def.types() {
+        // A key property's value comes from the key tuple, by position;
+        // anything else from the record.
+        let value = match def.key().iter().position(|k| k == property) {
+            Some(i) => key.key().get(i),
+            None => record.properties().get(property),
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        if declared.matches(value) {
+            continue;
+        }
+        // `None` is Null, which conforms to every declaration.
+        let Some(actual) = PropertyType::of(value) else {
+            continue;
+        };
+        out.push((property.clone(), *declared, actual));
+    }
+    out
+}
+
 /// Check `nodes` (a final node state) against the label definitions in
 /// `labels`, returning every violation in deterministic order: existence
-/// breaches in node-key order first, then UNIQUE collisions in
-/// (label, property, value) order.
+/// breaches in node-key order first, then declared-type breaches, then
+/// UNIQUE collisions in (label, property, value) order.
 ///
 /// With `focus` set, only violations *involving* a focus key are reported: an
 /// existence breach on a focus node, or a UNIQUE group containing at least
@@ -161,6 +239,14 @@ pub fn check_nodes(
                     property: property.clone(),
                 });
             }
+        }
+        for (property, declared, actual) in type_violations(key, record, def) {
+            violations.push(ConstraintViolation::WrongType {
+                node: key.clone(),
+                property,
+                declared,
+                actual,
+            });
         }
     }
 
@@ -220,7 +306,13 @@ pub fn check_upsert(
     // Fast path: an undeclared or unconstrained label has nothing to check —
     // plumbing writes to schema-less labels stay raw, like `put_node` itself.
     match labels.get(key.label()) {
-        Some(def) if !def.exists().is_empty() || !def.unique().is_empty() => {}
+        // `types` counts as a constraint (ADR-0066) — the third place this
+        // term was missed. Without it the error a caller sees for the same
+        // breach depended on whether the label happened to declare something
+        // unrelated: the save-time refusal when it did not, this richer
+        // violation list when it did.
+        Some(def)
+            if !def.exists().is_empty() || !def.unique().is_empty() || !def.types().is_empty() => {}
         _ => return Ok(Vec::new()),
     }
     let mut nodes = NodeSet::new();
@@ -243,7 +335,11 @@ pub fn check_label(
     label: &str,
     def: &LabelDef,
 ) -> Result<Vec<ConstraintViolation>, GraphError> {
-    if def.exists().is_empty() && def.unique().is_empty() {
+    // `types` counts here as much as `exists`/`unique` do (ADR-0066):
+    // without it, a declaration that only declares TYPES — the whole point of
+    // `declare-label --type` — would skip the scan and be accepted over data
+    // that already contradicts it.
+    if def.exists().is_empty() && def.unique().is_empty() && def.types().is_empty() {
         return Ok(Vec::new());
     }
     let mut nodes = NodeSet::new();

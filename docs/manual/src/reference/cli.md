@@ -172,16 +172,29 @@ re-validates before completing.
 
 ## Schema commands
 
-### `acetone declare-label <LABEL> --key <KEY>... [--require <PROP>]... [--unique <PROP>]...`
+### `acetone declare-label <LABEL> --key <KEY>... [--type <PROP>:<TYPE>]... [--require <PROP>]... [--unique <PROP>]...`
 
-Declare a primary label's key and constraints. `--key` names a key property;
-repeat it, in order, for a composite key. Declaring the label is required
-before Cypher `CREATE`/`MERGE` can persist nodes of it (node identity is
-`(primary label, key tuple)` — Invariant #3). `--require` adds an existence
-constraint; `--unique` adds a uniqueness constraint on a non-key property;
-both may be repeated. Redeclaring a label replaces its whole constraint set,
-and a declaration that existing nodes of the label would violate is refused
-with the violating nodes named — backfill first, declare after.
+Declare a primary label's key, property types and constraints. `--key` names
+a key property; repeat it, in order, for a composite key. Declaring the label
+is required before Cypher `CREATE`/`MERGE` can persist nodes of it (node
+identity is `(primary label, key tuple)` — Invariant #3).
+
+`--type` declares a property's type as `<property>:<type>`, where the type is
+one of `bool`, `int`, `float`, `string`, `bytes`, `date`, `time`, `datetime`,
+`duration`, `list`. Naming the same property twice is an error rather than
+last-wins. `--require` adds an existence constraint; `--unique` adds a
+uniqueness constraint on a non-key property. All three may be repeated.
+
+Declared types and constraints are enforced at write time; a property that is
+absent or null satisfies any declared type (presence is `--require`'s
+concern). A declared type is also what lets an index seek serve an equality
+pin on a string — without it the query declines to a scan, because a `bytes`
+or temporal value compares equal to its own text rendering and a raw probe
+would miss it (ADR-0066).
+
+Redeclaring a label replaces its whole constraint set, and a declaration that
+existing nodes of the label would violate is refused with the violating nodes
+named — backfill first, declare after.
 
 ### `acetone declare-rel-type <RTYPE>`
 

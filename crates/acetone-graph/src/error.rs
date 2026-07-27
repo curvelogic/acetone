@@ -254,6 +254,26 @@ pub enum GraphError {
     /// reported by `Repository::conflicts` / `CALL acetone.conflicts()`.
     #[error("{}", render_merge_violations(.0))]
     MergeViolations(Vec<crate::merge::GraphViolation>),
+    /// A staged node record holds a value contradicting the type its primary
+    /// label declares (spec §2, ADR-0066). Raised at `save` — the one point
+    /// every writer passes through — so `put-node`, `rekey`, import and
+    /// library callers are covered, not only the Cypher write path.
+    #[error(
+        "cannot write node {node}: property {property:?} is declared {declared} but the value \
+         is of type {actual}. A declared type is enforced because index seeks rely on it — a \
+         value contradicting the declaration would make a seek on this property silently return \
+         too few rows. Write a value of type {declared}, or redeclare the property's type."
+    )]
+    PropertyTypeViolation {
+        /// The offending node's key, rendered and escaped for display.
+        node: String,
+        /// The mistyped property.
+        property: String,
+        /// The declared type's name.
+        declared: &'static str,
+        /// The written value's type name.
+        actual: &'static str,
+    },
     /// A history rewrite (`acetone migrate`) hit an internal inconsistency
     /// (a cycle in the commit graph, or a reachable commit that vanished).
     #[error("migrate: {0}")]

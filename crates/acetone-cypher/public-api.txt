@@ -5253,6 +5253,12 @@ pub acetone_cypher::persist::PersistError::UniqueViolation
 pub acetone_cypher::persist::PersistError::UniqueViolation::label: alloc::string::String
 pub acetone_cypher::persist::PersistError::UniqueViolation::property: alloc::string::String
 pub acetone_cypher::persist::PersistError::Value(&'static str)
+pub acetone_cypher::persist::PersistError::WrongType
+pub acetone_cypher::persist::PersistError::WrongType::actual: &'static str
+pub acetone_cypher::persist::PersistError::WrongType::declared: &'static str
+pub acetone_cypher::persist::PersistError::WrongType::key: alloc::string::String
+pub acetone_cypher::persist::PersistError::WrongType::label: alloc::string::String
+pub acetone_cypher::persist::PersistError::WrongType::property: alloc::string::String
 impl core::convert::From<acetone_cypher::persist::PersistError> for acetone_cypher::session::QueryError
 pub fn acetone_cypher::session::QueryError::from(acetone_cypher::persist::PersistError) -> Self
 impl core::convert::From<acetone_graph::error::GraphError> for acetone_cypher::persist::PersistError
