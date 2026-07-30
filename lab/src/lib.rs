@@ -296,8 +296,10 @@ pub fn schema_with(declare_indexes: bool) -> Vec<SchemaEntry> {
     // served by a seek instead of a scan (`acetone-2ck.17`): without it the
     // key pin cannot rule out a Bytes/temporal value equal to the pin's
     // string rendering, so it declines. `Software.name` was already typed —
-    // it is both the key and an ordinary declared property — which is why
-    // one of the four labels could already be looked up by key.
+    // it is both the key and an ordinary declared property — so it is the one
+    // label whose point lookup would have worked without this schema edit.
+    // No label was seekable by string key *before* `acetone-2ck.17`: the old
+    // code declined every string key pin regardless of what was declared.
     let mut host_types = BTreeMap::new();
     host_types.insert("hostname".to_string(), PropertyType::String);
     host_types.insert("os".to_string(), PropertyType::String);

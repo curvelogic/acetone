@@ -56,7 +56,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_model::schema::{IndexDef, LabelDef, SchemaEntry};
+use acetone_model::schema::{IndexDef, LabelDef, PropertyType, SchemaEntry};
 use acetone_prolly::{BatchOp, ChunkParams, Root, collect_reachable_chunks};
 use acetone_store::{
     ChunkStore, Commit, CommitStore, ConsolidateOptions, ConsolidateStats, GitStore,
@@ -1657,6 +1657,103 @@ fn check_label_key_stability(
     Ok(())
 }
 
+/// A newly declared or retyped property type must hold over the data that
+/// already exists, or the declaration would be false the moment it landed.
+///
+/// [`Transaction::check_staged_node_types`] examines only what this
+/// transaction *writes*, so a schema-only transaction — declare `id: string`
+/// over nodes that are already there — slipped past it entirely. That is not
+/// a cosmetic gap: `store_source` decides a raw string probe is exact **from
+/// the declaration alone**, for index pins (`probe_value`) and, since
+/// `acetone-2ck.17`, for primary-key pins too. Retyping around existing data
+/// therefore turned a seek into a silent wrong answer — on node identity, in
+/// a repository built entirely through the public library API. The CLI's
+/// `declare-label` refuses this via `constraints::check_label`, but
+/// `Transaction::put_schema` is public and reaches storage without it.
+///
+/// Only labels whose declared types actually changed are scanned, and only
+/// the changed properties are judged — mirroring the merge path's
+/// responsibility rule (ADR-0066). A property whose declaration is unchanged
+/// was already enforced when its value was written.
+///
+/// Nodes this transaction also writes or deletes are skipped: they are
+/// [`Transaction::check_staged_node_types`]'s business, and skipping them is
+/// what lets a retype and its backfill land in **one** transaction rather
+/// than being refused for the state it is in the middle of repairing.
+///
+/// The scan is affordable because the caller already pays for one: a schema
+/// change runs [`check_label_key_stability`] over the same base nodes.
+fn check_retyped_labels(
+    store: &GitStore,
+    params: ChunkParams,
+    base_nodes: &MapRoot,
+    old_entries: &[SchemaEntry],
+    new_entries: &[SchemaEntry],
+    touched: &BTreeSet<Vec<u8>>,
+) -> Result<(), GraphError> {
+    let old_types: BTreeMap<&str, &BTreeMap<String, PropertyType>> = old_entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SchemaEntry::Label { name, def } => Some((name.as_str(), def.types())),
+            _ => None,
+        })
+        .collect();
+    let root = base_nodes.to_root(params)?;
+    for entry in new_entries {
+        let SchemaEntry::Label { name, def } = entry else {
+            continue;
+        };
+        if def.types().is_empty() {
+            continue;
+        }
+        let previous = old_types.get(name.as_str()).copied();
+        let changed: BTreeSet<&str> = def
+            .types()
+            .iter()
+            .filter(|(property, declared)| {
+                previous.and_then(|types| types.get(*property)) != Some(*declared)
+            })
+            .map(|(property, _)| property.as_str())
+            .collect();
+        if changed.is_empty() {
+            continue;
+        }
+        let prefix = acetone_model::graph_keys::node_label_prefix(name);
+        for item in acetone_prolly::scan(
+            store,
+            &root,
+            (Bound::Included(prefix.as_slice()), Bound::Unbounded),
+        )? {
+            let (key, value) = item?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if touched.contains(&key[..]) {
+                continue;
+            }
+            let node = NodeKey::decode(&key)?;
+            let record = NodeRecord::decode(&value)?;
+            // The one definition of conformance, shared with the write-time,
+            // declare-time and merge-time checks — including its handling of
+            // key properties, whose values live in the node key rather than
+            // the record.
+            if let Some((property, declared, actual)) =
+                crate::constraints::type_violations(&node, &record, def)
+                    .into_iter()
+                    .find(|(property, _, _)| changed.contains(property.as_str()))
+            {
+                return Err(GraphError::PropertyTypeViolation {
+                    node: acetone_model::display::format_node_key(&node),
+                    property,
+                    declared: declared.as_str(),
+                    actual: actual.as_str(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A `GraphError::DanglingEdge` naming the offending edge and missing endpoint.
 fn dangling_edge(rtype: &str, role: &'static str, endpoint: &NodeKey) -> GraphError {
     GraphError::DanglingEdge {
@@ -2196,15 +2293,22 @@ impl<'r> Transaction<'r> {
         // would orphan every existing node's key from the schema. Such a change
         // needs an explicit `migrate`, not a redeclare.
         if schema_changed {
-            let old_keys = crate::index::schema_index_info(
-                &Snapshot::new(store, self.manifest.clone()).schema_entries()?,
-            )
-            .1;
-            let new_keys = crate::index::schema_index_info(
-                &Snapshot::new(store, manifest.clone()).schema_entries()?,
-            )
-            .1;
+            let old_entries = Snapshot::new(store, self.manifest.clone()).schema_entries()?;
+            let new_entries = Snapshot::new(store, manifest.clone()).schema_entries()?;
+            let old_keys = crate::index::schema_index_info(&old_entries).1;
+            let new_keys = crate::index::schema_index_info(&new_entries).1;
             check_label_key_stability(store, params, &base_nodes, &old_keys, &new_keys)?;
+            // A declaration must be true of the data already present, not just
+            // of what this transaction writes — otherwise a seek that trusts
+            // the declaration under-selects (see the function's own comment).
+            check_retyped_labels(
+                store,
+                params,
+                &base_nodes,
+                &old_entries,
+                &new_entries,
+                &touched_nodes.iter().cloned().collect(),
+            )?;
         }
         // Maintain the derived `idx/<name>` maps (spec §3.3, Invariant #5).
         // Skipped entirely when no index exists and the schema is unchanged, so

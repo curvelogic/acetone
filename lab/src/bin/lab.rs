@@ -412,16 +412,10 @@ fn key_seek_measurement(
 
     // The measurement that means something: point lookup versus label scan,
     // same repository, interleaved and order-swapped like every other case.
-    // Their row counts differ by design, so parity is checked against what
-    // each query must return rather than against each other — a seek that
+    // Their row counts differ by design, so each is checked against the exact
+    // count it must return rather than against the other — a seek that
     // under-selected to zero rows would otherwise look like a triumph.
-    let (point_ms, scan_ms) = interleaved_on(
-        indexed,
-        &point,
-        |rows| rows.contains("Int(1)"),
-        &scan,
-        |rows| rows.contains(&format!("Int({})", shape.hosts)),
-    )?;
+    let (point_ms, scan_ms) = interleaved_on(indexed, &point, 1, &scan, shape.hosts as i64)?;
     let ratio = if point_ms > 0.0 {
         scan_ms / point_ms
     } else {
@@ -452,36 +446,47 @@ fn key_seek_measurement(
 /// swapping the order every other iteration exactly as [`interleaved`] does.
 ///
 /// The two queries return different results by design, so instead of
-/// comparing them to each other this checks each against what it must
-/// return. That check is the load-bearing part: a seek that under-selected
-/// to zero rows would otherwise be reported as the fastest of all.
+/// comparing them to each other this checks each against the exact count it
+/// must return. That check is the load-bearing part: a seek that
+/// under-selected to zero rows would otherwise be reported as the fastest of
+/// all. Each query must project a single `count(*)` cell — the value is
+/// compared numerically, not by matching text against a `Debug` rendering
+/// (where `Int(1)` is a substring of `Int(10)`).
 fn interleaved_on(
     repo: &Repository,
     first: &str,
-    first_ok: impl Fn(&str) -> bool,
+    first_count: i64,
     second: &str,
-    second_ok: impl Fn(&str) -> bool,
+    second_count: i64,
 ) -> Result<(f64, f64), Box<dyn std::error::Error>> {
     let session = Session::new(repo);
     let (mut best_first, mut best_second) = (f64::INFINITY, f64::INFINITY);
     for i in 0..RUNS {
-        let time = |cypher: &str| -> Result<(f64, String), Box<dyn std::error::Error>> {
+        let time = |cypher: &str| -> Result<(f64, i64), Box<dyn std::error::Error>> {
             let start = Instant::now();
             let out = session.run(cypher)?;
-            Ok((start.elapsed().as_secs_f64() * 1000.0, format!("{out:?}")))
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            let result = out.result();
+            let [row] = result.rows.as_slice() else {
+                return Err(format!("expected exactly one row from: {cypher}").into());
+            };
+            let [acetone_cypher::exec::value::Value::Int(n)] = row.as_slice() else {
+                return Err(format!("expected a single integer count from: {cypher}").into());
+            };
+            Ok((elapsed, *n))
         };
-        let ((first_ms, first_rows), (second_ms, second_rows)) = if i % 2 == 0 {
+        let ((first_ms, first_n), (second_ms, second_n)) = if i % 2 == 0 {
             let a = time(first)?;
             (a, time(second)?)
         } else {
             let b = time(second)?;
             (time(first)?, b)
         };
-        if !first_ok(&first_rows) {
-            return Err(format!("wrong answer for: {first}\n  got: {first_rows}").into());
+        if first_n != first_count {
+            return Err(format!("{first}\n  expected {first_count}, got {first_n}").into());
         }
-        if !second_ok(&second_rows) {
-            return Err(format!("wrong answer for: {second}\n  got: {second_rows}").into());
+        if second_n != second_count {
+            return Err(format!("{second}\n  expected {second_count}, got {second_n}").into());
         }
         best_first = best_first.min(first_ms);
         best_second = best_second.min(second_ms);

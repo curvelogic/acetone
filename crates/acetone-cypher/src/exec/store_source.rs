@@ -67,8 +67,17 @@ use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 /// a silent wrong-answer bug on one path only.
 ///
 /// This is trustworthy because ADR-0066 made a declared type a **constraint**,
-/// enforced at save, declare and merge time, for key properties as much as
-/// record properties. Before that it was an assertion nothing checked.
+/// for key properties as much as record properties. Before that it was an
+/// assertion nothing checked. Enforcement binds every *writer*: staged records
+/// at save (`check_staged_node_types`), pre-existing data whenever a type is
+/// newly declared or changed (`check_retyped_labels` — installing a
+/// declaration the data already contradicts is refused, at the transaction
+/// primitive and not merely in the CLI), and the changed key set at merge.
+///
+/// One readable state is still outside that, and it is a read rather than a
+/// write: a conflicted merge persists its merged manifest as the workspace
+/// before validation refuses the commit, so a seek over that workspace can
+/// under-select (`acetone-7qw.14`). Read "enforced" as a claim about writers.
 fn string_probe_is_exact(declared: Option<PropertyType>) -> bool {
     matches!(
         declared,
@@ -346,11 +355,18 @@ impl GraphSource for StoreBackedSource<'_> {
         // differently), and a probe set we cannot form means "cannot
         // serve" — scan — never "definitively absent".
         //
-        // Only trust the recorded key types when their arity matches the pin.
-        // A hint may have been bound against another version's catalogue (AT
-        // clauses) — the index path guards the same way (PR #206 review
-        // finding 4) — and a positional type lookup against a key of a
-        // different shape would be reading the wrong property's declaration.
+        // Only trust the recorded key types when their arity matches the pin,
+        // so a positional type lookup is never read against a key of a
+        // different shape — a hint may have been bound against another
+        // version's catalogue (AT clauses), which the index path guards the
+        // same way (PR #206 review finding 4).
+        //
+        // Defensive, not load-bearing, and deliberately untested: a pin whose
+        // arity differs from the label's key encodes to a tuple no stored key
+        // can equal, so it finds nothing, leaves `served` false and declines
+        // whether this filter is here or not. It cannot change an answer
+        // today; it keeps the code honest if partial-key pins ever become
+        // servable.
         let key_types = self
             .key_types
             .get(label)
@@ -822,5 +838,48 @@ impl StoreBackedSource<'_> {
             // for a single point read.
             Candidates::OverBudget => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::string_probe_is_exact;
+    use acetone_model::schema::PropertyType;
+
+    /// The allow-list is what separates a sound string probe from a silent
+    /// wrong answer, and it is checked here **by membership** rather than by
+    /// behaviour.
+    ///
+    /// Behaviour cannot cover it. A string probe that misses everything
+    /// returns `None` and the scan answers, so under-selection needs a
+    /// *collision* — a `String`-keyed and a `Bytes`-keyed node under one
+    /// label, equal at runtime, distinct in the map. Under a declaration that
+    /// collision is exactly what ADR-0066's enforcement now refuses to let
+    /// exist (`acetone-graph/tests/property_types.rs`), so no reachable
+    /// fixture distinguishes "the guard declined" from "the probe found
+    /// nothing". Widening this list would therefore break no behavioural
+    /// test at all — which is why it is pinned directly.
+    ///
+    /// Stated as an explicit list of type names rather than by repeating the
+    /// implementation's `matches!`, so the two are independent statements of
+    /// the same fact. `PropertyType::names()` completeness is pinned in
+    /// `acetone-model`, so a new type cannot slip past this loop.
+    #[test]
+    fn only_types_that_rule_out_a_deferred_value_admit_a_string_probe() {
+        // A deferred value (`bytes`, the temporals) is stored raw but compares
+        // equal to its string *rendering* at runtime, so a raw string probe
+        // can miss it. `list` never keys an entry a string pin could equal.
+        let exact = ["bool", "int", "float", "string"];
+        for name in PropertyType::names() {
+            let declared = PropertyType::parse(name).expect("names() must parse");
+            assert_eq!(
+                string_probe_is_exact(Some(declared)),
+                exact.contains(name),
+                "declared type {name:?}: a string probe is exact only for {exact:?}"
+            );
+        }
+        // An undeclared property rules nothing out, so it is never exact —
+        // the case every graph built before ADR-0066 is in.
+        assert!(!string_probe_is_exact(None), "undeclared is never exact");
     }
 }

@@ -161,8 +161,9 @@ standing check that it stays pinned.
 The scan reference *can* move, and it did. Until `acetone-2ck.17` this
 lookup took **240.9 ms — 1.13x the label scan**: it was not seeking, it was
 scanning all 110,200 nodes to find one node by its identity. The two figures
-are the same binary over freshly built twin repositories on the same
-machine, differing only in whether the key seek's guard is open.
+come from the same source over freshly built repositories on the same
+machine, differing only in whether the key seek's guard is compiled open —
+not from the same binary, which could not produce both.
 
 What opened it: a string key pin used to be declined outright, because a
 Bytes/temporal key value compares equal to its string *rendering* at runtime

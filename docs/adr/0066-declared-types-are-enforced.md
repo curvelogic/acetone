@@ -107,6 +107,25 @@ The three points that mirror the existing constraints:
    backfill check `declare_label` already performs (`acetone-9gw`).
    Implemented as a type arm in `graph/constraints.rs check_nodes` rather
    than in the CLI, so it is not CLI-specific.
+
+   **Amended by `acetone-2ck.17`.** As first shipped this was CLI-specific in
+   practice: `constraints::check_label` had exactly one caller, the CLI's
+   `declare_label`, while `Transaction::put_schema` — public, and part of the
+   frozen 0.2 surface — installed a declaration with no backfill check at
+   all, and `check_staged_node_types` returns early when a transaction stages
+   no node put. So a schema-only transaction could retype *around* existing
+   data and make the declaration false the moment it landed. That was not
+   theoretical: a fresh repository built through the public library, with a
+   `String`-keyed and a `Bytes`-keyed node under one label, then declared
+   `id: string`, answered `MATCH (b:Blob {id: 'deadbeef'})` with one row
+   where the scan spelling returned two — a silent wrong answer on node
+   identity, found by the reviewer of `acetone-2ck.17`. `save_in_place` now
+   runs `check_retyped_labels` on any schema change, over the labels whose
+   declared types changed and the properties that changed, skipping nodes the
+   same transaction rewrites so a retype and its backfill can land together.
+   The scan was already paid for: a schema change already scans the same base
+   nodes for `check_label_key_stability`. Spec §2's parenthetical licensing
+   the gap is removed.
 3. **Merge time.** `merge.rs validate_merged` gains a type arm, reporting a
    breach as a `GraphViolation::WrongType` conflict — data, not an error
    (ADR-0007) — under the same responsibility rule as existence and UNIQUE:

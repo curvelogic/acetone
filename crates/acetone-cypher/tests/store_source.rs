@@ -692,35 +692,15 @@ fn an_undeclared_string_key_pin_would_drop_a_colliding_row() {
     );
 }
 
-/// The same guard shut by a *declared* deferred type. Defence in depth
-/// rather than the load-bearing case (enforcement stops the colliding twin
-/// from existing under a declaration at all — see the test above), but the
-/// allow-list must name the types it admits rather than admitting whatever
-/// happens to be declared.
-#[test]
-fn a_deferred_declared_key_type_declines() {
-    let (_dir, repo) = repo_with_label(
-        "Blob",
-        vec!["id".into()],
-        BTreeMap::from([("id".to_owned(), PropertyType::Bytes)]),
-        &[(vec![MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef])], 7)],
-    );
-    let snapshot = repo.workspace_snapshot().expect("snapshot");
-    let source = source_over(&snapshot);
-
-    let pin = RtValue::String("deadbeef".into());
-    assert!(
-        source
-            .nodes_by_key("Blob", std::slice::from_ref(&pin))
-            .is_none(),
-        "a Bytes-declared key declines a string pin"
-    );
-    assert_eq!(
-        scan_rows(&source, "id", &pin).len(),
-        1,
-        "and the scan does match it, through the carrier's rendering"
-    );
-}
+// A companion test asserting that a *declared* `bytes` key declines a string
+// pin was removed rather than kept: it was vacuous. With the guard forced
+// fully open the probe builds `NodeKey("Blob", [String("deadbeef")])`, finds
+// nothing, leaves `served == false` and returns `None` regardless — so its
+// `is_none()` was no evidence the guard had fired. No reachable fixture can
+// tell the two apart, because the collision that would distinguish them is
+// what ADR-0066's enforcement refuses to let exist under a declaration
+// (`acetone-graph/tests/property_types.rs`). The allow-list is pinned by
+// membership instead, in `store_source.rs`'s own unit test.
 
 /// Per component, like `probe_value`: a composite key is seekable only when
 /// every string component's declared type rules the hazard out. One
