@@ -492,6 +492,10 @@ fn primary_key_pin_is_served_by_the_store_backed_source() {
 /// deferred-typed node — under-selection, which candidate-superset
 /// semantics forbid — so the key seek declines string pins and lets the
 /// scan answer. Two spellings of one predicate must never disagree.
+///
+/// This is the **undeclared** case, which stays declined after
+/// `acetone-2ck.17`: with no declared type on the key property there is
+/// nothing to rule the hazard out.
 #[test]
 fn string_key_pin_declines_rather_than_under_selecting() {
     let (_dir, repo1) = repo();
@@ -546,6 +550,235 @@ fn string_key_pin_declines_rather_than_under_selecting() {
             .expect("numeric pin is served")
             .len(),
         1
+    );
+}
+
+/// Build a one-label repository and return a snapshot over it.
+fn repo_with_label(
+    label: &str,
+    key: Vec<String>,
+    types: BTreeMap<String, PropertyType>,
+    nodes: &[(Vec<MV>, i64)],
+) -> (tempfile::TempDir, Repository) {
+    let (dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: label.into(),
+            def: LabelDef::new(key, types, [], []).expect("label"),
+        })
+        .expect("schema");
+        for (key_tuple, tag) in nodes {
+            txn.put_node(
+                &NodeKey::new(label, key_tuple.clone()).expect("key"),
+                &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(*tag))])),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    (dir, repo)
+}
+
+/// The rows a scan would return for `label` where the `component`-th key
+/// property equals `pin` — computed the way the executor's filter does,
+/// through `eq3`, so a `Stored` carrier decays to its string rendering.
+fn scan_rows(source: &StoreBackedSource<'_>, key_name: &str, pin: &RtValue) -> Vec<String> {
+    let mut out: Vec<String> = source
+        .all_nodes()
+        .into_iter()
+        .filter(|n| {
+            n.properties
+                .get(key_name)
+                .is_some_and(|v| v.eq3(pin) == Some(true))
+        })
+        .map(|n| format!("{:?}", n.properties.get("tag")))
+        .collect();
+    out.sort();
+    out
+}
+
+/// `acetone-2ck.17`: a primary-key point lookup is the most valuable seek
+/// there is, and it was scanning for every string key — 257.13 ms indexed
+/// vs 257.69 ms unindexed over 50,000 hosts, i.e. 1.00x.
+///
+/// The declared type is what rules the rendering hazard out, exactly as it
+/// does for an equality pin in `probe_value`. ADR-0066 made a declaration a
+/// constraint enforced at save, declare and merge time — including for key
+/// properties, whose values live in the key tuple rather than the record —
+/// so trusting it here is trusting something checked.
+#[test]
+fn a_declared_string_key_is_seekable_and_agrees_with_the_scan() {
+    let (_dir, repo) = repo_with_label(
+        "Host",
+        vec!["id".into()],
+        BTreeMap::from([("id".to_owned(), PropertyType::String)]),
+        &[
+            (vec![MV::String("h1".into())], 1),
+            (vec![MV::String("h2".into())], 2),
+            (vec![MV::String("h3".into())], 3),
+        ],
+    );
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let source = source_over(&snapshot);
+
+    let pin = RtValue::String("h2".into());
+    let served = source
+        .nodes_by_key("Host", std::slice::from_ref(&pin))
+        .expect("a declared-string key pin must be SERVED, not declined");
+    let mut seek_rows: Vec<String> = served
+        .iter()
+        .map(|n| format!("{:?}", n.properties.get("tag")))
+        .collect();
+    seek_rows.sort();
+    assert_eq!(
+        seek_rows,
+        scan_rows(&source, "id", &pin),
+        "the seek must return exactly the scan's rows"
+    );
+    assert_eq!(seek_rows.len(), 1, "and that is one node, not zero");
+
+    // A pin that matches nothing still declines rather than asserting
+    // absence — unchanged, and the reason `served` is meaningful above.
+    assert!(
+        source
+            .nodes_by_key("Host", &[RtValue::String("absent".into())])
+            .is_none()
+    );
+}
+
+/// The hazard, in the only shape that actually produces a wrong answer.
+///
+/// A lone `Bytes`-keyed node is *not* enough: a key probe that finds
+/// nothing returns `None` and the scan answers, so an under-selecting probe
+/// degrades safely. The wrong answer needs a **collision** — two nodes
+/// under one label whose key values are distinct when stored (`String` vs
+/// `Bytes` encodings) but equal at runtime, because the `Bytes` value's
+/// ADR-0038 carrier decays to the same hex rendering under `eq3`. A raw
+/// string probe then finds the first, declares itself served, and silently
+/// drops the second.
+///
+/// The key property is undeclared here, which is what makes the collision
+/// reachable at all: since ADR-0066 a declared type is enforced, so a label
+/// declaring `id: string` cannot hold the `Bytes`-keyed twin, and that is
+/// precisely why the declaration is what the guard trusts.
+#[test]
+fn an_undeclared_string_key_pin_would_drop_a_colliding_row() {
+    let (_dir, repo) = repo_with_label(
+        "Blob",
+        vec!["id".into()],
+        BTreeMap::new(),
+        &[
+            (vec![MV::String("deadbeef".into())], 1),
+            (vec![MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef])], 2),
+        ],
+    );
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let source = source_over(&snapshot);
+
+    let pin = RtValue::String("deadbeef".into());
+    assert_eq!(
+        scan_rows(&source, "id", &pin).len(),
+        2,
+        "both nodes match the pin at runtime — this is the collision"
+    );
+    assert!(
+        source
+            .nodes_by_key("Blob", std::slice::from_ref(&pin))
+            .is_none(),
+        "so the seek must decline: serving the string probe alone would \
+         return one row where the scan returns two — under-selection, which \
+         candidate-superset semantics forbid"
+    );
+}
+
+/// The same guard shut by a *declared* deferred type. Defence in depth
+/// rather than the load-bearing case (enforcement stops the colliding twin
+/// from existing under a declaration at all — see the test above), but the
+/// allow-list must name the types it admits rather than admitting whatever
+/// happens to be declared.
+#[test]
+fn a_deferred_declared_key_type_declines() {
+    let (_dir, repo) = repo_with_label(
+        "Blob",
+        vec!["id".into()],
+        BTreeMap::from([("id".to_owned(), PropertyType::Bytes)]),
+        &[(vec![MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef])], 7)],
+    );
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let source = source_over(&snapshot);
+
+    let pin = RtValue::String("deadbeef".into());
+    assert!(
+        source
+            .nodes_by_key("Blob", std::slice::from_ref(&pin))
+            .is_none(),
+        "a Bytes-declared key declines a string pin"
+    );
+    assert_eq!(
+        scan_rows(&source, "id", &pin).len(),
+        1,
+        "and the scan does match it, through the carrier's rendering"
+    );
+}
+
+/// Per component, like `probe_value`: a composite key is seekable only when
+/// every string component's declared type rules the hazard out. One
+/// undeclared component is enough to send the whole pin to a scan.
+#[test]
+fn a_composite_key_needs_every_string_component_declared() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "Both".into(),
+            def: LabelDef::new(
+                vec!["a".into(), "b".into()],
+                BTreeMap::from([
+                    ("a".to_owned(), PropertyType::String),
+                    ("b".to_owned(), PropertyType::String),
+                ]),
+                [],
+                [],
+            )
+            .expect("label"),
+        })
+        .expect("schema");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "Half".into(),
+            def: LabelDef::new(
+                vec!["a".into(), "b".into()],
+                BTreeMap::from([("a".to_owned(), PropertyType::String)]),
+                [],
+                [],
+            )
+            .expect("label"),
+        })
+        .expect("schema");
+        for label in ["Both", "Half"] {
+            txn.put_node(
+                &NodeKey::new(label, vec![MV::String("x".into()), MV::String("y".into())])
+                    .expect("key"),
+                &NodeRecord::new([], BTreeMap::new()),
+            )
+            .expect("node");
+        }
+        txn.save().expect("save");
+    }
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let source = source_over(&snapshot);
+
+    let pin = [RtValue::String("x".into()), RtValue::String("y".into())];
+    assert_eq!(
+        source
+            .nodes_by_key("Both", &pin)
+            .expect("both components declared — served")
+            .len(),
+        1
+    );
+    assert!(
+        source.nodes_by_key("Half", &pin).is_none(),
+        "an undeclared string component sends the whole composite pin to a scan"
     );
 }
 

@@ -223,6 +223,19 @@ Without a declared type, acetone resolves that safely and pessimistically: it
 declines the index and scans. Correct, and as slow as having no index.
 Declare `mac` a `string` and the ambiguity is gone, so the seek is taken.
 
+**This applies to key properties too, and there it matters most.** Looking a
+node up by its own identity — `MATCH (h:Host {hostname: "db1"})` — faces the
+same ambiguity, and resolves it the same pessimistic way: without a declared
+type on `hostname`, the most valuable lookup in the database reads every node
+of that label. So type your key properties:
+
+```console
+$ acetone declare-label Host --key hostname --type hostname:string
+```
+
+On a 110,200-node registry graph that turns a point lookup from 240.9 ms — a
+full scan — into 0.25 ms.
+
 That is also why the type is enforced rather than advisory. The planner
 trusts the declaration; enforcement is what makes the trust sound.
 

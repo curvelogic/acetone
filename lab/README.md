@@ -10,7 +10,11 @@ Hosts run software; software depends on other software and is supplied by
 suppliers; hosts hold certificates. Labels `Host`/`Software`/`Supplier`/
 `Certificate` carry natural keys and a declared schema (so queries bind in
 **Strict** mode), with secondary indexes on `Host.os`, `Certificate.not_after`
-and the composite `(Host.os, Host.criticality)`. Generation is fully
+and the composite `(Host.os, Host.criticality)`. Each label's **key**
+property is typed as deliberately as the rest: a declared type on a key is
+what lets a primary-key point lookup be served by a seek rather than a scan
+(`acetone-2ck.17`), so a registry that wants point lookups declares one.
+Generation is fully
 deterministic (a seeded LCG — no wall-clock or RNG, which the workspace
 forbids), so a given `--scale` always yields the same graph and the same
 query results.
@@ -104,22 +108,22 @@ At `--scale 50000` (110,200 nodes / 219,985 edges), best of 7:
 
 | case                                     | indexed | unindexed | ratio |
 |------------------------------------------|--------:|----------:|------:|
-| IndexRange, expiring tomorrow (0.27%)    |  16.5 ms | 274.8 ms | **16.7x** |
-| Composite seek, empty bucket             |   0.4 ms | 244.6 ms | **621x** |
-| IndexRange, expiring this week (1.9%)    | 276.3 ms | 274.8 ms |  0.99x |
-| IndexRange, expiring in 30 days (8.2%)   | 276.7 ms | 275.4 ms |  1.00x |
-| Composite seek, populated bucket (2.9%)  | 244.3 ms | 245.2 ms |  1.00x |
-| IndexSeek equality on `os` (20%)         | 250.9 ms | 252.7 ms |  1.01x |
-| WHERE equality on `os` (20%)             | 280.8 ms | 283.8 ms |  1.01x |
+| IndexRange, expiring tomorrow (0.27%)    |  16.4 ms | 278.7 ms | **17.0x** |
+| Composite seek, empty bucket             |   0.4 ms | 246.2 ms | **643x** |
+| IndexRange, expiring this week (1.9%)    | 279.2 ms | 279.3 ms |  1.00x |
+| IndexRange, expiring in 30 days (8.2%)   | 282.1 ms | 281.7 ms |  1.00x |
+| Composite seek, populated bucket (2.9%)  | 247.9 ms | 249.4 ms |  1.01x |
+| IndexSeek equality on `os` (20%)         | 253.1 ms | 252.0 ms |  1.00x |
+| WHERE equality on `os` (20%)             | 286.4 ms | 285.8 ms |  1.00x |
 
-Read it as two groups, then a separate finding the table cannot show.
+Read it as two groups, then a point lookup the table cannot show.
 
 **Selective seeks win large.** A certificate expiry sweep at 0.27% runs
-16.7x faster; proving a bucket *empty* is 621x, because there are no
+17.0x faster; proving a bucket *empty* is 643x, because there are no
 candidates to fetch at all. Treat the absence-proof ratio as a lower bound of
 order rather than a figure: it is `scan time / fixed per-query overhead`, so
-it moves with both (an earlier run of the same case at this scale measured
-396x, and `--scale 200` gives 3.8x). The 16.7x is the stable one.
+it moves with both (runs of the same case at this scale have measured 396x
+and 621x, and `--scale 200` gives 3.8x). The 17.0x is the stable one.
 
 **Unselective seeks decline to parity, and that is the designed
 behaviour.** The 8.2% range and the 2.9% composite bucket are the two cases
@@ -137,28 +141,39 @@ millisecond the same fixed probe dominates — measured at `--scale 200`, the
 8.2% range reads 0.47x and the 20% equality cases 0.67-0.72x. Quote any of
 these figures with the scale attached.
 
-**A separate finding, which is deliberately *not* in the table.** A point
-lookup by primary key — `MATCH (h:Host {hostname: '…'})` — takes 241.5 ms,
-indistinguishable from a full scan of all 110,200 nodes. It is not seeking.
+**The point lookup, which is deliberately *not* in the table.**
 
-The run reports this on its own, without a ratio, because the indexed-versus-
-unindexed ratio is uninformative here **by construction**: `KeySeek` is
-emitted from the label's declared *key*, and the binder returns that hint
-before it ever consults the index catalogue. Both twins declare `Host` with
-the same `hostname` key, so both execute the identical plan and the ratio is
-pinned at ~1.00x whether key seeks work perfectly or not at all. An earlier
-version of this document printed that 1.00x as though the A/B had discovered
-the gap; it could not have. The evidence is the absolute time against the
-size of the scan it should be avoiding.
+| case                                     | seek | full `Host` scan | ratio |
+|------------------------------------------|-----:|-----------------:|------:|
+| `MATCH (h:Host {hostname: 'host-49999'})` | 0.25 ms | 274.5 ms | **1104x** |
 
-The cause is real and independently confirmed: string key pins are declined
-outright because a Bytes/temporal key value would compare equal to its string
-rendering at runtime and a raw probe would miss it. The equality path solves
-that hazard with the property's declared type, but key properties are never
-consulted for one. Tracked as `acetone-2ck.17`, with `acetone-2ck.18` for the
-reason it is not merely an internal fix: the CLI cannot declare property
-types at all, so the guard could not open for a CLI-built graph even if keys
-consulted it.
+It is measured against the **label scan it replaces on the same
+repository**, not against the unindexed twin, because the twin ratio is
+uninformative here **by construction**: `KeySeek` is emitted from the label's
+declared *key*, and the binder returns that hint before it ever consults the
+index catalogue. Both twins declare `Host` with the same `hostname` key, so
+both execute the identical plan and the ratio is pinned at ~1.00x whether key
+seeks work perfectly or not at all. An earlier version of this document
+printed that 1.00x as though the A/B had discovered a gap; the number could
+not have shown either outcome. The run still prints the twin figure, as the
+standing check that it stays pinned.
+
+The scan reference *can* move, and it did. Until `acetone-2ck.17` this
+lookup took **240.9 ms — 1.13x the label scan**: it was not seeking, it was
+scanning all 110,200 nodes to find one node by its identity. The two figures
+are the same binary over freshly built twin repositories on the same
+machine, differing only in whether the key seek's guard is open.
+
+What opened it: a string key pin used to be declined outright, because a
+Bytes/temporal key value compares equal to its string *rendering* at runtime
+while the stored encodings differ, so a raw probe could miss it. The equality
+path had always resolved that hazard through the property's declared type;
+key properties were simply never consulted for one. They are now — which is
+why this lab declares a type on each label's key property, and why
+`acetone-2ck.18` had to land first: until the CLI could declare a property
+type at all, and until a declaration was a constraint the write path enforces
+(ADR-0066) rather than an unchecked assertion, there was nothing here worth
+trusting.
 
 The run also prints the planner's own inputs — the sampled node-count
 estimate, its ratio to the true count, and the resulting candidate budget —

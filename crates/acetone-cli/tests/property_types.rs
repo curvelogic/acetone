@@ -632,3 +632,58 @@ fn fsck_reports_a_declared_type_violation() {
         "fsck must name the violation, got:\n{text}"
     );
 }
+
+/// `acetone-2ck.17`, end to end: a primary-key point lookup by string key
+/// answers identically to the scan spelling of the same predicate.
+///
+/// The key seek declined every string pin until the declared type could rule
+/// the rendering hazard out, and a graph built through the CLI could not
+/// declare one — so this whole path was scan-only for CLI users. What is
+/// asserted here is agreement (a seek must never return fewer rows than the
+/// scan it replaces); that the seek is *taken* is pinned at the source level
+/// in acetone-cypher's `store_source` tests and measured by the lab.
+#[test]
+fn a_cli_built_graph_answers_a_string_key_lookup_like_the_scan() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = repo_with_host(&dir, &["hostname:string"]);
+
+    for name in ["alpha", "beta", "gamma"] {
+        assert!(
+            acetone(
+                &repo,
+                &["query", &format!("CREATE (h:Host {{hostname: '{name}'}})")],
+            )
+            .status
+            .success()
+        );
+    }
+
+    let seek = stdout(&acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host {hostname: 'beta'}) RETURN h.hostname AS n",
+            "--format",
+            "csv",
+        ],
+    ));
+    let scan = stdout(&acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (h:Host) WHERE h.hostname = 'beta' RETURN h.hostname AS n",
+            "--format",
+            "csv",
+        ],
+    ));
+    assert_eq!(seek, scan, "the two spellings must agree");
+    assert!(
+        seek.contains("beta"),
+        "and both find the node, got:\n{seek}"
+    );
+    assert_eq!(
+        seek.lines().filter(|l| l.contains("beta")).count(),
+        1,
+        "exactly one row, got:\n{seek}"
+    );
+}

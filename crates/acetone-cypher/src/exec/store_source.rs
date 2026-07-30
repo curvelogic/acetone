@@ -28,6 +28,12 @@
 //! probe cannot miss: numeric and boolean pins always (they never cross-type
 //! match a rendering), a string pin only when the indexed property's declared
 //! type is a non-deferred scalar; otherwise it falls back to a scan (`None`).
+//!
+//! `nodes_by_key` applies the *same* rule to a primary-key pin, against the
+//! key property's declared type (`acetone-2ck.17`) — one shared predicate,
+//! [`string_probe_is_exact`]. Until ADR-0066 made a declared type a checked
+//! constraint there was nothing for a key pin to trust, so every string key
+//! pin declined and a primary-key point lookup cost a full scan.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +50,31 @@ use crate::ast::Direction;
 use crate::exec::adapter::{node_value, rel_value};
 use crate::exec::source::GraphSource;
 use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
+
+/// Whether a raw probe on the *string* encoding can be trusted not to miss a
+/// row, given the property's declared type (`None` = undeclared).
+///
+/// The hazard: a `Bytes` or temporal value is stored raw but compares equal to
+/// its string **rendering** at runtime, because an ADR-0038 [`Value::Stored`]
+/// carrier decays to that rendering under `eq3`. A probe on the string
+/// encoding alone would not visit it — under-selection, which
+/// candidate-superset semantics forbid. Only a declaration that rules a
+/// deferred value out makes the probe exact.
+///
+/// One predicate, two callers — the seek over a declared index
+/// (`probe_value`) and the seek over a primary key (`nodes_by_key`,
+/// `acetone-2ck.17`). They were two copies of this rule; a divergence would be
+/// a silent wrong-answer bug on one path only.
+///
+/// This is trustworthy because ADR-0066 made a declared type a **constraint**,
+/// enforced at save, declare and merge time, for key properties as much as
+/// record properties. Before that it was an assertion nothing checked.
+fn string_probe_is_exact(declared: Option<PropertyType>) -> bool {
+    matches!(
+        declared,
+        Some(PropertyType::String | PropertyType::Int | PropertyType::Float | PropertyType::Bool)
+    )
+}
 
 /// A declared index the store-backed seek can serve (single or
 /// composite — ADR-0027, acetone-0c7).
@@ -62,6 +93,11 @@ pub struct StoreBackedSource<'s> {
     snapshot: &'s Snapshot<'s>,
     /// label → key property names (to re-expose key values as properties).
     key_names: HashMap<String, Vec<String>>,
+    /// label → each key property's declared type, **by key position**, so a
+    /// key pin can be guarded exactly as an index pin is (`acetone-2ck.17`).
+    /// A missing label, or a position the schema does not cover, reads as
+    /// undeclared and therefore declines a string pin.
+    key_types: HashMap<String, Vec<Option<PropertyType>>>,
     /// index name → its label, ordered properties and per-component types.
     indexes: HashMap<String, IndexInfo>,
     /// The first store read error hit during a query, surfaced by the caller.
@@ -79,10 +115,18 @@ impl<'s> StoreBackedSource<'s> {
     /// the seekable declared indexes (single and composite).
     pub fn new(snapshot: &'s Snapshot<'s>, schema: &[SchemaEntry]) -> Self {
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
+        let mut key_types: HashMap<String, Vec<Option<PropertyType>>> = HashMap::new();
         let mut label_types: HashMap<String, BTreeMap<String, PropertyType>> = HashMap::new();
         for entry in schema {
             if let SchemaEntry::Label { name, def } = entry {
                 key_names.insert(name.clone(), def.key().to_vec());
+                key_types.insert(
+                    name.clone(),
+                    def.key()
+                        .iter()
+                        .map(|property| def.types().get(property).copied())
+                        .collect(),
+                );
                 label_types.insert(name.clone(), def.types().clone());
             }
         }
@@ -112,6 +156,7 @@ impl<'s> StoreBackedSource<'s> {
         StoreBackedSource {
             snapshot,
             key_names,
+            key_types,
             indexes,
             error: Cell::new(None),
             node_count: Cell::new(None),
@@ -203,13 +248,14 @@ impl<'s> StoreBackedSource<'s> {
             // A string pin could equal a Bytes/temporal value's rendering, which
             // is keyed raw — so a raw probe would miss it. Safe only when the
             // property's declared type rules out a deferred value.
-            Value::String(s) => match info.property_types.get(component).copied().flatten() {
-                Some(PropertyType::String)
-                | Some(PropertyType::Int)
-                | Some(PropertyType::Float)
-                | Some(PropertyType::Bool) => Some(vec![ModelValue::String(s.clone())]),
-                _ => None,
-            },
+            Value::String(s) => {
+                let declared = info.property_types.get(component).copied().flatten();
+                if string_probe_is_exact(declared) {
+                    Some(vec![ModelValue::String(s.clone())])
+                } else {
+                    None
+                }
+            }
             // Non-storable kinds never index.
             Value::Map(_) | Value::Node(_) | Value::Relationship(_) | Value::Path(_) => {
                 Some(Vec::new())
@@ -299,8 +345,18 @@ impl GraphSource for StoreBackedSource<'_> {
         // numeric encodings (3 == 3.0 in openCypher but they encode
         // differently), and a probe set we cannot form means "cannot
         // serve" — scan — never "definitively absent".
+        //
+        // Only trust the recorded key types when their arity matches the pin.
+        // A hint may have been bound against another version's catalogue (AT
+        // clauses) — the index path guards the same way (PR #206 review
+        // finding 4) — and a positional type lookup against a key of a
+        // different shape would be reading the wrong property's declaration.
+        let key_types = self
+            .key_types
+            .get(label)
+            .filter(|types| types.len() == key_values.len());
         let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(key_values.len());
-        for value in key_values {
+        for (component, value) in key_values.iter().enumerate() {
             let alternatives = match value {
                 // Null/NaN can never be a key value (keys are non-null),
                 // so nothing matches — but say "cannot serve" rather than
@@ -320,16 +376,29 @@ impl GraphSource for StoreBackedSource<'_> {
                     }
                     alts
                 }
-                // A STRING pin cannot be served: a Bytes/temporal key
-                // value compares equal to its string *rendering* at
-                // runtime (ADR-0038 carriers decay under eq3), and the
-                // stored encodings differ, so a probe on the string
-                // encoding alone would MISS such a node — under-selection,
-                // which candidate-superset semantics forbid. `probe_value`
-                // guards this for indexes via the declared type; keys have
-                // no such guard here, so decline and let the scan answer
-                // (PR #219 review blocker 3 — a wrong-answer regression).
-                Value::String(_) => return None,
+                // A STRING pin is served only when the key property's
+                // DECLARED type rules out a deferred value — the same
+                // guard, and the same shared predicate, that `probe_value`
+                // applies to an index pin. Without it, a Bytes/temporal key
+                // value compares equal to its string *rendering* at runtime
+                // (ADR-0038 carriers decay under eq3) while the stored
+                // encodings differ, so a probe on the string encoding alone
+                // would MISS such a node — under-selection, which
+                // candidate-superset semantics forbid (PR #219 review
+                // blocker 3, a wrong-answer regression). Keys had no guard
+                // until `acetone-2ck.17`, so every string key pin scanned:
+                // a primary-key point lookup, the most valuable seek there
+                // is, cost a full 110,200-node scan.
+                Value::String(s) => {
+                    let declared = key_types
+                        .and_then(|types| types.get(component))
+                        .copied()
+                        .flatten();
+                    if !string_probe_is_exact(declared) {
+                        return None;
+                    }
+                    vec![ModelValue::String(s.clone())]
+                }
                 // A carrier pin has the same hazard from the other side.
                 Value::Stored(_) => return None,
                 other => vec![crate::exec::adapter::model_value_of(other)?],
