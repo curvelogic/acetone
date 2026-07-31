@@ -2892,7 +2892,20 @@ impl<'s> Snapshot<'s> {
     /// fewer rows than the equivalent scan.
     ///
     /// A ref read that fails is reported as "in progress": the safe answer is
-    /// the one that costs a scan, not the one that risks a short answer.
+    /// the one that costs a scan, not the one that risks a short answer. A
+    /// false positive here is free of correctness risk by construction —
+    /// distrust only ever turns a seek into a scan, never changing a result
+    /// set — so every uncertain case is resolved that way. `reset_workspace`
+    /// leaves the ref set deliberately, so it can report a merge over a
+    /// workspace that is already clean; the cost is one scan.
+    ///
+    /// Two things this deliberately does **not** do. It does not check
+    /// whether MERGE_HEAD is stale (already an ancestor of the branch tip,
+    /// from a completion whose `delete_ref` failed) the way
+    /// [`Repository::conflicts`] does: that needs a history walk, this sits
+    /// on the per-query read path, and the commit path clears such a ref
+    /// itself, so the state self-heals and costs only speed meanwhile. And it
+    /// does not cache — one ref read per call, which is once per query today.
     pub fn merge_in_progress(&self) -> bool {
         self.manifest.conflicts.is_some()
             || self
