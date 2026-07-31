@@ -2874,6 +2874,34 @@ impl<'s> Snapshot<'s> {
         &self.manifest
     }
 
+    /// Whether a merge is unfinished in this worktree — the state in which
+    /// the workspace may hold one branch's schema beside the other's data.
+    ///
+    /// **The conflicts map alone is not this signal**, which is why this
+    /// method exists rather than callers testing `manifest.conflicts`.
+    /// `merge_manifests` short-circuits graph validation when cell conflicts
+    /// are present, and resolving those ends with an unconditional
+    /// `conflicts = None`, so a merge can be mid-flight with an empty map
+    /// while [`Repository::conflicts`] still re-derives graph violations live
+    /// (ADR-0058) and commit is still refused. [`Repository::abort_merge`]
+    /// takes the same disjunction, for the same reason.
+    ///
+    /// The read path uses this to stop believing declared property types
+    /// while it holds (`acetone-7qw.14`): in that state a declaration can be
+    /// false of the data beside it, and a seek that trusted one would return
+    /// fewer rows than the equivalent scan.
+    ///
+    /// A ref read that fails is reported as "in progress": the safe answer is
+    /// the one that costs a scan, not the one that risks a short answer.
+    pub fn merge_in_progress(&self) -> bool {
+        self.manifest.conflicts.is_some()
+            || self
+                .store
+                .read_ref(WORKTREE_MERGE_HEAD_REF)
+                .map(|head| head.is_some())
+                .unwrap_or(true)
+    }
+
     fn root(&self, map_root: &MapRoot) -> Result<Root, GraphError> {
         Ok(map_root.to_root(self.manifest.chunk_params)?)
     }

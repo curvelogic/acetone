@@ -217,17 +217,32 @@ seek over it could under-select. Conflicts are data rather than errors
 legitimate, and gating the write would be the wrong repair.
 
 `StoreBackedSource` therefore records every declared type as **absent** while
-`manifest.conflicts` is set, sending both string-pin guards down the scan
-path. The cost is bounded to string pins during an unresolved merge —
-numeric and boolean pins are sound whatever the schema says, and ranges never
-consult a declaration. The bead's recorded objection to this option was that
-it slows a user down mid-merge; that has it backwards. A conflicted workspace
-is precisely when someone queries in order to decide *how to resolve*, which
-makes a silently short answer far worse than a slow one.
+a merge is unfinished, sending both string-pin guards down the scan path. The
+cost is bounded to string pins for the duration — numeric and boolean pins
+are sound whatever the schema says, and ranges never consult a declaration.
+The bead's recorded objection to this option was that it slows a user down
+mid-merge; that has it backwards. Mid-merge is precisely when someone queries
+in order to decide *how to resolve*, which makes a silently short answer far
+worse than a slow one.
 
-So the guarantee now reads in both directions: a declaration is enforced on
-every writer, and where enforcement cannot reach by design, the reader
-declines to rely on it.
+**The signal is the unfinished merge, not the conflicts map**, and the first
+attempt got this wrong. `merge_manifests` short-circuits graph validation
+while cell conflicts are present, and resolving those ends with an
+unconditional `conflicts = None`, so a merge can be mid-flight with an empty
+map while `Repository::conflicts` still re-derives the violation live
+(ADR-0058) and commit is still refused. Keying off the map handed trust back
+at the *worst* moment — the user has just resolved and is querying to check
+the result. `Snapshot::merge_in_progress` takes the same disjunction
+`abort_merge` already took, and a ref read that fails reports "in progress",
+because the safe answer is the one that costs a scan.
+
+So the guarantee reads in both directions wherever a transaction has had the
+chance to check a declaration: it is enforced on every writer, and where
+enforcement cannot reach by design, the reader declines to rely on it. One
+gap remains outside that, and it is now filed rather than asserted away: a
+manifest assembled without a transaction — by a `FormatTransform`, or before
+this checking existed — can pair a declaration with contradicting data, and
+no read-time check detects it (`acetone-7qw.16`; `fsck` reports it).
 
 **This is a deliberate spec change, not a bug fix.** Spec §2 says a label
 "MAY additionally declare property types and constraints (v0.1 supports

@@ -703,12 +703,18 @@ fn an_undeclared_string_key_pin_would_drop_a_colliding_row() {
 /// the two — a `String`-keyed and a `Bytes`-keyed node under one label,
 /// distinct in the nodes map, equal at runtime.
 ///
-/// The collision is stored under an **untyped** label — which is legal, and
-/// how a graph written before ADR-0066 carries one — and the declaration is
-/// supplied through the source's own schema argument, which is
-/// `StoreBackedSource`'s actual contract: it is handed a snapshot and a
-/// schema. That is the state a pre-enforcement repository presents, and one
-/// a `migrate::FormatTransform` can still write.
+/// The collision is stored under an **untyped** label — which is legal —
+/// and the declaration is supplied through the source's own schema argument,
+/// which is `StoreBackedSource`'s actual contract: it is handed a snapshot
+/// and a schema.
+///
+/// That configuration is not one `Session` builds in production, which
+/// always passes `snapshot.schema_entries()`. It is chosen here to isolate
+/// the predicate: this test guards the allow-list, not a system state. The
+/// nearby *system* state — a manifest that genuinely pairs a declaration
+/// with contradicting data, as a pre-enforcement repository or a
+/// `migrate::FormatTransform` can — is real, is **not** defended, and is
+/// filed as `acetone-7qw.16` rather than left asserted in a comment.
 ///
 /// It deliberately does **not** use a conflicted merge to reach the
 /// declaration. A conflicted workspace is the other route, but since
@@ -1588,4 +1594,206 @@ fn the_cap_boundary_is_exact() {
         .filter(|n| matches!(n.properties.get("v"), Some(RtValue::Int(1))))
         .count();
     assert_eq!(served.len(), truth, "a served set must be complete");
+}
+
+/// `acetone-7qw.14`, the half the first fix missed (PR #228 review, blocker
+/// 1): **`manifest.conflicts` is not the signal for "this workspace may be
+/// lying"**.
+///
+/// `merge_manifests` short-circuits graph validation when cell conflicts are
+/// present, so a merge carrying both records only the cell conflict. Then
+/// `resolve` ends with an unconditional `conflicts = None` — the merge is
+/// still in progress, `Repository::conflicts()` still re-derives the type
+/// violation live (ADR-0058), and commit is still refused, but the map is
+/// empty. Keying trust off that map handed the declaration back precisely
+/// when the user has finished resolving and is querying to check the result
+/// before completing the merge.
+///
+/// The repository already knew the two signals diverge: `abort_merge` tests
+/// `merge_head().is_some() || conflicts.is_some()` for exactly this reason.
+/// MERGE_HEAD is the authoritative "unresolved merge" state.
+#[test]
+fn a_resolved_but_unfinished_merge_still_does_not_trust_declarations() {
+    let (_dir, repo) = repo();
+    let untyped = SchemaEntry::Label {
+        name: "Blob".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("untyped"),
+    };
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&untyped).expect("schema");
+    for (key, tag) in [
+        (MV::String("deadbeef".into()), 1),
+        (MV::String("n1".into()), 0),
+    ] {
+        txn.put_node(
+            &NodeKey::new("Blob", vec![key]).expect("key"),
+            &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(tag))])),
+        )
+        .expect("node");
+    }
+    let base = txn.commit("base", &[], None).expect("commit");
+
+    // `other`: declare id: string (both existing keys are strings, so this
+    // is legal here) and touch n1, to give the merge a CELL conflict.
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Blob".into(),
+        def: LabelDef::new(
+            vec!["id".into()],
+            BTreeMap::from([("id".to_owned(), PropertyType::String)]),
+            [],
+            [],
+        )
+        .expect("typed"),
+    })
+    .expect("schema");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![MV::String("n1".into())]).expect("key"),
+        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(10))])),
+    )
+    .expect("node");
+    txn.commit("declare + touch n1", &[], None).expect("commit");
+
+    // `main`: add the Bytes-keyed twin (legal, untyped here) and touch n1
+    // differently, so the merge carries a cell conflict as well.
+    repo.checkout_branch("main").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef])]).expect("key"),
+        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(2))])),
+    )
+    .expect("bytes-keyed");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![MV::String("n1".into())]).expect("key"),
+        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(20))])),
+    )
+    .expect("node");
+    txn.commit("twin + touch n1", &[], None).expect("commit");
+
+    repo.merge("other", "merge").expect("merge");
+    repo.resolve_all(acetone_graph::repo::ResolveSide::Ours)
+        .expect("resolve");
+
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    assert!(
+        snapshot.manifest().conflicts.is_none(),
+        "the fixture must reach the state where the conflicts map is EMPTY"
+    );
+    assert!(
+        repo.merge_head().expect("merge head").is_some(),
+        "...while the merge is still in progress"
+    );
+
+    let source = source_over(&snapshot);
+    let pin = RtValue::String("deadbeef".into());
+    assert_eq!(
+        scan_rows(&source, "id", &pin).len(),
+        2,
+        "the collision is still present in the workspace"
+    );
+    assert!(
+        source
+            .nodes_by_key("Blob", std::slice::from_ref(&pin))
+            .is_none(),
+        "an unfinished merge must not hand back trust in a declaration its \
+         own violation list still contradicts"
+    );
+}
+
+/// The **index** half of `acetone-7qw.14` (PR #228 review, MAJOR 2: the
+/// first fix guarded both paths but only the key path was pinned, so half
+/// the behaviour could have been deleted silently).
+///
+/// Same hazard, same state: an unfinished merge holds one branch's
+/// `os: string` declaration beside the other branch's `Bytes` value, and
+/// `host_os` has been rebuilt over the merged nodes. A raw string probe on
+/// the index would visit the string-valued row and miss the `Bytes` one that
+/// matches at runtime.
+#[test]
+fn an_unfinished_merge_does_not_trust_declarations_on_the_index_path() {
+    let (_dir, repo) = repo();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Host".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("untyped"),
+    })
+    .expect("schema");
+    txn.put_schema(&SchemaEntry::Index {
+        name: "host_os".into(),
+        def: IndexDef::new("Host", vec!["os".into()]).expect("index"),
+    })
+    .expect("index");
+    txn.put_node(
+        &NodeKey::new("Host", vec![MV::String("h1".into())]).expect("key"),
+        &NodeRecord::new(
+            [],
+            BTreeMap::from([("os".to_owned(), MV::String("deadbeef".into()))]),
+        ),
+    )
+    .expect("node");
+    let base = txn.commit("base", &[], None).expect("commit");
+
+    // `other` declares os: string — legal, h1's value conforms.
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Host".into(),
+        def: LabelDef::new(
+            vec!["id".into()],
+            BTreeMap::from([("os".to_owned(), PropertyType::String)]),
+            [],
+            [],
+        )
+        .expect("typed"),
+    })
+    .expect("schema");
+    txn.commit("declare os: string", &[], None).expect("commit");
+
+    // `main` adds a Bytes-valued `os` — legal, still untyped here.
+    repo.checkout_branch("main").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_node(
+        &NodeKey::new("Host", vec![MV::String("h2".into())]).expect("key"),
+        &NodeRecord::new(
+            [],
+            BTreeMap::from([("os".to_owned(), MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef]))]),
+        ),
+    )
+    .expect("node");
+    txn.commit("bytes-valued os", &[], None).expect("commit");
+
+    repo.merge("other", "merge").expect("merge");
+
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let source = source_over(&snapshot);
+    let pin = RtValue::String("deadbeef".into());
+
+    // Both rows match the pin at runtime: h1 holds the string, h2's carrier
+    // renders to the same hex.
+    let matching = source
+        .all_nodes()
+        .into_iter()
+        .filter(|n| {
+            n.properties
+                .get("os")
+                .is_some_and(|v| v.eq3(&pin) == Some(true))
+        })
+        .count();
+    assert_eq!(
+        matching, 2,
+        "the collision is present on an indexed property"
+    );
+
+    assert!(
+        source
+            .nodes_by_index("host_os", &["os".into()], &[&pin])
+            .is_none(),
+        "the index seek must decline in an unfinished merge — serving the \
+         string probe would return one row where the scan returns two"
+    );
 }

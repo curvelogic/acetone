@@ -125,12 +125,19 @@ impl<'s> StoreBackedSource<'s> {
     /// Build over `snapshot`, using `schema` for key-property names and
     /// the seekable declared indexes (single and composite).
     pub fn new(snapshot: &'s Snapshot<'s>, schema: &[SchemaEntry]) -> Self {
-        // A CONFLICTED workspace does not get to have its declarations
-        // believed (`acetone-7qw.14`). A merge persists its merged manifest as
-        // the workspace and rebuilds the indexes over the merged nodes before
+        // An UNFINISHED MERGE does not get to have its declarations believed
+        // (`acetone-7qw.14`). A merge persists its merged manifest as the
+        // workspace and rebuilds the indexes over the merged nodes before
         // `validate_merged` runs; commit is refused, but that workspace is
         // live and queryable, and it is exactly where one branch's tightened
         // declaration can sit beside the other branch's contradicting data.
+        //
+        // The signal is `Snapshot::merge_in_progress`, NOT `conflicts` alone.
+        // Graph validation short-circuits when cell conflicts are present, and
+        // resolving those clears the map unconditionally — so keying off the
+        // map handed trust back the moment a user finished resolving and
+        // queried to check the result, which is the worst possible moment
+        // (PR #228 review, blocker 1).
         //
         // No write-time check can gate this, by design: conflicts are data
         // rather than errors (ADR-0007), so the state is legitimate. The
@@ -146,7 +153,7 @@ impl<'s> StoreBackedSource<'s> {
         // and it would still have to answer "what if the merge is resolved
         // mid-query". A conflicted workspace is when a user queries to decide
         // how to RESOLVE, and a short answer there is worse than a slow one.
-        let trust_declarations = snapshot.manifest().conflicts.is_none();
+        let trust_declarations = !snapshot.merge_in_progress();
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
         let mut key_types: HashMap<String, Vec<Option<PropertyType>>> = HashMap::new();
         let mut label_types: HashMap<String, BTreeMap<String, PropertyType>> = HashMap::new();
