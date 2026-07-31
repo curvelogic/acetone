@@ -114,9 +114,8 @@ individually enumerated and justified in `docs/conformance.md`.
   within 1.04-1.23x of a scan, while selective queries gain outright
   (0.16-0.24x). The residual is a constant — a declining seek has still paid
   for its index probe and one cardinality sample — so it is only negligible
-  relative to a scan worth avoiding: an unhelpful index costs about 20% at
-  moderate scale and up to ~2x on a graph small enough for the whole scan
-  to take a millisecond.
+  relative to a scan worth avoiding: within ~1% at 110,200 nodes, but
+  1.2-2x on a graph small enough for the whole scan to take a millisecond.
 - **`WHERE` equality predicates use indexes.** `MATCH (n:L) WHERE n.p = 1`
   previously scanned; only the inline form `MATCH (n:L {p: 1})` used an
   index. Seek hints now carry their own pinned values, so both forms plan
