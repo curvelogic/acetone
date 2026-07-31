@@ -200,7 +200,7 @@
         <span class="chip good"><span class="dot"></span>Sub-quadratic fsck</span>
       </div>
     </div>
-    <p class="foot">21 PRs · #199–#219 · every one adversarially reviewed</p>
+    <p class="foot">31 PRs · #199–#230 · every one adversarially reviewed · reopened once, for cause, and finished</p>
   </section>
 
   <!-- 2 · Where we are -->
@@ -274,24 +274,23 @@
   <!-- 6 · Criterion 3 -->
   <section class="slide" id="s6">
     <div class="slide-inner">
-      <span class="ec" style="color:var(--warn);background:var(--warn-soft)"><span class="dot"></span>EXIT CRITERION 3 · ONE JUDGEMENT CALL LEFT</span>
+      <span class="ec"><span class="dot"></span>EXIT CRITERION 3 · MET — ON THE SHIPPED PATH, THE HARD WAY</span>
       <h2>Seeks beat scans — and know when not to try.</h2>
+      <div class="card rule" style="margin:14px 0">
+        <div class="tag">WHY THE PHASE REOPENED</div>
+        <p style="margin-top:6px">The first report's table (13.8× range, 27.6× composite) was measured against the <b>in-memory source</b> — <code>Session</code> had no range or key seek at all. Wiring them in (#219, #221) exposed what that source never pays for: <b>a seek does one random point read per row; a scan reads sequentially.</b> Past ~1% selectivity the "optimisation" was <b>up to 37× slower than no index</b>. Your ruling: refine the cost model, make <code>WHERE</code> use indexes, and don't close until indexing is <em>beneficial</em>.</p>
+        <p style="margin-top:8px;color:var(--good)"><b>Shipped (#224–#230, ADR-0065/0066):</b> seeks spend 0.5% of a sampled scan estimate and otherwise decline; <code>WHERE</code> equality attaches hints; the CLI can declare property types <em>and they are enforced</em> — which is what makes a string seek sound at all; primary keys seek (240.9 ms → 0.25 ms).</p>
+      </div>
       <div class="table-wrap" style="margin:14px 0">
         <table>
-          <tr><th>Seek · lab graph, 440,800 nodes</th><th>Hinted</th><th>Scan</th><th>Speed-up</th></tr>
-          <tr><td>IndexRange <code>cert_not_after &lt; 30</code></td><td>24.4 ms</td><td>337.8 ms</td><td><b>13.8×</b></td></tr>
-          <tr><td>Composite seek (populated)</td><td>7.7 ms</td><td>213.1 ms</td><td><b>27.6×</b></td></tr>
-          <tr><td>Composite seek (empty bucket)</td><td>0.001 ms</td><td>208.2 ms</td><td>~10⁵×</td></tr>
-          <tr><td>KeySeek (primary key)</td><td>0.002 ms</td><td>201.0 ms</td><td>~10⁵×</td></tr>
+          <tr><th>Through <code>Session</code> · indexed vs unindexed twin · 110,200 nodes</th><th>indexed</th><th>unindexed</th><th>ratio</th></tr>
+          <tr><td>IndexRange, expiring tomorrow (0.27%)</td><td>16.4 ms</td><td>278.7 ms</td><td><b>17.0×</b></td></tr>
+          <tr><td>Composite seek, empty bucket (absence proof)</td><td>0.4 ms</td><td>246.2 ms</td><td><b>~600×</b></td></tr>
+          <tr><td>KeySeek <code>{hostname: 'host-49999'}</code> vs label scan</td><td>0.25 ms</td><td>274.5 ms</td><td><b>1104×</b></td></tr>
+          <tr><td>Range 8.2% · composite 2.9% · equality 20% (published as 13.8× / 27.6× / 4.5×)</td><td colspan="2" style="text-align:center">decline to scan, by design</td><td>1.00–1.01×</td></tr>
         </table>
       </div>
-      <div class="card rule">
-        <div class="tag">WHAT THE LAB COULD NOT SHOW</div>
-        <p style="margin-top:6px">All those rows were measured against the <b>in-memory source</b> — <code>Session</code>, the shipped path, had no range or key seek at all. Wiring them (PRs #219, #221) exposed the thing the in-memory source never pays for: <b>a seek does one random point read per row; the scan reads sequentially.</b> Past ~2.5% selectivity the "optimisation" was <b>up to 37× slower than no index</b>.</p>
-        <p style="margin-top:8px;color:var(--good)"><b>Fixed by declining, not optimising:</b> past 1024 candidates the source returns "cannot serve — scan instead", before paying for point reads. 51 rows: 8.2 ms vs 105.4 ms. 24,973 rows: 111.9 ms, where the naive seek took 2570.2 ms. No regime is slower than the scan.</p>
-        <p style="margin-top:8px;color:var(--warn)"><b>But the lab's own range case sits above the cap.</b> <code>cert_not_after &lt; 30</code> matches ~16,000 rows — 16× the cap — so through <code>Session</code> it declines and scans: 1.0×, not 13.8×. The mechanism is delivered; whether that satisfies "beats scan on the lab graph" is <b>yours to rule on</b>.</p>
-        <p style="margin-top:8px"><b>Still open, and not ours:</b> the <em>equality</em> seek path has the same cliff and no cap — <b>1248 ms indexed vs 67 ms unindexed</b> on <code>main</code> today — from PR #123, not this phase. Measured and recorded on <code>acetone-2ck.2</code>.</p>
-      </div>
+      <p>Parity asserted on every iteration; twins verified identical at the prolly roots (Invariant 1). The old headline cases were <b>scan-shaped all along</b> — the phase's contribution is that acetone now knows it at plan time. The decline's cost is a <em>constant</em> (index probe + one cardinality sample): invisible at 110k nodes, ~2× on a graph that scans in a millisecond — quote figures with their scale. The <b>equality-seek cliff from PR #123</b> (18× slower than no index) is <b>fixed by the same model</b>, not carried.</p>
     </div>
     <p class="num">6</p>
   </section>
@@ -353,7 +352,8 @@
           <p style="margin-top:8px;color:var(--good)"><b>Fixed:</b> anchor candidates charged uniformly against a <b>dedicated budget</b> (ADR-0064). Two earlier designs were tried and rejected in review — work-only (too loose) and borrowing the expansion budget (rejected ordinary joins).</p>
         </div>
       </div>
-      <p>Nine lesser findings filed as beads (six from the milestone review, two from PR #219's own review, one co-tenancy note). Defences that <strong>held</strong>: <code>prune_loose</code>'s safety floor survived every gc/worktree scenario; ADR-0044 anchors survived a real <code>git gc --prune=now --aggressive</code>; ref-name injection failed closed; 3M mutated queries, no panics; and <strong>no dependency added, bumped or re-featured all phase</strong>.</p>
+      <p>Eight lesser findings filed as beads (five from the milestone review, two from PR #219's own review, one co-tenancy note). Defences that <strong>held</strong>: <code>prune_loose</code>'s safety floor survived every gc/worktree scenario; ADR-0044 anchors survived a real <code>git gc --prune=now --aggressive</code>; ref-name injection failed closed; 3M mutated queries, no panics; and <strong>no dependency added, bumped or re-featured all phase</strong>.</p>
+      <p style="margin-top:10px"><b>Coverage note:</b> this review ran up to #218; the reopened tail (#219–#229, incl. the cost model and the new CLI type-declaration surface) got its own <b>final three-reviewer pass</b> before the amended report — security <b>GATE READY</b> (both blocker fixes held under re-attack; the one High — the scanned-candidate budget buys minutes of <em>bounded</em> store I/O, not sub-second trips — is on <code>7qw.7</code> with measurements), correctness <b>SOUND</b> (58 hostile differential checks, no wrong-answer path), audit: <b>TCK and lab reconcile item-for-item</b>. Its Medium + Low code findings shipped fixed in #230.</p>
     </div>
     <p class="num">9</p>
   </section>
@@ -362,7 +362,7 @@
   <section class="slide" id="s10">
     <div class="slide-inner">
       <p class="eyebrow">Decisions taken</p>
-      <h2>Three ADRs for the agenda.</h2>
+      <h2>Five ADRs for the agenda.</h2>
       <div class="grid cols-2" style="margin-top:16px">
         <div class="card lead">
           <div class="tag">ADR-0062</div>
@@ -379,6 +379,18 @@
         <div class="tag">ADR-0064</div>
         <h3 style="margin-top:6px">Scanning gets its own budget</h3>
         <p style="margin-top:6px"><code>max_scanned_candidates</code>, not the expansion budget — borrowing that one rejected ordinary nested-loop joins. <b>Adds a public field to <code>QueryLimits</code> and a variant to <code>ResourceLimit</code></b>, both in the frozen surface, inside a 0.3.x "additive only" series — and the CI freeze gate cannot see either, since <code>public-api.txt</code> records only the re-export line. Needs your ruling.</p>
+      </div>
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card lead">
+          <div class="tag">ADR-0065</div>
+          <h3 style="margin-top:6px">Indexes chosen by estimated cost</h3>
+          <p style="margin-top:6px">A seek spends 0.5% of a sampled scan estimate, else declines. Three designs rejected on the record — one refuted by direct measurement (36× the bytes moved break-even only ~2×: point reads are per-object overhead, not size).</p>
+        </div>
+        <div class="card lead">
+          <div class="tag">ADR-0066 · SPEC §2 AMENDMENT</div>
+          <h3 style="margin-top:6px">A declared type is a constraint</h3>
+          <p style="margin-top:6px">Enforced at write, declare (backfill) and merge (violation as data, ADR-0007). A false declaration makes a seek <em>under-select</em> — silently short answers on node identity — so flag-without-enforcement was the worst ordering. <b>Library writes that previously succeeded can now fail.</b> Needs your ratification.</p>
+        </div>
       </div>
       <div class="card" style="margin-top:16px">
         <div class="tag">PROCESS · DISCLOSED DEVIATION</div>
@@ -413,7 +425,7 @@
 <div class="l"><span class="ok">  fsck: clean</span></div>
         </div>
       </div>
-      <p>Plus the seek measurements through the lab, and an <code>fsck</code> exposure fabricated on purpose so you can see it named rather than take "clean" on trust.</p>
+      <p>Plus the lab's indexed-vs-unindexed twin run through <code>Session</code> (selective win, designed decline, and the 1104× key lookup, live), <code>declare-label --type</code> refusing a contradicted declaration, and an <code>fsck</code> exposure fabricated on purpose so you can see it named rather than take "clean" on trust.</p>
     </div>
     <p class="num">11</p>
   </section>
@@ -424,17 +436,16 @@
       <p class="eyebrow">For the boundary review</p>
       <h2>What's yours to rule on.</h2>
       <ul class="clean" style="margin:18px 0">
-        <li><b>Gate <code>acetone-2ck.1</code>.</b> All four criteria have evidence; both security blockers are closed. Yours to close — agents never close it.</li>
-        <li><b>Criterion 3's remaining judgement call.</b> Both seek kinds now reach the product, but the lab's own range case (~16,000 rows) sits above the 1024 cap and declines through <code>Session</code>. Does "beats scan on the lab graph" hold when the mechanism declines on that case?</li>
-        <li><b>The equality-seek cliff on <code>main</code>.</b> Arrived with PR #123, not this phase, but now measured: declaring an index makes an unselective equality query <b>18× slower</b>. PR #221 demonstrates the remedy for the range path; <code>acetone-2ck.2</code> carries both.</li>
-        <li><b>The API-freeze question ADR-0064 raises.</b> A public field and enum variant added to types STABILITY.md freezes, in a patch series whose policy is additive-only, and invisible to the freeze gate. <code>#[non_exhaustive]</code> on both, or a minor bump?</li>
+        <li><b>Gate <code>acetone-2ck.1</code>.</b> All four criteria have evidence — criteria 1 and 3 re-verified by execution on current <code>main</code> in the final review (three fresh strongest-tier reviewers: security GATE READY, correctness SOUND across 58 hostile differential checks, audit reconciling TCK and lab item-for-item), criteria 2 and 4's mechanisms confirmed intact. Yours to close — agents never close it.</li>
+        <li><b>Ratify ADR-0062–0066</b> — especially <b>0066</b> (spec §2 amendment; library writes that previously succeeded can now fail) and <b>0065</b> (the planner's cost policy).</li>
+        <li><b>The API-freeze question ADR-0064 raises.</b> A public field and enum variant added to types STABILITY.md freezes, in a patch series whose policy is additive-only, and invisible to the freeze gate (<code>7qw.5</code>). <code>#[non_exhaustive]</code> or a minor bump? (<code>fht</code> is the precedent, but covers <code>GraphError</code> only.)</li>
         <li><b>The Opus tier substitution.</b> Disclosed, compliant with ADR-0009 as written — but worth your view on whether the policy should say something explicit about capacity exhaustion.</li>
-        <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>2ck.2</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code> and the security beads — all re-homed to <code>7qw</code>. The epic still carries 16 pre-existing beads from the Phase 8 triage; whether those move is yours.</li>
+        <li><b>Follow-ups crossing the boundary</b>, each with its reason in the report: <code>2ck.12</code>, <code>s1j</code>, <code>hi8</code>, <code>1qj</code>, <code>taf</code>, and the reopened tail's own (<code>7qw.10–.19</code>, incl. the governed-but-slow scan budget <code>7qw.7</code> and the format-coupled <code>7qw.16</code>, now dep-linked to a format-boundary gate bead <code>qjzy</code>). <b>Epic <code>7qw</code> was reopened</b> to own them — it had been closed with these floating under it. <code>2ck</code> still carries 16 pre-existing beads from the Phase 8 triage; whether those move is yours.</li>
       </ul>
       <div class="chips">
         <span class="chip good"><span class="dot"></span>TCK 2185/3897 · 0 failures</span>
         <span class="chip good"><span class="dot"></span>Import bounded</span>
-        <span class="chip warn"><span class="dot"></span>Seeks reach the product; lab case declines</span>
+        <span class="chip good"><span class="dot"></span>Seeks win 17×–1104× shipped; decline at parity</span>
         <span class="chip good"><span class="dot"></span>fsck ≈N^1.27 · merge_base flat</span>
       </div>
     </div>

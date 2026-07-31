@@ -16,8 +16,38 @@ fine.)
 
 ## [Unreleased]
 
+openCypher TCK conformance rises to **2185 / 3897 (56.07%) with zero
+failures**, from 1602 (41.1%) at 0.3.1; every residual parse rejection is
+individually enumerated and justified in `docs/conformance.md`.
+
 ### Added
 
+- **Query-language coverage**: pattern comprehensions
+  (`[ (a)-[r]->(b) WHERE p | expr ]`), label predicates in expression
+  position (`WHERE n:Label`), chained comparisons (`1 < 2 < 3`),
+  `CALL … YIELD` aliasing and `YIELD *`, and bidirectional relationship
+  patterns.
+- **Streaming import** (ADR-0062): a source larger than memory imports in
+  bounded resident memory — records are pulled one at a time and staged in
+  batches (`--batch-size`, default 8192). The bound is unconditional for
+  UNIQUE-free imports; with unique-constrained labels the tracker is
+  compact but grows with those labels.
+- **Index range seeks and primary-key point lookups** reach the shipped
+  read path: inequality/range predicates on an indexed property, composite
+  index seeks, and `KeySeek` on a label's declared key are planned and
+  served through `Session`, declining to a scan when unselective (see the
+  cost model under *Changed*).
+- **Index-backed UNIQUE enforcement**, including uniqueness within a single
+  statement's writes, keyed by the memcomparable value encoding (so
+  `0.0`/`-0.0` and NaN behave correctly).
+- **`fsck` anchor-completeness checks** (ADR-0063) for commits and
+  workspace refs — the "clean now, data gone after `git gc` later" class is
+  reported while it is still recoverable, including for pre-ADR-0014 legacy
+  workspaces.
+- **Worktree-aware `gc`** and a streaming `fsck` canonical-map rebuild, so
+  both operate on repositories whose node maps exceed memory.
+- An **advisory when a query names an undeclared label** in expression
+  position, catching typo'd labels that would otherwise just return no rows.
 - **`declare-label --type <property>:<type>`** — property types are
   declarable through the CLI, taking `bool`, `int`, `float`, `string`,
   `bytes`, `date`, `time`, `datetime`, `duration` and `list`. `acetone
@@ -26,6 +56,23 @@ fine.)
 
 ### Changed
 
+- **`WITH … WHERE` now filters after `SKIP`/`LIMIT`**, matching
+  openCypher's sub-clause order. Queries combining them can return
+  different (now-conformant) results, and an `ORDER BY` key error can
+  surface on rows the `WHERE` would previously have discarded first.
+- **Aggregates inside comprehension, quantifier and `reduce` bodies are
+  compile-time errors** (`InvalidAggregation`) rather than silently wrong
+  answers; aggregate slots are keyed by expression identity, fixing wrong
+  values when an aggregate sat in a skipped `CASE` branch.
+- **`merge_base` runs in two linear walks** (paint-down maximal-common
+  ancestors), flat across histories that previously grew its cost
+  quadratically.
+- **Parse-time resource bounds**: a chained-comparison desugar bomb and
+  allocation-amplifying query shapes are refused in milliseconds at
+  megabytes (previously unbounded before any governor existed), and anchor
+  scans in pattern comprehensions/predicates are charged against a
+  dedicated scanned-candidate budget (ADR-0064) with a typed
+  `ResourceExceeded` error.
 - **A declared property type is now a constraint, not an annotation**
   (ADR-0066). It is enforced when a transaction saves, when a type is newly
   declared or changed over existing data (which is refused, naming a
@@ -66,9 +113,9 @@ fine.)
   cases measured at 53x, 18x and 12.5x slower than no index at all now run
   within 1.04-1.23x of a scan, while selective queries gain outright
   (0.16-0.24x). The residual is a constant — a declining seek has still paid
-  for its index probe and one cardinality sample — so on a graph small
-  enough for the whole scan to take a millisecond, an unhelpful index still
-  costs about 20%.
+  for its index probe and one cardinality sample — so it is only negligible
+  relative to a scan worth avoiding: within ~1% at 110,200 nodes, but
+  1.2-2x on a graph small enough for the whole scan to take a millisecond.
 - **`WHERE` equality predicates use indexes.** `MATCH (n:L) WHERE n.p = 1`
   previously scanned; only the inline form `MATCH (n:L {p: 1})` used an
   index. Seek hints now carry their own pinned values, so both forms plan
@@ -76,6 +123,12 @@ fine.)
 - Seek hints are an ordered candidate list rather than a single choice, so a
   hint the cost model declines at runtime falls through to the next instead
   of discarding a usable plan.
+
+### Fixed
+
+- `UNWIND` streams into a following `LIMIT` instead of tripping the
+  result-row governor, and bound relationship-list var-length patterns no
+  longer over-match.
 
 ## [0.3.1] - 2026-07-24
 
