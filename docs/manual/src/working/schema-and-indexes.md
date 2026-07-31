@@ -239,6 +239,44 @@ full scan — into 0.25 ms.
 That is also why the type is enforced rather than advisory. The planner
 trusts the declaration; enforcement is what makes the trust sound.
 
+### Two places that trust is qualified
+
+**While a merge is unfinished, declarations are not trusted.** A merge can
+combine one branch's declaration with the other branch's data, and the
+merged workspace is queryable before you commit it. In that state a
+declaration may be false of the data beside it, so seeks that would depend on
+one fall back to scanning until the merge completes or you abort it. Queries
+stay correct and get slower; that is the right way round, because a merge in
+progress is exactly when you are querying to decide how to resolve.
+
+**A graph predating enforcement should be checked once.** Enforcement is
+what makes a declaration trustworthy, and it is recent — see the CHANGELOG
+entry for declared property types. Before it, a type could be declared over
+data that contradicted it and nothing objected, so the planner would go on
+trusting a declaration that was already false. Nothing detects that when you
+query; `fsck` is what finds it:
+
+```console
+$ acetone fsck
+[advisory] workspace refs/worktree/acetone/workspace / nodes: node "Host" ["db1"] property "os" is declared int but holds a string value
+fsck: 0 error(s), 1 advisory(ies)
+```
+
+An advisory of that shape means a seek on `Host.os` may be returning too few
+rows. Fix it by correcting the offending values or by redeclaring the
+property's type — both are ordinary writes — and the seek becomes sound
+again.
+
+Note the wording differs from the write-time refusal quoted earlier ("the
+value **written** is of type …"). That one is a write being turned away
+before it lands; this is a value already stored that no longer matches what
+the schema says.
+
+This only ever applied to graphs built through the **library**: the CLI could
+not declare a property type at all until the same release that added
+enforcement, so a graph you built with `acetone` commands has never been able
+to reach this state. Neither can any graph written since, whatever built it.
+
 ## Changing schema on a populated graph
 
 Schema declarations are ordinary workspace writes: they take effect
