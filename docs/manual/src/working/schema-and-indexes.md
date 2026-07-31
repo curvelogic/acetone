@@ -258,12 +258,19 @@ query; `fsck` is what finds it:
 
 ```console
 $ acetone fsck
+[advisory] workspace refs/worktree/acetone/workspace / nodes: node "Host" ["db1"] property "os" is declared int but holds a string value
+fsck: 0 error(s), 1 advisory(ies)
 ```
 
-A `declared … but the value is of type …` finding means a seek on that
-property may be returning too few rows. Fix it by correcting the offending
-values or by redeclaring the property's type — both are ordinary writes —
-and the seek becomes sound again.
+An advisory of that shape means a seek on `Host.os` may be returning too few
+rows. Fix it by correcting the offending values or by redeclaring the
+property's type — both are ordinary writes — and the seek becomes sound
+again.
+
+Note the wording differs from the write-time refusal quoted earlier ("the
+value **written** is of type …"). That one is a write being turned away
+before it lands; this is a value already stored that no longer matches what
+the schema says.
 
 This only ever applied to graphs built through the **library**: the CLI could
 not declare a property type at all until the same release that added
