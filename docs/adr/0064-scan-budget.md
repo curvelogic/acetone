@@ -1,6 +1,6 @@
 # ADR-0064: Scanning is governed on its own budget
 
-- Status: accepted
+- Status: accepted; **ratified by Greg at the Phase 9 boundary, 2026-07-31**
 - Date: 2026-07-26
 - Bead: `acetone-2ck.15` (PR #219); follows the Phase 9 milestone security review
 

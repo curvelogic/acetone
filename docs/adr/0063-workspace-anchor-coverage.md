@@ -1,6 +1,6 @@
 # ADR-0063: Anchor completeness for workspaces, and the one place coverage is borrowed
 
-- Status: accepted
+- Status: accepted; **ratified by Greg at the Phase 9 boundary, 2026-07-31**
 - Date: 2026-07-26
 - Bead: acetone-2ck.11 (PR #217); follows ADR-0015 (workspace anchoring), ADR-0014 (per-worktree workspace refs), ADR-0044 (durability anchors), acetone-5a8 (commit-side anchor completeness)
 
