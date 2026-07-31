@@ -260,9 +260,10 @@ pub enum GraphError {
     /// library callers are covered, not only the Cypher write path.
     #[error(
         "cannot write node {node}: property {property:?} is declared {declared} but the value \
-         is of type {actual}. A declared type is enforced because index seeks rely on it — a \
-         value contradicting the declaration would make a seek on this property silently return \
-         too few rows. Write a value of type {declared}, or redeclare the property's type."
+         is of type {actual}. A declared type is enforced because seeks rely on it — index seeks \
+         and primary-key lookups alike — and a value contradicting the declaration would make a \
+         seek on this property silently return too few rows. Write a value of type {declared}, \
+         or redeclare the property's type."
     )]
     PropertyTypeViolation {
         /// The offending node's key, rendered and escaped for display.

@@ -16,8 +16,38 @@ fine.)
 
 ## [Unreleased]
 
+### Added
+
+- **`declare-label --type <property>:<type>`** — property types are
+  declarable through the CLI, taking `bool`, `int`, `float`, `string`,
+  `bytes`, `date`, `time`, `datetime`, `duration` and `list`. `acetone
+  schema` renders what is declared, in both the text and `--json` forms.
+  They were previously reachable only from the library.
+
 ### Changed
 
+- **A declared property type is now a constraint, not an annotation**
+  (ADR-0066). It is enforced when a transaction saves, when a type is newly
+  declared or changed over existing data (which is refused, naming a
+  violating node — `declare-label` still names them all), and at merge —
+  where a breach is reported as a conflict rather than an error. `float`
+  admits an integer, matching what import already did; nothing else widens.
+  This is a deliberate spec change (§2): writes that contradicted a
+  declaration were previously accepted, and were already getting wrong
+  answers from any seek over that property. No on-disk format change.
+
+  **Library consumers: `Transaction::save`/`commit` can now fail where they
+  previously succeeded.** Installing a declaration that the data already
+  present contradicts is refused, not only through `declare-label` but
+  through `put_schema` on any transaction. Nodes the same transaction
+  rewrites or deletes are excluded, so a retype and its backfill still land
+  together. No signature changed; both already returned `Result`.
+- **A primary-key point lookup is served by a seek.** `MATCH (h:Host
+  {hostname: "db1"})` previously scanned every node of the label, because
+  a string key pin could not rule out a `bytes`/temporal value equal to
+  the pin's text rendering. It now consults the key property's declared
+  type, exactly as an equality seek does — so typing your key properties
+  is what buys the lookup. On a 110,200-node graph: 240.9 ms to 0.25 ms.
 - **Indexes are now chosen by estimated cost** (ADR-0065). A seek does one
   random point read per matching row where a scan reads sequentially, so a
   seek only wins while selective. Both the equality/composite and range

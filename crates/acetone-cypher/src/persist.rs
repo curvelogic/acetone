@@ -95,9 +95,10 @@ pub enum PersistError {
     UniqueViolation { label: String, property: String },
     #[error(
         "property {property:?} of {label:?} {key} is declared {declared} but the value written is \
-         of type {actual}. A declared type is enforced (ADR-0066) because index seeks rely on it: \
-         a value contradicting the declaration would make a seek on this property silently return \
-         too few rows. Write a value of type {declared}, or redeclare the property's type."
+         of type {actual}. A declared type is enforced (ADR-0066) because seeks rely on it — index \
+         seeks and primary-key lookups alike — and a value contradicting the declaration would \
+         make a seek on this property silently return too few rows. Write a value of type \
+         {declared}, or redeclare the property's type."
     )]
     WrongType {
         /// The primary label declaring the type.

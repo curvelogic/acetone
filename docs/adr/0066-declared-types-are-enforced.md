@@ -107,6 +107,34 @@ The three points that mirror the existing constraints:
    backfill check `declare_label` already performs (`acetone-9gw`).
    Implemented as a type arm in `graph/constraints.rs check_nodes` rather
    than in the CLI, so it is not CLI-specific.
+
+   **Amended by `acetone-2ck.17`.** As first shipped this was CLI-specific in
+   practice: `constraints::check_label` had exactly one caller, the CLI's
+   `declare_label`, while `Transaction::put_schema` — public, and part of the
+   frozen 0.2 surface — installed a declaration with no backfill check at
+   all, and `check_staged_node_types` returns early when a transaction stages
+   no node put. So a schema-only transaction could retype *around* existing
+   data and make the declaration false the moment it landed. That was not
+   theoretical: a fresh repository built through the public library, with a
+   `String`-keyed and a `Bytes`-keyed node under one label, then declared
+   `id: string`, answered `MATCH (b:Blob {id: 'deadbeef'})` with one row
+   where the scan spelling returned two — a silent wrong answer on node
+   identity, found by the reviewer of `acetone-2ck.17`. `save_in_place` now
+   runs `check_retyped_labels` on any schema change, over the labels whose
+   declared types changed and the properties that changed, skipping nodes the
+   same transaction rewrites *or deletes* so a retype and its backfill can
+   land together — deletion matters, because a **key** property cannot be
+   repaired by rewriting a record, leaving delete-and-recreate as the only
+   route. It costs a prefix scan of the retyped label, on a schema change
+   only: the same work `declare-label` already did, moved from the CLI to the
+   primitive every writer passes through — and cheaper, by more than a
+   constant. `constraints::check_label` walks `snapshot.nodes()`, every node
+   in the graph, and materialises the matching ones into a `NodeSet`;
+   `check_retyped_labels` prefix-scans the one label and streams it. (An earlier draft of this amendment said the
+   scan "was already paid for" by `check_label_key_stability`. That was
+   wrong — that check scans nothing unless a key *tuple* changed, and then
+   only probes for a single node.) Spec §2's parenthetical licensing the gap
+   is removed, and replaced by one naming the gap that genuinely remains.
 3. **Merge time.** `merge.rs validate_merged` gains a type arm, reporting a
    breach as a `GraphViolation::WrongType` conflict — data, not an error
    (ADR-0007) — under the same responsibility rule as existence and UNIQUE:

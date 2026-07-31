@@ -379,21 +379,24 @@ fn criterion_3_measurements(
     Ok(())
 }
 
-/// The primary-key point lookup, reported **separately from the table above
-/// and without a ratio**, because the twin ratio here is uninformative by
-/// construction.
+/// The primary-key point lookup, measured against **the label scan it
+/// replaces on the same repository** rather than against the unindexed twin.
 ///
-/// `KeySeek` is emitted from the label's declared KEY alone: the binder
-/// returns the hint before it ever consults the index catalogue, so a
-/// declared index plays no part. Both twins declare `Host` with the same
-/// `hostname` key, so both bind and execute the identical plan and the ratio
-/// is pinned at ~1.00x whether key seeks work perfectly or not at all. An
-/// earlier version of this harness printed that 1.00x in the ratio column
-/// and read a discovered gap out of it; the number could not have shown
-/// either outcome.
+/// The twin ratio is uninformative here by construction: `KeySeek` is emitted
+/// from the label's declared KEY alone — the binder returns the hint before
+/// it ever consults the index catalogue — so a declared index plays no part.
+/// Both twins declare `Host` with the same `hostname` key, execute the
+/// identical plan, and the ratio is pinned at ~1.00x whether key seeks work
+/// perfectly or not at all. An earlier version of this harness printed that
+/// 1.00x in the ratio column and read a discovered gap out of it; the number
+/// could not have shown either outcome.
 ///
-/// What *is* evidence is the absolute time against the size of the scan it
-/// should be avoiding (`acetone-2ck.17`).
+/// The reference that *can* move is the scan: a point lookup either costs a
+/// fraction of a full `Host` scan (it is seeking) or costs about the same as
+/// one (it is scanning). At 110,200 nodes that reference separates the two
+/// outcomes by three orders of magnitude — 240.9 ms before `acetone-2ck.17`,
+/// 0.25 ms after. The twin figure is still printed, as the standing check
+/// that it stays pinned at parity.
 fn key_seek_measurement(
     indexed: &Repository,
     plain: &Repository,
@@ -401,24 +404,94 @@ fn key_seek_measurement(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Derived from the shape so the key EXISTS at every scale: a missing key
     // makes the hinted side fall back to a scan (PR #209 review).
-    let cypher = format!(
+    let point = format!(
         "MATCH (h:Host {{hostname: 'host-{}'}}) RETURN count(*) AS n",
         shape.hosts.saturating_sub(1)
     );
-    let (indexed_ms, plain_ms) = interleaved(indexed, plain, &cypher)?;
-    println!("\n  Point lookup by primary key — NOT an index A/B:");
-    println!("    {cypher}");
+    let scan = "MATCH (h:Host) RETURN count(*) AS n".to_string();
+
+    // The measurement that means something: point lookup versus label scan,
+    // same repository, interleaved and order-swapped like every other case.
+    // Their row counts differ by design, so each is checked against the exact
+    // count it must return rather than against the other — a seek that
+    // under-selected to zero rows would otherwise look like a triumph.
+    let (point_ms, scan_ms) = interleaved_on(indexed, &point, 1, &scan, shape.hosts as i64)?;
+    let ratio = if point_ms > 0.0 {
+        scan_ms / point_ms
+    } else {
+        f64::INFINITY
+    };
+    println!("\n  Point lookup by primary key — vs the label scan it replaces:");
+    println!("    {point}");
     println!(
-        "    {indexed_ms:.2} ms (twin without indexes: {plain_ms:.2} ms — the same plan; \
-         KeySeek comes from the declared key, not from an index)"
-    );
-    println!(
-        "    Compare against a full scan of {} nodes. A point lookup that costs \
-         a scan is not seeking: acetone-2ck.17 (string key pins are declined \
-         outright), blocked on acetone-2ck.18 (no CLI property types).",
+        "    {point_ms:.2} ms   full Host scan {scan_ms:.2} ms   {:.2}x   \
+         ({} hosts, {} nodes)",
+        ratio,
+        shape.hosts,
         shape.nodes()
     );
+
+    // The twin comparison, kept only to show it stays pinned — see the doc
+    // comment. It is NOT evidence about key seeks either way.
+    let (twin_indexed_ms, twin_plain_ms) = interleaved(indexed, plain, &point)?;
+    println!(
+        "    (unindexed twin runs the same plan: {twin_indexed_ms:.2} ms vs \
+         {twin_plain_ms:.2} ms — KeySeek comes from the declared key, not \
+         from an index)"
+    );
     Ok(())
+}
+
+/// Time two DIFFERENT queries against ONE repository, alternating and
+/// swapping the order every other iteration exactly as [`interleaved`] does.
+///
+/// The two queries return different results by design, so instead of
+/// comparing them to each other this checks each against the exact count it
+/// must return. That check is the load-bearing part: a seek that
+/// under-selected to zero rows would otherwise be reported as the fastest of
+/// all. Each query must project a single `count(*)` cell — the value is
+/// compared numerically, not by matching text against a `Debug` rendering
+/// (where `Int(1)` is a substring of `Int(10)`).
+fn interleaved_on(
+    repo: &Repository,
+    first: &str,
+    first_count: i64,
+    second: &str,
+    second_count: i64,
+) -> Result<(f64, f64), Box<dyn std::error::Error>> {
+    let session = Session::new(repo);
+    let (mut best_first, mut best_second) = (f64::INFINITY, f64::INFINITY);
+    for i in 0..RUNS {
+        let time = |cypher: &str| -> Result<(f64, i64), Box<dyn std::error::Error>> {
+            let start = Instant::now();
+            let out = session.run(cypher)?;
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            let result = out.result();
+            let [row] = result.rows.as_slice() else {
+                return Err(format!("expected exactly one row from: {cypher}").into());
+            };
+            let [acetone_cypher::exec::value::Value::Int(n)] = row.as_slice() else {
+                return Err(format!("expected a single integer count from: {cypher}").into());
+            };
+            Ok((elapsed, *n))
+        };
+        let ((first_ms, first_n), (second_ms, second_n)) = if i % 2 == 0 {
+            let a = time(first)?;
+            (a, time(second)?)
+        } else {
+            let b = time(second)?;
+            (time(first)?, b)
+        };
+        if first_n != first_count {
+            return Err(format!("{first}\n  expected {first_count}, got {first_n}").into());
+        }
+        if second_n != second_count {
+            return Err(format!("{second}\n  expected {second_count}, got {second_n}").into());
+        }
+        best_first = best_first.min(first_ms);
+        best_second = best_second.min(second_ms);
+    }
+    Ok((best_first, best_second))
 }
 
 /// Runs to take the best of. The minimum is the right statistic here: it is

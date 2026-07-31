@@ -192,6 +192,31 @@ fn with_node_added(store: &GitStore, m: &Manifest, id: u8) -> Manifest {
     out
 }
 
+/// Copy `m` with `entry` spliced into its `schema` map, bypassing the
+/// transaction boundary exactly as [`with_node_removed`] does — and for the
+/// same reason. Since `acetone-2ck.17`, `save_in_place` refuses to install a
+/// declaration the data already present contradicts, so no *transaction*
+/// produces this state.
+///
+/// The tests below are therefore fabricated, and must not be deleted later
+/// as "an impossible state". Three writers still reach it: `merge` itself,
+/// which assembles a merged manifest directly and can pair one branch's
+/// tightened declaration with the other's untouched data (`acetone-7qw.14`);
+/// `migrate::FormatTransform`, a public trait that rewrites manifests
+/// without a transaction (ADR-0066); and any repository written before the
+/// check existed. `validate_merged` must cope with all three.
+fn with_schema_spliced(store: &GitStore, m: &Manifest, entry: &SchemaEntry) -> Manifest {
+    let schema = apply_batch(
+        store,
+        &m.schema.to_root(m.chunk_params).expect("schema root"),
+        vec![BatchOp::Put(entry.map_key(), entry.encode_value())],
+    )
+    .expect("apply_batch");
+    let mut out = m.clone();
+    out.schema = MapRoot::from_root(&schema);
+    out
+}
+
 #[test]
 fn a_pre_existing_dangling_edge_is_not_attributed_to_the_merge() {
     // If base already contains a dangling edge (constructed via plumbing — the
@@ -868,16 +893,29 @@ fn retyping_alone_flags_an_untouched_pre_existing_node() {
     // pre-existing node may not satisfy — the same shape as
     // `schema_tightening_flags_a_pre_existing_node_missing_the_new_required_property`
     // for existence.
+    //
+    // "theirs" installs the declaration through PLUMBING rather than a
+    // commit, because `acetone-2ck.17` closed the route a transaction had:
+    // `save_in_place` now refuses to declare `port: int` on a branch whose
+    // own data already carries a string one. That is the correct refusal —
+    // and it is precisely why this arm still needs a test. `merge` writes
+    // its merged manifest directly, never through a transaction, so it can
+    // still assemble one side's tightened schema over the other's untouched
+    // data; and a repository written before the check carries the state
+    // outright.
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init(dir.path());
     let untyped = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("untyped");
-    let typed = LabelDef::new(
-        vec!["id".to_string()],
-        BTreeMap::from([("port".to_string(), PropertyType::Int)]),
-        [],
-        [],
-    )
-    .expect("typed");
+    let typed = SchemaEntry::Label {
+        name: "N".to_string(),
+        def: LabelDef::new(
+            vec!["id".to_string()],
+            BTreeMap::from([("port".to_string(), PropertyType::Int)]),
+            [],
+            [],
+        )
+        .expect("typed"),
+    };
     let (b, o, t) = diverge(
         &repo,
         // Base: the schema AND the node, with a string port.
@@ -894,15 +932,12 @@ fn retyping_alone_flags_an_untouched_pre_existing_node() {
         |tx| {
             tx.put_node(&node(2), &record(&[])).expect("put");
         },
-        // theirs: retype only.
+        // theirs: no committed change; the retype is spliced in below.
         |tx| {
-            tx.put_schema(&SchemaEntry::Label {
-                name: "N".to_string(),
-                def: typed.clone(),
-            })
-            .expect("schema");
+            tx.put_node(&node(3), &record(&[])).expect("put");
         },
     );
+    let t = with_schema_spliced(repo.store(), &t, &typed);
 
     let vs = violations(merge(&repo, &b, &o, &t));
     assert_eq!(
@@ -929,22 +964,30 @@ fn a_pre_existing_type_violation_is_not_attributed_to_a_disjoint_merge() {
     // Without this, replacing `changed || newly_declared` with a bare `true`
     // passes every other type test (PR #226 review, S1).
     //
-    // The violating base is built in TWO commits, because one transaction
-    // cannot produce it any more: the save-time check (ADR-0066) inspects
-    // staged node puts against the transaction's final schema, so writing the
-    // string and declaring `int` together is refused. Declaring a type stages
-    // no nodes, so the second commit installs it over the existing value —
-    // which is exactly how a repository predating enforcement carries one.
+    // The violating base is built by PLUMBING, because no write path produces
+    // it. An earlier version of this test used two commits — write the string
+    // under an untyped label, then declare `int` in a second, node-free
+    // transaction — and noted that "declaring a type stages no nodes, so the
+    // second commit installs it over the existing value". That was true, and
+    // it was a bug rather than a technique: it is exactly the hole
+    // `acetone-2ck.17` closed, and with the key seek trusting declarations it
+    // produced a silent wrong answer. `save_in_place` now refuses the second
+    // commit. The state itself remains worth testing — a repository written
+    // before the check carries it, and `fsck` reports it — so it is
+    // fabricated directly, as this file already does for a dangling edge.
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init(dir.path());
     let untyped = LabelDef::new(vec!["id".to_string()], BTreeMap::new(), [], []).expect("untyped");
-    let typed = LabelDef::new(
-        vec!["id".to_string()],
-        BTreeMap::from([("port".to_string(), PropertyType::Int)]),
-        [],
-        [],
-    )
-    .expect("typed");
+    let typed = SchemaEntry::Label {
+        name: "N".to_string(),
+        def: LabelDef::new(
+            vec!["id".to_string()],
+            BTreeMap::from([("port".to_string(), PropertyType::Int)]),
+            [],
+            [],
+        )
+        .expect("typed"),
+    };
 
     let mut tx = repo.begin_write().expect("begin");
     tx.put_schema(&SchemaEntry::Label {
@@ -954,24 +997,25 @@ fn a_pre_existing_type_violation_is_not_attributed_to_a_disjoint_merge() {
     .expect("schema");
     tx.put_node(&node(1), &record(&[("port", Value::String("8080".into()))]))
         .expect("put");
-    tx.commit("untyped node", &[], None).expect("commit");
-
-    let mut tx = repo.begin_write().expect("begin");
-    tx.put_schema(&SchemaEntry::Label {
-        name: "N".to_string(),
-        def: typed,
-    })
-    .expect("schema");
-    let base_commit = tx.commit("retype", &[], None).expect("commit");
-    let base_m = manifest_at(&repo, &base_commit.to_hex());
+    let base_commit = tx.commit("untyped node", &[], None).expect("commit");
+    let base_m = with_schema_spliced(
+        repo.store(),
+        &manifest_at(&repo, &base_commit.to_hex()),
+        &typed,
+    );
 
     // Two disjoint, conforming additions on either side. Neither touches
-    // node(1), and neither changes the declaration.
+    // node(1), and neither changes the declaration — both inherit it from
+    // the fabricated base, so it is spliced onto both sides too.
     let mut tx = repo.begin_write().expect("begin");
     tx.put_node(&node(2), &record(&[("port", Value::Int(80))]))
         .expect("put");
     let ours_commit = tx.commit("ours", &[], None).expect("commit");
-    let ours_m = manifest_at(&repo, &ours_commit.to_hex());
+    let ours_m = with_schema_spliced(
+        repo.store(),
+        &manifest_at(&repo, &ours_commit.to_hex()),
+        &typed,
+    );
 
     repo.create_branch("other", Some(&base_commit.to_hex()))
         .expect("branch");
@@ -980,7 +1024,11 @@ fn a_pre_existing_type_violation_is_not_attributed_to_a_disjoint_merge() {
     tx.put_node(&node(3), &record(&[("port", Value::Int(443))]))
         .expect("put");
     let theirs_commit = tx.commit("theirs", &[], None).expect("commit");
-    let theirs_m = manifest_at(&repo, &theirs_commit.to_hex());
+    let theirs_m = with_schema_spliced(
+        repo.store(),
+        &manifest_at(&repo, &theirs_commit.to_hex()),
+        &typed,
+    );
 
     // The pre-existing breach on node(1) is real — fsck reports it — but it
     // is not this merge's responsibility.
