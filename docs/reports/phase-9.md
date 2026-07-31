@@ -1,6 +1,18 @@
 # Phase 9 report — at scale and in conformance
 
-*Epic `acetone-2ck` · base `main @ 848d0e9` (post-0.3.1) · this report covers PRs #199–#221*
+*Epic `acetone-2ck` · base `main @ 848d0e9` (post-0.3.1) · this report covers PRs #199–#230*
+
+**This is the amended report.** The phase was first reported done at
+PRs #220/#222; Greg reopened it because criterion 3's evidence had been
+measured against an in-memory source rather than the shipped read path, and
+wiring the seeks into the product exposed that an unselective seek *loses* to
+the scan it replaces. His ruling: the real problems were that we select an
+index seek when we shouldn't — the cost model needed refining — and that
+`WHERE` didn't use indexes; selective lab wins were secondary to indexing
+being *beneficial*. PRs #224–#230 are that remediation, and this report's
+criterion-3 section now carries the shipped-path evidence. An earlier docs
+amendment (PR #223) recording the interim not-satisfied state was closed as
+superseded; its measurements survive below as the before-half of the story.
 
 Phase 9 is the phase where acetone stops being demonstrably correct on small
 inputs and starts being **measurably correct at size**. Two things had to
@@ -10,10 +22,12 @@ to stop assuming everything fits in memory or in one pass (the scale half).
 
 The headline numbers: **TCK conformance moved from 1602/3897 (41.1%) with 50
 failures to 2185/3897 (56.07%) with zero failures**; import of a source larger
-than memory completes in bounded resident memory; index seeks beat scans by
-4.5×–10⁵× on the lab graph (the low end being an unselective equality seek);
-and `fsck` and `merge_base` are verified
-sub-quadratic on multi-version repositories.
+than memory completes in bounded resident memory; on the **shipped read path**
+a selective index seek beats the scan 17× (0.27% selectivity), an absence
+proof by two orders of magnitude, and a primary-key point lookup 1104× —
+while unselective seeks now *decline* to within 1% of the scan instead of
+losing to it by up to 37× (ADR-0065); and `fsck` and `merge_base` are
+verified sub-quadratic on multi-version repositories.
 
 Everything landed autonomously under the usual gate: per bead a design recorded
 in the bead, TDD, a fresh strongest-tier adversarial review with no
@@ -47,6 +61,14 @@ the most important section of this report.
 | `acetone-cbl.2` | #218 | **Conformance statement published** with every residual parse rejection individually justified. **Criterion 1.** |
 | `acetone-2ck.15` | #219 | **Both milestone-security blockers closed**; `KeySeek` wired into the shipped read path. |
 | `acetone-2ck.14` | #221 | **`IndexRange` wired into the store-backed source** — range seeks reach the shipped read path, and decline when they would lose to a scan. |
+| — | #220, #222 | The original report and deck, and a criterion-3 claim (#222) later **retracted** — part of the honest record; #223 (interim amendment) closed as superseded. |
+| `acetone-2ck.2`, `acetone-7qw.9` | #224 | **The cost model** (ADR-0065): seeks spend a fixed fraction of the estimated scan cost and otherwise decline; **`WHERE` equality uses indexes**; hints are an ordered candidate list with fall-through. |
+| `acetone-2ck.16` | #225 | **The lab measures the shipped path**: an identical unindexed twin repository, compared through `Session`, interleaved, with parity assertions. |
+| `acetone-2ck.18` | #226 | **`declare-label --type`** — property types declarable through the CLI **and enforced** at write, declare and merge (ADR-0066, spec §2 amendment). |
+| `acetone-2ck.17` | #227 | **Primary-key point lookups seek for string keys** when the key's type is declared: 240.9 ms → 0.25 ms on a 110,200-node graph. |
+| `acetone-7qw.14` | #228 | **A conflicted workspace does not trust its own declared types** — seeks that would rely on one decline to a scan until the merge completes or aborts. |
+| `acetone-7qw.16` | #229 | **Documented where a declared type is not trusted** (pre-enforcement repositories; `fsck` detects, the manual explains). |
+| `acetone-2ck.20` | #230 | **Final-review fixes**: declare-time backfill checks stream instead of materialising the graph; a non-finite cardinality estimate is refused rather than saturating the seek budget. |
 
 ## Gate evidence — Phase 9 exit criteria
 
@@ -94,97 +116,92 @@ Two honest scopings, both recorded when they were found rather than after:
 - **Wall-time is superlinear** even though memory is bounded, because every save
   re-anchors the whole chunk set (`acetone-taf`).
 
-### Criterion 3 — index range and composite seek beat scan on the lab graph ⚠️
+### Criterion 3 — index range and composite seek beat scan on the lab graph ✅
 
-Measured on the lab graph at 440,800 nodes (`lab/README.md`):
+**The story of this criterion is the story of the phase's reopening**, so the
+evidence is presented in the order it was learned.
 
-| Seek | Hinted | Scan | Speed-up |
-|------|--------|------|----------|
-| IndexRange (`cert_not_after < 30`) | 24.4 ms | 337.8 ms | **13.8×** |
-| Composite seek (populated bucket) | 7.7 ms | 213.1 ms | **27.6×** |
-| Composite seek (empty bucket) | 0.001 ms | 208.2 ms | ~10⁵× |
-| KeySeek (primary key) | 0.002 ms | 201.0 ms | ~10⁵× |
-| IndexSeek equality (`host_os`) | 53.0 ms | 236.2 ms | **4.5×** |
+**What was first published, and why it was withdrawn.** The original report
+carried a table headlined 13.8× (range) and 27.6× (composite) at 440,800
+nodes. The milestone security review found all of it was measured against the
+**in-memory `GraphSnapshot`**, not the source `Session` uses — the shipped
+`StoreBackedSource` implemented only equality seeks, so the product could not
+even execute most of the table. Wiring `KeySeek` (#219) and `IndexRange`
+(#221) into the shipped path then exposed what the in-memory source structurally
+could not show: **a seek does one random point read per matching row, while
+the scan it replaces reads sequentially.** Past roughly 1% selectivity the
+"optimisation" *lost* — up to **37× slower than no index** for the range, 3.7×
+for the composite. Declaring an index made ordinary queries dramatically
+worse. The 13.8× and 27.6× cases were, on a real store, genuinely
+scan-shaped: their speed-ups were artefacts of a source that pays nothing for
+point reads.
 
-Each case carries a parity assertion, so a "speed-up" that returned different
-rows would fail rather than flatter.
+**The fix (PR #224, ADR-0065): indexes are chosen by estimated cost.** The
+planner samples the nodes map (mean fanout per level — a fixed two-dozen chunk
+reads, memoised per query) to estimate what the scan would cost, and a seek
+may spend 0.5% of it (`estimate/200`, floor 32) before declining to the scan.
+Declining can only change plans, never rows: `None` means "cannot serve, scan
+instead", and every served candidate set is re-filtered by the full predicate.
+ADR-0065 records three rejected designs, one refuted by direct measurement.
+Alongside it, **`WHERE` equality now attaches index hints** (`acetone-7qw.9`)
+— previously only the inline `{p: 1}` form used an index — and hints are an
+ordered candidate list with fall-through. Because a string seek is only sound
+when a declared type rules out an encoding mismatch, this pulled in the CLI
+work Greg directed: **property types declarable through the CLI and enforced**
+(#226, ADR-0066), and **string primary-key seeks** (#227).
 
-**Where these numbers came from, and what has since changed.** The milestone
-security review found that `StoreBackedSource` — the source `Session` actually
-uses — implemented only `nodes_by_index`, and that the lab builds a
-`GraphSnapshot` for *every* case, so **all the rows above were measured against
-the in-memory source, not the shipped read path**. `KeySeek` was wired in
-PR #219 and `IndexRange` in PR #221, so both now reach the product. **The lab
-still measures the in-memory source and `lab/README.md` still does not say so**
-— that disclosure was on `acetone-2ck.14`, which closed with the re-measurement
-half undone, so it is re-homed to `acetone-2ck.2` rather than left on a closed
-bead.
+**The shipped-path evidence** (`lab/README.md`): the lab now builds an
+identical unindexed **twin repository** (root-hash-verified — Invariant 1
+makes root equality prove graph equality), and measures both through
+`Session`, interleaved with the order swapped every other iteration, each case
+asserting result parity on every run. At `--scale 50000` (110,200 nodes /
+219,985 edges), best of 7:
 
-Wiring the range seek then exposed something the lab could never show, because
-the in-memory source does not pay for it: **a seek does one random point read
-per matching row, while the scan it replaces reads the nodes map sequentially.**
-Past roughly 2.5% selectivity the "optimisation" was *up to 37× slower than no
-index at all*. Declaring an index made ordinary queries dramatically worse.
+| case | indexed | unindexed | ratio |
+|------|--------:|----------:|------:|
+| IndexRange, expiring tomorrow (0.27%) | 16.4 ms | 278.7 ms | **17.0×** |
+| Composite seek, empty bucket | 0.4 ms | 246.2 ms | **643×** |
+| IndexRange, expiring this week (1.9%) | 279.2 ms | 279.3 ms | 1.00× |
+| IndexRange, expiring in 30 days (8.2%) | 282.1 ms | 281.7 ms | 1.00× |
+| Composite seek, populated bucket (2.9%) | 247.9 ms | 249.4 ms | 1.01× |
+| IndexSeek equality on `os` (20%) | 253.1 ms | 252.0 ms | 1.00× |
+| WHERE equality on `os` (20%) | 286.4 ms | 285.8 ms | 1.00× |
 
-The fix is to decline rather than to optimise: past 1024 candidates the source
-returns `None` — the `GraphSource` contract's "cannot serve, scan instead" —
-before paying for a point read in that family. (The budget is checked per
-family, so a numeric range whose int half fits under the cap does those reads
-before the float half can trip the decline.) Measured by PR #221's reviewer on
-a 50,000-node graph with three binaries side
-by side (always-scan `main`, always-seek, and the shipped fix). These are that
-reviewer's own run, not the four-row table in PR #221's description, which used
-a different data shape and a 150.4 ms scan baseline:
+And the point lookup, measured against the label scan it replaces on the same
+repository (the twin ratio is pinned at 1.00× *by construction* here — both
+twins declare the same key, so both plan the same `KeySeek`; the README
+explains why):
 
-| rows | always scan | always seek | shipped |
-|---:|---:|---:|---:|
-| 51 | 105.4 ms | 8.2 ms | **8.2 ms** |
-| 494 | 105.0 ms | 53.2 ms | **54.2 ms** |
-| 2,030 | 107.6 ms | 208.4 ms | **100.3 ms** |
-| 24,973 | 117.9 ms | 2570.2 ms | **111.9 ms** |
+| case | seek | full `Host` scan | ratio |
+|------|-----:|-----------------:|------:|
+| `MATCH (h:Host {hostname: 'host-49999'})` | 0.25 ms | 274.5 ms | **1104×** |
 
-No regime is slower than the scan, and the selective win is intact.
+Until #227 that lookup took 240.9 ms — it scanned all 110,200 nodes to find
+one node by its declared identity.
 
-**And this is where the criterion's judgement call actually sits.** The lab's
-own range case would decline at the shipped cap: `cert_not_after` is `i % 365`
-and the lab runs at 200,000 certificates, so `cert_not_after < 30` matches
-roughly **16,000 rows — sixteen times `MAX_RANGE_CANDIDATES`**. Through
-`Session` that query declines and label-scans, giving **1.0×, not the 13.8×** in
-the table at the top of this section. The 13.8× is real and is what the
-in-memory source does; it is not what the product does for that query.
+Read the table as two groups. **Selective seeks win large**: 17.0× at 0.27%
+selectivity, and an absence proof at ~600× (quote that one as an order of
+magnitude — it is scan time over fixed per-query overhead, and runs of the
+same case measured 396–643×). **Unselective seeks decline to parity, and
+that is the designed behaviour**: the 8.2% range and 2.9% composite are the
+very cases published as 13.8× and 27.6× — on a real store they are
+scan-shaped, and before ADR-0065 they lost by up to 37×. Now they cost the
+scan ±1%. The residual is a **constant** (one index probe plus one
+cardinality sample), so it is only negligible relative to a scan worth
+avoiding: at `--scale 200` the same declining cases read 0.47–0.72×. Any of
+these figures needs its scale attached. Run-to-run variance is real — the
+final gate audit independently re-ran the suite at the same scale and got
+14.35× / 594× / 0.97–1.01× / 843× for the four headline shapes, the same
+story within noise. The `lab/README.md` best-of-7 table is the canonical
+citation.
 
-So the mechanism is delivered and correct, and a *selective* range beats a scan
-on the shipped path. Whether "index range … measurably beat scan on the lab
-graph" is satisfied by a mechanism that declines on the lab's own chosen case is
-a judgement call, and it is Greg's — an earlier draft of this report claimed the
-question had disappeared when it had only moved. **Raising the cap is not the
-answer**: the cap is precisely what stops an unselective seek being 37× slower
-than no index. Nor would `acetone-2ck.2`'s cardinality-informed threshold
-rescue this particular case — and that is the sharper conclusion. 16,438 of
-200,000 rows is **8.2% selectivity**, where the phase's own measured law puts
-break-even at roughly 2% on loose objects and 8% packed; scaled from the
-400k-loose anchor, break-even for a 200,000-row label is about 3,500 rows, so
-the lab's case is some five times beyond it. A perfect cost model declines this
-range too. **The lab's chosen range case is genuinely scan-shaped, and its
-13.8× is an artefact of a source that pays nothing for point reads.** What
-`acetone-2ck.2` fixes is the *class* — it would admit ranges the absolute cap
-wrongly declines on large graphs, such as the 2,000-rows-at-400k case measured
-at 3.4× — not this instance. Re-measuring the lab through `Session` will
-therefore confirm 1.0× permanently, not temporarily.
-
-**Two further open risks fall out of this.** First, the
-cap is absolute where break-even scales with label cardinality (measured: ~1,000
-rows at 50k nodes loose, ~4,000 packed, ~7,000 at 400k), so it is progressively
-conservative on larger graphs. Second — and this one ships on `main` today —
-**the equality-seek path has the same cliff and no cap**: an unselective
-`IndexSeek` measured **1248 ms indexed against 67 ms unindexed, 18× slower**
-(independently reproduced by the amendment's reviewer at 13.7× on a leaner node
-shape). It arrived with PR #123 (`acetone-cbl.11`, lazy store-backed
-`IndexSeek`), not with this phase — an earlier draft of this paragraph blamed
-PR #206, which is *itself Phase 9 work* and would have made the sentence
-self-contradictory. Both are recorded with their measurements on `acetone-2ck.2`
-(costed planning seeds), which the roadmap names in this phase's paragraph and
-which did not ship.
+**The criterion's judgement call, dissolved rather than ruled on.** The
+earlier interim finding — that the lab's own chosen range case declines
+through `Session`, so the criterion turned on whether a decline "beats" a
+scan — is gone: the lab's suite now spans selectivities, and the selective
+cases win outright on the shipped path. What remains true is that the lab's
+*original* two cases were scan-shaped all along; the phase's contribution is
+that acetone now knows it at plan time.
 
 ### Criterion 4 — `fsck` and `merge_base` sub-quadratic on a multi-version repository ✅
 
@@ -237,6 +254,22 @@ divergences.
   rather than borrowing the expansion budget, because borrowing it rejected
   ordinary nested-loop joins (a 20-row semi-join over 100k nodes). Written
   during PR #219's review, for the same reason ADR-0063 was.
+- **ADR-0065 — indexes are chosen by estimated cost.** A seek spends a fixed
+  fraction (0.5%) of the sampled scan estimate and otherwise declines.
+  Records three rejected designs — an absolute cap, prolly-height tiering,
+  and a bytes-proportional fraction that direct measurement refuted (36× the
+  bytes moved break-even only ~2×; point reads are dominated by per-object
+  overhead, not size).
+- **ADR-0066 — a declared property type is a constraint, not an annotation.**
+  Enforced at write, at declare (backfill, refusing a declaration the data
+  contradicts) and at merge (a `WrongType` violation is data, per ADR-0007).
+  **This is a spec §2 amendment** — previously only UNIQUE and existence were
+  enforced, so unenforced types were conformant as written — and a behaviour
+  change for library consumers: `Transaction::save`/`commit` can now fail
+  where they previously succeeded. Flagged as a governing-document change;
+  the alternative (ship the flag, enforce later) was rejected as the worst
+  ordering — a seek trusting an unenforced declaration under-selects, which
+  is a silent wrong answer on node identity.
 
 ## What review caught
 
@@ -266,10 +299,18 @@ shipped:
 
 ## Milestone security review
 
-A dedicated security-focused review ran over the whole phase diff
-(`848d0e9..main`, 19 PRs, 48 files, ~7000 insertions) before this report. It
-returned **two blocker-class findings**, both since fixed in PR #219 with
-regression tests:
+Security review ran **twice** this phase, and the coverage split matters for
+anyone auditing it. The **milestone review** described in this section covered
+the diff up to PR #218 (`848d0e9..`, 19 PRs, 48 files, ~7000 insertions); its
+two blockers were fixed in PR #219. The reopened tail — PRs #219–#229, which
+includes the cost model and the new CLI type-declaration input surface — was
+covered by a **final phase-level review** (three fresh strongest-tier
+reviewers: security, correctness, gate audit) run before this amended report;
+its results are in *The final review* below. No part of the phase diff went
+without a phase-level security pass, but no single pass covered all of it.
+
+The milestone review returned **two blocker-class findings**, both since
+fixed in PR #219 with regression tests:
 
 1. **Exponential AST blowup** — the chained-comparison desugar clones interior
    operands, so nesting doubled the AST per level. A **268-byte query reached
@@ -346,6 +387,68 @@ git and gix; three million mutated queries produced no panics; and **no
 dependency was added, bumped or re-featured all phase** (`cargo deny` and
 `cargo audit` clean).
 
+## The final review
+
+Before this amended report was written, **three fresh strongest-tier
+reviewers** ran in parallel over what the milestone review had not covered:
+a security sweep of PRs #219–#229, a cross-PR correctness review of the
+criterion-3 sequence (#224–#229), and an audit re-verifying every criterion's
+evidence against current `main`. All three worked by execution, not argument.
+
+**Security: GATE READY.** No blockers. Both milestone blocker fixes held
+under re-attack (the 269-byte comparison bomb refuses in 7 ms at 3.2 MB; the
+scan exploit terminates with its typed error). PR #228's conflicted-workspace
+distrust was complete against every escape route tried (`resolve_all` both
+ways, commit, abort). ADR-0066's enforcement resisted every bypass attempted,
+including declare-and-write-bad in one transaction and
+declare-plus-delete-the-offender (correctly accepted — nothing left to
+violate — with resurrection then refused). Hostile `--type` input, 1 MB pins,
+NaN/±∞/2⁵³ values: no panics, no terminal injection, no wrong answers. No
+dependency changed all phase. Findings: one **High** — the scanned-candidate
+budget is denominated for the in-memory executor, so the governed pathology
+still burns ~13 minutes and 1.4 GB of *bounded* work on the store path before
+its typed error (measured 30–47 µs per candidate; recorded on
+`acetone-7qw.7`, whose business the re-denomination already was — and the
+governor docstring that plausibly let this survive earlier review is
+corrected in #230); one **Medium** and one **Low**, both fixed in PR #230
+(the declare-time backfill check materialised the whole node map; a
+non-finite cardinality estimate saturated the seek budget on a crafted
+store); and one informational confirmation that the documented
+pre-enforcement residual (`acetone-7qw.16`) is genuinely reachable from a
+repository written by an older binary — `fsck` names it, the manual explains
+it.
+
+**Correctness: SOUND — no wrong-answer path found.** Fifty-eight
+differential checks through `Session` on real repositories, hunting exactly
+the class this phase's history warns about (declared type vs runtime type vs
+key encoding): dual numeric encodings of the same key value, `Bytes`/string
+key collisions, NFC/NFD unicode, signed zero, 2⁵³-boundary int/float,
+parameter pins, conflicted-workspace states, mixed-encoding composite pins,
+write-then-read within a session. Every seek spelling returned exactly the
+scan's rows. The trust boundary (#227 trusts a declared key type; #228
+withdraws trust in a conflicted workspace) is consistent across all four seek
+forms, and the cost model provably changes plans only. Three Low findings:
+the shape-closure asymmetry documented in #230 and filed as a design question
+(`acetone-7qw.17` — declaring any type closes node-pattern map literals in
+`CREATE`/`MATCH`/`MERGE` while `SET` stays open); numeric equality lossy
+above 2⁵³ (`acetone-7qw.18`, pre-existing, seek path verified exactly
+consistent with it); inline and `WHERE` pins never merge for composite seek
+eligibility (`acetone-7qw.19`, plans only).
+
+**Audit: the evidence reproduces.** The TCK re-run on current `main`
+reconciled with `docs/conformance.md` item for item — 2185/3897, zero
+failures, all 51 enumerated rejections matching by family. The lab re-run at
+the README's stated scale confirmed the table's shape and absolute times
+(variance noted in the criterion-3 section). All 29 beads closed during the
+phase carry reviewer sign-off in their close reasons (one administrative
+supersede-split aside, whose halves were reviewed under #219/#221). The
+public-API freeze surfaces regenerate to empty diffs under the pinned
+toolchain — which retires nothing about the ADR-0064 freeze question below,
+since the gate is known-blind to field/variant changes inside re-exported
+types. The audit's documentation punch-list (stale figures, the CHANGELOG
+gap, follow-up homing, `conformance.md`'s date) is discharged by this
+amendment and PR #230's bead work.
+
 ## Process notes and open risks
 
 - **Review-tier deviation, disclosed.** Fable 5 capacity was exhausted partway
@@ -378,21 +481,33 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
   runner runs.
 - **Follow-ups crossing the boundary**, each with its reason: `acetone-2ck.12`
   (SET parenthesised target — surfaced *by* the conformance enumeration at the
-  boundary itself), `acetone-2ck.2` (costed planning seeds — carrying the
-  absolute-cap limitation, the pre-existing equality-seek cliff, and the lab
-  re-measurement disclosure inherited from `acetone-2ck.14`, all with
-  measurements), `acetone-s1j`
+  boundary itself), `acetone-s1j`
   (write-query escape — pre-existing, now disclosed), `acetone-hi8` (temporal
   support — a whole feature family, not a defect), `acetone-1qj` (binder
-  over-accept), `acetone-taf` (import wall-time), and the seven security beads
-  above. All of these are now re-homed to `acetone-7qw` (the 0.3.x quality and
-  security epic) rather than left under the closed phase — though `acetone-7qw`
-  is itself closed, so this is a move to a better-named home rather than to an
-  open one. Note that
+  over-accept), `acetone-taf` (import wall-time), and the security and
+  quality beads under `acetone-7qw`. The reopened tail resolved two of the
+  original list in-phase after all — `acetone-2ck.2` (the cost model shipped
+  in #224, retiring both the absolute-cap limitation and the equality-seek
+  cliff it carried) and `acetone-7qw.9` (`WHERE` indexing, same PR) — and
+  added its own: `acetone-7qw.10` (cost the hint candidates rather than
+  first-serve — measured 65× off the best plan in one band), `acetone-7qw.11`
+  (the estimator reads 1.96×-high/0.02×-low and bimodal on skewed builds),
+  `acetone-7qw.12`/`.13`/`.15` (review minors), `acetone-7qw.16` (the
+  pre-enforcement declared-type residual — its durable fix is format-coupled,
+  so it is dep-linked to a new format-boundary gate bead, `acetone-qjzy`),
+  and from the final review `acetone-7qw.17`/`.18`/`.19` (above). Each is a
+  real future unit of work with its measurements attached; none blocks the
+  ratified criteria. **`acetone-7qw` has been reopened** to own them — it had
+  been closed at the 0.3.1 boundary, which left Phase 9-surfaced follow-ups
+  floating under a closed epic against ADR-0054. Note that
   `acetone-2ck` still carries **16 open beads** that predate this phase — they
   were parented there during the Phase 8 backlog triage, not surfaced by Phase
   9 — plus the gate bead itself. Deciding whether those move or stay is Greg's,
   not something this phase should have quietly re-filed.
+- **One reviewer was replaced mid-review.** PR #226's first assigned reviewer
+  went idle four times without delivering; a fresh reviewer was dispatched
+  with the same brief and no partial context, and its review is the one of
+  record (noted on the bead).
 - **Behaviour changes worth knowing about**: `WITH … WHERE` now filters *after*
   `SKIP`/`LIMIT`, which changes results for queries combining them (conformant,
   and the TCK does not pin it); `ORDER BY` keys are now evaluated on rows the
@@ -402,17 +517,27 @@ dependency was added, bumped or re-featured all phase** (`cargo deny` and
 
 ## Gate readiness
 
-All four criteria have evidence; both security blockers are closed. Criterion 3
-carries one live judgement call, set out in its section above. Criterion 3's
-*reachability* shortfall was closed in PR #221 rather than carried
-across the boundary, which also surfaced and fixed a performance cliff the lab's
-in-memory measurements could never have shown. What remains is narrower and is
-stated in that section: the lab's own range case sits above the cap and would
-decline through `Session`.
+All four criteria have evidence that reproduces on demand from current
+`main`, independently re-verified by the final review's audit. Both milestone
+security blockers are closed and their fixes held under fresh attack; the
+final security pass over the reopened tail is GATE READY. The criterion-3
+judgement call the interim reports carried is dissolved: selective seeks win
+outright on the shipped path (17×/643×/1104×), unselective seeks decline to
+parity by design, and the equality-seek cliff that shipped on `main` since
+PR #123 — 18× slower than no index — is **fixed** by the cost model rather
+than carried as an open risk (measured 1.04–1.23× post-#224, selective gains
+intact).
 
-Three things therefore remain for Greg rather than for an agent: **whether
-criterion 3 is satisfied** on that reading; the **API-freeze question** ADR-0064
-raises; and the **pre-existing equality-seek cliff** (18× slower than
-no index on an unselective seek) that ships on `main` today, arrived with
-PR #123 rather than this phase, and is now measured and recorded on
-`acetone-2ck.2` with a demonstrated remedy.
+What remains for Greg at the boundary, rather than for an agent:
+
+1. **Ratify ADR-0062–0066** — of which **0066 amends spec §2** and changes
+   library write behaviour (previously-succeeding writes can now fail), and
+   0065 sets the planner's cost policy.
+2. **The API-freeze question** ADR-0064 raised — a public field on
+   `QueryLimits` and a variant on `ResourceLimit` inside a 0.3.x "additive
+   only" series, both invisible to the CI freeze gate (`acetone-7qw.5`);
+   `#[non_exhaustive]` (`acetone-fht` is already on the books for the next
+   minor boundary) or a minor bump.
+3. **Close the gate bead** `acetone-2ck.1` if the evidence satisfies the
+   ratified criteria — and rule on whether the 16 pre-phase beads under
+   `acetone-2ck` move or stay.
