@@ -127,8 +127,10 @@ The three points that mirror the existing constraints:
    repaired by rewriting a record, leaving delete-and-recreate as the only
    route. It costs a prefix scan of the retyped label, on a schema change
    only: the same work `declare-label` already did, moved from the CLI to the
-   primitive every writer passes through, and cheaper for streaming the label
-   rather than materialising it. (An earlier draft of this amendment said the
+   primitive every writer passes through — and cheaper, by more than a
+   constant. `constraints::check_label` walks `snapshot.nodes()`, every node
+   in the graph, and materialises the matching ones into a `NodeSet`;
+   `check_retyped_labels` prefix-scans the one label and streams it. (An earlier draft of this amendment said the
    scan "was already paid for" by `check_label_key_stability`. That was
    wrong — that check scans nothing unless a key *tuple* changed, and then
    only probes for a single node.) Spec §2's parenthetical licensing the gap
