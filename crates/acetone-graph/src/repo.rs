@@ -2970,6 +2970,24 @@ impl<'s> Snapshot<'s> {
         Ok(acetone_prolly::scan(self.store, &root, ..)?.map(|item| item.map_err(GraphError::from)))
     }
 
+    /// Stream the raw node-map entries from an inclusive lower bound, in
+    /// key order — [`Self::scan_nodes`] with a starting point, so a caller
+    /// after one label's prefix does not walk the map from its first key
+    /// (acetone-2ck.20).
+    pub(crate) fn scan_nodes_from<'a>(
+        &'a self,
+        from: &[u8],
+    ) -> Result<
+        impl Iterator<Item = Result<(acetone_prolly::Bytes, acetone_prolly::Bytes), GraphError>> + 'a,
+        GraphError,
+    > {
+        let root = self.root(&self.manifest.nodes)?;
+        Ok(
+            acetone_prolly::scan(self.store, &root, (Bound::Included(from), Bound::Unbounded))?
+                .map(|item| item.map_err(GraphError::from)),
+        )
+    }
+
     /// All nodes, in key order.
     pub fn nodes(&self) -> Result<Vec<(NodeKey, NodeRecord)>, GraphError> {
         let root = self.root(&self.manifest.nodes)?;

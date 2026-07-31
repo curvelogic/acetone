@@ -100,7 +100,29 @@ pub fn estimate_entries<S: ChunkStore>(store: &S, root: &Root) -> Result<usize, 
         sampled += 1;
     }
     let mean_leaf = entries_total as f64 / sampled.max(1) as f64;
-    Ok((level_width * mean_leaf) as usize)
+    finite_estimate(level_width, mean_leaf)
+}
+
+/// The product of the sampled per-level fanouts and the mean leaf
+/// occupancy, refused when it is not finite: a tree whose sampled shape
+/// multiplies past `f64` range is not a plausible map, and the saturating
+/// `as usize` cast would otherwise hand callers a `usize::MAX` "estimate"
+/// that makes any budget derived from it vacuous — a crafted store could
+/// use it to keep an unselective seek from ever declining
+/// (acetone-2ck.20). Callers already treat an error as "cannot sample";
+/// for planning that means scan, which is always a correct answer.
+fn finite_estimate(level_width: f64, mean_leaf: f64) -> Result<usize, ProllyError> {
+    let estimate = level_width * mean_leaf;
+    if !estimate.is_finite() {
+        return Err(ProllyError::Corrupt {
+            context: "entry estimate",
+            reason: format!(
+                "sampled fanout product {level_width:e} x mean leaf occupancy {mean_leaf:e} \
+                 is not finite"
+            ),
+        });
+    }
+    Ok(estimate as usize)
 }
 
 /// Up to `want` indices spread evenly across `len`, avoiding the extremes
@@ -151,4 +173,30 @@ pub fn reachable_chunks<S: ChunkStore>(store: &S, root: &Root) -> Result<Vec<Has
     let mut set = BTreeSet::new();
     collect_reachable_chunks(store, root, &mut set)?;
     Ok(set.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::finite_estimate;
+
+    #[test]
+    fn plausible_estimates_pass_through() {
+        assert_eq!(finite_estimate(0.0, 0.0).expect("zero"), 0);
+        assert_eq!(finite_estimate(1000.0, 8.0).expect("small"), 8000);
+        // Large but finite still saturates on cast rather than erroring —
+        // the guard is against non-finite shape, not against big maps.
+        assert!(finite_estimate(1e18, 8.0).is_ok());
+    }
+
+    #[test]
+    fn a_non_finite_product_is_refused_not_saturated() {
+        // 64 levels of ~6e4 sampled fanout overflow f64 (~1e307): the
+        // product arrives here infinite and must refuse, because
+        // `f64::INFINITY as usize` saturates to `usize::MAX` and a budget
+        // divided from that never declines.
+        assert!((f64::INFINITY * 8.0).is_infinite());
+        let err = finite_estimate(f64::INFINITY, 8.0).expect_err("refused");
+        assert!(err.to_string().contains("not finite"), "{err}");
+        assert!(finite_estimate(f64::MAX, f64::MAX).is_err());
+    }
 }

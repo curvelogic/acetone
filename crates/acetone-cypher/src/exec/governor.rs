@@ -48,8 +48,14 @@ pub struct QueryLimits {
 
 impl Default for QueryLimits {
     /// Generous defaults: realistic registry/lab-graph queries run orders of
-    /// magnitude under them, while the known pathologies trip in well under a
-    /// second. Validated by the property/fuzz regime, not asserted here.
+    /// magnitude under them. The ceilings are deterministic *work* bounds,
+    /// not time bounds: on the in-memory executor the known pathologies trip
+    /// in well under a second, but over the store-backed source a scanned
+    /// candidate is a full node materialisation (measured 30–47 µs each), so
+    /// exhausting `max_scanned_candidates` can take minutes of bounded work
+    /// before the typed error (acetone-7qw.7 tracks re-denominating the
+    /// budget in store work; `wall_clock` is the opt-in backstop meanwhile).
+    /// Validated by the property/fuzz regime, not asserted here.
     fn default() -> Self {
         QueryLimits {
             max_work_units: 100_000_000,

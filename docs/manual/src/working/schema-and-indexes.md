@@ -206,6 +206,18 @@ presence is `--require`'s business, not the type's. And as with the other
 constraints, declaring a type over data that already contradicts it is
 refused with the offending nodes named, so backfill comes first.
 
+One side effect to know about before you declare: once a label declares
+*any* property type, a node-pattern map literal on that label — in
+`CREATE`, `MATCH` or `MERGE` alike — may only name declared or key
+properties. `CREATE (:Interface {host: "db1", name: "eth1", speed: 10})`
+is refused with `unknown property "speed"` if `speed` is not in the
+declaration, and so is `MATCH (i:Interface {speed: 10})`, which closes a
+read path too. `SET i.speed = 10` on a matched node is the one open
+exception: it is still accepted, and the property reads back. The shape
+closes only once a first type is declared; whether that closure (and its
+asymmetry with `SET`) is the right rule is an open design question
+(`acetone-7qw.17`).
+
 ### Why this is not just tidiness
 
 A declared type is the reason an index can serve an equality match on a
