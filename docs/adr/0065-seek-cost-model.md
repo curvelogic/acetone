@@ -1,6 +1,6 @@
 # ADR-0065: Seeks are chosen by estimated cost, and hints are candidates
 
-- Status: accepted
+- Status: accepted; **ratified by Greg at the Phase 9 boundary, 2026-07-31**
 - Date: 2026-07-26
 - Beads: `acetone-2ck.2`, `acetone-7qw.9` (PR #224); supersedes the absolute cap in ADR-0064's sibling work (PR #221)
 

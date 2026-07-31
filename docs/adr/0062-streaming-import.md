@@ -1,6 +1,6 @@
 # ADR-0062: Streaming import — pull-based extraction, batched staging
 
-Status: accepted (Phase 9, acetone-6g5.7); recorded for boundary review
+Status: accepted (Phase 9, acetone-6g5.7); **ratified by Greg at the Phase 9 boundary, 2026-07-31**
 
 ## Context
 

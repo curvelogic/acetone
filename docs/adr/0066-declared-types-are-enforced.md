@@ -1,8 +1,8 @@
 # ADR-0066: A declared property type is a constraint, not an annotation
 
-- Status: accepted
+- Status: accepted; **ratified by Greg at the Phase 9 boundary, 2026-07-31**, spec §2 amendment and write-path change included
 - Date: 2026-07-27
-- Deciders: agent under the Phase 9 mandate (CLAUDE.md: decisions are made, not deferred). Flagged for Greg at the Phase 9 boundary because it changes the spec and the write path.
+- Deciders: agent under the Phase 9 mandate (CLAUDE.md: decisions are made, not deferred). Flagged for Greg at the Phase 9 boundary because it changes the spec and the write path; he ratified it there, with the demo showing write-time refusal and declare-time backfill refusal on the shipped CLI.
 - Beads: `acetone-2ck.18` (this work), `acetone-2ck.17` (the key-seek guard that consumes it)
 - Related: spec §2 (schema); ADR-0038 (typed value carriers); ADR-0065 (seek cost model); ADR-0027 (index encoding)
 

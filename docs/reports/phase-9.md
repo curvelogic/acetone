@@ -532,17 +532,21 @@ PR #123 — 18× slower than no index — is **fixed** by the cost model rather
 than carried as an open risk (measured 1.04–1.23× post-#224, selective gains
 intact).
 
-What remains for Greg at the boundary, rather than for an agent:
+**Boundary outcome (2026-07-31).** Greg ran the sprint demo — conformance
+live, both security blocker fixes, the lab's twin-repository criterion-3
+measurement through `Session`, declared-type enforcement, and `fsck` naming
+the pre-enforcement residual — then **ratified ADR-0062–0066 and accepted the
+gate evidence**. The ADR status lines record it.
 
-1. **Ratify ADR-0062–0066** — of which **0066 amends spec §2** and changes
-   library write behaviour (previously-succeeding writes can now fail), and
-   0065 sets the planner's cost policy.
-2. **The API-freeze question** ADR-0064 raised — a public field on
+What remains for Greg, rather than for an agent:
+
+1. **The API-freeze question** ADR-0064 raised — a public field on
    `QueryLimits` and a variant on `ResourceLimit` inside a 0.3.x "additive
    only" series, both invisible to the CI freeze gate (`acetone-7qw.5`);
    `#[non_exhaustive]` or a minor bump. (`acetone-fht` is the precedent on
    the books, but it is scoped to `GraphError` only — these two types have
-   no equivalent bead yet.)
-3. **Close the gate bead** `acetone-2ck.1` if the evidence satisfies the
-   ratified criteria — and rule on whether the 16 pre-phase beads under
-   `acetone-2ck` move or stay.
+   no equivalent bead yet.) Not blocking the gate; it decides what the next
+   version number is.
+2. **Close the gate bead** `acetone-2ck.1` — the evidence is accepted, and
+   the close is the human act the protocol reserves. Rule at the same time
+   on whether the 16 pre-phase beads under `acetone-2ck` move or stay.
