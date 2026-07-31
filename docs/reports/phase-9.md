@@ -301,7 +301,7 @@ shipped:
 
 Security review ran **twice** this phase, and the coverage split matters for
 anyone auditing it. The **milestone review** described in this section covered
-the diff up to PR #218 (`848d0e9..`, 19 PRs, 48 files, ~7000 insertions); its
+the diff up to PR #218 (`848d0e9..`, 20 PRs, 49 files, ~7200 insertions); its
 two blockers were fixed in PR #219. The reopened tail — PRs #219–#229, which
 includes the cost model and the new CLI type-declaration input surface — was
 covered by a **final phase-level review** (three fresh strongest-tier
@@ -367,7 +367,7 @@ reviewer at the merged commit:
 - **`QueryLimits` and `ResourceLimit` gained a public field and variant** — see
   the API-freeze note under *Process notes* below.
 
-Lesser findings are filed — six from the milestone review itself
+Lesser findings are filed — five beads from the milestone review itself
 (`acetone-7qw.2`–`.6`), plus two from PR #219's own review
 (`acetone-7qw.7`, `acetone-7qw.8`) and the co-tenancy note (`acetone-42d`):
 `acetone-7qw.2` (quadratic import
@@ -517,8 +517,12 @@ amendment and PR #230's bead work.
 
 ## Gate readiness
 
-All four criteria have evidence that reproduces on demand from current
-`main`, independently re-verified by the final review's audit. Both milestone
+All four criteria have evidence; the final review's audit independently
+re-verified criteria 1 and 3 by execution on current `main` (the TCK
+reconciled item-for-item; the lab re-run at the published scale) and
+confirmed criteria 2 and 4's mechanisms intact via the green suites —
+criterion 4's original tables remain in-session measurements, as disclosed
+in its section. Both milestone
 security blockers are closed and their fixes held under fresh attack; the
 final security pass over the reopened tail is GATE READY. The criterion-3
 judgement call the interim reports carried is dissolved: selective seeks win
@@ -536,8 +540,9 @@ What remains for Greg at the boundary, rather than for an agent:
 2. **The API-freeze question** ADR-0064 raised — a public field on
    `QueryLimits` and a variant on `ResourceLimit` inside a 0.3.x "additive
    only" series, both invisible to the CI freeze gate (`acetone-7qw.5`);
-   `#[non_exhaustive]` (`acetone-fht` is already on the books for the next
-   minor boundary) or a minor bump.
+   `#[non_exhaustive]` or a minor bump. (`acetone-fht` is the precedent on
+   the books, but it is scoped to `GraphError` only — these two types have
+   no equivalent bead yet.)
 3. **Close the gate bead** `acetone-2ck.1` if the evidence satisfies the
    ratified criteria — and rule on whether the 16 pre-phase beads under
    `acetone-2ck` move or stay.

@@ -48,6 +48,11 @@ individually enumerated and justified in `docs/conformance.md`.
   both operate on repositories whose node maps exceed memory.
 - An **advisory when a query names an undeclared label** in expression
   position, catching typo'd labels that would otherwise just return no rows.
+- **`declare-label --type <property>:<type>`** — property types are
+  declarable through the CLI, taking `bool`, `int`, `float`, `string`,
+  `bytes`, `date`, `time`, `datetime`, `duration` and `list`. `acetone
+  schema` renders what is declared, in both the text and `--json` forms.
+  They were previously reachable only from the library.
 
 ### Changed
 
@@ -68,21 +73,6 @@ individually enumerated and justified in `docs/conformance.md`.
   scans in pattern comprehensions/predicates are charged against a
   dedicated scanned-candidate budget (ADR-0064) with a typed
   `ResourceExceeded` error.
-
-### Fixed
-
-- `UNWIND` streams into a following `LIMIT` instead of tripping the
-  result-row governor, and bound relationship-list var-length patterns no
-  longer over-match.
-
-- **`declare-label --type <property>:<type>`** — property types are
-  declarable through the CLI, taking `bool`, `int`, `float`, `string`,
-  `bytes`, `date`, `time`, `datetime`, `duration` and `list`. `acetone
-  schema` renders what is declared, in both the text and `--json` forms.
-  They were previously reachable only from the library.
-
-### Changed
-
 - **A declared property type is now a constraint, not an annotation**
   (ADR-0066). It is enforced when a transaction saves, when a type is newly
   declared or changed over existing data (which is refused, naming a
@@ -123,9 +113,10 @@ individually enumerated and justified in `docs/conformance.md`.
   cases measured at 53x, 18x and 12.5x slower than no index at all now run
   within 1.04-1.23x of a scan, while selective queries gain outright
   (0.16-0.24x). The residual is a constant — a declining seek has still paid
-  for its index probe and one cardinality sample — so on a graph small
-  enough for the whole scan to take a millisecond, an unhelpful index still
-  costs about 20%.
+  for its index probe and one cardinality sample — so it is only negligible
+  relative to a scan worth avoiding: an unhelpful index costs about 20% at
+  moderate scale and up to ~2x on a graph small enough for the whole scan
+  to take a millisecond.
 - **`WHERE` equality predicates use indexes.** `MATCH (n:L) WHERE n.p = 1`
   previously scanned; only the inline form `MATCH (n:L {p: 1})` used an
   index. Seek hints now carry their own pinned values, so both forms plan
@@ -133,6 +124,12 @@ individually enumerated and justified in `docs/conformance.md`.
 - Seek hints are an ordered candidate list rather than a single choice, so a
   hint the cost model declines at runtime falls through to the next instead
   of discarding a usable plan.
+
+### Fixed
+
+- `UNWIND` streams into a following `LIMIT` instead of tripping the
+  result-row governor, and bound relationship-list var-length patterns no
+  longer over-match.
 
 ## [0.3.1] - 2026-07-24
 
