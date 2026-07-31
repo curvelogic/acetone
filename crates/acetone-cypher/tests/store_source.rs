@@ -692,15 +692,89 @@ fn an_undeclared_string_key_pin_would_drop_a_colliding_row() {
     );
 }
 
-// A companion test asserting that a *declared* `bytes` key declines a string
-// pin was removed rather than kept: it was vacuous. With the guard forced
-// fully open the probe builds `NodeKey("Blob", [String("deadbeef")])`, finds
-// nothing, leaves `served == false` and returns `None` regardless — so its
-// `is_none()` was no evidence the guard had fired. No reachable fixture can
-// tell the two apart, because the collision that would distinguish them is
-// what ADR-0066's enforcement refuses to let exist under a declaration
-// (`acetone-graph/tests/property_types.rs`). The allow-list is pinned by
-// membership instead, in `store_source.rs`'s own unit test.
+/// The allow-list, pinned **behaviourally** — a `bytes`-declared key must
+/// decline a string pin, and the proof is a state where declining changes
+/// the answer.
+///
+/// An earlier version of this test used a lone `Bytes`-keyed node and was
+/// vacuous: with the guard forced open the probe builds
+/// `NodeKey("Blob", [String("deadbeef")])`, finds nothing, leaves `served`
+/// false, and returns `None` regardless. Only a **collision** distinguishes
+/// the two — a `String`-keyed and a `Bytes`-keyed node under one label,
+/// distinct in the nodes map, equal at runtime.
+///
+/// Reaching that collision *under a declaration* takes a conflicted merge,
+/// and it is reached here with three ordinary commits. Each side is legal
+/// on its own: the branch declares `id: bytes` over data that conforms, and
+/// `main` adds a `String`-keyed node while its own schema is still untyped.
+/// Only the merged state breaches — which is the class of violation
+/// write-time enforcement cannot catch by construction, and why merge
+/// validates separately (ADR-0066). The merged workspace is refused a commit
+/// but stays queryable (`acetone-7qw.14`), and that is where the guard earns
+/// its keep: declining leaves the seek agreeing with the scan.
+#[test]
+fn a_bytes_declared_key_declines_where_declining_changes_the_answer() {
+    let (_dir, repo) = repo();
+    let untyped = SchemaEntry::Label {
+        name: "Blob".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("untyped"),
+    };
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&untyped).expect("schema");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef])]).expect("key"),
+        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(1))])),
+    )
+    .expect("bytes-keyed");
+    let base = txn.commit("base", &[], None).expect("commit");
+
+    // The branch declares `id: bytes`. Legal: its own data conforms.
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Blob".into(),
+        def: LabelDef::new(
+            vec!["id".into()],
+            BTreeMap::from([("id".to_owned(), PropertyType::Bytes)]),
+            [],
+            [],
+        )
+        .expect("typed"),
+    })
+    .expect("schema");
+    txn.commit("declare id: bytes", &[], None).expect("commit");
+
+    // `main` adds a String-keyed node. Legal: still untyped over here.
+    repo.checkout_branch("main").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![MV::String("deadbeef".into())]).expect("key"),
+        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(2))])),
+    )
+    .expect("string-keyed");
+    txn.commit("add a string-keyed twin", &[], None)
+        .expect("commit");
+
+    repo.merge("other", "merge").expect("merge");
+
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let source = source_over(&snapshot);
+    let pin = RtValue::String("deadbeef".into());
+    assert_eq!(
+        scan_rows(&source, "id", &pin).len(),
+        2,
+        "both nodes match the pin at runtime — the collision is present"
+    );
+    assert!(
+        source
+            .nodes_by_key("Blob", std::slice::from_ref(&pin))
+            .is_none(),
+        "a bytes-declared key must decline: serving the string probe would \
+         find one node and silently drop the other"
+    );
+}
 
 /// Per component, like `probe_value`: a composite key is seekable only when
 /// every string component's declared type rules the hazard out. One

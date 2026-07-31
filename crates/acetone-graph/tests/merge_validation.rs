@@ -195,10 +195,16 @@ fn with_node_added(store: &GitStore, m: &Manifest, id: u8) -> Manifest {
 /// Copy `m` with `entry` spliced into its `schema` map, bypassing the
 /// transaction boundary exactly as [`with_node_removed`] does — and for the
 /// same reason. Since `acetone-2ck.17`, `save_in_place` refuses to install a
-/// declaration the data already present contradicts, so no current write path
-/// produces this state; only a repository written before that check existed
-/// carries one, and `merge` assembles manifests directly rather than through
-/// a transaction. `validate_merged` must still cope with both.
+/// declaration the data already present contradicts, so no *transaction*
+/// produces this state.
+///
+/// The tests below are therefore fabricated, and must not be deleted later
+/// as "an impossible state". Three writers still reach it: `merge` itself,
+/// which assembles a merged manifest directly and can pair one branch's
+/// tightened declaration with the other's untouched data (`acetone-7qw.14`);
+/// `migrate::FormatTransform`, a public trait that rewrites manifests
+/// without a transaction (ADR-0066); and any repository written before the
+/// check existed. `validate_merged` must cope with all three.
 fn with_schema_spliced(store: &GitStore, m: &Manifest, entry: &SchemaEntry) -> Manifest {
     let schema = apply_batch(
         store,

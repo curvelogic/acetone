@@ -1679,10 +1679,16 @@ fn check_label_key_stability(
 /// Nodes this transaction also writes or deletes are skipped: they are
 /// [`Transaction::check_staged_node_types`]'s business, and skipping them is
 /// what lets a retype and its backfill land in **one** transaction rather
-/// than being refused for the state it is in the middle of repairing.
+/// than being repaired and refused at once. Deletes count, which matters
+/// because a *key* property cannot be repaired by rewriting a record —
+/// delete-and-recreate is the only route.
 ///
-/// The scan is affordable because the caller already pays for one: a schema
-/// change runs [`check_label_key_stability`] over the same base nodes.
+/// Cost: a prefix scan of the retyped label, on a schema change only. It is
+/// not free — [`check_label_key_stability`] scans nothing unless a key tuple
+/// changed, and then only probes for one node — but it is the same work the
+/// CLI's `declare-label` already did, moved from the CLI to the primitive
+/// every writer passes through, and cheaper: `constraints::check_label`
+/// materialises the label's nodes into a set, this streams them.
 fn check_retyped_labels(
     store: &GitStore,
     params: ChunkParams,

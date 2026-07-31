@@ -850,15 +850,18 @@ mod tests {
     /// wrong answer, and it is checked here **by membership** rather than by
     /// behaviour.
     ///
-    /// Behaviour cannot cover it. A string probe that misses everything
-    /// returns `None` and the scan answers, so under-selection needs a
-    /// *collision* — a `String`-keyed and a `Bytes`-keyed node under one
-    /// label, equal at runtime, distinct in the map. Under a declaration that
-    /// collision is exactly what ADR-0066's enforcement now refuses to let
-    /// exist (`acetone-graph/tests/property_types.rs`), so no reachable
-    /// fixture distinguishes "the guard declined" from "the probe found
-    /// nothing". Widening this list would therefore break no behavioural
-    /// test at all — which is why it is pinned directly.
+    /// A string probe that misses everything returns `None` and the scan
+    /// answers, so under-selection needs a *collision* — a `String`-keyed and
+    /// a `Bytes`-keyed node under one label, equal at runtime, distinct in
+    /// the map. Write-time enforcement stops a single branch from reaching
+    /// that state under a declaration, but a **conflicted merge** still does:
+    /// see `a_bytes_declared_key_declines_where_declining_changes_the_answer`
+    /// in `tests/store_source.rs`, which builds it from three ordinary
+    /// commits and pins this list behaviourally.
+    ///
+    /// This test remains worth its place beside that one: it covers every
+    /// type rather than the one the fixture happens to use, and it fails on
+    /// the widening directly rather than through a merge.
     ///
     /// Stated as an explicit list of type names rather than by repeating the
     /// implementation's `matches!`, so the two are independent statements of

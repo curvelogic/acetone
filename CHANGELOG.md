@@ -27,14 +27,21 @@ fine.)
 ### Changed
 
 - **A declared property type is now a constraint, not an annotation**
-  (ADR-0066). It is enforced when a transaction saves, when a type is
-  declared over existing data (which is refused, naming the violating
-  nodes), and at merge — where a breach is reported as a conflict rather
-  than an error. `float` admits an integer, matching what import already
-  did; nothing else widens. This is a deliberate spec change (§2): writes
-  that contradicted a declaration were previously accepted, and were
-  already getting wrong answers from any seek over that property. No
-  on-disk format change.
+  (ADR-0066). It is enforced when a transaction saves, when a type is newly
+  declared or changed over existing data (which is refused, naming a
+  violating node — `declare-label` still names them all), and at merge —
+  where a breach is reported as a conflict rather than an error. `float`
+  admits an integer, matching what import already did; nothing else widens.
+  This is a deliberate spec change (§2): writes that contradicted a
+  declaration were previously accepted, and were already getting wrong
+  answers from any seek over that property. No on-disk format change.
+
+  **Library consumers: `Transaction::save`/`commit` can now fail where they
+  previously succeeded.** Installing a declaration that the data already
+  present contradicts is refused, not only through `declare-label` but
+  through `put_schema` on any transaction. Nodes the same transaction
+  rewrites or deletes are excluded, so a retype and its backfill still land
+  together. No signature changed; both already returned `Result`.
 - **A primary-key point lookup is served by a seek.** `MATCH (h:Host
   {hostname: "db1"})` previously scanned every node of the label, because
   a string key pin could not rule out a `bytes`/temporal value equal to

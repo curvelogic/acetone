@@ -122,10 +122,17 @@ The three points that mirror the existing constraints:
    identity, found by the reviewer of `acetone-2ck.17`. `save_in_place` now
    runs `check_retyped_labels` on any schema change, over the labels whose
    declared types changed and the properties that changed, skipping nodes the
-   same transaction rewrites so a retype and its backfill can land together.
-   The scan was already paid for: a schema change already scans the same base
-   nodes for `check_label_key_stability`. Spec §2's parenthetical licensing
-   the gap is removed.
+   same transaction rewrites *or deletes* so a retype and its backfill can
+   land together — deletion matters, because a **key** property cannot be
+   repaired by rewriting a record, leaving delete-and-recreate as the only
+   route. It costs a prefix scan of the retyped label, on a schema change
+   only: the same work `declare-label` already did, moved from the CLI to the
+   primitive every writer passes through, and cheaper for streaming the label
+   rather than materialising it. (An earlier draft of this amendment said the
+   scan "was already paid for" by `check_label_key_stability`. That was
+   wrong — that check scans nothing unless a key *tuple* changed, and then
+   only probes for a single node.) Spec §2's parenthetical licensing the gap
+   is removed, and replaced by one naming the gap that genuinely remains.
 3. **Merge time.** `merge.rs validate_merged` gains a type arm, reporting a
    breach as a `GraphViolation::WrongType` conflict — data, not an error
    (ADR-0007) — under the same responsibility rule as existence and UNIQUE:

@@ -151,24 +151,50 @@ fn a_retype_and_its_backfill_land_in_one_transaction() {
 /// Only the properties whose declaration actually changed are re-judged, so
 /// an unrelated schema write does not re-litigate settled data — the same
 /// responsibility rule the merge path uses.
+///
+/// What gives this teeth is a **pre-existing** breach, which a single branch
+/// can no longer create — so it is reached the way one genuinely remains
+/// reachable: a conflicted merge, from three ordinary commits. One branch
+/// declares `size: int` over data that conforms (there is none yet); the
+/// other adds a string `size` while its own schema is still untyped. The
+/// merged workspace carries both.
+///
+/// Without the `changed` filter, that breach would block an unrelated `id`
+/// declaration — so a repository in this state, or one written before the
+/// check existed, could not be maintained at all, only abandoned.
 #[test]
-fn an_unrelated_schema_change_does_not_re_judge_existing_data() {
+fn an_unrelated_schema_change_does_not_re_judge_a_pre_existing_breach() {
     let (_dir, repo) = repo();
-    {
-        let mut txn = repo.begin_write().expect("begin");
-        txn.put_schema(&label(
-            "id",
-            BTreeMap::from([("size".to_owned(), PropertyType::Int)]),
-        ))
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&label("id", BTreeMap::new()))
         .expect("schema");
-        txn.put_node(
-            &NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
-            &NodeRecord::new([], BTreeMap::from([("size".to_owned(), Value::Int(8))])),
-        )
-        .expect("node");
-        txn.save().expect("save");
-    }
-    // Declaring an additional, conforming type leaves `size` alone.
+    let base = txn.commit("untyped", &[], None).expect("commit");
+
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&label(
+        "id",
+        BTreeMap::from([("size".to_owned(), PropertyType::Int)]),
+    ))
+    .expect("schema");
+    txn.commit("declare size: int", &[], None).expect("commit");
+
+    repo.checkout_branch("main").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+        &NodeRecord::new(
+            [],
+            BTreeMap::from([("size".to_owned(), Value::String("8".into()))]),
+        ),
+    )
+    .expect("node");
+    txn.commit("string size", &[], None).expect("commit");
+    repo.merge("other", "merge").expect("merge");
+
+    // Declaring `id: string` is satisfied, and unrelated to that breach.
     let mut txn = repo.begin_write().expect("begin");
     txn.put_schema(&label(
         "id",
@@ -179,5 +205,5 @@ fn an_unrelated_schema_change_does_not_re_judge_existing_data() {
     ))
     .expect("stage schema");
     txn.save()
-        .expect("an unrelated, satisfied declaration must succeed");
+        .expect("a satisfied declaration must not be blocked by an unrelated pre-existing breach");
 }
