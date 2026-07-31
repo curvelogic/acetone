@@ -297,32 +297,128 @@ pub fn check_upsert(
     key: &NodeKey,
     record: &NodeRecord,
 ) -> Result<Vec<ConstraintViolation>, GraphError> {
-    let mut labels = BTreeMap::new();
-    for entry in snapshot.schema_entries()? {
-        if let acetone_model::schema::SchemaEntry::Label { name, def } = entry {
-            labels.insert(name, def);
-        }
-    }
+    // Only the written label's definition matters: existence and type
+    // breaches are judged on the focus node alone, and a UNIQUE group can
+    // only involve the focus through its own label.
+    let def = snapshot
+        .schema_entries()?
+        .into_iter()
+        .find_map(|entry| match entry {
+            acetone_model::schema::SchemaEntry::Label { name, def } if name == key.label() => {
+                Some(def)
+            }
+            _ => None,
+        });
     // Fast path: an undeclared or unconstrained label has nothing to check —
     // plumbing writes to schema-less labels stay raw, like `put_node` itself.
-    match labels.get(key.label()) {
-        // `types` counts as a constraint (ADR-0066) — the third place this
-        // term was missed. Without it the error a caller sees for the same
-        // breach depended on whether the label happened to declare something
-        // unrelated: the save-time refusal when it did not, this richer
-        // violation list when it did.
-        Some(def)
-            if !def.exists().is_empty() || !def.unique().is_empty() || !def.types().is_empty() => {}
-        _ => return Ok(Vec::new()),
+    // `types` counts as a constraint (ADR-0066) — the third place this
+    // term was missed. Without it the error a caller sees for the same
+    // breach depended on whether the label happened to declare something
+    // unrelated: the save-time refusal when it did not, this richer
+    // violation list when it did.
+    let Some(def) = def else {
+        return Ok(Vec::new());
+    };
+    if def.exists().is_empty() && def.unique().is_empty() && def.types().is_empty() {
+        return Ok(Vec::new());
     }
-    let mut nodes = NodeSet::new();
-    for (k, r) in snapshot.nodes()? {
-        nodes.insert(k.encode()?, (k, r));
-    }
+
+    // Existence and type breaches of the focus node, in `check_nodes`' order.
+    let mut violations = Vec::new();
+    node_violations(key, record, &def, &mut violations);
+
+    // UNIQUE, judged against the workspace as it would be *after* the put:
+    // the stored version of `key` (if any) is skipped in the scan — the
+    // write replaces it, so matching its old value is never a
+    // self-collision — and the written record's values stand in for it.
+    // Only groups seeded from the focus values can involve the focus, so
+    // the scan tracks nothing else; memory is O(collisions), not O(label).
     let encoded = key.encode()?;
-    let focus: BTreeSet<Vec<u8>> = [encoded.clone()].into_iter().collect();
-    nodes.insert(encoded, (key.clone(), record.clone()));
-    check_nodes(&labels, &nodes, Some(&focus))
+    #[allow(clippy::type_complexity)]
+    let mut wanted: BTreeMap<(String, Vec<u8>), Vec<(Vec<u8>, NodeKey, Value)>> = BTreeMap::new();
+    for property in def.unique() {
+        if let Some(value) = record.properties().get(property) {
+            let enc = encode_value(value).map_err(RecordEncodeError::from)?;
+            wanted.insert((property.clone(), enc), Vec::new());
+        }
+    }
+    if !wanted.is_empty() {
+        let prefix = acetone_model::graph_keys::node_label_prefix(key.label());
+        for item in snapshot.scan_nodes_from(&prefix)? {
+            let (kbytes, vbytes) = item?;
+            if !kbytes.starts_with(&prefix) {
+                break;
+            }
+            if kbytes.as_ref() == encoded.as_slice() {
+                continue;
+            }
+            let other = NodeRecord::decode(&vbytes)?;
+            let mut other_key = None;
+            for ((property, enc), members) in wanted.iter_mut() {
+                let Some(value) = other.properties().get(property) else {
+                    continue;
+                };
+                if encode_value(value).map_err(RecordEncodeError::from)? != *enc {
+                    continue;
+                }
+                let decoded = match &other_key {
+                    Some(k) => k,
+                    None => other_key.insert(NodeKey::decode(&kbytes)?),
+                };
+                members.push((kbytes.to_vec(), decoded.clone(), value.clone()));
+            }
+        }
+    }
+    for ((property, _), mut members) in wanted {
+        if members.is_empty() {
+            continue;
+        }
+        // The focus node joins its group at its key position, so the member
+        // list comes out in node-key order like `check_nodes`' would; the
+        // displayed value is the first member's, same as `check_nodes`.
+        let value = record
+            .properties()
+            .get(&property)
+            .expect("wanted groups are seeded from present properties")
+            .clone();
+        let at = members.partition_point(|(e, _, _)| e.as_slice() < encoded.as_slice());
+        members.insert(at, (encoded.clone(), key.clone(), value));
+        violations.push(ConstraintViolation::Unique {
+            label: key.label().to_owned(),
+            property,
+            value: members[0].2.clone(),
+            nodes: members.into_iter().map(|(_, k, _)| k).collect(),
+        });
+    }
+    Ok(violations)
+}
+
+/// The existence and declared-type breaches of one node, pushed in the
+/// order [`check_nodes`] emits them for that node.
+fn node_violations(
+    key: &NodeKey,
+    record: &NodeRecord,
+    def: &LabelDef,
+    violations: &mut Vec<ConstraintViolation>,
+) {
+    for property in def.exists() {
+        let present =
+            def.key().iter().any(|k| k == property) || record.properties().contains_key(property);
+        if !present {
+            violations.push(ConstraintViolation::MissingRequired {
+                node: key.clone(),
+                property: property.clone(),
+            });
+        }
+    }
+    for (property, declared, actual) in type_violations(key, record, def) {
+        violations.push(ConstraintViolation::WrongType {
+            node: key.clone(),
+            property,
+            declared,
+            actual,
+        });
+    }
 }
 
 /// Check every existing node bearing `label` against `def` — the backfill
@@ -342,14 +438,49 @@ pub fn check_label(
     if def.exists().is_empty() && def.unique().is_empty() && def.types().is_empty() {
         return Ok(Vec::new());
     }
-    let mut nodes = NodeSet::new();
-    for (key, record) in snapshot.nodes()? {
-        if key.label() == label {
-            nodes.insert(key.encode()?, (key, record));
+    // Stream the label's prefix rather than materialising the graph
+    // (acetone-2ck.20): this check runs over repositories of any size, on
+    // declare, and used to hold every decoded node in memory at once.
+    // What it keeps is O(violations) plus, for UNIQUE, one encoded value
+    // per node of the label — the same bound ADR-0062 accepts for import.
+    // Existence and type breaches stream out per node in key order; UNIQUE
+    // groups accumulate and are emitted after the scan, so the output is
+    // ordered exactly as `check_nodes` orders it.
+    let mut violations = Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut groups: BTreeMap<(String, Vec<u8>), (Value, Vec<NodeKey>)> = BTreeMap::new();
+    let prefix = acetone_model::graph_keys::node_label_prefix(label);
+    for item in snapshot.scan_nodes_from(&prefix)? {
+        let (kbytes, vbytes) = item?;
+        if !kbytes.starts_with(&prefix) {
+            break;
+        }
+        let key = NodeKey::decode(&kbytes)?;
+        let record = NodeRecord::decode(&vbytes)?;
+        node_violations(&key, &record, def, &mut violations);
+        for property in def.unique() {
+            if let Some(value) = record.properties().get(property) {
+                let enc = encode_value(value).map_err(RecordEncodeError::from)?;
+                groups
+                    .entry((property.clone(), enc))
+                    .or_insert_with(|| (value.clone(), Vec::new()))
+                    .1
+                    .push(key.clone());
+            }
         }
     }
-    let labels = BTreeMap::from([(label.to_owned(), def.clone())]);
-    check_nodes(&labels, &nodes, None)
+    for ((property, _), (value, members)) in groups {
+        if members.len() < 2 {
+            continue;
+        }
+        violations.push(ConstraintViolation::Unique {
+            label: label.to_owned(),
+            property,
+            value,
+            nodes: members,
+        });
+    }
+    Ok(violations)
 }
 
 #[cfg(test)]
