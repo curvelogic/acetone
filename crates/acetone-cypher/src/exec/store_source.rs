@@ -74,10 +74,12 @@ use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 /// declaration the data already contradicts is refused, at the transaction
 /// primitive and not merely in the CLI), and the changed key set at merge.
 ///
-/// One readable state is still outside that, and it is a read rather than a
-/// write: a conflicted merge persists its merged manifest as the workspace
-/// before validation refuses the commit, so a seek over that workspace can
-/// under-select (`acetone-7qw.14`). Read "enforced" as a claim about writers.
+/// One readable state sits outside every writer's reach, by design: a
+/// conflicted merge persists its merged manifest as the workspace before
+/// validation refuses the commit. There, a declaration can be false of the
+/// data beside it — so [`StoreBackedSource::new`] records every declared type
+/// as absent while conflicts are present, and this predicate is never
+/// consulted with anything to trust (`acetone-7qw.14`).
 fn string_probe_is_exact(declared: Option<PropertyType>) -> bool {
     matches!(
         declared,
@@ -123,6 +125,28 @@ impl<'s> StoreBackedSource<'s> {
     /// Build over `snapshot`, using `schema` for key-property names and
     /// the seekable declared indexes (single and composite).
     pub fn new(snapshot: &'s Snapshot<'s>, schema: &[SchemaEntry]) -> Self {
+        // A CONFLICTED workspace does not get to have its declarations
+        // believed (`acetone-7qw.14`). A merge persists its merged manifest as
+        // the workspace and rebuilds the indexes over the merged nodes before
+        // `validate_merged` runs; commit is refused, but that workspace is
+        // live and queryable, and it is exactly where one branch's tightened
+        // declaration can sit beside the other branch's contradicting data.
+        //
+        // No write-time check can gate this, by design: conflicts are data
+        // rather than errors (ADR-0007), so the state is legitimate. The
+        // reader is what has to stop trusting. Recording every type as absent
+        // sends both string-pin guards — `probe_value` and `nodes_by_key` —
+        // down the scan path, which is correct and merely slower.
+        //
+        // Scoped deliberately: it costs only string pins, only while a merge
+        // is unresolved. Numeric and boolean pins are sound whatever the
+        // schema says, and ranges never consult a declared type. The
+        // alternative — tracking which properties carry a `WrongType`
+        // conflict — is more machinery for a state that should be transient,
+        // and it would still have to answer "what if the merge is resolved
+        // mid-query". A conflicted workspace is when a user queries to decide
+        // how to RESOLVE, and a short answer there is worse than a slow one.
+        let trust_declarations = snapshot.manifest().conflicts.is_none();
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
         let mut key_types: HashMap<String, Vec<Option<PropertyType>>> = HashMap::new();
         let mut label_types: HashMap<String, BTreeMap<String, PropertyType>> = HashMap::new();
@@ -133,10 +157,16 @@ impl<'s> StoreBackedSource<'s> {
                     name.clone(),
                     def.key()
                         .iter()
-                        .map(|property| def.types().get(property).copied())
+                        .map(|property| {
+                            trust_declarations
+                                .then(|| def.types().get(property).copied())
+                                .flatten()
+                        })
                         .collect(),
                 );
-                label_types.insert(name.clone(), def.types().clone());
+                if trust_declarations {
+                    label_types.insert(name.clone(), def.types().clone());
+                }
             }
         }
         let mut indexes: HashMap<String, IndexInfo> = HashMap::new();

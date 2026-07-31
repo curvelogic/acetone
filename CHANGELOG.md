@@ -42,6 +42,15 @@ fine.)
   through `put_schema` on any transaction. Nodes the same transaction
   rewrites or deletes are excluded, so a retype and its backfill still land
   together. No signature changed; both already returned `Result`.
+- **A conflicted workspace no longer trusts its own declared types.** A merge
+  that produces graph-level violations persists the merged manifest as the
+  workspace and rebuilds indexes over it; the commit is refused, but that
+  workspace stays queryable, and in it one branch's declaration can sit
+  beside the other's contradicting data. A seek relying on the declaration
+  could then return fewer rows than the equivalent scan. While a merge is
+  unresolved, seeks that would depend on a declared type fall back to a scan
+  — correct, and slower only for string pins, only until the conflict is
+  resolved.
 - **A primary-key point lookup is served by a seek.** `MATCH (h:Host
   {hostname: "db1"})` previously scanned every node of the label, because
   a string key pin could not rule out a `bytes`/temporal value equal to

@@ -703,37 +703,44 @@ fn an_undeclared_string_key_pin_would_drop_a_colliding_row() {
 /// the two — a `String`-keyed and a `Bytes`-keyed node under one label,
 /// distinct in the nodes map, equal at runtime.
 ///
-/// Reaching that collision *under a declaration* takes a conflicted merge,
-/// and it is reached here with three ordinary commits. Each side is legal
-/// on its own: the branch declares `id: bytes` over data that conforms, and
-/// `main` adds a `String`-keyed node while its own schema is still untyped.
-/// Only the merged state breaches — which is the class of violation
-/// write-time enforcement cannot catch by construction, and why merge
-/// validates separately (ADR-0066). The merged workspace is refused a commit
-/// but stays queryable (`acetone-7qw.14`), and that is where the guard earns
-/// its keep: declining leaves the seek agreeing with the scan.
+/// The collision is stored under an **untyped** label — which is legal, and
+/// how a graph written before ADR-0066 carries one — and the declaration is
+/// supplied through the source's own schema argument, which is
+/// `StoreBackedSource`'s actual contract: it is handed a snapshot and a
+/// schema. That is the state a pre-enforcement repository presents, and one
+/// a `migrate::FormatTransform` can still write.
+///
+/// It deliberately does **not** use a conflicted merge to reach the
+/// declaration. A conflicted workspace is the other route, but since
+/// `acetone-7qw.14` the source stops trusting declarations there, so the
+/// guard would decline because the type reads as *absent* — proving nothing
+/// about the allow-list. That is the same vacuity trap as the test this one
+/// replaced; the distinguishing state has to be one where types are trusted.
 #[test]
 fn a_bytes_declared_key_declines_where_declining_changes_the_answer() {
     let (_dir, repo) = repo();
-    let untyped = SchemaEntry::Label {
-        name: "Blob".into(),
-        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("untyped"),
-    };
-    let mut txn = repo.begin_write().expect("begin");
-    txn.put_schema(&untyped).expect("schema");
-    txn.put_node(
-        &NodeKey::new("Blob", vec![MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef])]).expect("key"),
-        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(1))])),
-    )
-    .expect("bytes-keyed");
-    let base = txn.commit("base", &[], None).expect("commit");
-
-    // The branch declares `id: bytes`. Legal: its own data conforms.
-    repo.create_branch("other", Some(&base.to_hex()))
-        .expect("branch");
-    repo.checkout_branch("other").expect("checkout");
     let mut txn = repo.begin_write().expect("begin");
     txn.put_schema(&SchemaEntry::Label {
+        name: "Blob".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("untyped"),
+    })
+    .expect("schema");
+    for (key, tag) in [
+        (MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef]), 1),
+        (MV::String("deadbeef".into()), 2),
+    ] {
+        txn.put_node(
+            &NodeKey::new("Blob", vec![key]).expect("key"),
+            &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(tag))])),
+        )
+        .expect("node");
+    }
+    txn.save().expect("save");
+
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    // The declaration the stored data contradicts, supplied as the source's
+    // schema — no plumbing, and no conflicted workspace.
+    let declared = [SchemaEntry::Label {
         name: "Blob".into(),
         def: LabelDef::new(
             vec!["id".into()],
@@ -742,25 +749,9 @@ fn a_bytes_declared_key_declines_where_declining_changes_the_answer() {
             [],
         )
         .expect("typed"),
-    })
-    .expect("schema");
-    txn.commit("declare id: bytes", &[], None).expect("commit");
+    }];
+    let source = StoreBackedSource::new(&snapshot, &declared);
 
-    // `main` adds a String-keyed node. Legal: still untyped over here.
-    repo.checkout_branch("main").expect("checkout");
-    let mut txn = repo.begin_write().expect("begin");
-    txn.put_node(
-        &NodeKey::new("Blob", vec![MV::String("deadbeef".into())]).expect("key"),
-        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(2))])),
-    )
-    .expect("string-keyed");
-    txn.commit("add a string-keyed twin", &[], None)
-        .expect("commit");
-
-    repo.merge("other", "merge").expect("merge");
-
-    let snapshot = repo.workspace_snapshot().expect("snapshot");
-    let source = source_over(&snapshot);
     let pin = RtValue::String("deadbeef".into());
     assert_eq!(
         scan_rows(&source, "id", &pin).len(),
@@ -773,6 +764,113 @@ fn a_bytes_declared_key_declines_where_declining_changes_the_answer() {
             .is_none(),
         "a bytes-declared key must decline: serving the string probe would \
          find one node and silently drop the other"
+    );
+}
+
+/// `acetone-7qw.14`: a merge that produces graph-level violations persists
+/// the merged manifest as the workspace and rebuilds its indexes over the
+/// merged nodes **before** `validate_merged` runs. Commit is refused, so
+/// nothing reaches history — but that workspace is live and queryable, and
+/// in it a declaration can be false of the data beside it.
+///
+/// Every write-time check is by design powerless here: conflicts are data,
+/// not errors (ADR-0007), so the state is legitimate. It is the **reader**
+/// that must stop trusting a declaration it can see is contested. Without
+/// that, `MATCH (b:Blob {id: 'deadbeef'})` returns one row where the scan
+/// spelling returns two — a silent short answer, on node identity, at
+/// precisely the moment a user is querying to decide how to resolve.
+///
+/// Reached from three ordinary commits, each legal on its own.
+#[test]
+fn a_conflicted_workspace_does_not_trust_its_own_declarations() {
+    let (_dir, repo) = repo();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Blob".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("untyped"),
+    })
+    .expect("schema");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![MV::String("deadbeef".into())]).expect("key"),
+        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(1))])),
+    )
+    .expect("string-keyed");
+    let base = txn.commit("base", &[], None).expect("commit");
+
+    // The branch declares `id: string`. Legal: its own data conforms.
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Blob".into(),
+        def: LabelDef::new(
+            vec!["id".into()],
+            BTreeMap::from([("id".to_owned(), PropertyType::String)]),
+            [],
+            [],
+        )
+        .expect("typed"),
+    })
+    .expect("schema");
+    txn.commit("declare id: string", &[], None).expect("commit");
+
+    // `main` adds a Bytes-keyed twin. Legal: still untyped over here.
+    repo.checkout_branch("main").expect("checkout");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_node(
+        &NodeKey::new("Blob", vec![MV::Bytes(vec![0xde, 0xad, 0xbe, 0xef])]).expect("key"),
+        &NodeRecord::new([], BTreeMap::from([("tag".to_owned(), MV::Int(2))])),
+    )
+    .expect("bytes-keyed");
+    txn.commit("add a bytes-keyed twin", &[], None)
+        .expect("commit");
+
+    repo.merge("other", "merge").expect("merge");
+
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    assert!(
+        snapshot.manifest().conflicts.is_some(),
+        "the fixture must actually be a conflicted workspace"
+    );
+    let source = source_over(&snapshot);
+    let pin = RtValue::String("deadbeef".into());
+    assert_eq!(
+        scan_rows(&source, "id", &pin).len(),
+        2,
+        "both nodes match the pin at runtime"
+    );
+    assert!(
+        source
+            .nodes_by_key("Blob", std::slice::from_ref(&pin))
+            .is_none(),
+        "the seek must decline rather than answer from a declaration the \
+         merge itself has flagged as contested — serving it returns one row \
+         where the scan returns two"
+    );
+}
+
+/// The other half of `acetone-7qw.14`: distrust is scoped to the conflicted
+/// workspace. An ordinary repository must still seek, or the fix is a silent
+/// performance regression that turns every string key lookup back into a
+/// scan — the very thing `acetone-2ck.17` removed.
+#[test]
+fn an_unconflicted_workspace_still_trusts_its_declarations() {
+    let (_dir, repo) = repo_with_label(
+        "Host",
+        vec!["id".into()],
+        BTreeMap::from([("id".to_owned(), PropertyType::String)]),
+        &[(vec![MV::String("h1".into())], 1)],
+    );
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    assert!(snapshot.manifest().conflicts.is_none());
+    let source = source_over(&snapshot);
+    assert_eq!(
+        source
+            .nodes_by_key("Host", &[RtValue::String("h1".into())])
+            .expect("a declared string key must still be SERVED outside a merge")
+            .len(),
+        1
     );
 }
 
