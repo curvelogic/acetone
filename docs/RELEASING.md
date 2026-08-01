@@ -70,8 +70,8 @@ bd mol squash <molecule-root>                 # digest it when done
 
 The `publish` step carries a human gate: the molecule parks until the draft
 is published — by Greg, or by delegation per ADR-0067 — and the gate is
-resolved (`bd gate resolve`). This
-document remains the narrative authority — the formula deliberately contains
+resolved (`bd gate resolve`). This document remains the narrative authority
+— the formula deliberately contains
 pointers and acceptance criteria, not commands, so it cannot drift from what
 is written here or in `.github/workflows/release.yml`.
 

@@ -107,8 +107,8 @@ Pointer: docs/RELEASING.md, step 4.
 HUMAN GATE — publishing the draft is Greg's approval, and GitHub creates the
 tag v{{version}} at that moment (the tag ruleset permits only Greg to create
 v* tags). No agent publishes a release on its own initiative; an explicit,
-informed, current instruction from Greg delegates the publish (ADR-0067),
-recorded verbatim on this step's bead.
+informed, current, first-hand instruction from Greg delegates the publish
+(ADR-0067), recorded verbatim on this step's bead.
 
 Agents park here: the molecule resumes when the gate on this step is resolved
 ('bd gate resolve <gate-id>') after the release is published.

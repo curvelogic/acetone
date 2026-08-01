@@ -44,6 +44,7 @@ preflight → prep → land → build → publish (human gate) → post-publish
   > **Amended by ADR-0067** (2026-08-01): an explicit, informed, current,
   > first-hand instruction from Greg delegates the publish, recorded verbatim
   > on the publish step's bead. Absent that, no agent publishes.
+
 - **post-publish** — verify and merge the *automated* Homebrew tap PR
   (`homebrew-bump.yml`, since PR #170 — not created by hand), verify tag and
   attestation, then `bd mol squash` to a digest.
