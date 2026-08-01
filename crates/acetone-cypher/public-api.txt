@@ -3250,7 +3250,7 @@ pub fn acetone_cypher::exec::eval::ExecError::from(T) -> T
 impl<T> gix_error::exn::ext::ErrorExt for acetone_cypher::exec::eval::ExecError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::eval::ExecError
 pub type acetone_cypher::exec::eval::ExecError::Output = T
-pub enum acetone_cypher::exec::eval::ResourceLimit
+#[non_exhaustive] pub enum acetone_cypher::exec::eval::ResourceLimit
 pub acetone_cypher::exec::eval::ResourceLimit::CollectionLen
 pub acetone_cypher::exec::eval::ResourceLimit::ExpansionSteps
 pub acetone_cypher::exec::eval::ResourceLimit::ResultRows
@@ -3421,7 +3421,7 @@ impl<T> core::convert::From<T> for acetone_cypher::exec::governor::Governor
 pub fn acetone_cypher::exec::governor::Governor::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::governor::Governor
 pub type acetone_cypher::exec::governor::Governor::Output = T
-pub struct acetone_cypher::exec::governor::QueryLimits
+#[non_exhaustive] pub struct acetone_cypher::exec::governor::QueryLimits
 pub acetone_cypher::exec::governor::QueryLimits::max_collection_len: u64
 pub acetone_cypher::exec::governor::QueryLimits::max_expansion_steps: u64
 pub acetone_cypher::exec::governor::QueryLimits::max_result_rows: u64
@@ -3430,6 +3430,12 @@ pub acetone_cypher::exec::governor::QueryLimits::max_work_units: u64
 pub acetone_cypher::exec::governor::QueryLimits::wall_clock: core::option::Option<core::time::Duration>
 impl acetone_cypher::exec::governor::QueryLimits
 pub fn acetone_cypher::exec::governor::QueryLimits::unbounded() -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_collection_len(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_expansion_steps(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_result_rows(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_scanned_candidates(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_work_units(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_wall_clock(self, core::option::Option<core::time::Duration>) -> Self
 impl core::clone::Clone for acetone_cypher::exec::governor::QueryLimits
 pub fn acetone_cypher::exec::governor::QueryLimits::clone(&self) -> acetone_cypher::exec::governor::QueryLimits
 impl core::cmp::Eq for acetone_cypher::exec::governor::QueryLimits
@@ -4378,7 +4384,7 @@ pub fn acetone_cypher::exec::QueryError::from(T) -> T
 impl<T> gix_error::exn::ext::ErrorExt for acetone_cypher::exec::QueryError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::QueryError
 pub type acetone_cypher::exec::QueryError::Output = T
-pub enum acetone_cypher::exec::ResourceLimit
+#[non_exhaustive] pub enum acetone_cypher::exec::ResourceLimit
 pub acetone_cypher::exec::ResourceLimit::CollectionLen
 pub acetone_cypher::exec::ResourceLimit::ExpansionSteps
 pub acetone_cypher::exec::ResourceLimit::ResultRows
@@ -4729,7 +4735,7 @@ impl<T> core::convert::From<T> for acetone_cypher::exec::source::NoProcedures
 pub fn acetone_cypher::exec::source::NoProcedures::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::source::NoProcedures
 pub type acetone_cypher::exec::source::NoProcedures::Output = T
-pub struct acetone_cypher::exec::QueryLimits
+#[non_exhaustive] pub struct acetone_cypher::exec::QueryLimits
 pub acetone_cypher::exec::QueryLimits::max_collection_len: u64
 pub acetone_cypher::exec::QueryLimits::max_expansion_steps: u64
 pub acetone_cypher::exec::QueryLimits::max_result_rows: u64
@@ -4738,6 +4744,12 @@ pub acetone_cypher::exec::QueryLimits::max_work_units: u64
 pub acetone_cypher::exec::QueryLimits::wall_clock: core::option::Option<core::time::Duration>
 impl acetone_cypher::exec::governor::QueryLimits
 pub fn acetone_cypher::exec::governor::QueryLimits::unbounded() -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_collection_len(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_expansion_steps(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_result_rows(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_scanned_candidates(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_max_work_units(self, u64) -> Self
+pub fn acetone_cypher::exec::governor::QueryLimits::with_wall_clock(self, core::option::Option<core::time::Duration>) -> Self
 impl core::clone::Clone for acetone_cypher::exec::governor::QueryLimits
 pub fn acetone_cypher::exec::governor::QueryLimits::clone(&self) -> acetone_cypher::exec::governor::QueryLimits
 impl core::cmp::Eq for acetone_cypher::exec::governor::QueryLimits

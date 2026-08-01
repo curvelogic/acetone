@@ -123,6 +123,25 @@ individually enumerated and justified in `docs/conformance.md`.
 - Seek hints are an ordered candidate list rather than a single choice, so a
   hint the cost model declines at runtime falls through to the next instead
   of discarding a usable plan.
+- **BREAKING (library): `GraphError` is now `#[non_exhaustive]`.** A downstream
+  `match` over it must carry a wildcard arm; add one and every future variant
+  becomes a non-event for your build. This is a one-time break taken
+  deliberately at a minor boundary, because the alternative is breaking
+  consumers every time the repository layer grows an error (`NothingToCommit`
+  in 0.3.1, `PropertyTypeViolation` in this release).
+- **BREAKING (library): `QueryLimits` and `ResourceLimit` are now
+  `#[non_exhaustive]` too**, and `QueryLimits` gains chainable setters —
+  `QueryLimits::default().with_max_result_rows(1_000)` — because a
+  non-exhaustive struct cannot be built from another crate even with
+  `..Default::default()`. Both types grow whenever the governor grows a cap
+  (this release added `max_scanned_candidates` / `ScannedCandidates` with
+  ADR-0064, itself source-breaking), so closing them now makes every future
+  cap a non-event. Read access to the fields is unchanged.
+- **Note on the public-API gate.** It caught the `acetone-cypher` changes
+  above (that snapshot is signature-tracked) but is blind to the `GraphError`
+  one: types re-exported from `acetone-graph`/`-model`/`-store` appear in the
+  core snapshot by name only, so a change to their internals re-blesses to an
+  empty diff (`acetone-7qw.5`). Hence the manual notes here. See STABILITY.md.
 
 ### Fixed
 

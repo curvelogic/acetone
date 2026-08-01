@@ -459,14 +459,24 @@ amendment and PR #230's bead work.
   relative to the strongest model the session has access to, so this is
   compliant, but it is a deviation from what previous phases did and Greg should
   know.
-- **An API-freeze question for the boundary.** ADR-0064 adds a public field to
-  `QueryLimits` and a variant to `ResourceLimit`, both in STABILITY.md's curated
-  frozen surface. That is source-breaking for exhaustive struct literals and
-  `match`es inside a 0.3.x patch series whose policy is "additive only". Worse,
-  `crates/acetone-core/public-api.txt` records only the re-export line, so **the
-  CI freeze gate cannot see either change** — the same blind spot as
-  `acetone-7qw.5`. The options are `#[non_exhaustive]` on both types, or a minor
-  version bump; either way it is Greg's ruling, not an agent's.
+- **An API-freeze question for the boundary — since ruled.** ADR-0064 adds a
+  public field to `QueryLimits` and a variant to `ResourceLimit`, both in
+  STABILITY.md's curated frozen surface. That is source-breaking for exhaustive
+  struct literals and `match`es inside a 0.3.x patch series whose policy is
+  "additive only". **Greg's ruling at the boundary: cut 0.4**, and take
+  `#[non_exhaustive]` on both types at the same minor boundary rather than
+  waiting for 0.5.
+
+  One correction to how this was first written up here. The claim that "the CI
+  freeze gate cannot see either change" was **wrong**, and cutting 0.4 proved
+  it: `crates/acetone-cypher/public-api.txt` is signature-tracked and records
+  `max_scanned_candidates: u64` and `ScannedCandidates` by name, so that gate
+  *did* cover ADR-0064. The `acetone-7qw.5` blind spot is real but narrower —
+  it covers types re-exported from `acetone-graph`, `acetone-model` and
+  `acetone-store`, which appear in the core snapshot by name only. The
+  demonstration is `GraphError`: making it `#[non_exhaustive]` for 0.4
+  re-blessed to an **empty diff** despite being source-breaking. STABILITY.md
+  now states the covered and uncovered sets explicitly.
 - **The review gate leaves no externally auditable trace.** Every PR this phase
   was reviewed by a fresh subagent with no implementation context, but that
   review lands in bead close reasons and PR descriptions — not as a GitHub

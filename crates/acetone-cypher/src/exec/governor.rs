@@ -24,7 +24,25 @@ use crate::span::Span;
 
 /// The public, governed configuration surface (frozen at the 0.2 gate). Every
 /// field is an inclusive cap: a query may reach it but not exceed it.
+///
+/// **Non-exhaustive from 0.4.** New caps are added as new ways to spend
+/// resources appear — `max_scanned_candidates` arrived with ADR-0064 — and
+/// each addition used to break every downstream struct literal. Build one
+/// from [`QueryLimits::default`] or [`QueryLimits::unbounded`] and adjust it
+/// with the `with_*` methods, and a new cap is then a non-event for your
+/// build:
+///
+/// ```
+/// use acetone_cypher::exec::QueryLimits;
+///
+/// let limits = QueryLimits::default().with_max_result_rows(1_000);
+/// assert_eq!(limits.max_result_rows, 1_000);
+/// ```
+///
+/// Fields stay public for *reading* — only construction and exhaustive
+/// destructuring are closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QueryLimits {
     /// Canonical deterministic odometer: total charged work across the query
     /// (one unit per produced row, per expansion hop, per collection cell).
@@ -81,6 +99,49 @@ impl QueryLimits {
             max_collection_len: u64::MAX,
             wall_clock: None,
         }
+    }
+
+    /// Set the canonical work-unit odometer cap — the backstop no other cap
+    /// can slip past.
+    pub fn with_max_work_units(mut self, units: u64) -> Self {
+        self.max_work_units = units;
+        self
+    }
+
+    /// Set the largest a single materialised result-row set may grow.
+    pub fn with_max_result_rows(mut self, rows: u64) -> Self {
+        self.max_result_rows = rows;
+        self
+    }
+
+    /// Set the cumulative variable-length / expansion hop cap.
+    pub fn with_max_expansion_steps(mut self, steps: u64) -> Self {
+        self.max_expansion_steps = steps;
+        self
+    }
+
+    /// Set the cumulative anchor-candidate (scanning) cap, kept separate from
+    /// expansion so a legitimate nested-loop join is not rejected by a budget
+    /// sized for edge traversal (ADR-0064).
+    pub fn with_max_scanned_candidates(mut self, candidates: u64) -> Self {
+        self.max_scanned_candidates = candidates;
+        self
+    }
+
+    /// Set the largest a single list/collection may be.
+    pub fn with_max_collection_len(mut self, len: u64) -> Self {
+        self.max_collection_len = len;
+        self
+    }
+
+    /// Arm (or with `None`, disarm) the optional wall-clock backstop. The
+    /// default execution path stays free of clock reads while this is `None`;
+    /// the caps above are deterministic *work* bounds, and on a store-backed
+    /// source exhausting one can take minutes, so this is the only bound
+    /// denominated in time.
+    pub fn with_wall_clock(mut self, budget: Option<Duration>) -> Self {
+        self.wall_clock = budget;
+        self
     }
 }
 

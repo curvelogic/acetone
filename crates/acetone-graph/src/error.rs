@@ -11,7 +11,17 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors from repository operations.
+///
+/// **Non-exhaustive.** New variants are added as the repository layer grows
+/// (`NothingToCommit` arrived in 0.3.1, `PropertyTypeViolation` with
+/// ADR-0066), and under ADR-0046 adding one is an *additive* change to the
+/// frozen surface. It is only additive for a downstream `match` if that
+/// match cannot be exhaustive, hence this attribute: consumers must carry a
+/// wildcard arm, and a new variant then never breaks their build. Adding the
+/// attribute is itself the one-time break, taken deliberately at the 0.4
+/// minor boundary rather than in a patch (`acetone-fht`).
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum GraphError {
     /// The chunk/ref/commit store failed.
     #[error(transparent)]

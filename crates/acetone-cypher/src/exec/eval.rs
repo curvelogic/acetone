@@ -41,7 +41,15 @@ pub enum ExecError {
 /// Which governed resource a query exhausted (see [`crate::exec::governor`]).
 /// Carried by [`ExecError::ResourceExceeded`] so a caller can tell *which*
 /// cap tripped without string-matching the message.
+///
+/// **Non-exhaustive from 0.4**, for the same reason as [`QueryLimits`]: this
+/// enum grows a variant whenever the governor grows a cap (`ScannedCandidates`
+/// arrived with ADR-0064), and each addition used to break every downstream
+/// exhaustive `match`. Carry a wildcard arm.
+///
+/// [`QueryLimits`]: crate::exec::QueryLimits
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ResourceLimit {
     /// The canonical deterministic work-unit odometer.
     WorkUnits,

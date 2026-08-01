@@ -47,10 +47,7 @@ fn resource_limit(err: QueryError) -> ResourceLimit {
 fn unbounded_var_length_on_a_dense_graph_is_bounded() {
     // Without a governor this query does not terminate on a dense graph.
     let graph = complete_graph(8);
-    let limits = QueryLimits {
-        max_expansion_steps: 2_000,
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_max_expansion_steps(2_000);
     let err = run_query_with_limits(
         "MATCH (a:N)-[*]->(b:N) RETURN count(*) AS c",
         &graph,
@@ -102,10 +99,7 @@ fn a_list_returning_function_is_charged_against_the_collection_cap() {
     // collection cap, like range()/collect(). A `split` into more parts than the
     // cap must be rejected up front, not allocated first.
     let graph = MemoryGraph::new();
-    let limits = QueryLimits {
-        max_collection_len: 5,
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_max_collection_len(5);
     // Eight parts, cap of five.
     let err = run_query_with_limits(
         "RETURN split('a,a,a,a,a,a,a,a', ',') AS parts",
@@ -133,10 +127,7 @@ fn an_amplifying_replace_is_charged_before_allocation() {
     // charged against the collection cap *before* the string is built, the
     // same accounting `s + s` and split() pay.
     let graph = MemoryGraph::new();
-    let limits = QueryLimits {
-        max_collection_len: 20,
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_max_collection_len(20);
     let err = run_query_with_limits(
         "RETURN replace('aaaa', 'a', 'bbbbbb') AS r",
         &graph,
@@ -164,10 +155,7 @@ fn an_empty_pattern_replace_charges_its_boundary_insertions() {
     // 8 bytes. The pre-charge must use that same length — reject at a cap of
     // 7, accept at 8.
     let graph = MemoryGraph::new();
-    let reject = QueryLimits {
-        max_collection_len: 7,
-        ..QueryLimits::unbounded()
-    };
+    let reject = QueryLimits::unbounded().with_max_collection_len(7);
     let err = run_query_with_limits(
         "RETURN replace('ab', '', 'XY') AS r",
         &graph,
@@ -177,10 +165,7 @@ fn an_empty_pattern_replace_charges_its_boundary_insertions() {
     .expect_err("an empty-pattern replace past the cap must be governed");
     assert_eq!(resource_limit(err), ResourceLimit::CollectionLen);
 
-    let accept = QueryLimits {
-        max_collection_len: 8,
-        ..QueryLimits::unbounded()
-    };
+    let accept = QueryLimits::unbounded().with_max_collection_len(8);
     let result = run_query_with_limits(
         "RETURN replace('ab', '', 'XY') AS r",
         &graph,
@@ -213,10 +198,7 @@ fn a_huge_intermediate_row_set_is_bounded() {
     // A cartesian blow-up whose intermediate set dwarfs the tiny final result:
     // 51 * 51 = 2601 rows materialised, capped at 100.
     let graph = MemoryGraph::new();
-    let limits = QueryLimits {
-        max_result_rows: 100,
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_max_result_rows(100);
     let err = run_query_with_limits(
         "UNWIND range(0, 50) AS x UNWIND range(0, 50) AS y RETURN count(*) AS c",
         &graph,
@@ -233,10 +215,7 @@ fn the_work_odometer_catches_a_query_that_dodges_the_dimensional_caps() {
     // but whose total charged work exceeds a tight odometer still errors —
     // the odometer is the catch-all backstop.
     let graph = complete_graph(6);
-    let limits = QueryLimits {
-        max_work_units: 500,
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_max_work_units(500);
     let err = run_query_with_limits(
         "MATCH (a:N)-[*]->(b:N) RETURN count(*) AS c",
         &graph,
@@ -305,10 +284,7 @@ fn a_distinct_aggregate_charges_the_collection_cap() {
     // range(0, 5000) whose own up-front charge would trip the cap first and
     // leave the DISTINCT charge untested).
     let graph = MemoryGraph::new();
-    let limits = QueryLimits {
-        max_collection_len: 1000,
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_max_collection_len(1000);
     let err = run_query_with_limits(
         "UNWIND range(0, 70) AS x UNWIND range(0, 70) AS y \
          RETURN count(DISTINCT x * 100 + y) AS c",
@@ -329,10 +305,7 @@ fn a_huge_grouping_set_charges_the_collection_cap() {
     // are unbounded here and each source range is far under the cap, so only
     // the per-group charge can trip.
     let graph = MemoryGraph::new();
-    let limits = QueryLimits {
-        max_collection_len: 1000,
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_max_collection_len(1000);
     let err = run_query_with_limits(
         "UNWIND range(0, 99) AS x UNWIND range(0, 99) AS y \
          RETURN x * 100 + y AS g, count(*) AS c",
@@ -431,10 +404,7 @@ fn the_wall_clock_backstop_trips_on_an_already_past_deadline() {
     // doing appreciable work errors on the wall clock. Other caps are
     // unbounded, so only the clock can trip.
     let graph = complete_graph(8);
-    let limits = QueryLimits {
-        wall_clock: Some(Duration::from_nanos(1)),
-        ..QueryLimits::unbounded()
-    };
+    let limits = QueryLimits::unbounded().with_wall_clock(Some(Duration::from_nanos(1)));
     let err = run_query_with_limits(
         "MATCH (a:N)-[*]->(b:N) RETURN count(*) AS c",
         &graph,

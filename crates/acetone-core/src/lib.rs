@@ -54,9 +54,35 @@ pub use acetone_store as store;
 // Repository, transactions, history, and the migrate escape hatch.
 pub use acetone_graph::repo::{DEFAULT_BRANCH, DEFAULT_WORKSPACE, InitOptions, LogEntry};
 pub use acetone_graph::{
-    FormatTransform, GraphError, MigrateReport, Rechunk, Repository, Snapshot, Transaction,
-    rewrite_history,
+    FormatTransform, MigrateReport, Rechunk, Repository, Snapshot, Transaction, rewrite_history,
 };
+
+/// `GraphError` is `#[non_exhaustive]` from 0.4 (`acetone-fht`): match it with
+/// a wildcard arm and the variants added by each release — `NothingToCommit`
+/// in 0.3.1, `PropertyTypeViolation` in 0.4 — stop breaking your build.
+///
+/// ```
+/// use acetone_core::GraphError;
+/// fn describe(e: &GraphError) -> &'static str {
+///     match e {
+///         GraphError::NothingToCommit => "nothing to commit",
+///         _ => "something else",
+///     }
+/// }
+/// assert_eq!(describe(&GraphError::NothingToCommit), "nothing to commit");
+/// ```
+///
+/// **This example illustrates the attribute; it does not guard it.** No
+/// automated check does. `crates/acetone-core/public-api.txt` records this
+/// re-export by name only, so removing the attribute re-blesses to an empty
+/// diff (`acetone-7qw.5`), and a `compile_fail` doctest cannot help either: a
+/// partial match over a 40-plus-variant enum fails `E0004` whether or not the
+/// type is non-exhaustive, so such a test passes vacuously. Only an exhaustive
+/// enumeration of every variant would flip, and it would silently go vacuous
+/// again the first time a variant was added without updating it. The durable
+/// fix is to signature-track this crate's surface the way `acetone-cypher`'s
+/// is tracked — `acetone-7qw.20`. Until then: review.
+pub use acetone_graph::GraphError;
 
 // The governed query entry point (ADR-0039) and its caps/result (ADR-0036/0043).
 pub use acetone_cypher::exec::{QueryLimits, QueryResult, ResourceLimit};
