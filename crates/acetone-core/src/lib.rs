@@ -33,11 +33,12 @@
 //! expose. This **deep-access surface is not part of the 0.2 stability
 //! guarantee**: items reachable only through these modules may change in any
 //! 0.2.x release. Depend on the flat crate-root re-exports for a stable API;
-//! reach into the modules only when you knowingly accept the churn. (The
-//! `acetone-cypher` snapshot signature-tracks that crate's whole surface; the
-//! `graph`/`model`/`store` deep surfaces are guarded only by the fresh-review
-//! gate, not a snapshot — see `STABILITY.md`, which lists the frozen surface
-//! and the policy in full.)
+//! reach into the modules only when you knowingly accept the churn. (All five
+//! constituent crates are signature-tracked by committed snapshots since
+//! Phase 10 — `acetone-7qw.20` — so deep-surface changes are *visible* in CI,
+//! but visibility is not a promise: the snapshots widen what is seen, not
+//! what is frozen. `STABILITY.md` lists the frozen surface and the policy in
+//! full.)
 
 #![forbid(unsafe_code)]
 
