@@ -26,11 +26,14 @@ rises to **2185 / 3897 (56.07%) with zero failures**, from 1602 (41.1%) at
 in `docs/conformance.md`.
 
 Indexing becomes *beneficial* rather than merely present: seeks now reach the
-shipped read path, win outright where they should (17× on a 0.27%-selective
-range, ~600× proving a bucket empty, 1104× on a primary-key lookup, all
-measured through `Session` against an identical unindexed twin repository at
-110,200 nodes), and **decline to the scan where they would lose** — the
-regime that was up to 37× *slower* than no index before ADR-0065.
+shipped read path and win outright where they should — 17× on a
+0.27%-selective range and ~600× proving a bucket empty, both against an
+identical unindexed twin repository; 1104× on a primary-key lookup, against
+the label scan it replaces (the twin cannot show that one, since both twins
+declare the same key and so run the same plan). All measured through
+`Session` at 110,200 nodes. Where a seek would lose, it now **declines to the
+scan** — the regime that at that scale ran up to 37× *slower* than no index
+before ADR-0065.
 
 A minor bump, so pre-1.0 it carries deliberate breaking changes: three frozen
 types are now `#[non_exhaustive]`, and a declared property type is enforced
