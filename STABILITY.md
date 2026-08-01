@@ -45,8 +45,8 @@ nothing in this surface.
 
 ## How it is enforced
 
-Five committed snapshots, checked by the CI `public-api` job (ADR-0046) — the
-API analogue of the format goldens:
+Six committed snapshots, checked by the CI `public-api` job (ADR-0046, amended
+in Phase 10) — the API analogue of the format goldens:
 
 - `crates/acetone-core/public-api.txt` — the curated re-export **list**, so a
   symbol added to or removed from the frozen surface is caught.
@@ -55,6 +55,11 @@ API analogue of the format goldens:
   the **full-signature** surfaces of the crates hosting every frozen type,
   recorded field by field, variant by variant, method signature by method
   signature, attributes included.
+- `crates/acetone-prolly/public-api.txt` — `acetone-prolly` hosts no frozen
+  type by name, but its types leak through the tracked surface (`ChunkParams`
+  is a public field of the frozen `InitOptions`; `Root` appears in deep-access
+  signatures), so it is snapshotted too — otherwise a change to those types'
+  own methods would be invisible to CI.
 
 Every type on the frozen surface is therefore **signature-tracked in the crate
 that hosts it**: a change *inside* a re-exported type — a new field or variant,
@@ -76,7 +81,7 @@ Any drift fails CI. After an **intentional** change, re-bless and commit the
 snapshots:
 
 ```sh
-scripts/bless-public-api.sh   # or the per-package command the CI error prints
+scripts/bless-public-api.sh
 ```
 
 **Tooling pin.** `cargo-public-api` reads rustdoc's *unstable* JSON, so the CI

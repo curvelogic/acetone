@@ -19,7 +19,7 @@ if ! command -v cargo-public-api >/dev/null 2>&1; then
 fi
 
 echo "Blessing public-API snapshots with ${NIGHTLY}…"
-for crate in acetone-core acetone-cypher acetone-graph acetone-model acetone-store; do
+for crate in acetone-core acetone-cypher acetone-graph acetone-model acetone-prolly acetone-store; do
   RUSTUP_TOOLCHAIN="${NIGHTLY}" cargo public-api --package "${crate}" \
     > "${ROOT}/crates/${crate}/public-api.txt"
 done

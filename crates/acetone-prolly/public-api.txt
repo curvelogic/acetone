@@ -1,0 +1,523 @@
+pub mod acetone_prolly
+pub use acetone_prolly::Bytes
+pub use acetone_prolly::Hash
+pub enum acetone_prolly::BatchOp
+pub acetone_prolly::BatchOp::Delete(alloc::vec::Vec<u8>)
+pub acetone_prolly::BatchOp::Put(alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)
+impl acetone_prolly::BatchOp
+pub fn acetone_prolly::BatchOp::key(&self) -> &[u8]
+impl core::clone::Clone for acetone_prolly::BatchOp
+pub fn acetone_prolly::BatchOp::clone(&self) -> acetone_prolly::BatchOp
+impl core::cmp::Eq for acetone_prolly::BatchOp
+impl core::cmp::PartialEq for acetone_prolly::BatchOp
+pub fn acetone_prolly::BatchOp::eq(&self, &acetone_prolly::BatchOp) -> bool
+impl core::fmt::Debug for acetone_prolly::BatchOp
+pub fn acetone_prolly::BatchOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_prolly::BatchOp
+impl core::marker::Freeze for acetone_prolly::BatchOp
+impl core::marker::Send for acetone_prolly::BatchOp
+impl core::marker::Sync for acetone_prolly::BatchOp
+impl core::marker::Unpin for acetone_prolly::BatchOp
+impl core::marker::UnsafeUnpin for acetone_prolly::BatchOp
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::BatchOp
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::BatchOp
+impl<Q, K> equivalent::Equivalent<K> for acetone_prolly::BatchOp where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::BatchOp::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_prolly::BatchOp where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::BatchOp::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_prolly::BatchOp where U: core::convert::From<T>
+pub fn acetone_prolly::BatchOp::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::BatchOp where U: core::convert::Into<T>
+pub type acetone_prolly::BatchOp::Error = core::convert::Infallible
+pub fn acetone_prolly::BatchOp::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::BatchOp where U: core::convert::TryFrom<T>
+pub type acetone_prolly::BatchOp::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::BatchOp::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::BatchOp where T: core::clone::Clone
+pub type acetone_prolly::BatchOp::Owned = T
+pub fn acetone_prolly::BatchOp::clone_into(&self, &mut T)
+pub fn acetone_prolly::BatchOp::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::BatchOp where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::BatchOp::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::BatchOp where T: ?core::marker::Sized
+pub fn acetone_prolly::BatchOp::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::BatchOp where T: ?core::marker::Sized
+pub fn acetone_prolly::BatchOp::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::BatchOp where T: core::clone::Clone
+pub unsafe fn acetone_prolly::BatchOp::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::BatchOp
+pub fn acetone_prolly::BatchOp::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::BatchOp
+pub type acetone_prolly::BatchOp::Output = T
+pub enum acetone_prolly::ChunkFaultKind
+pub acetone_prolly::ChunkFaultKind::Corrupt
+pub acetone_prolly::ChunkFaultKind::Missing
+impl core::clone::Clone for acetone_prolly::ChunkFaultKind
+pub fn acetone_prolly::ChunkFaultKind::clone(&self) -> acetone_prolly::ChunkFaultKind
+impl core::cmp::Eq for acetone_prolly::ChunkFaultKind
+impl core::cmp::PartialEq for acetone_prolly::ChunkFaultKind
+pub fn acetone_prolly::ChunkFaultKind::eq(&self, &acetone_prolly::ChunkFaultKind) -> bool
+impl core::fmt::Debug for acetone_prolly::ChunkFaultKind
+pub fn acetone_prolly::ChunkFaultKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for acetone_prolly::ChunkFaultKind
+impl core::marker::StructuralPartialEq for acetone_prolly::ChunkFaultKind
+impl core::marker::Freeze for acetone_prolly::ChunkFaultKind
+impl core::marker::Send for acetone_prolly::ChunkFaultKind
+impl core::marker::Sync for acetone_prolly::ChunkFaultKind
+impl core::marker::Unpin for acetone_prolly::ChunkFaultKind
+impl core::marker::UnsafeUnpin for acetone_prolly::ChunkFaultKind
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::ChunkFaultKind
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::ChunkFaultKind
+impl<Q, K> equivalent::Equivalent<K> for acetone_prolly::ChunkFaultKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::ChunkFaultKind::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_prolly::ChunkFaultKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::ChunkFaultKind::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_prolly::ChunkFaultKind where U: core::convert::From<T>
+pub fn acetone_prolly::ChunkFaultKind::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::ChunkFaultKind where U: core::convert::Into<T>
+pub type acetone_prolly::ChunkFaultKind::Error = core::convert::Infallible
+pub fn acetone_prolly::ChunkFaultKind::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::ChunkFaultKind where U: core::convert::TryFrom<T>
+pub type acetone_prolly::ChunkFaultKind::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::ChunkFaultKind::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::ChunkFaultKind where T: core::clone::Clone
+pub type acetone_prolly::ChunkFaultKind::Owned = T
+pub fn acetone_prolly::ChunkFaultKind::clone_into(&self, &mut T)
+pub fn acetone_prolly::ChunkFaultKind::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::ChunkFaultKind where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::ChunkFaultKind::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::ChunkFaultKind where T: ?core::marker::Sized
+pub fn acetone_prolly::ChunkFaultKind::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::ChunkFaultKind where T: ?core::marker::Sized
+pub fn acetone_prolly::ChunkFaultKind::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::ChunkFaultKind where T: core::clone::Clone
+pub unsafe fn acetone_prolly::ChunkFaultKind::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::ChunkFaultKind
+pub fn acetone_prolly::ChunkFaultKind::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::ChunkFaultKind
+pub type acetone_prolly::ChunkFaultKind::Output = T
+#[non_exhaustive] pub enum acetone_prolly::ProllyError
+pub acetone_prolly::ProllyError::Corrupt
+pub acetone_prolly::ProllyError::Corrupt::context: &'static str
+pub acetone_prolly::ProllyError::Corrupt::reason: alloc::string::String
+pub acetone_prolly::ProllyError::InvalidParams
+pub acetone_prolly::ProllyError::InvalidParams::reason: alloc::string::String
+pub acetone_prolly::ProllyError::InvalidRoot
+pub acetone_prolly::ProllyError::InvalidRoot::reason: alloc::string::String
+pub acetone_prolly::ProllyError::KeyTooLong
+pub acetone_prolly::ProllyError::KeyTooLong::len: usize
+pub acetone_prolly::ProllyError::KeyTooLong::max: usize
+pub acetone_prolly::ProllyError::MissingChunk
+pub acetone_prolly::ProllyError::MissingChunk::hash: acetone_store::hash::Hash
+pub acetone_prolly::ProllyError::ParamsMismatch
+pub acetone_prolly::ProllyError::Store(acetone_store::error::StoreError)
+pub acetone_prolly::ProllyError::TooManyEntries
+pub acetone_prolly::ProllyError::ValueTooLong
+pub acetone_prolly::ProllyError::ValueTooLong::len: usize
+pub acetone_prolly::ProllyError::ValueTooLong::max: usize
+impl core::convert::From<acetone_store::error::StoreError> for acetone_prolly::ProllyError
+pub fn acetone_prolly::ProllyError::from(acetone_store::error::StoreError) -> Self
+impl core::error::Error for acetone_prolly::ProllyError
+pub fn acetone_prolly::ProllyError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for acetone_prolly::ProllyError
+pub fn acetone_prolly::ProllyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_prolly::ProllyError
+pub fn acetone_prolly::ProllyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_prolly::ProllyError
+impl core::marker::Send for acetone_prolly::ProllyError
+impl core::marker::Sync for acetone_prolly::ProllyError
+impl core::marker::Unpin for acetone_prolly::ProllyError
+impl core::marker::UnsafeUnpin for acetone_prolly::ProllyError
+impl !core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::ProllyError
+impl !core::panic::unwind_safe::UnwindSafe for acetone_prolly::ProllyError
+impl<T, U> core::convert::Into<U> for acetone_prolly::ProllyError where U: core::convert::From<T>
+pub fn acetone_prolly::ProllyError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::ProllyError where U: core::convert::Into<T>
+pub type acetone_prolly::ProllyError::Error = core::convert::Infallible
+pub fn acetone_prolly::ProllyError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::ProllyError where U: core::convert::TryFrom<T>
+pub type acetone_prolly::ProllyError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::ProllyError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for acetone_prolly::ProllyError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_prolly::ProllyError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_prolly::ProllyError where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::ProllyError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::ProllyError where T: ?core::marker::Sized
+pub fn acetone_prolly::ProllyError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::ProllyError where T: ?core::marker::Sized
+pub fn acetone_prolly::ProllyError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_prolly::ProllyError
+pub fn acetone_prolly::ProllyError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_prolly::ProllyError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_prolly::ProllyError
+pub type acetone_prolly::ProllyError::Output = T
+pub struct acetone_prolly::ChunkFault
+pub acetone_prolly::ChunkFault::hash: acetone_store::hash::Hash
+pub acetone_prolly::ChunkFault::kind: acetone_prolly::ChunkFaultKind
+pub acetone_prolly::ChunkFault::reason: alloc::string::String
+impl core::clone::Clone for acetone_prolly::ChunkFault
+pub fn acetone_prolly::ChunkFault::clone(&self) -> acetone_prolly::ChunkFault
+impl core::cmp::Eq for acetone_prolly::ChunkFault
+impl core::cmp::PartialEq for acetone_prolly::ChunkFault
+pub fn acetone_prolly::ChunkFault::eq(&self, &acetone_prolly::ChunkFault) -> bool
+impl core::fmt::Debug for acetone_prolly::ChunkFault
+pub fn acetone_prolly::ChunkFault::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_prolly::ChunkFault
+impl core::marker::Freeze for acetone_prolly::ChunkFault
+impl core::marker::Send for acetone_prolly::ChunkFault
+impl core::marker::Sync for acetone_prolly::ChunkFault
+impl core::marker::Unpin for acetone_prolly::ChunkFault
+impl core::marker::UnsafeUnpin for acetone_prolly::ChunkFault
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::ChunkFault
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::ChunkFault
+impl<Q, K> equivalent::Equivalent<K> for acetone_prolly::ChunkFault where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::ChunkFault::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_prolly::ChunkFault where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::ChunkFault::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_prolly::ChunkFault where U: core::convert::From<T>
+pub fn acetone_prolly::ChunkFault::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::ChunkFault where U: core::convert::Into<T>
+pub type acetone_prolly::ChunkFault::Error = core::convert::Infallible
+pub fn acetone_prolly::ChunkFault::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::ChunkFault where U: core::convert::TryFrom<T>
+pub type acetone_prolly::ChunkFault::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::ChunkFault::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::ChunkFault where T: core::clone::Clone
+pub type acetone_prolly::ChunkFault::Owned = T
+pub fn acetone_prolly::ChunkFault::clone_into(&self, &mut T)
+pub fn acetone_prolly::ChunkFault::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::ChunkFault where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::ChunkFault::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::ChunkFault where T: ?core::marker::Sized
+pub fn acetone_prolly::ChunkFault::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::ChunkFault where T: ?core::marker::Sized
+pub fn acetone_prolly::ChunkFault::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::ChunkFault where T: core::clone::Clone
+pub unsafe fn acetone_prolly::ChunkFault::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::ChunkFault
+pub fn acetone_prolly::ChunkFault::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::ChunkFault
+pub type acetone_prolly::ChunkFault::Output = T
+pub struct acetone_prolly::ChunkParams
+impl acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::mask_bits(&self) -> u32
+pub fn acetone_prolly::ChunkParams::max_bytes(&self) -> u32
+pub fn acetone_prolly::ChunkParams::min_bytes(&self) -> u32
+pub fn acetone_prolly::ChunkParams::new(u32, u32, u32) -> core::result::Result<Self, acetone_prolly::ProllyError>
+impl core::clone::Clone for acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::clone(&self) -> acetone_prolly::ChunkParams
+impl core::cmp::Eq for acetone_prolly::ChunkParams
+impl core::cmp::Ord for acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::cmp(&self, &acetone_prolly::ChunkParams) -> core::cmp::Ordering
+impl core::cmp::PartialEq for acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::eq(&self, &acetone_prolly::ChunkParams) -> bool
+impl core::cmp::PartialOrd for acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::partial_cmp(&self, &acetone_prolly::ChunkParams) -> core::option::Option<core::cmp::Ordering>
+impl core::default::Default for acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::default() -> Self
+impl core::fmt::Debug for acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for acetone_prolly::ChunkParams
+impl core::marker::StructuralPartialEq for acetone_prolly::ChunkParams
+impl core::marker::Freeze for acetone_prolly::ChunkParams
+impl core::marker::Send for acetone_prolly::ChunkParams
+impl core::marker::Sync for acetone_prolly::ChunkParams
+impl core::marker::Unpin for acetone_prolly::ChunkParams
+impl core::marker::UnsafeUnpin for acetone_prolly::ChunkParams
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::ChunkParams
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::ChunkParams
+impl<Q, K> equivalent::Comparable<K> for acetone_prolly::ChunkParams where Q: core::cmp::Ord + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::ChunkParams::compare(&self, &K) -> core::cmp::Ordering
+impl<Q, K> equivalent::Equivalent<K> for acetone_prolly::ChunkParams where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::ChunkParams::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_prolly::ChunkParams where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::ChunkParams::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_prolly::ChunkParams where U: core::convert::From<T>
+pub fn acetone_prolly::ChunkParams::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::ChunkParams where U: core::convert::Into<T>
+pub type acetone_prolly::ChunkParams::Error = core::convert::Infallible
+pub fn acetone_prolly::ChunkParams::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::ChunkParams where U: core::convert::TryFrom<T>
+pub type acetone_prolly::ChunkParams::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::ChunkParams::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::ChunkParams where T: core::clone::Clone
+pub type acetone_prolly::ChunkParams::Owned = T
+pub fn acetone_prolly::ChunkParams::clone_into(&self, &mut T)
+pub fn acetone_prolly::ChunkParams::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::ChunkParams where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::ChunkParams::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::ChunkParams where T: ?core::marker::Sized
+pub fn acetone_prolly::ChunkParams::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::ChunkParams where T: ?core::marker::Sized
+pub fn acetone_prolly::ChunkParams::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::ChunkParams where T: core::clone::Clone
+pub unsafe fn acetone_prolly::ChunkParams::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::ChunkParams
+pub fn acetone_prolly::ChunkParams::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::ChunkParams
+pub type acetone_prolly::ChunkParams::Output = T
+pub struct acetone_prolly::Conflict
+pub acetone_prolly::Conflict::base: core::option::Option<bytes::bytes::Bytes>
+pub acetone_prolly::Conflict::key: bytes::bytes::Bytes
+pub acetone_prolly::Conflict::ours: core::option::Option<bytes::bytes::Bytes>
+pub acetone_prolly::Conflict::theirs: core::option::Option<bytes::bytes::Bytes>
+impl core::clone::Clone for acetone_prolly::Conflict
+pub fn acetone_prolly::Conflict::clone(&self) -> acetone_prolly::Conflict
+impl core::cmp::Eq for acetone_prolly::Conflict
+impl core::cmp::PartialEq for acetone_prolly::Conflict
+pub fn acetone_prolly::Conflict::eq(&self, &acetone_prolly::Conflict) -> bool
+impl core::fmt::Debug for acetone_prolly::Conflict
+pub fn acetone_prolly::Conflict::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_prolly::Conflict
+impl !core::marker::Freeze for acetone_prolly::Conflict
+impl core::marker::Send for acetone_prolly::Conflict
+impl core::marker::Sync for acetone_prolly::Conflict
+impl core::marker::Unpin for acetone_prolly::Conflict
+impl core::marker::UnsafeUnpin for acetone_prolly::Conflict
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::Conflict
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::Conflict
+impl<Q, K> equivalent::Equivalent<K> for acetone_prolly::Conflict where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::Conflict::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_prolly::Conflict where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::Conflict::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_prolly::Conflict where U: core::convert::From<T>
+pub fn acetone_prolly::Conflict::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::Conflict where U: core::convert::Into<T>
+pub type acetone_prolly::Conflict::Error = core::convert::Infallible
+pub fn acetone_prolly::Conflict::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::Conflict where U: core::convert::TryFrom<T>
+pub type acetone_prolly::Conflict::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::Conflict::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::Conflict where T: core::clone::Clone
+pub type acetone_prolly::Conflict::Owned = T
+pub fn acetone_prolly::Conflict::clone_into(&self, &mut T)
+pub fn acetone_prolly::Conflict::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::Conflict where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::Conflict::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::Conflict where T: ?core::marker::Sized
+pub fn acetone_prolly::Conflict::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::Conflict where T: ?core::marker::Sized
+pub fn acetone_prolly::Conflict::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::Conflict where T: core::clone::Clone
+pub unsafe fn acetone_prolly::Conflict::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::Conflict
+pub fn acetone_prolly::Conflict::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::Conflict
+pub type acetone_prolly::Conflict::Output = T
+pub struct acetone_prolly::Diff<'s, S>
+impl<S: acetone_store::store::ChunkStore> core::iter::traits::iterator::Iterator for acetone_prolly::Diff<'_, S>
+pub type acetone_prolly::Diff<'_, S>::Item = core::result::Result<acetone_prolly::DiffEntry, acetone_prolly::ProllyError>
+pub fn acetone_prolly::Diff<'_, S>::next(&mut self) -> core::option::Option<Self::Item>
+impl<'s, S> core::marker::Freeze for acetone_prolly::Diff<'s, S>
+impl<'s, S> core::marker::Send for acetone_prolly::Diff<'s, S> where S: core::marker::Sync
+impl<'s, S> core::marker::Sync for acetone_prolly::Diff<'s, S> where S: core::marker::Sync
+impl<'s, S> core::marker::Unpin for acetone_prolly::Diff<'s, S>
+impl<'s, S> core::marker::UnsafeUnpin for acetone_prolly::Diff<'s, S>
+impl<'s, S> core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::Diff<'s, S> where S: core::panic::unwind_safe::RefUnwindSafe
+impl<'s, S> core::panic::unwind_safe::UnwindSafe for acetone_prolly::Diff<'s, S> where S: core::panic::unwind_safe::RefUnwindSafe
+impl<I> core::iter::traits::collect::IntoIterator for acetone_prolly::Diff<'s, S> where I: core::iter::traits::iterator::Iterator
+pub type acetone_prolly::Diff<'s, S>::IntoIter = I
+pub type acetone_prolly::Diff<'s, S>::Item = <I as core::iter::traits::iterator::Iterator>::Item
+pub fn acetone_prolly::Diff<'s, S>::into_iter(self) -> I
+impl<T, U> core::convert::Into<U> for acetone_prolly::Diff<'s, S> where U: core::convert::From<T>
+pub fn acetone_prolly::Diff<'s, S>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::Diff<'s, S> where U: core::convert::Into<T>
+pub type acetone_prolly::Diff<'s, S>::Error = core::convert::Infallible
+pub fn acetone_prolly::Diff<'s, S>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::Diff<'s, S> where U: core::convert::TryFrom<T>
+pub type acetone_prolly::Diff<'s, S>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::Diff<'s, S>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for acetone_prolly::Diff<'s, S> where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::Diff<'s, S>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::Diff<'s, S> where T: ?core::marker::Sized
+pub fn acetone_prolly::Diff<'s, S>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::Diff<'s, S> where T: ?core::marker::Sized
+pub fn acetone_prolly::Diff<'s, S>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_prolly::Diff<'s, S>
+pub fn acetone_prolly::Diff<'s, S>::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::Diff<'s, S>
+pub type acetone_prolly::Diff<'s, S>::Output = T
+pub struct acetone_prolly::DiffEntry
+pub acetone_prolly::DiffEntry::after: core::option::Option<bytes::bytes::Bytes>
+pub acetone_prolly::DiffEntry::before: core::option::Option<bytes::bytes::Bytes>
+pub acetone_prolly::DiffEntry::key: bytes::bytes::Bytes
+impl core::clone::Clone for acetone_prolly::DiffEntry
+pub fn acetone_prolly::DiffEntry::clone(&self) -> acetone_prolly::DiffEntry
+impl core::cmp::Eq for acetone_prolly::DiffEntry
+impl core::cmp::PartialEq for acetone_prolly::DiffEntry
+pub fn acetone_prolly::DiffEntry::eq(&self, &acetone_prolly::DiffEntry) -> bool
+impl core::fmt::Debug for acetone_prolly::DiffEntry
+pub fn acetone_prolly::DiffEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_prolly::DiffEntry
+impl !core::marker::Freeze for acetone_prolly::DiffEntry
+impl core::marker::Send for acetone_prolly::DiffEntry
+impl core::marker::Sync for acetone_prolly::DiffEntry
+impl core::marker::Unpin for acetone_prolly::DiffEntry
+impl core::marker::UnsafeUnpin for acetone_prolly::DiffEntry
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::DiffEntry
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::DiffEntry
+impl<Q, K> equivalent::Equivalent<K> for acetone_prolly::DiffEntry where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::DiffEntry::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_prolly::DiffEntry where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::DiffEntry::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_prolly::DiffEntry where U: core::convert::From<T>
+pub fn acetone_prolly::DiffEntry::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::DiffEntry where U: core::convert::Into<T>
+pub type acetone_prolly::DiffEntry::Error = core::convert::Infallible
+pub fn acetone_prolly::DiffEntry::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::DiffEntry where U: core::convert::TryFrom<T>
+pub type acetone_prolly::DiffEntry::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::DiffEntry::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::DiffEntry where T: core::clone::Clone
+pub type acetone_prolly::DiffEntry::Owned = T
+pub fn acetone_prolly::DiffEntry::clone_into(&self, &mut T)
+pub fn acetone_prolly::DiffEntry::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::DiffEntry where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::DiffEntry::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::DiffEntry where T: ?core::marker::Sized
+pub fn acetone_prolly::DiffEntry::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::DiffEntry where T: ?core::marker::Sized
+pub fn acetone_prolly::DiffEntry::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::DiffEntry where T: core::clone::Clone
+pub unsafe fn acetone_prolly::DiffEntry::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::DiffEntry
+pub fn acetone_prolly::DiffEntry::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::DiffEntry
+pub type acetone_prolly::DiffEntry::Output = T
+pub struct acetone_prolly::MergeOutcome
+pub acetone_prolly::MergeOutcome::conflicts: alloc::vec::Vec<acetone_prolly::Conflict>
+pub acetone_prolly::MergeOutcome::root: acetone_prolly::Root
+impl core::clone::Clone for acetone_prolly::MergeOutcome
+pub fn acetone_prolly::MergeOutcome::clone(&self) -> acetone_prolly::MergeOutcome
+impl core::fmt::Debug for acetone_prolly::MergeOutcome
+pub fn acetone_prolly::MergeOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_prolly::MergeOutcome
+impl core::marker::Send for acetone_prolly::MergeOutcome
+impl core::marker::Sync for acetone_prolly::MergeOutcome
+impl core::marker::Unpin for acetone_prolly::MergeOutcome
+impl core::marker::UnsafeUnpin for acetone_prolly::MergeOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::MergeOutcome
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::MergeOutcome
+impl<T, U> core::convert::Into<U> for acetone_prolly::MergeOutcome where U: core::convert::From<T>
+pub fn acetone_prolly::MergeOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::MergeOutcome where U: core::convert::Into<T>
+pub type acetone_prolly::MergeOutcome::Error = core::convert::Infallible
+pub fn acetone_prolly::MergeOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::MergeOutcome where U: core::convert::TryFrom<T>
+pub type acetone_prolly::MergeOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::MergeOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::MergeOutcome where T: core::clone::Clone
+pub type acetone_prolly::MergeOutcome::Owned = T
+pub fn acetone_prolly::MergeOutcome::clone_into(&self, &mut T)
+pub fn acetone_prolly::MergeOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::MergeOutcome where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::MergeOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::MergeOutcome where T: ?core::marker::Sized
+pub fn acetone_prolly::MergeOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::MergeOutcome where T: ?core::marker::Sized
+pub fn acetone_prolly::MergeOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::MergeOutcome where T: core::clone::Clone
+pub unsafe fn acetone_prolly::MergeOutcome::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::MergeOutcome
+pub fn acetone_prolly::MergeOutcome::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::MergeOutcome
+pub type acetone_prolly::MergeOutcome::Output = T
+pub struct acetone_prolly::Root
+impl acetone_prolly::Root
+pub fn acetone_prolly::Root::hash(&self) -> acetone_store::hash::Hash
+pub fn acetone_prolly::Root::height(&self) -> u32
+pub fn acetone_prolly::Root::new(acetone_store::hash::Hash, u32, acetone_prolly::ChunkParams) -> core::result::Result<Self, acetone_prolly::ProllyError>
+pub fn acetone_prolly::Root::params(&self) -> acetone_prolly::ChunkParams
+impl core::clone::Clone for acetone_prolly::Root
+pub fn acetone_prolly::Root::clone(&self) -> acetone_prolly::Root
+impl core::cmp::Eq for acetone_prolly::Root
+impl core::cmp::PartialEq for acetone_prolly::Root
+pub fn acetone_prolly::Root::eq(&self, &acetone_prolly::Root) -> bool
+impl core::fmt::Debug for acetone_prolly::Root
+pub fn acetone_prolly::Root::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_prolly::Root
+impl core::marker::Freeze for acetone_prolly::Root
+impl core::marker::Send for acetone_prolly::Root
+impl core::marker::Sync for acetone_prolly::Root
+impl core::marker::Unpin for acetone_prolly::Root
+impl core::marker::UnsafeUnpin for acetone_prolly::Root
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::Root
+impl core::panic::unwind_safe::UnwindSafe for acetone_prolly::Root
+impl<Q, K> equivalent::Equivalent<K> for acetone_prolly::Root where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::Root::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_prolly::Root where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_prolly::Root::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_prolly::Root where U: core::convert::From<T>
+pub fn acetone_prolly::Root::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::Root where U: core::convert::Into<T>
+pub type acetone_prolly::Root::Error = core::convert::Infallible
+pub fn acetone_prolly::Root::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::Root where U: core::convert::TryFrom<T>
+pub type acetone_prolly::Root::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::Root::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_prolly::Root where T: core::clone::Clone
+pub type acetone_prolly::Root::Owned = T
+pub fn acetone_prolly::Root::clone_into(&self, &mut T)
+pub fn acetone_prolly::Root::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_prolly::Root where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::Root::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::Root where T: ?core::marker::Sized
+pub fn acetone_prolly::Root::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::Root where T: ?core::marker::Sized
+pub fn acetone_prolly::Root::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_prolly::Root where T: core::clone::Clone
+pub unsafe fn acetone_prolly::Root::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_prolly::Root
+pub fn acetone_prolly::Root::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::Root
+pub type acetone_prolly::Root::Output = T
+pub struct acetone_prolly::Scan<'s, S>
+impl<S: acetone_store::store::ChunkStore> core::iter::traits::iterator::Iterator for acetone_prolly::Scan<'_, S>
+pub type acetone_prolly::Scan<'_, S>::Item = core::result::Result<(bytes::bytes::Bytes, bytes::bytes::Bytes), acetone_prolly::ProllyError>
+pub fn acetone_prolly::Scan<'_, S>::next(&mut self) -> core::option::Option<Self::Item>
+impl<'s, S> !core::marker::Freeze for acetone_prolly::Scan<'s, S>
+impl<'s, S> core::marker::Send for acetone_prolly::Scan<'s, S> where S: core::marker::Sync
+impl<'s, S> core::marker::Sync for acetone_prolly::Scan<'s, S> where S: core::marker::Sync
+impl<'s, S> core::marker::Unpin for acetone_prolly::Scan<'s, S>
+impl<'s, S> core::marker::UnsafeUnpin for acetone_prolly::Scan<'s, S>
+impl<'s, S> core::panic::unwind_safe::RefUnwindSafe for acetone_prolly::Scan<'s, S> where S: core::panic::unwind_safe::RefUnwindSafe
+impl<'s, S> core::panic::unwind_safe::UnwindSafe for acetone_prolly::Scan<'s, S> where S: core::panic::unwind_safe::RefUnwindSafe
+impl<I> core::iter::traits::collect::IntoIterator for acetone_prolly::Scan<'s, S> where I: core::iter::traits::iterator::Iterator
+pub type acetone_prolly::Scan<'s, S>::IntoIter = I
+pub type acetone_prolly::Scan<'s, S>::Item = <I as core::iter::traits::iterator::Iterator>::Item
+pub fn acetone_prolly::Scan<'s, S>::into_iter(self) -> I
+impl<T, U> core::convert::Into<U> for acetone_prolly::Scan<'s, S> where U: core::convert::From<T>
+pub fn acetone_prolly::Scan<'s, S>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_prolly::Scan<'s, S> where U: core::convert::Into<T>
+pub type acetone_prolly::Scan<'s, S>::Error = core::convert::Infallible
+pub fn acetone_prolly::Scan<'s, S>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_prolly::Scan<'s, S> where U: core::convert::TryFrom<T>
+pub type acetone_prolly::Scan<'s, S>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_prolly::Scan<'s, S>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for acetone_prolly::Scan<'s, S> where T: 'static + ?core::marker::Sized
+pub fn acetone_prolly::Scan<'s, S>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_prolly::Scan<'s, S> where T: ?core::marker::Sized
+pub fn acetone_prolly::Scan<'s, S>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_prolly::Scan<'s, S> where T: ?core::marker::Sized
+pub fn acetone_prolly::Scan<'s, S>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_prolly::Scan<'s, S>
+pub fn acetone_prolly::Scan<'s, S>::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_prolly::Scan<'s, S>
+pub type acetone_prolly::Scan<'s, S>::Output = T
+pub const acetone_prolly::MAX_CHUNK_MAX_BYTES: u32
+pub const acetone_prolly::MAX_HEIGHT: u32
+pub const acetone_prolly::MAX_KEY_LEN: usize
+pub const acetone_prolly::MAX_VALUE_LEN: usize
+pub fn acetone_prolly::apply_batch<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root, impl core::iter::traits::collect::IntoIterator<Item = acetone_prolly::BatchOp>) -> core::result::Result<acetone_prolly::Root, acetone_prolly::ProllyError>
+pub fn acetone_prolly::apply_batch_recording<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root, impl core::iter::traits::collect::IntoIterator<Item = acetone_prolly::BatchOp>) -> core::result::Result<(acetone_prolly::Root, alloc::vec::Vec<(acetone_store::hash::Hash, acetone_store::hash::Hash)>), acetone_prolly::ProllyError>
+pub fn acetone_prolly::bulk_load<S: acetone_store::store::ChunkStore>(&S, acetone_prolly::ChunkParams, impl core::iter::traits::collect::IntoIterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>) -> core::result::Result<acetone_prolly::Root, acetone_prolly::ProllyError>
+pub fn acetone_prolly::collect_reachable_chunks<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root, &mut alloc::collections::btree::set::BTreeSet<acetone_store::hash::Hash>) -> core::result::Result<(), acetone_prolly::ProllyError>
+pub fn acetone_prolly::diff<'s, S: acetone_store::store::ChunkStore>(&'s S, &acetone_prolly::Root, &acetone_prolly::Root) -> core::result::Result<acetone_prolly::Diff<'s, S>, acetone_prolly::ProllyError>
+pub fn acetone_prolly::empty<S: acetone_store::store::ChunkStore>(&S, acetone_prolly::ChunkParams) -> core::result::Result<acetone_prolly::Root, acetone_prolly::ProllyError>
+pub fn acetone_prolly::estimate_entries<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root) -> core::result::Result<usize, acetone_prolly::ProllyError>
+pub fn acetone_prolly::get<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root, &[u8]) -> core::result::Result<core::option::Option<bytes::bytes::Bytes>, acetone_prolly::ProllyError>
+pub fn acetone_prolly::merge<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root, &acetone_prolly::Root, &acetone_prolly::Root) -> core::result::Result<acetone_prolly::MergeOutcome, acetone_prolly::ProllyError>
+pub fn acetone_prolly::reachable_chunks<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root) -> core::result::Result<alloc::vec::Vec<acetone_store::hash::Hash>, acetone_prolly::ProllyError>
+pub fn acetone_prolly::scan<'s, S, R>(&'s S, &acetone_prolly::Root, R) -> core::result::Result<acetone_prolly::Scan<'s, S>, acetone_prolly::ProllyError> where S: acetone_store::store::ChunkStore, R: core::ops::range::RangeBounds<[u8]>
+pub fn acetone_prolly::scan_rev<'s, S, R>(&'s S, &acetone_prolly::Root, R) -> core::result::Result<acetone_prolly::Scan<'s, S>, acetone_prolly::ProllyError> where S: acetone_store::store::ChunkStore, R: core::ops::range::RangeBounds<[u8]>
+pub fn acetone_prolly::verify_reachable<S: acetone_store::store::ChunkStore>(&S, &acetone_prolly::Root) -> alloc::vec::Vec<acetone_prolly::ChunkFault>

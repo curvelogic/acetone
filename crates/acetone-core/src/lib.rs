@@ -33,12 +33,13 @@
 //! expose. This **deep-access surface is not part of the 0.2 stability
 //! guarantee**: items reachable only through these modules may change in any
 //! 0.2.x release. Depend on the flat crate-root re-exports for a stable API;
-//! reach into the modules only when you knowingly accept the churn. (All five
-//! constituent crates are signature-tracked by committed snapshots since
-//! Phase 10 — `acetone-7qw.20` — so deep-surface changes are *visible* in CI,
-//! but visibility is not a promise: the snapshots widen what is seen, not
-//! what is frozen. `STABILITY.md` lists the frozen surface and the policy in
-//! full.)
+//! reach into the modules only when you knowingly accept the churn. (The
+//! library crates — `cypher`, `graph`, `model`, `store`, and `acetone-prolly`,
+//! whose `ChunkParams`/`Root` surface through `InitOptions` and the deep
+//! modules — are signature-tracked by committed snapshots since Phase 10,
+//! `acetone-7qw.20`, so deep-surface changes are *visible* in CI; visibility
+//! is not a promise: the snapshots widen what is seen, not what is frozen.
+//! `STABILITY.md` lists the frozen surface and the policy in full.)
 
 #![forbid(unsafe_code)]
 
