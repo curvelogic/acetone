@@ -36,7 +36,10 @@ The flow:
      fully static binary is not supported on macOS).
 3. **Review the draft** and its binaries in the Releases UI.
 4. **Publish** when happy. GitHub creates the `v<version>` tag at the target
-   commit. That publish is your approval — nothing is tagged before it.
+   commit. That publish is your approval — nothing is tagged before it. You may
+   delegate the click: an explicit, informed, current instruction from you
+   authorises an agent to publish the draft on your behalf (ADR-0067), with the
+   instruction recorded in the release record. Absent that, no agent publishes.
 5. **Homebrew follows automatically**: publishing triggers the
    **Homebrew bump** workflow, which opens a formula PR on the tap (see below).
    Review and merge that PR.
