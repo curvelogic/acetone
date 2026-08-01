@@ -16,9 +16,30 @@ fine.)
 
 ## [Unreleased]
 
-openCypher TCK conformance rises to **2185 / 3897 (56.07%) with zero
-failures**, from 1602 (41.1%) at 0.3.1; every residual parse rejection is
-individually enumerated and justified in `docs/conformance.md`.
+## [0.4.0] - 2026-08-01
+
+**At scale, and in conformance** (Phase 9). The query engine stops declining
+large parts of openCypher, and the storage and verification paths stop
+assuming everything fits in memory or in one pass. openCypher TCK conformance
+rises to **2185 / 3897 (56.07%) with zero failures**, from 1602 (41.1%) at
+0.3.1; every residual parse rejection is individually enumerated and justified
+in `docs/conformance.md`.
+
+Indexing becomes *beneficial* rather than merely present: seeks now reach the
+shipped read path and win outright where they should — 17× on a
+0.27%-selective range and ~600× proving a bucket empty, both against an
+identical unindexed twin repository; 1104× on a primary-key lookup, against
+the label scan it replaces (the twin cannot show that one, since both twins
+declare the same key and so run the same plan). All measured through
+`Session` at 110,200 nodes. Where a seek would lose, it now **declines to the
+scan** — the regime that at that scale ran up to 37× *slower* than no index
+before ADR-0065.
+
+A minor bump, so pre-1.0 it carries deliberate breaking changes: three frozen
+types are now `#[non_exhaustive]`, and a declared property type is enforced
+where it previously was not. Both are called out below. No on-disk format
+change — `format_version` stays 1 and 0.1–0.3.x repositories are read and
+written unchanged.
 
 ### Added
 
@@ -448,7 +469,9 @@ diffs become change reports, and any git remote is backup and transport.
 The authoritative design record — data model, storage, encodings, query
 language, diff/merge, and the phased roadmap — lives in `docs/`.
 
-[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/curvelogic/acetone/releases/tag/v0.4.0
+[0.3.1]: https://github.com/curvelogic/acetone/releases/tag/v0.3.1
 [0.3.0]: https://github.com/curvelogic/acetone/releases/tag/v0.3.0
 [0.2.0]: https://github.com/curvelogic/acetone/releases/tag/v0.2.0
 [0.1.1]: https://github.com/curvelogic/acetone/releases/tag/v0.1.1
