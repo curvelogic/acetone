@@ -71,6 +71,21 @@ crates). So (Greg's scope choice at the boundary):
   snapshots — a deliberate friction/coverage trade (a full-signature snapshot of
   every workspace crate would trip on ordinary internal-`pub` refactors).
 
+  > **Amended in Phase 10** (2026-08-01, `acetone-7qw.20`, PR #238): the
+  > friction/coverage trade is now decided the other way, under the Phase 10
+  > exit criterion 1 Greg ratified at phase open ("the freeze gate covers the
+  > entire frozen surface"). The blind spot this scope choice left was proven
+  > real in 0.4: `GraphError` — hosted by `acetone-graph`, so present in the
+  > core snapshot by name only — gained `#[non_exhaustive]`, a source-breaking
+  > change, and re-blessed to an **empty diff** (`acetone-7qw.5`). All library
+  > crates now carry full-signature snapshots (`cypher`, `graph`, `model`,
+  > `store`, `prolly` alongside the core façade list); the anticipated
+  > re-bless friction on internal-`pub` refactors is accepted as the same
+  > deal already taken for `acetone-cypher` — a visible diff on deep-surface
+  > change is a prompt for review, not noise. What is *promised* is unchanged:
+  > STABILITY.md still defines the frozen contract; the snapshots widen what
+  > is seen.
+
 **No new runtime or dev dependencies.** `cargo-public-api` is a CI-only binary,
 not a crate dependency, so the shipped artefact and the normal build are
 untouched. (Rejected: adding `public-api`/`rustdoc-json` as dev-deps — they

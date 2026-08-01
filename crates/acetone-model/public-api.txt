@@ -1,0 +1,1455 @@
+pub mod acetone_model
+pub mod acetone_model::display
+pub fn acetone_model::display::format_edge_key(&acetone_model::graph_keys::EdgeKey) -> alloc::string::String
+pub fn acetone_model::display::format_key_tuple(&[acetone_model::Value]) -> alloc::string::String
+pub fn acetone_model::display::format_label(&str) -> alloc::string::String
+pub fn acetone_model::display::format_labels(&[alloc::string::String]) -> alloc::string::String
+pub fn acetone_model::display::format_node_identity(&str, &[acetone_model::Value]) -> alloc::string::String
+pub fn acetone_model::display::format_node_key(&acetone_model::graph_keys::NodeKey) -> alloc::string::String
+pub fn acetone_model::display::format_value(&acetone_model::Value) -> alloc::string::String
+pub mod acetone_model::graph_keys
+pub enum acetone_model::graph_keys::GraphKeyError
+pub acetone_model::graph_keys::GraphKeyError::Decode(acetone_model::keys::KeyDecodeError)
+pub acetone_model::graph_keys::GraphKeyError::EmptyKeyTuple
+pub acetone_model::graph_keys::GraphKeyError::EmptyName(&'static str)
+pub acetone_model::graph_keys::GraphKeyError::Encode(acetone_model::keys::KeyEncodeError)
+pub acetone_model::graph_keys::GraphKeyError::NanKeyValue(&'static str)
+pub acetone_model::graph_keys::GraphKeyError::NonScalar(&'static str)
+pub acetone_model::graph_keys::GraphKeyError::NullKeyValue
+pub acetone_model::graph_keys::GraphKeyError::Shape(&'static str)
+impl core::clone::Clone for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::clone(&self) -> acetone_model::graph_keys::GraphKeyError
+impl core::cmp::PartialEq for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::eq(&self, &acetone_model::graph_keys::GraphKeyError) -> bool
+impl core::convert::From<acetone_model::keys::KeyDecodeError> for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::from(acetone_model::keys::KeyDecodeError) -> Self
+impl core::convert::From<acetone_model::keys::KeyEncodeError> for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::from(acetone_model::keys::KeyEncodeError) -> Self
+impl core::error::Error for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::graph_keys::GraphKeyError
+impl core::marker::Freeze for acetone_model::graph_keys::GraphKeyError
+impl core::marker::Send for acetone_model::graph_keys::GraphKeyError
+impl core::marker::Sync for acetone_model::graph_keys::GraphKeyError
+impl core::marker::Unpin for acetone_model::graph_keys::GraphKeyError
+impl core::marker::UnsafeUnpin for acetone_model::graph_keys::GraphKeyError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::graph_keys::GraphKeyError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::graph_keys::GraphKeyError
+impl<T, U> core::convert::Into<U> for acetone_model::graph_keys::GraphKeyError where U: core::convert::From<T>
+pub fn acetone_model::graph_keys::GraphKeyError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::graph_keys::GraphKeyError where U: core::convert::Into<T>
+pub type acetone_model::graph_keys::GraphKeyError::Error = core::convert::Infallible
+pub fn acetone_model::graph_keys::GraphKeyError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::graph_keys::GraphKeyError where U: core::convert::TryFrom<T>
+pub type acetone_model::graph_keys::GraphKeyError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::graph_keys::GraphKeyError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::graph_keys::GraphKeyError where T: core::clone::Clone
+pub type acetone_model::graph_keys::GraphKeyError::Owned = T
+pub fn acetone_model::graph_keys::GraphKeyError::clone_into(&self, &mut T)
+pub fn acetone_model::graph_keys::GraphKeyError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::graph_keys::GraphKeyError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::graph_keys::GraphKeyError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::graph_keys::GraphKeyError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::graph_keys::GraphKeyError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::graph_keys::GraphKeyError where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::GraphKeyError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::graph_keys::GraphKeyError where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::GraphKeyError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::graph_keys::GraphKeyError where T: core::clone::Clone
+pub unsafe fn acetone_model::graph_keys::GraphKeyError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::graph_keys::GraphKeyError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::graph_keys::GraphKeyError
+pub type acetone_model::graph_keys::GraphKeyError::Output = T
+pub struct acetone_model::graph_keys::EdgeKey
+impl acetone_model::graph_keys::EdgeKey
+pub fn acetone_model::graph_keys::EdgeKey::decode_fwd(&[u8]) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::EdgeKey::decode_rev(&[u8]) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::EdgeKey::disc(&self) -> &acetone_model::Value
+pub fn acetone_model::graph_keys::EdgeKey::dst(&self) -> &acetone_model::graph_keys::NodeKey
+pub fn acetone_model::graph_keys::EdgeKey::encode_fwd(&self) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::EdgeKey::encode_rev(&self) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::EdgeKey::new(acetone_model::graph_keys::NodeKey, impl core::convert::Into<alloc::string::String>, acetone_model::graph_keys::NodeKey, acetone_model::Value) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::EdgeKey::rtype(&self) -> &str
+pub fn acetone_model::graph_keys::EdgeKey::src(&self) -> &acetone_model::graph_keys::NodeKey
+impl core::clone::Clone for acetone_model::graph_keys::EdgeKey
+pub fn acetone_model::graph_keys::EdgeKey::clone(&self) -> acetone_model::graph_keys::EdgeKey
+impl core::cmp::PartialEq for acetone_model::graph_keys::EdgeKey
+pub fn acetone_model::graph_keys::EdgeKey::eq(&self, &acetone_model::graph_keys::EdgeKey) -> bool
+impl core::fmt::Debug for acetone_model::graph_keys::EdgeKey
+pub fn acetone_model::graph_keys::EdgeKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::graph_keys::EdgeKey
+impl core::marker::Freeze for acetone_model::graph_keys::EdgeKey
+impl core::marker::Send for acetone_model::graph_keys::EdgeKey
+impl core::marker::Sync for acetone_model::graph_keys::EdgeKey
+impl core::marker::Unpin for acetone_model::graph_keys::EdgeKey
+impl core::marker::UnsafeUnpin for acetone_model::graph_keys::EdgeKey
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::graph_keys::EdgeKey
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::graph_keys::EdgeKey
+impl<T, U> core::convert::Into<U> for acetone_model::graph_keys::EdgeKey where U: core::convert::From<T>
+pub fn acetone_model::graph_keys::EdgeKey::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::graph_keys::EdgeKey where U: core::convert::Into<T>
+pub type acetone_model::graph_keys::EdgeKey::Error = core::convert::Infallible
+pub fn acetone_model::graph_keys::EdgeKey::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::graph_keys::EdgeKey where U: core::convert::TryFrom<T>
+pub type acetone_model::graph_keys::EdgeKey::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::graph_keys::EdgeKey::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::graph_keys::EdgeKey where T: core::clone::Clone
+pub type acetone_model::graph_keys::EdgeKey::Owned = T
+pub fn acetone_model::graph_keys::EdgeKey::clone_into(&self, &mut T)
+pub fn acetone_model::graph_keys::EdgeKey::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::graph_keys::EdgeKey where T: 'static + ?core::marker::Sized
+pub fn acetone_model::graph_keys::EdgeKey::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::graph_keys::EdgeKey where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::EdgeKey::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::graph_keys::EdgeKey where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::EdgeKey::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::graph_keys::EdgeKey where T: core::clone::Clone
+pub unsafe fn acetone_model::graph_keys::EdgeKey::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::graph_keys::EdgeKey
+pub fn acetone_model::graph_keys::EdgeKey::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::graph_keys::EdgeKey
+pub type acetone_model::graph_keys::EdgeKey::Output = T
+pub struct acetone_model::graph_keys::IndexEntry
+impl acetone_model::graph_keys::IndexEntry
+pub fn acetone_model::graph_keys::IndexEntry::decode(&[u8]) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::IndexEntry::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::IndexEntry::label(&self) -> &str
+pub fn acetone_model::graph_keys::IndexEntry::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<acetone_model::Value>, acetone_model::graph_keys::NodeKey) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::IndexEntry::node(&self) -> &acetone_model::graph_keys::NodeKey
+pub fn acetone_model::graph_keys::IndexEntry::properties(&self) -> &[alloc::string::String]
+pub fn acetone_model::graph_keys::IndexEntry::values(&self) -> &[acetone_model::Value]
+impl core::clone::Clone for acetone_model::graph_keys::IndexEntry
+pub fn acetone_model::graph_keys::IndexEntry::clone(&self) -> acetone_model::graph_keys::IndexEntry
+impl core::cmp::PartialEq for acetone_model::graph_keys::IndexEntry
+pub fn acetone_model::graph_keys::IndexEntry::eq(&self, &acetone_model::graph_keys::IndexEntry) -> bool
+impl core::fmt::Debug for acetone_model::graph_keys::IndexEntry
+pub fn acetone_model::graph_keys::IndexEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::graph_keys::IndexEntry
+impl core::marker::Freeze for acetone_model::graph_keys::IndexEntry
+impl core::marker::Send for acetone_model::graph_keys::IndexEntry
+impl core::marker::Sync for acetone_model::graph_keys::IndexEntry
+impl core::marker::Unpin for acetone_model::graph_keys::IndexEntry
+impl core::marker::UnsafeUnpin for acetone_model::graph_keys::IndexEntry
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::graph_keys::IndexEntry
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::graph_keys::IndexEntry
+impl<T, U> core::convert::Into<U> for acetone_model::graph_keys::IndexEntry where U: core::convert::From<T>
+pub fn acetone_model::graph_keys::IndexEntry::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::graph_keys::IndexEntry where U: core::convert::Into<T>
+pub type acetone_model::graph_keys::IndexEntry::Error = core::convert::Infallible
+pub fn acetone_model::graph_keys::IndexEntry::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::graph_keys::IndexEntry where U: core::convert::TryFrom<T>
+pub type acetone_model::graph_keys::IndexEntry::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::graph_keys::IndexEntry::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::graph_keys::IndexEntry where T: core::clone::Clone
+pub type acetone_model::graph_keys::IndexEntry::Owned = T
+pub fn acetone_model::graph_keys::IndexEntry::clone_into(&self, &mut T)
+pub fn acetone_model::graph_keys::IndexEntry::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::graph_keys::IndexEntry where T: 'static + ?core::marker::Sized
+pub fn acetone_model::graph_keys::IndexEntry::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::graph_keys::IndexEntry where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::IndexEntry::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::graph_keys::IndexEntry where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::IndexEntry::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::graph_keys::IndexEntry where T: core::clone::Clone
+pub unsafe fn acetone_model::graph_keys::IndexEntry::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::graph_keys::IndexEntry
+pub fn acetone_model::graph_keys::IndexEntry::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::graph_keys::IndexEntry
+pub type acetone_model::graph_keys::IndexEntry::Output = T
+pub struct acetone_model::graph_keys::NodeKey
+impl acetone_model::graph_keys::NodeKey
+pub fn acetone_model::graph_keys::NodeKey::decode(&[u8]) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::NodeKey::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::NodeKey::from_value(&acetone_model::Value) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::NodeKey::key(&self) -> &[acetone_model::Value]
+pub fn acetone_model::graph_keys::NodeKey::label(&self) -> &str
+pub fn acetone_model::graph_keys::NodeKey::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<acetone_model::Value>) -> core::result::Result<Self, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::NodeKey::to_value(&self) -> acetone_model::Value
+impl core::clone::Clone for acetone_model::graph_keys::NodeKey
+pub fn acetone_model::graph_keys::NodeKey::clone(&self) -> acetone_model::graph_keys::NodeKey
+impl core::cmp::PartialEq for acetone_model::graph_keys::NodeKey
+pub fn acetone_model::graph_keys::NodeKey::eq(&self, &acetone_model::graph_keys::NodeKey) -> bool
+impl core::fmt::Debug for acetone_model::graph_keys::NodeKey
+pub fn acetone_model::graph_keys::NodeKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::graph_keys::NodeKey
+impl core::marker::Freeze for acetone_model::graph_keys::NodeKey
+impl core::marker::Send for acetone_model::graph_keys::NodeKey
+impl core::marker::Sync for acetone_model::graph_keys::NodeKey
+impl core::marker::Unpin for acetone_model::graph_keys::NodeKey
+impl core::marker::UnsafeUnpin for acetone_model::graph_keys::NodeKey
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::graph_keys::NodeKey
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::graph_keys::NodeKey
+impl<T, U> core::convert::Into<U> for acetone_model::graph_keys::NodeKey where U: core::convert::From<T>
+pub fn acetone_model::graph_keys::NodeKey::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::graph_keys::NodeKey where U: core::convert::Into<T>
+pub type acetone_model::graph_keys::NodeKey::Error = core::convert::Infallible
+pub fn acetone_model::graph_keys::NodeKey::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::graph_keys::NodeKey where U: core::convert::TryFrom<T>
+pub type acetone_model::graph_keys::NodeKey::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::graph_keys::NodeKey::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::graph_keys::NodeKey where T: core::clone::Clone
+pub type acetone_model::graph_keys::NodeKey::Owned = T
+pub fn acetone_model::graph_keys::NodeKey::clone_into(&self, &mut T)
+pub fn acetone_model::graph_keys::NodeKey::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::graph_keys::NodeKey where T: 'static + ?core::marker::Sized
+pub fn acetone_model::graph_keys::NodeKey::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::graph_keys::NodeKey where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::NodeKey::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::graph_keys::NodeKey where T: ?core::marker::Sized
+pub fn acetone_model::graph_keys::NodeKey::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::graph_keys::NodeKey where T: core::clone::Clone
+pub unsafe fn acetone_model::graph_keys::NodeKey::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::graph_keys::NodeKey
+pub fn acetone_model::graph_keys::NodeKey::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::graph_keys::NodeKey
+pub type acetone_model::graph_keys::NodeKey::Output = T
+pub fn acetone_model::graph_keys::edge_endpoint_prefix(&acetone_model::graph_keys::NodeKey) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::edge_endpoint_type_prefix(&acetone_model::graph_keys::NodeKey, &str) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::index_prefix(&str, &[alloc::string::String]) -> alloc::vec::Vec<u8>
+pub fn acetone_model::graph_keys::index_value_prefix(&str, &[alloc::string::String], &[acetone_model::Value]) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::graph_keys::GraphKeyError>
+pub fn acetone_model::graph_keys::node_label_prefix(&str) -> alloc::vec::Vec<u8>
+pub fn acetone_model::graph_keys::prefix_successor(&[u8]) -> core::option::Option<alloc::vec::Vec<u8>>
+pub mod acetone_model::keys
+pub enum acetone_model::keys::KeyDecodeError
+pub acetone_model::keys::KeyDecodeError::DepthExceeded
+pub acetone_model::keys::KeyDecodeError::InvalidChunkMarker(u8)
+pub acetone_model::keys::KeyDecodeError::InvalidUtf8
+pub acetone_model::keys::KeyDecodeError::NonCanonical(&'static str)
+pub acetone_model::keys::KeyDecodeError::UnexpectedEnd
+pub acetone_model::keys::KeyDecodeError::UnknownTag(u8)
+impl core::clone::Clone for acetone_model::keys::KeyDecodeError
+pub fn acetone_model::keys::KeyDecodeError::clone(&self) -> acetone_model::keys::KeyDecodeError
+impl core::cmp::Eq for acetone_model::keys::KeyDecodeError
+impl core::cmp::PartialEq for acetone_model::keys::KeyDecodeError
+pub fn acetone_model::keys::KeyDecodeError::eq(&self, &acetone_model::keys::KeyDecodeError) -> bool
+impl core::convert::From<acetone_model::keys::KeyDecodeError> for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::from(acetone_model::keys::KeyDecodeError) -> Self
+impl core::convert::From<acetone_model::keys::KeyDecodeError> for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::from(acetone_model::keys::KeyDecodeError) -> Self
+impl core::error::Error for acetone_model::keys::KeyDecodeError
+impl core::fmt::Debug for acetone_model::keys::KeyDecodeError
+pub fn acetone_model::keys::KeyDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::keys::KeyDecodeError
+pub fn acetone_model::keys::KeyDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::keys::KeyDecodeError
+impl core::marker::Freeze for acetone_model::keys::KeyDecodeError
+impl core::marker::Send for acetone_model::keys::KeyDecodeError
+impl core::marker::Sync for acetone_model::keys::KeyDecodeError
+impl core::marker::Unpin for acetone_model::keys::KeyDecodeError
+impl core::marker::UnsafeUnpin for acetone_model::keys::KeyDecodeError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::keys::KeyDecodeError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::keys::KeyDecodeError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::keys::KeyDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::keys::KeyDecodeError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::keys::KeyDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::keys::KeyDecodeError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::keys::KeyDecodeError where U: core::convert::From<T>
+pub fn acetone_model::keys::KeyDecodeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::keys::KeyDecodeError where U: core::convert::Into<T>
+pub type acetone_model::keys::KeyDecodeError::Error = core::convert::Infallible
+pub fn acetone_model::keys::KeyDecodeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::keys::KeyDecodeError where U: core::convert::TryFrom<T>
+pub type acetone_model::keys::KeyDecodeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::keys::KeyDecodeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::keys::KeyDecodeError where T: core::clone::Clone
+pub type acetone_model::keys::KeyDecodeError::Owned = T
+pub fn acetone_model::keys::KeyDecodeError::clone_into(&self, &mut T)
+pub fn acetone_model::keys::KeyDecodeError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::keys::KeyDecodeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::keys::KeyDecodeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::keys::KeyDecodeError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::keys::KeyDecodeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::keys::KeyDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::keys::KeyDecodeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::keys::KeyDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::keys::KeyDecodeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::keys::KeyDecodeError where T: core::clone::Clone
+pub unsafe fn acetone_model::keys::KeyDecodeError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::keys::KeyDecodeError
+pub fn acetone_model::keys::KeyDecodeError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::keys::KeyDecodeError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::keys::KeyDecodeError
+pub type acetone_model::keys::KeyDecodeError::Output = T
+pub enum acetone_model::keys::KeyEncodeError
+pub acetone_model::keys::KeyEncodeError::DepthExceeded
+pub acetone_model::keys::KeyEncodeError::NanNotPermitted
+pub acetone_model::keys::KeyEncodeError::OffsetOutOfRange(i16)
+pub acetone_model::keys::KeyEncodeError::TimeOutOfRange(u64)
+impl core::clone::Clone for acetone_model::keys::KeyEncodeError
+pub fn acetone_model::keys::KeyEncodeError::clone(&self) -> acetone_model::keys::KeyEncodeError
+impl core::cmp::Eq for acetone_model::keys::KeyEncodeError
+impl core::cmp::PartialEq for acetone_model::keys::KeyEncodeError
+pub fn acetone_model::keys::KeyEncodeError::eq(&self, &acetone_model::keys::KeyEncodeError) -> bool
+impl core::convert::From<acetone_model::keys::KeyEncodeError> for acetone_model::graph_keys::GraphKeyError
+pub fn acetone_model::graph_keys::GraphKeyError::from(acetone_model::keys::KeyEncodeError) -> Self
+impl core::error::Error for acetone_model::keys::KeyEncodeError
+impl core::fmt::Debug for acetone_model::keys::KeyEncodeError
+pub fn acetone_model::keys::KeyEncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::keys::KeyEncodeError
+pub fn acetone_model::keys::KeyEncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::keys::KeyEncodeError
+impl core::marker::Freeze for acetone_model::keys::KeyEncodeError
+impl core::marker::Send for acetone_model::keys::KeyEncodeError
+impl core::marker::Sync for acetone_model::keys::KeyEncodeError
+impl core::marker::Unpin for acetone_model::keys::KeyEncodeError
+impl core::marker::UnsafeUnpin for acetone_model::keys::KeyEncodeError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::keys::KeyEncodeError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::keys::KeyEncodeError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::keys::KeyEncodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::keys::KeyEncodeError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::keys::KeyEncodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::keys::KeyEncodeError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::keys::KeyEncodeError where U: core::convert::From<T>
+pub fn acetone_model::keys::KeyEncodeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::keys::KeyEncodeError where U: core::convert::Into<T>
+pub type acetone_model::keys::KeyEncodeError::Error = core::convert::Infallible
+pub fn acetone_model::keys::KeyEncodeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::keys::KeyEncodeError where U: core::convert::TryFrom<T>
+pub type acetone_model::keys::KeyEncodeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::keys::KeyEncodeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::keys::KeyEncodeError where T: core::clone::Clone
+pub type acetone_model::keys::KeyEncodeError::Owned = T
+pub fn acetone_model::keys::KeyEncodeError::clone_into(&self, &mut T)
+pub fn acetone_model::keys::KeyEncodeError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::keys::KeyEncodeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::keys::KeyEncodeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::keys::KeyEncodeError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::keys::KeyEncodeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::keys::KeyEncodeError where T: ?core::marker::Sized
+pub fn acetone_model::keys::KeyEncodeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::keys::KeyEncodeError where T: ?core::marker::Sized
+pub fn acetone_model::keys::KeyEncodeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::keys::KeyEncodeError where T: core::clone::Clone
+pub unsafe fn acetone_model::keys::KeyEncodeError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::keys::KeyEncodeError
+pub fn acetone_model::keys::KeyEncodeError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::keys::KeyEncodeError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::keys::KeyEncodeError
+pub type acetone_model::keys::KeyEncodeError::Output = T
+pub const acetone_model::keys::MAX_DEPTH: usize
+pub fn acetone_model::keys::decode_key(&[u8]) -> core::result::Result<alloc::vec::Vec<acetone_model::Value>, acetone_model::keys::KeyDecodeError>
+pub fn acetone_model::keys::encode_key(&[acetone_model::Value]) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::keys::KeyEncodeError>
+pub fn acetone_model::keys::encode_key_into(&mut alloc::vec::Vec<u8>, &[acetone_model::Value]) -> core::result::Result<(), acetone_model::keys::KeyEncodeError>
+pub fn acetone_model::keys::key_cmp(&[acetone_model::Value], &[acetone_model::Value]) -> core::cmp::Ordering
+pub mod acetone_model::manifest
+pub enum acetone_model::manifest::ManifestDecodeError
+pub acetone_model::manifest::ManifestDecodeError::Cbor(acetone_model::values::ValueDecodeError)
+pub acetone_model::manifest::ManifestDecodeError::EmptyIndexName
+pub acetone_model::manifest::ManifestDecodeError::InvalidHash(alloc::string::String)
+pub acetone_model::manifest::ManifestDecodeError::InvalidHeight(u64)
+pub acetone_model::manifest::ManifestDecodeError::InvalidParams(alloc::string::String)
+pub acetone_model::manifest::ManifestDecodeError::NotCanonical(&'static str)
+pub acetone_model::manifest::ManifestDecodeError::Shape(&'static str)
+pub acetone_model::manifest::ManifestDecodeError::UnsupportedVersion(u64)
+impl core::clone::Clone for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::clone(&self) -> acetone_model::manifest::ManifestDecodeError
+impl core::cmp::Eq for acetone_model::manifest::ManifestDecodeError
+impl core::cmp::PartialEq for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::eq(&self, &acetone_model::manifest::ManifestDecodeError) -> bool
+impl core::convert::From<acetone_model::values::ValueDecodeError> for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::from(acetone_model::values::ValueDecodeError) -> Self
+impl core::error::Error for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::manifest::ManifestDecodeError
+impl core::marker::Freeze for acetone_model::manifest::ManifestDecodeError
+impl core::marker::Send for acetone_model::manifest::ManifestDecodeError
+impl core::marker::Sync for acetone_model::manifest::ManifestDecodeError
+impl core::marker::Unpin for acetone_model::manifest::ManifestDecodeError
+impl core::marker::UnsafeUnpin for acetone_model::manifest::ManifestDecodeError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::manifest::ManifestDecodeError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::manifest::ManifestDecodeError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::manifest::ManifestDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::manifest::ManifestDecodeError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::manifest::ManifestDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::manifest::ManifestDecodeError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::manifest::ManifestDecodeError where U: core::convert::From<T>
+pub fn acetone_model::manifest::ManifestDecodeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::manifest::ManifestDecodeError where U: core::convert::Into<T>
+pub type acetone_model::manifest::ManifestDecodeError::Error = core::convert::Infallible
+pub fn acetone_model::manifest::ManifestDecodeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::manifest::ManifestDecodeError where U: core::convert::TryFrom<T>
+pub type acetone_model::manifest::ManifestDecodeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::manifest::ManifestDecodeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::manifest::ManifestDecodeError where T: core::clone::Clone
+pub type acetone_model::manifest::ManifestDecodeError::Owned = T
+pub fn acetone_model::manifest::ManifestDecodeError::clone_into(&self, &mut T)
+pub fn acetone_model::manifest::ManifestDecodeError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::manifest::ManifestDecodeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::manifest::ManifestDecodeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::manifest::ManifestDecodeError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::manifest::ManifestDecodeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::manifest::ManifestDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::manifest::ManifestDecodeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::manifest::ManifestDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::manifest::ManifestDecodeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::manifest::ManifestDecodeError where T: core::clone::Clone
+pub unsafe fn acetone_model::manifest::ManifestDecodeError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::manifest::ManifestDecodeError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::manifest::ManifestDecodeError
+pub type acetone_model::manifest::ManifestDecodeError::Output = T
+pub struct acetone_model::manifest::Manifest
+pub acetone_model::manifest::Manifest::chunk_params: acetone_prolly::chunker::ChunkParams
+pub acetone_model::manifest::Manifest::conflicts: core::option::Option<acetone_model::manifest::MapRoot>
+pub acetone_model::manifest::Manifest::edges_fwd: acetone_model::manifest::MapRoot
+pub acetone_model::manifest::Manifest::edges_rev: acetone_model::manifest::MapRoot
+pub acetone_model::manifest::Manifest::indexes: alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::manifest::MapRoot>
+pub acetone_model::manifest::Manifest::nodes: acetone_model::manifest::MapRoot
+pub acetone_model::manifest::Manifest::schema: acetone_model::manifest::MapRoot
+impl acetone_model::manifest::Manifest
+pub fn acetone_model::manifest::Manifest::decode(&[u8]) -> core::result::Result<Self, acetone_model::manifest::ManifestDecodeError>
+pub fn acetone_model::manifest::Manifest::encode(&self) -> alloc::vec::Vec<u8>
+impl core::clone::Clone for acetone_model::manifest::Manifest
+pub fn acetone_model::manifest::Manifest::clone(&self) -> acetone_model::manifest::Manifest
+impl core::cmp::Eq for acetone_model::manifest::Manifest
+impl core::cmp::PartialEq for acetone_model::manifest::Manifest
+pub fn acetone_model::manifest::Manifest::eq(&self, &acetone_model::manifest::Manifest) -> bool
+impl core::fmt::Debug for acetone_model::manifest::Manifest
+pub fn acetone_model::manifest::Manifest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::manifest::Manifest
+impl core::marker::Freeze for acetone_model::manifest::Manifest
+impl core::marker::Send for acetone_model::manifest::Manifest
+impl core::marker::Sync for acetone_model::manifest::Manifest
+impl core::marker::Unpin for acetone_model::manifest::Manifest
+impl core::marker::UnsafeUnpin for acetone_model::manifest::Manifest
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::manifest::Manifest
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::manifest::Manifest
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::manifest::Manifest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::manifest::Manifest::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::manifest::Manifest where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::manifest::Manifest::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::manifest::Manifest where U: core::convert::From<T>
+pub fn acetone_model::manifest::Manifest::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::manifest::Manifest where U: core::convert::Into<T>
+pub type acetone_model::manifest::Manifest::Error = core::convert::Infallible
+pub fn acetone_model::manifest::Manifest::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::manifest::Manifest where U: core::convert::TryFrom<T>
+pub type acetone_model::manifest::Manifest::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::manifest::Manifest::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::manifest::Manifest where T: core::clone::Clone
+pub type acetone_model::manifest::Manifest::Owned = T
+pub fn acetone_model::manifest::Manifest::clone_into(&self, &mut T)
+pub fn acetone_model::manifest::Manifest::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::manifest::Manifest where T: 'static + ?core::marker::Sized
+pub fn acetone_model::manifest::Manifest::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::manifest::Manifest where T: ?core::marker::Sized
+pub fn acetone_model::manifest::Manifest::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::manifest::Manifest where T: ?core::marker::Sized
+pub fn acetone_model::manifest::Manifest::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::manifest::Manifest where T: core::clone::Clone
+pub unsafe fn acetone_model::manifest::Manifest::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::manifest::Manifest
+pub fn acetone_model::manifest::Manifest::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::manifest::Manifest
+pub type acetone_model::manifest::Manifest::Output = T
+pub struct acetone_model::manifest::MapRoot
+pub acetone_model::manifest::MapRoot::hash: acetone_store::hash::Hash
+pub acetone_model::manifest::MapRoot::height: u32
+impl acetone_model::manifest::MapRoot
+pub fn acetone_model::manifest::MapRoot::from_root(&acetone_prolly::Root) -> Self
+pub fn acetone_model::manifest::MapRoot::to_root(&self, acetone_prolly::chunker::ChunkParams) -> core::result::Result<acetone_prolly::Root, acetone_prolly::error::ProllyError>
+impl core::clone::Clone for acetone_model::manifest::MapRoot
+pub fn acetone_model::manifest::MapRoot::clone(&self) -> acetone_model::manifest::MapRoot
+impl core::cmp::Eq for acetone_model::manifest::MapRoot
+impl core::cmp::PartialEq for acetone_model::manifest::MapRoot
+pub fn acetone_model::manifest::MapRoot::eq(&self, &acetone_model::manifest::MapRoot) -> bool
+impl core::fmt::Debug for acetone_model::manifest::MapRoot
+pub fn acetone_model::manifest::MapRoot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for acetone_model::manifest::MapRoot
+impl core::marker::StructuralPartialEq for acetone_model::manifest::MapRoot
+impl core::marker::Freeze for acetone_model::manifest::MapRoot
+impl core::marker::Send for acetone_model::manifest::MapRoot
+impl core::marker::Sync for acetone_model::manifest::MapRoot
+impl core::marker::Unpin for acetone_model::manifest::MapRoot
+impl core::marker::UnsafeUnpin for acetone_model::manifest::MapRoot
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::manifest::MapRoot
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::manifest::MapRoot
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::manifest::MapRoot where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::manifest::MapRoot::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::manifest::MapRoot where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::manifest::MapRoot::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::manifest::MapRoot where U: core::convert::From<T>
+pub fn acetone_model::manifest::MapRoot::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::manifest::MapRoot where U: core::convert::Into<T>
+pub type acetone_model::manifest::MapRoot::Error = core::convert::Infallible
+pub fn acetone_model::manifest::MapRoot::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::manifest::MapRoot where U: core::convert::TryFrom<T>
+pub type acetone_model::manifest::MapRoot::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::manifest::MapRoot::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::manifest::MapRoot where T: core::clone::Clone
+pub type acetone_model::manifest::MapRoot::Owned = T
+pub fn acetone_model::manifest::MapRoot::clone_into(&self, &mut T)
+pub fn acetone_model::manifest::MapRoot::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::manifest::MapRoot where T: 'static + ?core::marker::Sized
+pub fn acetone_model::manifest::MapRoot::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::manifest::MapRoot where T: ?core::marker::Sized
+pub fn acetone_model::manifest::MapRoot::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::manifest::MapRoot where T: ?core::marker::Sized
+pub fn acetone_model::manifest::MapRoot::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::manifest::MapRoot where T: core::clone::Clone
+pub unsafe fn acetone_model::manifest::MapRoot::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::manifest::MapRoot
+pub fn acetone_model::manifest::MapRoot::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::manifest::MapRoot
+pub type acetone_model::manifest::MapRoot::Output = T
+pub const acetone_model::manifest::FORMAT_VERSION: u32
+pub mod acetone_model::records
+pub enum acetone_model::records::RecordDecodeError
+pub acetone_model::records::RecordDecodeError::Cbor(acetone_model::values::ValueDecodeError)
+pub acetone_model::records::RecordDecodeError::NotCanonical(&'static str)
+pub acetone_model::records::RecordDecodeError::Shape(&'static str)
+impl core::clone::Clone for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::clone(&self) -> acetone_model::records::RecordDecodeError
+impl core::cmp::Eq for acetone_model::records::RecordDecodeError
+impl core::cmp::PartialEq for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::eq(&self, &acetone_model::records::RecordDecodeError) -> bool
+impl core::convert::From<acetone_model::values::ValueDecodeError> for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::from(acetone_model::values::ValueDecodeError) -> Self
+impl core::error::Error for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::records::RecordDecodeError
+impl core::marker::Freeze for acetone_model::records::RecordDecodeError
+impl core::marker::Send for acetone_model::records::RecordDecodeError
+impl core::marker::Sync for acetone_model::records::RecordDecodeError
+impl core::marker::Unpin for acetone_model::records::RecordDecodeError
+impl core::marker::UnsafeUnpin for acetone_model::records::RecordDecodeError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::records::RecordDecodeError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::records::RecordDecodeError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::records::RecordDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::records::RecordDecodeError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::records::RecordDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::records::RecordDecodeError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::records::RecordDecodeError where U: core::convert::From<T>
+pub fn acetone_model::records::RecordDecodeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::records::RecordDecodeError where U: core::convert::Into<T>
+pub type acetone_model::records::RecordDecodeError::Error = core::convert::Infallible
+pub fn acetone_model::records::RecordDecodeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::records::RecordDecodeError where U: core::convert::TryFrom<T>
+pub type acetone_model::records::RecordDecodeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::records::RecordDecodeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::records::RecordDecodeError where T: core::clone::Clone
+pub type acetone_model::records::RecordDecodeError::Owned = T
+pub fn acetone_model::records::RecordDecodeError::clone_into(&self, &mut T)
+pub fn acetone_model::records::RecordDecodeError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::records::RecordDecodeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::records::RecordDecodeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::records::RecordDecodeError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::records::RecordDecodeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::records::RecordDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::records::RecordDecodeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::records::RecordDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::records::RecordDecodeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::records::RecordDecodeError where T: core::clone::Clone
+pub unsafe fn acetone_model::records::RecordDecodeError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::records::RecordDecodeError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::records::RecordDecodeError
+pub type acetone_model::records::RecordDecodeError::Output = T
+pub enum acetone_model::records::RecordEncodeError
+pub acetone_model::records::RecordEncodeError::Value(acetone_model::values::ValueEncodeError)
+impl core::clone::Clone for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::clone(&self) -> acetone_model::records::RecordEncodeError
+impl core::cmp::Eq for acetone_model::records::RecordEncodeError
+impl core::cmp::PartialEq for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::eq(&self, &acetone_model::records::RecordEncodeError) -> bool
+impl core::convert::From<acetone_model::values::ValueEncodeError> for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::from(acetone_model::values::ValueEncodeError) -> Self
+impl core::error::Error for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::records::RecordEncodeError
+impl core::marker::Freeze for acetone_model::records::RecordEncodeError
+impl core::marker::Send for acetone_model::records::RecordEncodeError
+impl core::marker::Sync for acetone_model::records::RecordEncodeError
+impl core::marker::Unpin for acetone_model::records::RecordEncodeError
+impl core::marker::UnsafeUnpin for acetone_model::records::RecordEncodeError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::records::RecordEncodeError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::records::RecordEncodeError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::records::RecordEncodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::records::RecordEncodeError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::records::RecordEncodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::records::RecordEncodeError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::records::RecordEncodeError where U: core::convert::From<T>
+pub fn acetone_model::records::RecordEncodeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::records::RecordEncodeError where U: core::convert::Into<T>
+pub type acetone_model::records::RecordEncodeError::Error = core::convert::Infallible
+pub fn acetone_model::records::RecordEncodeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::records::RecordEncodeError where U: core::convert::TryFrom<T>
+pub type acetone_model::records::RecordEncodeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::records::RecordEncodeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::records::RecordEncodeError where T: core::clone::Clone
+pub type acetone_model::records::RecordEncodeError::Owned = T
+pub fn acetone_model::records::RecordEncodeError::clone_into(&self, &mut T)
+pub fn acetone_model::records::RecordEncodeError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::records::RecordEncodeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::records::RecordEncodeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::records::RecordEncodeError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::records::RecordEncodeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::records::RecordEncodeError where T: ?core::marker::Sized
+pub fn acetone_model::records::RecordEncodeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::records::RecordEncodeError where T: ?core::marker::Sized
+pub fn acetone_model::records::RecordEncodeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::records::RecordEncodeError where T: core::clone::Clone
+pub unsafe fn acetone_model::records::RecordEncodeError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::records::RecordEncodeError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::records::RecordEncodeError
+pub type acetone_model::records::RecordEncodeError::Output = T
+pub struct acetone_model::records::EdgeRecord
+impl acetone_model::records::EdgeRecord
+pub fn acetone_model::records::EdgeRecord::decode(&[u8]) -> core::result::Result<Self, acetone_model::records::RecordDecodeError>
+pub fn acetone_model::records::EdgeRecord::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::records::RecordEncodeError>
+pub fn acetone_model::records::EdgeRecord::new(alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::Value>) -> Self
+pub fn acetone_model::records::EdgeRecord::properties(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::Value>
+impl core::clone::Clone for acetone_model::records::EdgeRecord
+pub fn acetone_model::records::EdgeRecord::clone(&self) -> acetone_model::records::EdgeRecord
+impl core::cmp::PartialEq for acetone_model::records::EdgeRecord
+pub fn acetone_model::records::EdgeRecord::eq(&self, &acetone_model::records::EdgeRecord) -> bool
+impl core::default::Default for acetone_model::records::EdgeRecord
+pub fn acetone_model::records::EdgeRecord::default() -> acetone_model::records::EdgeRecord
+impl core::fmt::Debug for acetone_model::records::EdgeRecord
+pub fn acetone_model::records::EdgeRecord::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::records::EdgeRecord
+impl core::marker::Freeze for acetone_model::records::EdgeRecord
+impl core::marker::Send for acetone_model::records::EdgeRecord
+impl core::marker::Sync for acetone_model::records::EdgeRecord
+impl core::marker::Unpin for acetone_model::records::EdgeRecord
+impl core::marker::UnsafeUnpin for acetone_model::records::EdgeRecord
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::records::EdgeRecord
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::records::EdgeRecord
+impl<T, U> core::convert::Into<U> for acetone_model::records::EdgeRecord where U: core::convert::From<T>
+pub fn acetone_model::records::EdgeRecord::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::records::EdgeRecord where U: core::convert::Into<T>
+pub type acetone_model::records::EdgeRecord::Error = core::convert::Infallible
+pub fn acetone_model::records::EdgeRecord::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::records::EdgeRecord where U: core::convert::TryFrom<T>
+pub type acetone_model::records::EdgeRecord::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::records::EdgeRecord::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::records::EdgeRecord where T: core::clone::Clone
+pub type acetone_model::records::EdgeRecord::Owned = T
+pub fn acetone_model::records::EdgeRecord::clone_into(&self, &mut T)
+pub fn acetone_model::records::EdgeRecord::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::records::EdgeRecord where T: 'static + ?core::marker::Sized
+pub fn acetone_model::records::EdgeRecord::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::records::EdgeRecord where T: ?core::marker::Sized
+pub fn acetone_model::records::EdgeRecord::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::records::EdgeRecord where T: ?core::marker::Sized
+pub fn acetone_model::records::EdgeRecord::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::records::EdgeRecord where T: core::clone::Clone
+pub unsafe fn acetone_model::records::EdgeRecord::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::records::EdgeRecord
+pub fn acetone_model::records::EdgeRecord::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::records::EdgeRecord
+pub type acetone_model::records::EdgeRecord::Output = T
+pub struct acetone_model::records::NodeRecord
+impl acetone_model::records::NodeRecord
+pub fn acetone_model::records::NodeRecord::decode(&[u8]) -> core::result::Result<Self, acetone_model::records::RecordDecodeError>
+pub fn acetone_model::records::NodeRecord::encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::records::RecordEncodeError>
+pub fn acetone_model::records::NodeRecord::new(impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>, alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::Value>) -> Self
+pub fn acetone_model::records::NodeRecord::properties(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::Value>
+pub fn acetone_model::records::NodeRecord::secondary_labels(&self) -> &[alloc::string::String]
+impl core::clone::Clone for acetone_model::records::NodeRecord
+pub fn acetone_model::records::NodeRecord::clone(&self) -> acetone_model::records::NodeRecord
+impl core::cmp::PartialEq for acetone_model::records::NodeRecord
+pub fn acetone_model::records::NodeRecord::eq(&self, &acetone_model::records::NodeRecord) -> bool
+impl core::fmt::Debug for acetone_model::records::NodeRecord
+pub fn acetone_model::records::NodeRecord::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::records::NodeRecord
+impl core::marker::Freeze for acetone_model::records::NodeRecord
+impl core::marker::Send for acetone_model::records::NodeRecord
+impl core::marker::Sync for acetone_model::records::NodeRecord
+impl core::marker::Unpin for acetone_model::records::NodeRecord
+impl core::marker::UnsafeUnpin for acetone_model::records::NodeRecord
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::records::NodeRecord
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::records::NodeRecord
+impl<T, U> core::convert::Into<U> for acetone_model::records::NodeRecord where U: core::convert::From<T>
+pub fn acetone_model::records::NodeRecord::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::records::NodeRecord where U: core::convert::Into<T>
+pub type acetone_model::records::NodeRecord::Error = core::convert::Infallible
+pub fn acetone_model::records::NodeRecord::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::records::NodeRecord where U: core::convert::TryFrom<T>
+pub type acetone_model::records::NodeRecord::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::records::NodeRecord::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::records::NodeRecord where T: core::clone::Clone
+pub type acetone_model::records::NodeRecord::Owned = T
+pub fn acetone_model::records::NodeRecord::clone_into(&self, &mut T)
+pub fn acetone_model::records::NodeRecord::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::records::NodeRecord where T: 'static + ?core::marker::Sized
+pub fn acetone_model::records::NodeRecord::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::records::NodeRecord where T: ?core::marker::Sized
+pub fn acetone_model::records::NodeRecord::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::records::NodeRecord where T: ?core::marker::Sized
+pub fn acetone_model::records::NodeRecord::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::records::NodeRecord where T: core::clone::Clone
+pub unsafe fn acetone_model::records::NodeRecord::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::records::NodeRecord
+pub fn acetone_model::records::NodeRecord::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::records::NodeRecord
+pub type acetone_model::records::NodeRecord::Output = T
+pub mod acetone_model::schema
+pub enum acetone_model::schema::PropertyType
+pub acetone_model::schema::PropertyType::Bool
+pub acetone_model::schema::PropertyType::Bytes
+pub acetone_model::schema::PropertyType::Date
+pub acetone_model::schema::PropertyType::DateTime
+pub acetone_model::schema::PropertyType::Duration
+pub acetone_model::schema::PropertyType::Float
+pub acetone_model::schema::PropertyType::Int
+pub acetone_model::schema::PropertyType::List
+pub acetone_model::schema::PropertyType::String
+pub acetone_model::schema::PropertyType::Time
+impl acetone_model::schema::PropertyType
+pub fn acetone_model::schema::PropertyType::as_str(self) -> &'static str
+pub fn acetone_model::schema::PropertyType::matches(self, &acetone_model::Value) -> bool
+pub fn acetone_model::schema::PropertyType::names() -> &'static [&'static str]
+pub fn acetone_model::schema::PropertyType::of(&acetone_model::Value) -> core::option::Option<Self>
+pub fn acetone_model::schema::PropertyType::parse(&str) -> core::result::Result<Self, acetone_model::schema::SchemaError>
+impl core::clone::Clone for acetone_model::schema::PropertyType
+pub fn acetone_model::schema::PropertyType::clone(&self) -> acetone_model::schema::PropertyType
+impl core::cmp::Eq for acetone_model::schema::PropertyType
+impl core::cmp::PartialEq for acetone_model::schema::PropertyType
+pub fn acetone_model::schema::PropertyType::eq(&self, &acetone_model::schema::PropertyType) -> bool
+impl core::fmt::Debug for acetone_model::schema::PropertyType
+pub fn acetone_model::schema::PropertyType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for acetone_model::schema::PropertyType
+impl core::marker::StructuralPartialEq for acetone_model::schema::PropertyType
+impl core::marker::Freeze for acetone_model::schema::PropertyType
+impl core::marker::Send for acetone_model::schema::PropertyType
+impl core::marker::Sync for acetone_model::schema::PropertyType
+impl core::marker::Unpin for acetone_model::schema::PropertyType
+impl core::marker::UnsafeUnpin for acetone_model::schema::PropertyType
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::schema::PropertyType
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::schema::PropertyType
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::schema::PropertyType where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::PropertyType::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::schema::PropertyType where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::PropertyType::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::schema::PropertyType where U: core::convert::From<T>
+pub fn acetone_model::schema::PropertyType::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::schema::PropertyType where U: core::convert::Into<T>
+pub type acetone_model::schema::PropertyType::Error = core::convert::Infallible
+pub fn acetone_model::schema::PropertyType::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::schema::PropertyType where U: core::convert::TryFrom<T>
+pub type acetone_model::schema::PropertyType::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::schema::PropertyType::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::schema::PropertyType where T: core::clone::Clone
+pub type acetone_model::schema::PropertyType::Owned = T
+pub fn acetone_model::schema::PropertyType::clone_into(&self, &mut T)
+pub fn acetone_model::schema::PropertyType::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::schema::PropertyType where T: 'static + ?core::marker::Sized
+pub fn acetone_model::schema::PropertyType::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::schema::PropertyType where T: ?core::marker::Sized
+pub fn acetone_model::schema::PropertyType::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::schema::PropertyType where T: ?core::marker::Sized
+pub fn acetone_model::schema::PropertyType::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::schema::PropertyType where T: core::clone::Clone
+pub unsafe fn acetone_model::schema::PropertyType::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::schema::PropertyType
+pub fn acetone_model::schema::PropertyType::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::schema::PropertyType
+pub type acetone_model::schema::PropertyType::Output = T
+pub enum acetone_model::schema::SchemaEntry
+pub acetone_model::schema::SchemaEntry::Index
+pub acetone_model::schema::SchemaEntry::Index::def: acetone_model::schema::IndexDef
+pub acetone_model::schema::SchemaEntry::Index::name: alloc::string::String
+pub acetone_model::schema::SchemaEntry::Label
+pub acetone_model::schema::SchemaEntry::Label::def: acetone_model::schema::LabelDef
+pub acetone_model::schema::SchemaEntry::Label::name: alloc::string::String
+pub acetone_model::schema::SchemaEntry::RelType
+pub acetone_model::schema::SchemaEntry::RelType::def: acetone_model::schema::RelTypeDef
+pub acetone_model::schema::SchemaEntry::RelType::name: alloc::string::String
+impl acetone_model::schema::SchemaEntry
+pub fn acetone_model::schema::SchemaEntry::decode(&[u8], &[u8]) -> core::result::Result<Self, acetone_model::schema::SchemaError>
+pub fn acetone_model::schema::SchemaEntry::encode_value(&self) -> alloc::vec::Vec<u8>
+pub fn acetone_model::schema::SchemaEntry::map_key(&self) -> alloc::vec::Vec<u8>
+pub fn acetone_model::schema::SchemaEntry::name(&self) -> &str
+impl core::clone::Clone for acetone_model::schema::SchemaEntry
+pub fn acetone_model::schema::SchemaEntry::clone(&self) -> acetone_model::schema::SchemaEntry
+impl core::cmp::Eq for acetone_model::schema::SchemaEntry
+impl core::cmp::PartialEq for acetone_model::schema::SchemaEntry
+pub fn acetone_model::schema::SchemaEntry::eq(&self, &acetone_model::schema::SchemaEntry) -> bool
+impl core::fmt::Debug for acetone_model::schema::SchemaEntry
+pub fn acetone_model::schema::SchemaEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::schema::SchemaEntry
+impl core::marker::Freeze for acetone_model::schema::SchemaEntry
+impl core::marker::Send for acetone_model::schema::SchemaEntry
+impl core::marker::Sync for acetone_model::schema::SchemaEntry
+impl core::marker::Unpin for acetone_model::schema::SchemaEntry
+impl core::marker::UnsafeUnpin for acetone_model::schema::SchemaEntry
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::schema::SchemaEntry
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::schema::SchemaEntry
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::schema::SchemaEntry where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::SchemaEntry::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::schema::SchemaEntry where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::SchemaEntry::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::schema::SchemaEntry where U: core::convert::From<T>
+pub fn acetone_model::schema::SchemaEntry::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::schema::SchemaEntry where U: core::convert::Into<T>
+pub type acetone_model::schema::SchemaEntry::Error = core::convert::Infallible
+pub fn acetone_model::schema::SchemaEntry::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::schema::SchemaEntry where U: core::convert::TryFrom<T>
+pub type acetone_model::schema::SchemaEntry::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::schema::SchemaEntry::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::schema::SchemaEntry where T: core::clone::Clone
+pub type acetone_model::schema::SchemaEntry::Owned = T
+pub fn acetone_model::schema::SchemaEntry::clone_into(&self, &mut T)
+pub fn acetone_model::schema::SchemaEntry::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::schema::SchemaEntry where T: 'static + ?core::marker::Sized
+pub fn acetone_model::schema::SchemaEntry::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::schema::SchemaEntry where T: ?core::marker::Sized
+pub fn acetone_model::schema::SchemaEntry::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::schema::SchemaEntry where T: ?core::marker::Sized
+pub fn acetone_model::schema::SchemaEntry::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::schema::SchemaEntry where T: core::clone::Clone
+pub unsafe fn acetone_model::schema::SchemaEntry::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::schema::SchemaEntry
+pub fn acetone_model::schema::SchemaEntry::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::schema::SchemaEntry
+pub type acetone_model::schema::SchemaEntry::Output = T
+pub enum acetone_model::schema::SchemaError
+pub acetone_model::schema::SchemaError::Cbor(acetone_model::values::ValueDecodeError)
+pub acetone_model::schema::SchemaError::EmptyName(&'static str)
+pub acetone_model::schema::SchemaError::InvalidConstraint(&'static str)
+pub acetone_model::schema::SchemaError::InvalidKey(&'static str)
+pub acetone_model::schema::SchemaError::KeyDecode(acetone_model::keys::KeyDecodeError)
+pub acetone_model::schema::SchemaError::NotCanonical(&'static str)
+pub acetone_model::schema::SchemaError::Shape(&'static str)
+pub acetone_model::schema::SchemaError::UnknownKind(alloc::string::String)
+pub acetone_model::schema::SchemaError::UnknownType(alloc::string::String)
+impl core::clone::Clone for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::clone(&self) -> acetone_model::schema::SchemaError
+impl core::cmp::Eq for acetone_model::schema::SchemaError
+impl core::cmp::PartialEq for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::eq(&self, &acetone_model::schema::SchemaError) -> bool
+impl core::convert::From<acetone_model::keys::KeyDecodeError> for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::from(acetone_model::keys::KeyDecodeError) -> Self
+impl core::convert::From<acetone_model::values::ValueDecodeError> for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::from(acetone_model::values::ValueDecodeError) -> Self
+impl core::error::Error for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::schema::SchemaError
+impl core::marker::Freeze for acetone_model::schema::SchemaError
+impl core::marker::Send for acetone_model::schema::SchemaError
+impl core::marker::Sync for acetone_model::schema::SchemaError
+impl core::marker::Unpin for acetone_model::schema::SchemaError
+impl core::marker::UnsafeUnpin for acetone_model::schema::SchemaError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::schema::SchemaError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::schema::SchemaError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::schema::SchemaError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::SchemaError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::schema::SchemaError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::SchemaError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::schema::SchemaError where U: core::convert::From<T>
+pub fn acetone_model::schema::SchemaError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::schema::SchemaError where U: core::convert::Into<T>
+pub type acetone_model::schema::SchemaError::Error = core::convert::Infallible
+pub fn acetone_model::schema::SchemaError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::schema::SchemaError where U: core::convert::TryFrom<T>
+pub type acetone_model::schema::SchemaError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::schema::SchemaError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::schema::SchemaError where T: core::clone::Clone
+pub type acetone_model::schema::SchemaError::Owned = T
+pub fn acetone_model::schema::SchemaError::clone_into(&self, &mut T)
+pub fn acetone_model::schema::SchemaError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::schema::SchemaError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::schema::SchemaError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::schema::SchemaError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::schema::SchemaError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::schema::SchemaError where T: ?core::marker::Sized
+pub fn acetone_model::schema::SchemaError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::schema::SchemaError where T: ?core::marker::Sized
+pub fn acetone_model::schema::SchemaError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::schema::SchemaError where T: core::clone::Clone
+pub unsafe fn acetone_model::schema::SchemaError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::schema::SchemaError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::schema::SchemaError
+pub type acetone_model::schema::SchemaError::Output = T
+pub struct acetone_model::schema::IndexDef
+impl acetone_model::schema::IndexDef
+pub fn acetone_model::schema::IndexDef::label(&self) -> &str
+pub fn acetone_model::schema::IndexDef::new(impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<alloc::string::String>) -> core::result::Result<Self, acetone_model::schema::SchemaError>
+pub fn acetone_model::schema::IndexDef::properties(&self) -> &[alloc::string::String]
+impl core::clone::Clone for acetone_model::schema::IndexDef
+pub fn acetone_model::schema::IndexDef::clone(&self) -> acetone_model::schema::IndexDef
+impl core::cmp::Eq for acetone_model::schema::IndexDef
+impl core::cmp::PartialEq for acetone_model::schema::IndexDef
+pub fn acetone_model::schema::IndexDef::eq(&self, &acetone_model::schema::IndexDef) -> bool
+impl core::fmt::Debug for acetone_model::schema::IndexDef
+pub fn acetone_model::schema::IndexDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::schema::IndexDef
+impl core::marker::Freeze for acetone_model::schema::IndexDef
+impl core::marker::Send for acetone_model::schema::IndexDef
+impl core::marker::Sync for acetone_model::schema::IndexDef
+impl core::marker::Unpin for acetone_model::schema::IndexDef
+impl core::marker::UnsafeUnpin for acetone_model::schema::IndexDef
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::schema::IndexDef
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::schema::IndexDef
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::schema::IndexDef where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::IndexDef::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::schema::IndexDef where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::IndexDef::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::schema::IndexDef where U: core::convert::From<T>
+pub fn acetone_model::schema::IndexDef::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::schema::IndexDef where U: core::convert::Into<T>
+pub type acetone_model::schema::IndexDef::Error = core::convert::Infallible
+pub fn acetone_model::schema::IndexDef::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::schema::IndexDef where U: core::convert::TryFrom<T>
+pub type acetone_model::schema::IndexDef::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::schema::IndexDef::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::schema::IndexDef where T: core::clone::Clone
+pub type acetone_model::schema::IndexDef::Owned = T
+pub fn acetone_model::schema::IndexDef::clone_into(&self, &mut T)
+pub fn acetone_model::schema::IndexDef::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::schema::IndexDef where T: 'static + ?core::marker::Sized
+pub fn acetone_model::schema::IndexDef::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::schema::IndexDef where T: ?core::marker::Sized
+pub fn acetone_model::schema::IndexDef::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::schema::IndexDef where T: ?core::marker::Sized
+pub fn acetone_model::schema::IndexDef::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::schema::IndexDef where T: core::clone::Clone
+pub unsafe fn acetone_model::schema::IndexDef::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::schema::IndexDef
+pub fn acetone_model::schema::IndexDef::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::schema::IndexDef
+pub type acetone_model::schema::IndexDef::Output = T
+pub struct acetone_model::schema::LabelDef
+impl acetone_model::schema::LabelDef
+pub fn acetone_model::schema::LabelDef::exists(&self) -> &[alloc::string::String]
+pub fn acetone_model::schema::LabelDef::is_surrogate(&self) -> bool
+pub fn acetone_model::schema::LabelDef::key(&self) -> &[alloc::string::String]
+pub fn acetone_model::schema::LabelDef::new(alloc::vec::Vec<alloc::string::String>, alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::schema::PropertyType>, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> core::result::Result<Self, acetone_model::schema::SchemaError>
+pub fn acetone_model::schema::LabelDef::surrogate(alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::schema::PropertyType>, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> core::result::Result<Self, acetone_model::schema::SchemaError>
+pub fn acetone_model::schema::LabelDef::types(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::schema::PropertyType>
+pub fn acetone_model::schema::LabelDef::unique(&self) -> &[alloc::string::String]
+impl core::clone::Clone for acetone_model::schema::LabelDef
+pub fn acetone_model::schema::LabelDef::clone(&self) -> acetone_model::schema::LabelDef
+impl core::cmp::Eq for acetone_model::schema::LabelDef
+impl core::cmp::PartialEq for acetone_model::schema::LabelDef
+pub fn acetone_model::schema::LabelDef::eq(&self, &acetone_model::schema::LabelDef) -> bool
+impl core::fmt::Debug for acetone_model::schema::LabelDef
+pub fn acetone_model::schema::LabelDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::schema::LabelDef
+impl core::marker::Freeze for acetone_model::schema::LabelDef
+impl core::marker::Send for acetone_model::schema::LabelDef
+impl core::marker::Sync for acetone_model::schema::LabelDef
+impl core::marker::Unpin for acetone_model::schema::LabelDef
+impl core::marker::UnsafeUnpin for acetone_model::schema::LabelDef
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::schema::LabelDef
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::schema::LabelDef
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::schema::LabelDef where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::LabelDef::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::schema::LabelDef where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::LabelDef::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::schema::LabelDef where U: core::convert::From<T>
+pub fn acetone_model::schema::LabelDef::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::schema::LabelDef where U: core::convert::Into<T>
+pub type acetone_model::schema::LabelDef::Error = core::convert::Infallible
+pub fn acetone_model::schema::LabelDef::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::schema::LabelDef where U: core::convert::TryFrom<T>
+pub type acetone_model::schema::LabelDef::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::schema::LabelDef::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::schema::LabelDef where T: core::clone::Clone
+pub type acetone_model::schema::LabelDef::Owned = T
+pub fn acetone_model::schema::LabelDef::clone_into(&self, &mut T)
+pub fn acetone_model::schema::LabelDef::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::schema::LabelDef where T: 'static + ?core::marker::Sized
+pub fn acetone_model::schema::LabelDef::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::schema::LabelDef where T: ?core::marker::Sized
+pub fn acetone_model::schema::LabelDef::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::schema::LabelDef where T: ?core::marker::Sized
+pub fn acetone_model::schema::LabelDef::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::schema::LabelDef where T: core::clone::Clone
+pub unsafe fn acetone_model::schema::LabelDef::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::schema::LabelDef
+pub fn acetone_model::schema::LabelDef::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::schema::LabelDef
+pub type acetone_model::schema::LabelDef::Output = T
+pub struct acetone_model::schema::RelTypeDef
+impl acetone_model::schema::RelTypeDef
+pub fn acetone_model::schema::RelTypeDef::discriminator(&self) -> core::option::Option<&str>
+pub fn acetone_model::schema::RelTypeDef::exists(&self) -> &[alloc::string::String]
+pub fn acetone_model::schema::RelTypeDef::new(core::option::Option<alloc::string::String>, alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::schema::PropertyType>, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>) -> core::result::Result<Self, acetone_model::schema::SchemaError>
+pub fn acetone_model::schema::RelTypeDef::types(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_model::schema::PropertyType>
+impl core::clone::Clone for acetone_model::schema::RelTypeDef
+pub fn acetone_model::schema::RelTypeDef::clone(&self) -> acetone_model::schema::RelTypeDef
+impl core::cmp::Eq for acetone_model::schema::RelTypeDef
+impl core::cmp::PartialEq for acetone_model::schema::RelTypeDef
+pub fn acetone_model::schema::RelTypeDef::eq(&self, &acetone_model::schema::RelTypeDef) -> bool
+impl core::fmt::Debug for acetone_model::schema::RelTypeDef
+pub fn acetone_model::schema::RelTypeDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::schema::RelTypeDef
+impl core::marker::Freeze for acetone_model::schema::RelTypeDef
+impl core::marker::Send for acetone_model::schema::RelTypeDef
+impl core::marker::Sync for acetone_model::schema::RelTypeDef
+impl core::marker::Unpin for acetone_model::schema::RelTypeDef
+impl core::marker::UnsafeUnpin for acetone_model::schema::RelTypeDef
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::schema::RelTypeDef
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::schema::RelTypeDef
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::schema::RelTypeDef where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::RelTypeDef::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::schema::RelTypeDef where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::schema::RelTypeDef::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::schema::RelTypeDef where U: core::convert::From<T>
+pub fn acetone_model::schema::RelTypeDef::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::schema::RelTypeDef where U: core::convert::Into<T>
+pub type acetone_model::schema::RelTypeDef::Error = core::convert::Infallible
+pub fn acetone_model::schema::RelTypeDef::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::schema::RelTypeDef where U: core::convert::TryFrom<T>
+pub type acetone_model::schema::RelTypeDef::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::schema::RelTypeDef::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::schema::RelTypeDef where T: core::clone::Clone
+pub type acetone_model::schema::RelTypeDef::Owned = T
+pub fn acetone_model::schema::RelTypeDef::clone_into(&self, &mut T)
+pub fn acetone_model::schema::RelTypeDef::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::schema::RelTypeDef where T: 'static + ?core::marker::Sized
+pub fn acetone_model::schema::RelTypeDef::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::schema::RelTypeDef where T: ?core::marker::Sized
+pub fn acetone_model::schema::RelTypeDef::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::schema::RelTypeDef where T: ?core::marker::Sized
+pub fn acetone_model::schema::RelTypeDef::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::schema::RelTypeDef where T: core::clone::Clone
+pub unsafe fn acetone_model::schema::RelTypeDef::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::schema::RelTypeDef
+pub fn acetone_model::schema::RelTypeDef::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::schema::RelTypeDef
+pub type acetone_model::schema::RelTypeDef::Output = T
+pub const acetone_model::schema::KIND_INDEX: &str
+pub const acetone_model::schema::KIND_LABEL: &str
+pub const acetone_model::schema::KIND_RTYPE: &str
+pub const acetone_model::schema::SURROGATE_KEY_PROPERTY: &str
+pub fn acetone_model::schema::schema_kind_prefix(&str) -> alloc::vec::Vec<u8>
+pub mod acetone_model::values
+pub enum acetone_model::values::ValueDecodeError
+pub acetone_model::values::ValueDecodeError::DepthExceeded
+pub acetone_model::values::ValueDecodeError::IntOutOfRange
+pub acetone_model::values::ValueDecodeError::InvalidTagContent
+pub acetone_model::values::ValueDecodeError::InvalidTagContent::reason: &'static str
+pub acetone_model::values::ValueDecodeError::InvalidTagContent::tag: u64
+pub acetone_model::values::ValueDecodeError::InvalidUtf8
+pub acetone_model::values::ValueDecodeError::LengthOverrun
+pub acetone_model::values::ValueDecodeError::LengthOverrun::declared: u64
+pub acetone_model::values::ValueDecodeError::LengthOverrun::remaining: usize
+pub acetone_model::values::ValueDecodeError::MalformedHead
+pub acetone_model::values::ValueDecodeError::NonCanonical(&'static str)
+pub acetone_model::values::ValueDecodeError::OffsetOutOfRange
+pub acetone_model::values::ValueDecodeError::TimeOutOfRange
+pub acetone_model::values::ValueDecodeError::TrailingBytes
+pub acetone_model::values::ValueDecodeError::UnexpectedEnd
+pub acetone_model::values::ValueDecodeError::UnknownTag(u64)
+pub acetone_model::values::ValueDecodeError::Unsupported(&'static str)
+impl core::clone::Clone for acetone_model::values::ValueDecodeError
+pub fn acetone_model::values::ValueDecodeError::clone(&self) -> acetone_model::values::ValueDecodeError
+impl core::cmp::Eq for acetone_model::values::ValueDecodeError
+impl core::cmp::PartialEq for acetone_model::values::ValueDecodeError
+pub fn acetone_model::values::ValueDecodeError::eq(&self, &acetone_model::values::ValueDecodeError) -> bool
+impl core::convert::From<acetone_model::values::ValueDecodeError> for acetone_model::manifest::ManifestDecodeError
+pub fn acetone_model::manifest::ManifestDecodeError::from(acetone_model::values::ValueDecodeError) -> Self
+impl core::convert::From<acetone_model::values::ValueDecodeError> for acetone_model::records::RecordDecodeError
+pub fn acetone_model::records::RecordDecodeError::from(acetone_model::values::ValueDecodeError) -> Self
+impl core::convert::From<acetone_model::values::ValueDecodeError> for acetone_model::schema::SchemaError
+pub fn acetone_model::schema::SchemaError::from(acetone_model::values::ValueDecodeError) -> Self
+impl core::error::Error for acetone_model::values::ValueDecodeError
+impl core::fmt::Debug for acetone_model::values::ValueDecodeError
+pub fn acetone_model::values::ValueDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::values::ValueDecodeError
+pub fn acetone_model::values::ValueDecodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::values::ValueDecodeError
+impl core::marker::Freeze for acetone_model::values::ValueDecodeError
+impl core::marker::Send for acetone_model::values::ValueDecodeError
+impl core::marker::Sync for acetone_model::values::ValueDecodeError
+impl core::marker::Unpin for acetone_model::values::ValueDecodeError
+impl core::marker::UnsafeUnpin for acetone_model::values::ValueDecodeError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::values::ValueDecodeError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::values::ValueDecodeError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::values::ValueDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::values::ValueDecodeError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::values::ValueDecodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::values::ValueDecodeError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::values::ValueDecodeError where U: core::convert::From<T>
+pub fn acetone_model::values::ValueDecodeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::values::ValueDecodeError where U: core::convert::Into<T>
+pub type acetone_model::values::ValueDecodeError::Error = core::convert::Infallible
+pub fn acetone_model::values::ValueDecodeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::values::ValueDecodeError where U: core::convert::TryFrom<T>
+pub type acetone_model::values::ValueDecodeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::values::ValueDecodeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::values::ValueDecodeError where T: core::clone::Clone
+pub type acetone_model::values::ValueDecodeError::Owned = T
+pub fn acetone_model::values::ValueDecodeError::clone_into(&self, &mut T)
+pub fn acetone_model::values::ValueDecodeError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::values::ValueDecodeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::values::ValueDecodeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::values::ValueDecodeError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::values::ValueDecodeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::values::ValueDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::values::ValueDecodeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::values::ValueDecodeError where T: ?core::marker::Sized
+pub fn acetone_model::values::ValueDecodeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::values::ValueDecodeError where T: core::clone::Clone
+pub unsafe fn acetone_model::values::ValueDecodeError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::values::ValueDecodeError
+pub fn acetone_model::values::ValueDecodeError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::values::ValueDecodeError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::values::ValueDecodeError
+pub type acetone_model::values::ValueDecodeError::Output = T
+pub enum acetone_model::values::ValueEncodeError
+pub acetone_model::values::ValueEncodeError::DepthExceeded
+pub acetone_model::values::ValueEncodeError::OffsetOutOfRange(i16)
+pub acetone_model::values::ValueEncodeError::TimeOutOfRange(u64)
+impl core::clone::Clone for acetone_model::values::ValueEncodeError
+pub fn acetone_model::values::ValueEncodeError::clone(&self) -> acetone_model::values::ValueEncodeError
+impl core::cmp::Eq for acetone_model::values::ValueEncodeError
+impl core::cmp::PartialEq for acetone_model::values::ValueEncodeError
+pub fn acetone_model::values::ValueEncodeError::eq(&self, &acetone_model::values::ValueEncodeError) -> bool
+impl core::convert::From<acetone_model::values::ValueEncodeError> for acetone_model::records::RecordEncodeError
+pub fn acetone_model::records::RecordEncodeError::from(acetone_model::values::ValueEncodeError) -> Self
+impl core::error::Error for acetone_model::values::ValueEncodeError
+impl core::fmt::Debug for acetone_model::values::ValueEncodeError
+pub fn acetone_model::values::ValueEncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_model::values::ValueEncodeError
+pub fn acetone_model::values::ValueEncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::values::ValueEncodeError
+impl core::marker::Freeze for acetone_model::values::ValueEncodeError
+impl core::marker::Send for acetone_model::values::ValueEncodeError
+impl core::marker::Sync for acetone_model::values::ValueEncodeError
+impl core::marker::Unpin for acetone_model::values::ValueEncodeError
+impl core::marker::UnsafeUnpin for acetone_model::values::ValueEncodeError
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::values::ValueEncodeError
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::values::ValueEncodeError
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::values::ValueEncodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::values::ValueEncodeError::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::values::ValueEncodeError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::values::ValueEncodeError::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::values::ValueEncodeError where U: core::convert::From<T>
+pub fn acetone_model::values::ValueEncodeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::values::ValueEncodeError where U: core::convert::Into<T>
+pub type acetone_model::values::ValueEncodeError::Error = core::convert::Infallible
+pub fn acetone_model::values::ValueEncodeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::values::ValueEncodeError where U: core::convert::TryFrom<T>
+pub type acetone_model::values::ValueEncodeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::values::ValueEncodeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::values::ValueEncodeError where T: core::clone::Clone
+pub type acetone_model::values::ValueEncodeError::Owned = T
+pub fn acetone_model::values::ValueEncodeError::clone_into(&self, &mut T)
+pub fn acetone_model::values::ValueEncodeError::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_model::values::ValueEncodeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_model::values::ValueEncodeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_model::values::ValueEncodeError where T: 'static + ?core::marker::Sized
+pub fn acetone_model::values::ValueEncodeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::values::ValueEncodeError where T: ?core::marker::Sized
+pub fn acetone_model::values::ValueEncodeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::values::ValueEncodeError where T: ?core::marker::Sized
+pub fn acetone_model::values::ValueEncodeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::values::ValueEncodeError where T: core::clone::Clone
+pub unsafe fn acetone_model::values::ValueEncodeError::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::values::ValueEncodeError
+pub fn acetone_model::values::ValueEncodeError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_model::values::ValueEncodeError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_model::values::ValueEncodeError
+pub type acetone_model::values::ValueEncodeError::Output = T
+pub const acetone_model::values::CANONICAL_NAN_BITS: u64
+pub const acetone_model::values::MAX_DEPTH: usize
+pub const acetone_model::values::TAG_DATE: u64
+pub const acetone_model::values::TAG_DATETIME: u64
+pub const acetone_model::values::TAG_DURATION: u64
+pub const acetone_model::values::TAG_TIME: u64
+pub fn acetone_model::values::decode_value(&[u8]) -> core::result::Result<acetone_model::Value, acetone_model::values::ValueDecodeError>
+pub fn acetone_model::values::encode_value(&acetone_model::Value) -> core::result::Result<alloc::vec::Vec<u8>, acetone_model::values::ValueEncodeError>
+pub fn acetone_model::values::encode_value_into(&mut alloc::vec::Vec<u8>, &acetone_model::Value) -> core::result::Result<(), acetone_model::values::ValueEncodeError>
+pub enum acetone_model::Value
+pub acetone_model::Value::Bool(bool)
+pub acetone_model::Value::Bytes(alloc::vec::Vec<u8>)
+pub acetone_model::Value::Date(acetone_model::Date)
+pub acetone_model::Value::DateTime(acetone_model::DateTime)
+pub acetone_model::Value::Duration(acetone_model::Duration)
+pub acetone_model::Value::Float(f64)
+pub acetone_model::Value::Int(i64)
+pub acetone_model::Value::List(alloc::vec::Vec<acetone_model::Value>)
+pub acetone_model::Value::Null
+pub acetone_model::Value::String(alloc::string::String)
+pub acetone_model::Value::Time(acetone_model::Time)
+impl core::clone::Clone for acetone_model::Value
+pub fn acetone_model::Value::clone(&self) -> acetone_model::Value
+impl core::cmp::PartialEq for acetone_model::Value
+pub fn acetone_model::Value::eq(&self, &acetone_model::Value) -> bool
+impl core::fmt::Debug for acetone_model::Value
+pub fn acetone_model::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_model::Value
+impl core::marker::Freeze for acetone_model::Value
+impl core::marker::Send for acetone_model::Value
+impl core::marker::Sync for acetone_model::Value
+impl core::marker::Unpin for acetone_model::Value
+impl core::marker::UnsafeUnpin for acetone_model::Value
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::Value
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::Value
+impl<T, U> core::convert::Into<U> for acetone_model::Value where U: core::convert::From<T>
+pub fn acetone_model::Value::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::Value where U: core::convert::Into<T>
+pub type acetone_model::Value::Error = core::convert::Infallible
+pub fn acetone_model::Value::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::Value where U: core::convert::TryFrom<T>
+pub type acetone_model::Value::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::Value::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::Value where T: core::clone::Clone
+pub type acetone_model::Value::Owned = T
+pub fn acetone_model::Value::clone_into(&self, &mut T)
+pub fn acetone_model::Value::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::Value where T: 'static + ?core::marker::Sized
+pub fn acetone_model::Value::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::Value where T: ?core::marker::Sized
+pub fn acetone_model::Value::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::Value where T: ?core::marker::Sized
+pub fn acetone_model::Value::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::Value where T: core::clone::Clone
+pub unsafe fn acetone_model::Value::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::Value
+pub fn acetone_model::Value::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::Value
+pub type acetone_model::Value::Output = T
+pub struct acetone_model::Date
+pub acetone_model::Date::days: i64
+impl core::clone::Clone for acetone_model::Date
+pub fn acetone_model::Date::clone(&self) -> acetone_model::Date
+impl core::cmp::Eq for acetone_model::Date
+impl core::cmp::Ord for acetone_model::Date
+pub fn acetone_model::Date::cmp(&self, &acetone_model::Date) -> core::cmp::Ordering
+impl core::cmp::PartialEq for acetone_model::Date
+pub fn acetone_model::Date::eq(&self, &acetone_model::Date) -> bool
+impl core::cmp::PartialOrd for acetone_model::Date
+pub fn acetone_model::Date::partial_cmp(&self, &acetone_model::Date) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for acetone_model::Date
+pub fn acetone_model::Date::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for acetone_model::Date
+pub fn acetone_model::Date::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for acetone_model::Date
+impl core::marker::StructuralPartialEq for acetone_model::Date
+impl core::marker::Freeze for acetone_model::Date
+impl core::marker::Send for acetone_model::Date
+impl core::marker::Sync for acetone_model::Date
+impl core::marker::Unpin for acetone_model::Date
+impl core::marker::UnsafeUnpin for acetone_model::Date
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::Date
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::Date
+impl<Q, K> equivalent::Comparable<K> for acetone_model::Date where Q: core::cmp::Ord + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Date::compare(&self, &K) -> core::cmp::Ordering
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::Date where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Date::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::Date where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Date::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::Date where U: core::convert::From<T>
+pub fn acetone_model::Date::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::Date where U: core::convert::Into<T>
+pub type acetone_model::Date::Error = core::convert::Infallible
+pub fn acetone_model::Date::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::Date where U: core::convert::TryFrom<T>
+pub type acetone_model::Date::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::Date::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::Date where T: core::clone::Clone
+pub type acetone_model::Date::Owned = T
+pub fn acetone_model::Date::clone_into(&self, &mut T)
+pub fn acetone_model::Date::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::Date where T: 'static + ?core::marker::Sized
+pub fn acetone_model::Date::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::Date where T: ?core::marker::Sized
+pub fn acetone_model::Date::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::Date where T: ?core::marker::Sized
+pub fn acetone_model::Date::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::Date where T: core::clone::Clone
+pub unsafe fn acetone_model::Date::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::Date
+pub fn acetone_model::Date::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::Date
+pub type acetone_model::Date::Output = T
+pub struct acetone_model::DateTime
+pub acetone_model::DateTime::epoch_nanos: i64
+pub acetone_model::DateTime::offset_minutes: i16
+impl core::clone::Clone for acetone_model::DateTime
+pub fn acetone_model::DateTime::clone(&self) -> acetone_model::DateTime
+impl core::cmp::Eq for acetone_model::DateTime
+impl core::cmp::Ord for acetone_model::DateTime
+pub fn acetone_model::DateTime::cmp(&self, &acetone_model::DateTime) -> core::cmp::Ordering
+impl core::cmp::PartialEq for acetone_model::DateTime
+pub fn acetone_model::DateTime::eq(&self, &acetone_model::DateTime) -> bool
+impl core::cmp::PartialOrd for acetone_model::DateTime
+pub fn acetone_model::DateTime::partial_cmp(&self, &acetone_model::DateTime) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for acetone_model::DateTime
+pub fn acetone_model::DateTime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for acetone_model::DateTime
+pub fn acetone_model::DateTime::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for acetone_model::DateTime
+impl core::marker::StructuralPartialEq for acetone_model::DateTime
+impl core::marker::Freeze for acetone_model::DateTime
+impl core::marker::Send for acetone_model::DateTime
+impl core::marker::Sync for acetone_model::DateTime
+impl core::marker::Unpin for acetone_model::DateTime
+impl core::marker::UnsafeUnpin for acetone_model::DateTime
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::DateTime
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::DateTime
+impl<Q, K> equivalent::Comparable<K> for acetone_model::DateTime where Q: core::cmp::Ord + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::DateTime::compare(&self, &K) -> core::cmp::Ordering
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::DateTime where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::DateTime::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::DateTime where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::DateTime::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::DateTime where U: core::convert::From<T>
+pub fn acetone_model::DateTime::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::DateTime where U: core::convert::Into<T>
+pub type acetone_model::DateTime::Error = core::convert::Infallible
+pub fn acetone_model::DateTime::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::DateTime where U: core::convert::TryFrom<T>
+pub type acetone_model::DateTime::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::DateTime::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::DateTime where T: core::clone::Clone
+pub type acetone_model::DateTime::Owned = T
+pub fn acetone_model::DateTime::clone_into(&self, &mut T)
+pub fn acetone_model::DateTime::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::DateTime where T: 'static + ?core::marker::Sized
+pub fn acetone_model::DateTime::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::DateTime where T: ?core::marker::Sized
+pub fn acetone_model::DateTime::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::DateTime where T: ?core::marker::Sized
+pub fn acetone_model::DateTime::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::DateTime where T: core::clone::Clone
+pub unsafe fn acetone_model::DateTime::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::DateTime
+pub fn acetone_model::DateTime::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::DateTime
+pub type acetone_model::DateTime::Output = T
+pub struct acetone_model::Duration
+pub acetone_model::Duration::days: i64
+pub acetone_model::Duration::months: i64
+pub acetone_model::Duration::nanos: i64
+impl core::clone::Clone for acetone_model::Duration
+pub fn acetone_model::Duration::clone(&self) -> acetone_model::Duration
+impl core::cmp::Eq for acetone_model::Duration
+impl core::cmp::Ord for acetone_model::Duration
+pub fn acetone_model::Duration::cmp(&self, &acetone_model::Duration) -> core::cmp::Ordering
+impl core::cmp::PartialEq for acetone_model::Duration
+pub fn acetone_model::Duration::eq(&self, &acetone_model::Duration) -> bool
+impl core::cmp::PartialOrd for acetone_model::Duration
+pub fn acetone_model::Duration::partial_cmp(&self, &acetone_model::Duration) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for acetone_model::Duration
+pub fn acetone_model::Duration::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for acetone_model::Duration
+pub fn acetone_model::Duration::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for acetone_model::Duration
+impl core::marker::StructuralPartialEq for acetone_model::Duration
+impl core::marker::Freeze for acetone_model::Duration
+impl core::marker::Send for acetone_model::Duration
+impl core::marker::Sync for acetone_model::Duration
+impl core::marker::Unpin for acetone_model::Duration
+impl core::marker::UnsafeUnpin for acetone_model::Duration
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::Duration
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::Duration
+impl<Q, K> equivalent::Comparable<K> for acetone_model::Duration where Q: core::cmp::Ord + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Duration::compare(&self, &K) -> core::cmp::Ordering
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::Duration where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Duration::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::Duration where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Duration::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::Duration where U: core::convert::From<T>
+pub fn acetone_model::Duration::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::Duration where U: core::convert::Into<T>
+pub type acetone_model::Duration::Error = core::convert::Infallible
+pub fn acetone_model::Duration::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::Duration where U: core::convert::TryFrom<T>
+pub type acetone_model::Duration::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::Duration::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::Duration where T: core::clone::Clone
+pub type acetone_model::Duration::Owned = T
+pub fn acetone_model::Duration::clone_into(&self, &mut T)
+pub fn acetone_model::Duration::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::Duration where T: 'static + ?core::marker::Sized
+pub fn acetone_model::Duration::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::Duration where T: ?core::marker::Sized
+pub fn acetone_model::Duration::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::Duration where T: ?core::marker::Sized
+pub fn acetone_model::Duration::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::Duration where T: core::clone::Clone
+pub unsafe fn acetone_model::Duration::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::Duration
+pub fn acetone_model::Duration::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::Duration
+pub type acetone_model::Duration::Output = T
+pub struct acetone_model::Time
+pub acetone_model::Time::nanos: u64
+impl core::clone::Clone for acetone_model::Time
+pub fn acetone_model::Time::clone(&self) -> acetone_model::Time
+impl core::cmp::Eq for acetone_model::Time
+impl core::cmp::Ord for acetone_model::Time
+pub fn acetone_model::Time::cmp(&self, &acetone_model::Time) -> core::cmp::Ordering
+impl core::cmp::PartialEq for acetone_model::Time
+pub fn acetone_model::Time::eq(&self, &acetone_model::Time) -> bool
+impl core::cmp::PartialOrd for acetone_model::Time
+pub fn acetone_model::Time::partial_cmp(&self, &acetone_model::Time) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for acetone_model::Time
+pub fn acetone_model::Time::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for acetone_model::Time
+pub fn acetone_model::Time::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for acetone_model::Time
+impl core::marker::StructuralPartialEq for acetone_model::Time
+impl core::marker::Freeze for acetone_model::Time
+impl core::marker::Send for acetone_model::Time
+impl core::marker::Sync for acetone_model::Time
+impl core::marker::Unpin for acetone_model::Time
+impl core::marker::UnsafeUnpin for acetone_model::Time
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_model::Time
+impl core::panic::unwind_safe::UnwindSafe for acetone_model::Time
+impl<Q, K> equivalent::Comparable<K> for acetone_model::Time where Q: core::cmp::Ord + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Time::compare(&self, &K) -> core::cmp::Ordering
+impl<Q, K> equivalent::Equivalent<K> for acetone_model::Time where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Time::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_model::Time where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_model::Time::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_model::Time where U: core::convert::From<T>
+pub fn acetone_model::Time::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_model::Time where U: core::convert::Into<T>
+pub type acetone_model::Time::Error = core::convert::Infallible
+pub fn acetone_model::Time::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_model::Time where U: core::convert::TryFrom<T>
+pub type acetone_model::Time::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_model::Time::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_model::Time where T: core::clone::Clone
+pub type acetone_model::Time::Owned = T
+pub fn acetone_model::Time::clone_into(&self, &mut T)
+pub fn acetone_model::Time::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_model::Time where T: 'static + ?core::marker::Sized
+pub fn acetone_model::Time::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_model::Time where T: ?core::marker::Sized
+pub fn acetone_model::Time::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_model::Time where T: ?core::marker::Sized
+pub fn acetone_model::Time::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_model::Time where T: core::clone::Clone
+pub unsafe fn acetone_model::Time::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_model::Time
+pub fn acetone_model::Time::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_model::Time
+pub type acetone_model::Time::Output = T
+pub const acetone_model::MAX_OFFSET_MINUTES: i16
+pub const acetone_model::NANOS_PER_DAY: u64

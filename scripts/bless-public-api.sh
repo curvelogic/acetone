@@ -19,9 +19,9 @@ if ! command -v cargo-public-api >/dev/null 2>&1; then
 fi
 
 echo "Blessing public-API snapshots with ${NIGHTLY}…"
-RUSTUP_TOOLCHAIN="${NIGHTLY}" cargo public-api --package acetone-core \
-  > "${ROOT}/crates/acetone-core/public-api.txt"
-RUSTUP_TOOLCHAIN="${NIGHTLY}" cargo public-api --package acetone-cypher \
-  > "${ROOT}/crates/acetone-cypher/public-api.txt"
+for crate in acetone-core acetone-cypher acetone-graph acetone-model acetone-prolly acetone-store; do
+  RUSTUP_TOOLCHAIN="${NIGHTLY}" cargo public-api --package "${crate}" \
+    > "${ROOT}/crates/${crate}/public-api.txt"
+done
 echo "Done. Review the diff and commit:"
-echo "  git diff -- crates/acetone-core/public-api.txt crates/acetone-cypher/public-api.txt"
+echo "  git diff -- crates/*/public-api.txt"

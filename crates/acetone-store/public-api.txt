@@ -1,0 +1,775 @@
+pub mod acetone_store
+pub use acetone_store::Bytes
+#[non_exhaustive] pub enum acetone_store::ObjectFormat
+pub acetone_store::ObjectFormat::Sha1
+pub acetone_store::ObjectFormat::Sha256
+impl core::clone::Clone for acetone_store::ObjectFormat
+pub fn acetone_store::ObjectFormat::clone(&self) -> acetone_store::ObjectFormat
+impl core::cmp::Eq for acetone_store::ObjectFormat
+impl core::cmp::PartialEq for acetone_store::ObjectFormat
+pub fn acetone_store::ObjectFormat::eq(&self, &acetone_store::ObjectFormat) -> bool
+impl core::default::Default for acetone_store::ObjectFormat
+pub fn acetone_store::ObjectFormat::default() -> acetone_store::ObjectFormat
+impl core::fmt::Debug for acetone_store::ObjectFormat
+pub fn acetone_store::ObjectFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for acetone_store::ObjectFormat
+impl core::marker::StructuralPartialEq for acetone_store::ObjectFormat
+impl core::marker::Freeze for acetone_store::ObjectFormat
+impl core::marker::Send for acetone_store::ObjectFormat
+impl core::marker::Sync for acetone_store::ObjectFormat
+impl core::marker::Unpin for acetone_store::ObjectFormat
+impl core::marker::UnsafeUnpin for acetone_store::ObjectFormat
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::ObjectFormat
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::ObjectFormat
+impl<Q, K> equivalent::Equivalent<K> for acetone_store::ObjectFormat where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::ObjectFormat::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_store::ObjectFormat where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::ObjectFormat::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_store::ObjectFormat where U: core::convert::From<T>
+pub fn acetone_store::ObjectFormat::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::ObjectFormat where U: core::convert::Into<T>
+pub type acetone_store::ObjectFormat::Error = core::convert::Infallible
+pub fn acetone_store::ObjectFormat::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::ObjectFormat where U: core::convert::TryFrom<T>
+pub type acetone_store::ObjectFormat::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::ObjectFormat::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::ObjectFormat where T: core::clone::Clone
+pub type acetone_store::ObjectFormat::Owned = T
+pub fn acetone_store::ObjectFormat::clone_into(&self, &mut T)
+pub fn acetone_store::ObjectFormat::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::ObjectFormat where T: 'static + ?core::marker::Sized
+pub fn acetone_store::ObjectFormat::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::ObjectFormat where T: ?core::marker::Sized
+pub fn acetone_store::ObjectFormat::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::ObjectFormat where T: ?core::marker::Sized
+pub fn acetone_store::ObjectFormat::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::ObjectFormat where T: core::clone::Clone
+pub unsafe fn acetone_store::ObjectFormat::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::ObjectFormat
+pub fn acetone_store::ObjectFormat::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::ObjectFormat
+pub type acetone_store::ObjectFormat::Output = T
+#[non_exhaustive] pub enum acetone_store::StoreError
+pub acetone_store::StoreError::Backend
+pub acetone_store::StoreError::Backend::cause: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync + 'static)>
+pub acetone_store::StoreError::Backend::context: &'static str
+pub acetone_store::StoreError::CasFailed
+pub acetone_store::StoreError::CasFailed::name: alloc::string::String
+pub acetone_store::StoreError::Corrupt
+pub acetone_store::StoreError::Corrupt::context: &'static str
+pub acetone_store::StoreError::Corrupt::reason: alloc::string::String
+pub acetone_store::StoreError::InvalidAnchor
+pub acetone_store::StoreError::InvalidAnchor::hash: acetone_store::Hash
+pub acetone_store::StoreError::InvalidAnchor::reason: &'static str
+pub acetone_store::StoreError::InvalidHash
+pub acetone_store::StoreError::InvalidHash::reason: alloc::string::String
+pub acetone_store::StoreError::InvalidRefName
+pub acetone_store::StoreError::InvalidRefName::name: alloc::string::String
+pub acetone_store::StoreError::InvalidRefName::reason: alloc::string::String
+pub acetone_store::StoreError::InvalidSignature
+pub acetone_store::StoreError::InvalidSignature::reason: alloc::string::String
+pub acetone_store::StoreError::InvalidTrailer
+pub acetone_store::StoreError::InvalidTrailer::reason: alloc::string::String
+pub acetone_store::StoreError::InvalidTrailer::token: alloc::string::String
+pub acetone_store::StoreError::NotARepository
+pub acetone_store::StoreError::NotARepository::start: std::path::PathBuf
+pub acetone_store::StoreError::ObjectTooLarge
+pub acetone_store::StoreError::ObjectTooLarge::limit: u64
+pub acetone_store::StoreError::ObjectTooLarge::size: u64
+pub acetone_store::StoreError::SignedTag
+pub acetone_store::StoreError::SignedTag::name: alloc::string::String
+pub acetone_store::StoreError::SignedTagCreation
+pub acetone_store::StoreError::SignedTagCreation::name: alloc::string::String
+pub acetone_store::StoreError::SymbolicRef
+pub acetone_store::StoreError::SymbolicRef::name: alloc::string::String
+pub acetone_store::StoreError::WrongObjectKind
+pub acetone_store::StoreError::WrongObjectKind::actual: alloc::string::String
+pub acetone_store::StoreError::WrongObjectKind::expected: &'static str
+pub acetone_store::StoreError::WrongObjectKind::hash: acetone_store::Hash
+impl core::error::Error for acetone_store::StoreError
+impl core::fmt::Debug for acetone_store::StoreError
+pub fn acetone_store::StoreError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_store::StoreError
+pub fn acetone_store::StoreError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_store::StoreError
+impl core::marker::Send for acetone_store::StoreError
+impl core::marker::Sync for acetone_store::StoreError
+impl core::marker::Unpin for acetone_store::StoreError
+impl core::marker::UnsafeUnpin for acetone_store::StoreError
+impl !core::panic::unwind_safe::RefUnwindSafe for acetone_store::StoreError
+impl !core::panic::unwind_safe::UnwindSafe for acetone_store::StoreError
+impl<T, U> core::convert::Into<U> for acetone_store::StoreError where U: core::convert::From<T>
+pub fn acetone_store::StoreError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::StoreError where U: core::convert::Into<T>
+pub type acetone_store::StoreError::Error = core::convert::Infallible
+pub fn acetone_store::StoreError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::StoreError where U: core::convert::TryFrom<T>
+pub type acetone_store::StoreError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::StoreError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for acetone_store::StoreError where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_store::StoreError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_store::StoreError where T: 'static + ?core::marker::Sized
+pub fn acetone_store::StoreError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::StoreError where T: ?core::marker::Sized
+pub fn acetone_store::StoreError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::StoreError where T: ?core::marker::Sized
+pub fn acetone_store::StoreError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_store::StoreError
+pub fn acetone_store::StoreError::from(T) -> T
+impl<T> gix_error::exn::ext::ErrorExt for acetone_store::StoreError where T: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+impl<T> typenum::type_operators::Same for acetone_store::StoreError
+pub type acetone_store::StoreError::Output = T
+pub enum acetone_store::WorkspaceAnchors
+pub acetone_store::WorkspaceAnchors::Anchored(alloc::collections::btree::set::BTreeSet<acetone_store::Hash>)
+pub acetone_store::WorkspaceAnchors::PreHuoBlob
+pub acetone_store::WorkspaceAnchors::TreeUnanchored
+impl core::fmt::Debug for acetone_store::WorkspaceAnchors
+pub fn acetone_store::WorkspaceAnchors::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_store::WorkspaceAnchors
+impl core::marker::Send for acetone_store::WorkspaceAnchors
+impl core::marker::Sync for acetone_store::WorkspaceAnchors
+impl core::marker::Unpin for acetone_store::WorkspaceAnchors
+impl core::marker::UnsafeUnpin for acetone_store::WorkspaceAnchors
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::WorkspaceAnchors
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::WorkspaceAnchors
+impl<T, U> core::convert::Into<U> for acetone_store::WorkspaceAnchors where U: core::convert::From<T>
+pub fn acetone_store::WorkspaceAnchors::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::WorkspaceAnchors where U: core::convert::Into<T>
+pub type acetone_store::WorkspaceAnchors::Error = core::convert::Infallible
+pub fn acetone_store::WorkspaceAnchors::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::WorkspaceAnchors where U: core::convert::TryFrom<T>
+pub type acetone_store::WorkspaceAnchors::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::WorkspaceAnchors::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for acetone_store::WorkspaceAnchors where T: 'static + ?core::marker::Sized
+pub fn acetone_store::WorkspaceAnchors::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::WorkspaceAnchors where T: ?core::marker::Sized
+pub fn acetone_store::WorkspaceAnchors::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::WorkspaceAnchors where T: ?core::marker::Sized
+pub fn acetone_store::WorkspaceAnchors::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_store::WorkspaceAnchors
+pub fn acetone_store::WorkspaceAnchors::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::WorkspaceAnchors
+pub type acetone_store::WorkspaceAnchors::Output = T
+pub struct acetone_store::Commit
+pub acetone_store::Commit::author: acetone_store::Identity
+pub acetone_store::Commit::committer: acetone_store::Identity
+pub acetone_store::Commit::id: acetone_store::Hash
+pub acetone_store::Commit::manifest: bytes::bytes::Bytes
+pub acetone_store::Commit::message: alloc::string::String
+pub acetone_store::Commit::parents: alloc::vec::Vec<acetone_store::Hash>
+pub acetone_store::Commit::trailers: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+impl core::clone::Clone for acetone_store::Commit
+pub fn acetone_store::Commit::clone(&self) -> acetone_store::Commit
+impl core::fmt::Debug for acetone_store::Commit
+pub fn acetone_store::Commit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for acetone_store::Commit
+impl core::marker::Send for acetone_store::Commit
+impl core::marker::Sync for acetone_store::Commit
+impl core::marker::Unpin for acetone_store::Commit
+impl core::marker::UnsafeUnpin for acetone_store::Commit
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::Commit
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::Commit
+impl<T, U> core::convert::Into<U> for acetone_store::Commit where U: core::convert::From<T>
+pub fn acetone_store::Commit::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::Commit where U: core::convert::Into<T>
+pub type acetone_store::Commit::Error = core::convert::Infallible
+pub fn acetone_store::Commit::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::Commit where U: core::convert::TryFrom<T>
+pub type acetone_store::Commit::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::Commit::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::Commit where T: core::clone::Clone
+pub type acetone_store::Commit::Owned = T
+pub fn acetone_store::Commit::clone_into(&self, &mut T)
+pub fn acetone_store::Commit::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::Commit where T: 'static + ?core::marker::Sized
+pub fn acetone_store::Commit::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::Commit where T: ?core::marker::Sized
+pub fn acetone_store::Commit::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::Commit where T: ?core::marker::Sized
+pub fn acetone_store::Commit::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::Commit where T: core::clone::Clone
+pub unsafe fn acetone_store::Commit::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::Commit
+pub fn acetone_store::Commit::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::Commit
+pub type acetone_store::Commit::Output = T
+#[non_exhaustive] pub struct acetone_store::ConsolidateOptions
+pub acetone_store::ConsolidateOptions::prune_loose: bool
+pub acetone_store::ConsolidateOptions::prune_superseded_packs: bool
+impl core::clone::Clone for acetone_store::ConsolidateOptions
+pub fn acetone_store::ConsolidateOptions::clone(&self) -> acetone_store::ConsolidateOptions
+impl core::default::Default for acetone_store::ConsolidateOptions
+pub fn acetone_store::ConsolidateOptions::default() -> Self
+impl core::fmt::Debug for acetone_store::ConsolidateOptions
+pub fn acetone_store::ConsolidateOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_store::ConsolidateOptions
+impl core::marker::Send for acetone_store::ConsolidateOptions
+impl core::marker::Sync for acetone_store::ConsolidateOptions
+impl core::marker::Unpin for acetone_store::ConsolidateOptions
+impl core::marker::UnsafeUnpin for acetone_store::ConsolidateOptions
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::ConsolidateOptions
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::ConsolidateOptions
+impl<T, U> core::convert::Into<U> for acetone_store::ConsolidateOptions where U: core::convert::From<T>
+pub fn acetone_store::ConsolidateOptions::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::ConsolidateOptions where U: core::convert::Into<T>
+pub type acetone_store::ConsolidateOptions::Error = core::convert::Infallible
+pub fn acetone_store::ConsolidateOptions::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::ConsolidateOptions where U: core::convert::TryFrom<T>
+pub type acetone_store::ConsolidateOptions::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::ConsolidateOptions::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::ConsolidateOptions where T: core::clone::Clone
+pub type acetone_store::ConsolidateOptions::Owned = T
+pub fn acetone_store::ConsolidateOptions::clone_into(&self, &mut T)
+pub fn acetone_store::ConsolidateOptions::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::ConsolidateOptions where T: 'static + ?core::marker::Sized
+pub fn acetone_store::ConsolidateOptions::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::ConsolidateOptions where T: ?core::marker::Sized
+pub fn acetone_store::ConsolidateOptions::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::ConsolidateOptions where T: ?core::marker::Sized
+pub fn acetone_store::ConsolidateOptions::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::ConsolidateOptions where T: core::clone::Clone
+pub unsafe fn acetone_store::ConsolidateOptions::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::ConsolidateOptions
+pub fn acetone_store::ConsolidateOptions::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::ConsolidateOptions
+pub type acetone_store::ConsolidateOptions::Output = T
+#[non_exhaustive] pub struct acetone_store::ConsolidateStats
+pub acetone_store::ConsolidateStats::deltas: usize
+pub acetone_store::ConsolidateStats::objects: usize
+pub acetone_store::ConsolidateStats::pack_bytes: u64
+pub acetone_store::ConsolidateStats::pruned_loose: usize
+pub acetone_store::ConsolidateStats::pruned_packs: usize
+pub acetone_store::ConsolidateStats::whole: usize
+impl core::clone::Clone for acetone_store::ConsolidateStats
+pub fn acetone_store::ConsolidateStats::clone(&self) -> acetone_store::ConsolidateStats
+impl core::cmp::Eq for acetone_store::ConsolidateStats
+impl core::cmp::PartialEq for acetone_store::ConsolidateStats
+pub fn acetone_store::ConsolidateStats::eq(&self, &acetone_store::ConsolidateStats) -> bool
+impl core::fmt::Debug for acetone_store::ConsolidateStats
+pub fn acetone_store::ConsolidateStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_store::ConsolidateStats
+impl core::marker::Freeze for acetone_store::ConsolidateStats
+impl core::marker::Send for acetone_store::ConsolidateStats
+impl core::marker::Sync for acetone_store::ConsolidateStats
+impl core::marker::Unpin for acetone_store::ConsolidateStats
+impl core::marker::UnsafeUnpin for acetone_store::ConsolidateStats
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::ConsolidateStats
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::ConsolidateStats
+impl<Q, K> equivalent::Equivalent<K> for acetone_store::ConsolidateStats where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::ConsolidateStats::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_store::ConsolidateStats where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::ConsolidateStats::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_store::ConsolidateStats where U: core::convert::From<T>
+pub fn acetone_store::ConsolidateStats::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::ConsolidateStats where U: core::convert::Into<T>
+pub type acetone_store::ConsolidateStats::Error = core::convert::Infallible
+pub fn acetone_store::ConsolidateStats::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::ConsolidateStats where U: core::convert::TryFrom<T>
+pub type acetone_store::ConsolidateStats::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::ConsolidateStats::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::ConsolidateStats where T: core::clone::Clone
+pub type acetone_store::ConsolidateStats::Owned = T
+pub fn acetone_store::ConsolidateStats::clone_into(&self, &mut T)
+pub fn acetone_store::ConsolidateStats::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::ConsolidateStats where T: 'static + ?core::marker::Sized
+pub fn acetone_store::ConsolidateStats::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::ConsolidateStats where T: ?core::marker::Sized
+pub fn acetone_store::ConsolidateStats::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::ConsolidateStats where T: ?core::marker::Sized
+pub fn acetone_store::ConsolidateStats::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::ConsolidateStats where T: core::clone::Clone
+pub unsafe fn acetone_store::ConsolidateStats::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::ConsolidateStats
+pub fn acetone_store::ConsolidateStats::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::ConsolidateStats
+pub type acetone_store::ConsolidateStats::Output = T
+pub struct acetone_store::GitStore
+impl acetone_store::GitStore
+pub fn acetone_store::GitStore::commit_anchors(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<alloc::collections::btree::set::BTreeSet<acetone_store::Hash>>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::commit_manifest_id(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<acetone_store::Hash>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::common_dir(&self) -> &std::path::Path
+pub fn acetone_store::GitStore::contains_object(&self, &acetone_store::Hash) -> core::result::Result<bool, acetone_store::StoreError>
+pub fn acetone_store::GitStore::create(&std::path::Path) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::GitStore::create_tag(&self, &str, &acetone_store::Hash, &str, &acetone_store::Signature) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::create_with(&std::path::Path, acetone_store::GitStoreOptions) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::GitStore::git_dir(&self) -> &std::path::Path
+pub fn acetone_store::GitStore::head_commit_id(&self, &str) -> core::result::Result<core::option::Option<acetone_store::Hash>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::list_symbolic_refs(&self, &str) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::open(&std::path::Path) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::GitStore::open_discovering(&std::path::Path) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::GitStore::open_discovering_with(&std::path::Path, acetone_store::GitStoreOptions) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::GitStore::open_with(&std::path::Path, acetone_store::GitStoreOptions) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::GitStore::overwrite_ref(&self, &str, &acetone_store::Hash) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::GitStore::peel_tag(&self, &acetone_store::Hash) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::read_tag(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<acetone_store::TagObject>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::resolve_symref(&self, &str) -> core::result::Result<core::option::Option<acetone_store::Hash>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::rewrite_commit(&self, &acetone_store::RewriteCommit<'_>) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::rewrite_tag(&self, &acetone_store::TagObject, &acetone_store::Hash) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::workspace_anchors(&self, &acetone_store::Hash) -> core::result::Result<acetone_store::WorkspaceAnchors, acetone_store::StoreError>
+pub fn acetone_store::GitStore::workspace_manifest_hash(&self, &acetone_store::Hash) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::write_refs_atomic(&self, &[acetone_store::RefSwing]) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::GitStore::write_workspace_tree(&self, &[u8], &[acetone_store::Hash]) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+impl acetone_store::GitStore
+pub fn acetone_store::GitStore::consolidate(&self, acetone_store::ConsolidateOptions) -> core::result::Result<acetone_store::ConsolidateStats, acetone_store::StoreError>
+pub fn acetone_store::GitStore::consolidate_scoped(&self, acetone_store::ConsolidateOptions, &dyn core::ops::function::Fn(&str) -> bool) -> core::result::Result<acetone_store::ConsolidateStats, acetone_store::StoreError>
+pub fn acetone_store::GitStore::record_base_hints(&self, &[(acetone_store::Hash, acetone_store::Hash)]) -> core::result::Result<(), acetone_store::StoreError>
+impl acetone_store::ChunkStore for acetone_store::GitStore
+pub fn acetone_store::GitStore::get(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<bytes::bytes::Bytes>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::max_chunk_size(&self) -> u64
+pub fn acetone_store::GitStore::put(&self, &[u8]) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::put_batch(&self, &[&[u8]]) -> core::result::Result<alloc::vec::Vec<acetone_store::Hash>, acetone_store::StoreError>
+impl acetone_store::CommitStore for acetone_store::GitStore
+pub fn acetone_store::GitStore::create_commit(&self, &acetone_store::NewCommit<'_>) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::read_commit(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<acetone_store::Commit>, acetone_store::StoreError>
+impl acetone_store::RefStore for acetone_store::GitStore
+pub fn acetone_store::GitStore::delete_ref(&self, &str) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::GitStore::list_refs(&self, &str) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, acetone_store::Hash)>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::read_head(&self, &str) -> core::result::Result<core::option::Option<alloc::string::String>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::read_ref(&self, &str) -> core::result::Result<core::option::Option<acetone_store::Hash>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::set_head(&self, &str, &str) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::GitStore::write_ref(&self, &str, core::option::Option<&acetone_store::Hash>, &acetone_store::Hash) -> core::result::Result<(), acetone_store::StoreError>
+impl core::fmt::Debug for acetone_store::GitStore
+pub fn acetone_store::GitStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for acetone_store::GitStore
+impl !core::marker::Send for acetone_store::GitStore
+impl !core::marker::Sync for acetone_store::GitStore
+impl core::marker::Unpin for acetone_store::GitStore
+impl core::marker::UnsafeUnpin for acetone_store::GitStore
+impl !core::panic::unwind_safe::RefUnwindSafe for acetone_store::GitStore
+impl !core::panic::unwind_safe::UnwindSafe for acetone_store::GitStore
+impl<T, U> core::convert::Into<U> for acetone_store::GitStore where U: core::convert::From<T>
+pub fn acetone_store::GitStore::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::GitStore where U: core::convert::Into<T>
+pub type acetone_store::GitStore::Error = core::convert::Infallible
+pub fn acetone_store::GitStore::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::GitStore where U: core::convert::TryFrom<T>
+pub type acetone_store::GitStore::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::GitStore::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for acetone_store::GitStore where T: 'static + ?core::marker::Sized
+pub fn acetone_store::GitStore::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::GitStore where T: ?core::marker::Sized
+pub fn acetone_store::GitStore::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::GitStore where T: ?core::marker::Sized
+pub fn acetone_store::GitStore::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_store::GitStore
+pub fn acetone_store::GitStore::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::GitStore
+pub type acetone_store::GitStore::Output = T
+#[non_exhaustive] pub struct acetone_store::GitStoreOptions
+pub acetone_store::GitStoreOptions::max_chunk_size: u64
+pub acetone_store::GitStoreOptions::object_format: acetone_store::ObjectFormat
+impl core::clone::Clone for acetone_store::GitStoreOptions
+pub fn acetone_store::GitStoreOptions::clone(&self) -> acetone_store::GitStoreOptions
+impl core::default::Default for acetone_store::GitStoreOptions
+pub fn acetone_store::GitStoreOptions::default() -> Self
+impl core::fmt::Debug for acetone_store::GitStoreOptions
+pub fn acetone_store::GitStoreOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_store::GitStoreOptions
+impl core::marker::Send for acetone_store::GitStoreOptions
+impl core::marker::Sync for acetone_store::GitStoreOptions
+impl core::marker::Unpin for acetone_store::GitStoreOptions
+impl core::marker::UnsafeUnpin for acetone_store::GitStoreOptions
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::GitStoreOptions
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::GitStoreOptions
+impl<T, U> core::convert::Into<U> for acetone_store::GitStoreOptions where U: core::convert::From<T>
+pub fn acetone_store::GitStoreOptions::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::GitStoreOptions where U: core::convert::Into<T>
+pub type acetone_store::GitStoreOptions::Error = core::convert::Infallible
+pub fn acetone_store::GitStoreOptions::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::GitStoreOptions where U: core::convert::TryFrom<T>
+pub type acetone_store::GitStoreOptions::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::GitStoreOptions::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::GitStoreOptions where T: core::clone::Clone
+pub type acetone_store::GitStoreOptions::Owned = T
+pub fn acetone_store::GitStoreOptions::clone_into(&self, &mut T)
+pub fn acetone_store::GitStoreOptions::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::GitStoreOptions where T: 'static + ?core::marker::Sized
+pub fn acetone_store::GitStoreOptions::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::GitStoreOptions where T: ?core::marker::Sized
+pub fn acetone_store::GitStoreOptions::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::GitStoreOptions where T: ?core::marker::Sized
+pub fn acetone_store::GitStoreOptions::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::GitStoreOptions where T: core::clone::Clone
+pub unsafe fn acetone_store::GitStoreOptions::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::GitStoreOptions
+pub fn acetone_store::GitStoreOptions::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::GitStoreOptions
+pub type acetone_store::GitStoreOptions::Output = T
+pub struct acetone_store::Hash(_)
+impl acetone_store::Hash
+pub fn acetone_store::Hash::as_bytes(&self) -> &[u8]
+pub fn acetone_store::Hash::from_bytes(&[u8]) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::Hash::from_hex(&str) -> core::result::Result<Self, acetone_store::StoreError>
+pub fn acetone_store::Hash::to_hex(&self) -> alloc::string::String
+impl core::clone::Clone for acetone_store::Hash
+pub fn acetone_store::Hash::clone(&self) -> acetone_store::Hash
+impl core::cmp::Eq for acetone_store::Hash
+impl core::cmp::Ord for acetone_store::Hash
+pub fn acetone_store::Hash::cmp(&self, &acetone_store::Hash) -> core::cmp::Ordering
+impl core::cmp::PartialEq for acetone_store::Hash
+pub fn acetone_store::Hash::eq(&self, &acetone_store::Hash) -> bool
+impl core::cmp::PartialOrd for acetone_store::Hash
+pub fn acetone_store::Hash::partial_cmp(&self, &acetone_store::Hash) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for acetone_store::Hash
+pub fn acetone_store::Hash::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for acetone_store::Hash
+pub fn acetone_store::Hash::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for acetone_store::Hash
+pub fn acetone_store::Hash::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for acetone_store::Hash
+impl core::marker::StructuralPartialEq for acetone_store::Hash
+impl core::marker::Freeze for acetone_store::Hash
+impl core::marker::Send for acetone_store::Hash
+impl core::marker::Sync for acetone_store::Hash
+impl core::marker::Unpin for acetone_store::Hash
+impl core::marker::UnsafeUnpin for acetone_store::Hash
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::Hash
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::Hash
+impl<Q, K> equivalent::Comparable<K> for acetone_store::Hash where Q: core::cmp::Ord + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::Hash::compare(&self, &K) -> core::cmp::Ordering
+impl<Q, K> equivalent::Equivalent<K> for acetone_store::Hash where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::Hash::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_store::Hash where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::Hash::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_store::Hash where U: core::convert::From<T>
+pub fn acetone_store::Hash::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::Hash where U: core::convert::Into<T>
+pub type acetone_store::Hash::Error = core::convert::Infallible
+pub fn acetone_store::Hash::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::Hash where U: core::convert::TryFrom<T>
+pub type acetone_store::Hash::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::Hash::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::Hash where T: core::clone::Clone
+pub type acetone_store::Hash::Owned = T
+pub fn acetone_store::Hash::clone_into(&self, &mut T)
+pub fn acetone_store::Hash::to_owned(&self) -> T
+impl<T> alloc::string::ToString for acetone_store::Hash where T: core::fmt::Display + ?core::marker::Sized
+pub fn acetone_store::Hash::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for acetone_store::Hash where T: 'static + ?core::marker::Sized
+pub fn acetone_store::Hash::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::Hash where T: ?core::marker::Sized
+pub fn acetone_store::Hash::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::Hash where T: ?core::marker::Sized
+pub fn acetone_store::Hash::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::Hash where T: core::clone::Clone
+pub unsafe fn acetone_store::Hash::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::Hash
+pub fn acetone_store::Hash::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::Hash
+pub type acetone_store::Hash::Output = T
+pub struct acetone_store::Identity
+pub acetone_store::Identity::email: alloc::string::String
+pub acetone_store::Identity::name: alloc::string::String
+pub acetone_store::Identity::time_offset_seconds: i32
+pub acetone_store::Identity::time_seconds: i64
+impl core::clone::Clone for acetone_store::Identity
+pub fn acetone_store::Identity::clone(&self) -> acetone_store::Identity
+impl core::cmp::Eq for acetone_store::Identity
+impl core::cmp::PartialEq for acetone_store::Identity
+pub fn acetone_store::Identity::eq(&self, &acetone_store::Identity) -> bool
+impl core::fmt::Debug for acetone_store::Identity
+pub fn acetone_store::Identity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_store::Identity
+impl core::marker::Freeze for acetone_store::Identity
+impl core::marker::Send for acetone_store::Identity
+impl core::marker::Sync for acetone_store::Identity
+impl core::marker::Unpin for acetone_store::Identity
+impl core::marker::UnsafeUnpin for acetone_store::Identity
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::Identity
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::Identity
+impl<Q, K> equivalent::Equivalent<K> for acetone_store::Identity where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::Identity::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_store::Identity where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::Identity::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_store::Identity where U: core::convert::From<T>
+pub fn acetone_store::Identity::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::Identity where U: core::convert::Into<T>
+pub type acetone_store::Identity::Error = core::convert::Infallible
+pub fn acetone_store::Identity::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::Identity where U: core::convert::TryFrom<T>
+pub type acetone_store::Identity::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::Identity::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::Identity where T: core::clone::Clone
+pub type acetone_store::Identity::Owned = T
+pub fn acetone_store::Identity::clone_into(&self, &mut T)
+pub fn acetone_store::Identity::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::Identity where T: 'static + ?core::marker::Sized
+pub fn acetone_store::Identity::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::Identity where T: ?core::marker::Sized
+pub fn acetone_store::Identity::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::Identity where T: ?core::marker::Sized
+pub fn acetone_store::Identity::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::Identity where T: core::clone::Clone
+pub unsafe fn acetone_store::Identity::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::Identity
+pub fn acetone_store::Identity::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::Identity
+pub type acetone_store::Identity::Output = T
+#[non_exhaustive] pub struct acetone_store::NewCommit<'a>
+pub acetone_store::NewCommit::anchors: &'a [acetone_store::Hash]
+pub acetone_store::NewCommit::author: acetone_store::Signature
+pub acetone_store::NewCommit::manifest: &'a [u8]
+pub acetone_store::NewCommit::message: &'a str
+pub acetone_store::NewCommit::parents: &'a [acetone_store::Hash]
+pub acetone_store::NewCommit::summary: &'a str
+pub acetone_store::NewCommit::trailers: &'a [(alloc::string::String, alloc::string::String)]
+impl<'a> acetone_store::NewCommit<'a>
+pub fn acetone_store::NewCommit<'a>::new(&'a [u8], &'a str, &'a str) -> Self
+impl<'a> core::clone::Clone for acetone_store::NewCommit<'a>
+pub fn acetone_store::NewCommit<'a>::clone(&self) -> acetone_store::NewCommit<'a>
+impl<'a> core::fmt::Debug for acetone_store::NewCommit<'a>
+pub fn acetone_store::NewCommit<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Freeze for acetone_store::NewCommit<'a>
+impl<'a> core::marker::Send for acetone_store::NewCommit<'a>
+impl<'a> core::marker::Sync for acetone_store::NewCommit<'a>
+impl<'a> core::marker::Unpin for acetone_store::NewCommit<'a>
+impl<'a> core::marker::UnsafeUnpin for acetone_store::NewCommit<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for acetone_store::NewCommit<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for acetone_store::NewCommit<'a>
+impl<T, U> core::convert::Into<U> for acetone_store::NewCommit<'a> where U: core::convert::From<T>
+pub fn acetone_store::NewCommit<'a>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::NewCommit<'a> where U: core::convert::Into<T>
+pub type acetone_store::NewCommit<'a>::Error = core::convert::Infallible
+pub fn acetone_store::NewCommit<'a>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::NewCommit<'a> where U: core::convert::TryFrom<T>
+pub type acetone_store::NewCommit<'a>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::NewCommit<'a>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::NewCommit<'a> where T: core::clone::Clone
+pub type acetone_store::NewCommit<'a>::Owned = T
+pub fn acetone_store::NewCommit<'a>::clone_into(&self, &mut T)
+pub fn acetone_store::NewCommit<'a>::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::NewCommit<'a> where T: 'static + ?core::marker::Sized
+pub fn acetone_store::NewCommit<'a>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::NewCommit<'a> where T: ?core::marker::Sized
+pub fn acetone_store::NewCommit<'a>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::NewCommit<'a> where T: ?core::marker::Sized
+pub fn acetone_store::NewCommit<'a>::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::NewCommit<'a> where T: core::clone::Clone
+pub unsafe fn acetone_store::NewCommit<'a>::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::NewCommit<'a>
+pub fn acetone_store::NewCommit<'a>::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::NewCommit<'a>
+pub type acetone_store::NewCommit<'a>::Output = T
+pub struct acetone_store::RefSwing
+pub acetone_store::RefSwing::expected: core::option::Option<acetone_store::Hash>
+pub acetone_store::RefSwing::name: alloc::string::String
+pub acetone_store::RefSwing::new: acetone_store::Hash
+impl core::clone::Clone for acetone_store::RefSwing
+pub fn acetone_store::RefSwing::clone(&self) -> acetone_store::RefSwing
+impl core::cmp::Eq for acetone_store::RefSwing
+impl core::cmp::PartialEq for acetone_store::RefSwing
+pub fn acetone_store::RefSwing::eq(&self, &acetone_store::RefSwing) -> bool
+impl core::fmt::Debug for acetone_store::RefSwing
+pub fn acetone_store::RefSwing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_store::RefSwing
+impl core::marker::Freeze for acetone_store::RefSwing
+impl core::marker::Send for acetone_store::RefSwing
+impl core::marker::Sync for acetone_store::RefSwing
+impl core::marker::Unpin for acetone_store::RefSwing
+impl core::marker::UnsafeUnpin for acetone_store::RefSwing
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::RefSwing
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::RefSwing
+impl<Q, K> equivalent::Equivalent<K> for acetone_store::RefSwing where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::RefSwing::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_store::RefSwing where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::RefSwing::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_store::RefSwing where U: core::convert::From<T>
+pub fn acetone_store::RefSwing::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::RefSwing where U: core::convert::Into<T>
+pub type acetone_store::RefSwing::Error = core::convert::Infallible
+pub fn acetone_store::RefSwing::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::RefSwing where U: core::convert::TryFrom<T>
+pub type acetone_store::RefSwing::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::RefSwing::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::RefSwing where T: core::clone::Clone
+pub type acetone_store::RefSwing::Owned = T
+pub fn acetone_store::RefSwing::clone_into(&self, &mut T)
+pub fn acetone_store::RefSwing::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::RefSwing where T: 'static + ?core::marker::Sized
+pub fn acetone_store::RefSwing::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::RefSwing where T: ?core::marker::Sized
+pub fn acetone_store::RefSwing::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::RefSwing where T: ?core::marker::Sized
+pub fn acetone_store::RefSwing::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::RefSwing where T: core::clone::Clone
+pub unsafe fn acetone_store::RefSwing::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::RefSwing
+pub fn acetone_store::RefSwing::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::RefSwing
+pub type acetone_store::RefSwing::Output = T
+#[non_exhaustive] pub struct acetone_store::RewriteCommit<'a>
+pub acetone_store::RewriteCommit::anchors: &'a [acetone_store::Hash]
+pub acetone_store::RewriteCommit::author: &'a acetone_store::Identity
+pub acetone_store::RewriteCommit::committer: &'a acetone_store::Identity
+pub acetone_store::RewriteCommit::manifest: &'a [u8]
+pub acetone_store::RewriteCommit::message: &'a str
+pub acetone_store::RewriteCommit::parents: &'a [acetone_store::Hash]
+pub acetone_store::RewriteCommit::summary: &'a str
+impl<'a> acetone_store::RewriteCommit<'a>
+pub fn acetone_store::RewriteCommit<'a>::new(&'a [u8], &'a str, &'a str, &'a acetone_store::Identity, &'a acetone_store::Identity) -> Self
+impl<'a> core::clone::Clone for acetone_store::RewriteCommit<'a>
+pub fn acetone_store::RewriteCommit<'a>::clone(&self) -> acetone_store::RewriteCommit<'a>
+impl<'a> core::fmt::Debug for acetone_store::RewriteCommit<'a>
+pub fn acetone_store::RewriteCommit<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Freeze for acetone_store::RewriteCommit<'a>
+impl<'a> core::marker::Send for acetone_store::RewriteCommit<'a>
+impl<'a> core::marker::Sync for acetone_store::RewriteCommit<'a>
+impl<'a> core::marker::Unpin for acetone_store::RewriteCommit<'a>
+impl<'a> core::marker::UnsafeUnpin for acetone_store::RewriteCommit<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for acetone_store::RewriteCommit<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for acetone_store::RewriteCommit<'a>
+impl<T, U> core::convert::Into<U> for acetone_store::RewriteCommit<'a> where U: core::convert::From<T>
+pub fn acetone_store::RewriteCommit<'a>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::RewriteCommit<'a> where U: core::convert::Into<T>
+pub type acetone_store::RewriteCommit<'a>::Error = core::convert::Infallible
+pub fn acetone_store::RewriteCommit<'a>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::RewriteCommit<'a> where U: core::convert::TryFrom<T>
+pub type acetone_store::RewriteCommit<'a>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::RewriteCommit<'a>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::RewriteCommit<'a> where T: core::clone::Clone
+pub type acetone_store::RewriteCommit<'a>::Owned = T
+pub fn acetone_store::RewriteCommit<'a>::clone_into(&self, &mut T)
+pub fn acetone_store::RewriteCommit<'a>::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::RewriteCommit<'a> where T: 'static + ?core::marker::Sized
+pub fn acetone_store::RewriteCommit<'a>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::RewriteCommit<'a> where T: ?core::marker::Sized
+pub fn acetone_store::RewriteCommit<'a>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::RewriteCommit<'a> where T: ?core::marker::Sized
+pub fn acetone_store::RewriteCommit<'a>::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::RewriteCommit<'a> where T: core::clone::Clone
+pub unsafe fn acetone_store::RewriteCommit<'a>::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::RewriteCommit<'a>
+pub fn acetone_store::RewriteCommit<'a>::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::RewriteCommit<'a>
+pub type acetone_store::RewriteCommit<'a>::Output = T
+pub struct acetone_store::Signature
+pub acetone_store::Signature::email: alloc::string::String
+pub acetone_store::Signature::name: alloc::string::String
+impl core::clone::Clone for acetone_store::Signature
+pub fn acetone_store::Signature::clone(&self) -> acetone_store::Signature
+impl core::cmp::Eq for acetone_store::Signature
+impl core::cmp::PartialEq for acetone_store::Signature
+pub fn acetone_store::Signature::eq(&self, &acetone_store::Signature) -> bool
+impl core::default::Default for acetone_store::Signature
+pub fn acetone_store::Signature::default() -> Self
+impl core::fmt::Debug for acetone_store::Signature
+pub fn acetone_store::Signature::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_store::Signature
+impl core::marker::Freeze for acetone_store::Signature
+impl core::marker::Send for acetone_store::Signature
+impl core::marker::Sync for acetone_store::Signature
+impl core::marker::Unpin for acetone_store::Signature
+impl core::marker::UnsafeUnpin for acetone_store::Signature
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::Signature
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::Signature
+impl<Q, K> equivalent::Equivalent<K> for acetone_store::Signature where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::Signature::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_store::Signature where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::Signature::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_store::Signature where U: core::convert::From<T>
+pub fn acetone_store::Signature::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::Signature where U: core::convert::Into<T>
+pub type acetone_store::Signature::Error = core::convert::Infallible
+pub fn acetone_store::Signature::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::Signature where U: core::convert::TryFrom<T>
+pub type acetone_store::Signature::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::Signature::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::Signature where T: core::clone::Clone
+pub type acetone_store::Signature::Owned = T
+pub fn acetone_store::Signature::clone_into(&self, &mut T)
+pub fn acetone_store::Signature::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::Signature where T: 'static + ?core::marker::Sized
+pub fn acetone_store::Signature::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::Signature where T: ?core::marker::Sized
+pub fn acetone_store::Signature::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::Signature where T: ?core::marker::Sized
+pub fn acetone_store::Signature::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::Signature where T: core::clone::Clone
+pub unsafe fn acetone_store::Signature::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::Signature
+pub fn acetone_store::Signature::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::Signature
+pub type acetone_store::Signature::Output = T
+pub struct acetone_store::TagObject
+pub acetone_store::TagObject::message: alloc::string::String
+pub acetone_store::TagObject::name: alloc::string::String
+pub acetone_store::TagObject::signed: bool
+pub acetone_store::TagObject::tagger: core::option::Option<acetone_store::Identity>
+pub acetone_store::TagObject::target: acetone_store::Hash
+impl core::clone::Clone for acetone_store::TagObject
+pub fn acetone_store::TagObject::clone(&self) -> acetone_store::TagObject
+impl core::cmp::Eq for acetone_store::TagObject
+impl core::cmp::PartialEq for acetone_store::TagObject
+pub fn acetone_store::TagObject::eq(&self, &acetone_store::TagObject) -> bool
+impl core::fmt::Debug for acetone_store::TagObject
+pub fn acetone_store::TagObject::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_store::TagObject
+impl core::marker::Freeze for acetone_store::TagObject
+impl core::marker::Send for acetone_store::TagObject
+impl core::marker::Sync for acetone_store::TagObject
+impl core::marker::Unpin for acetone_store::TagObject
+impl core::marker::UnsafeUnpin for acetone_store::TagObject
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_store::TagObject
+impl core::panic::unwind_safe::UnwindSafe for acetone_store::TagObject
+impl<Q, K> equivalent::Equivalent<K> for acetone_store::TagObject where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::TagObject::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_store::TagObject where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_store::TagObject::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_store::TagObject where U: core::convert::From<T>
+pub fn acetone_store::TagObject::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_store::TagObject where U: core::convert::Into<T>
+pub type acetone_store::TagObject::Error = core::convert::Infallible
+pub fn acetone_store::TagObject::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_store::TagObject where U: core::convert::TryFrom<T>
+pub type acetone_store::TagObject::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_store::TagObject::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_store::TagObject where T: core::clone::Clone
+pub type acetone_store::TagObject::Owned = T
+pub fn acetone_store::TagObject::clone_into(&self, &mut T)
+pub fn acetone_store::TagObject::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_store::TagObject where T: 'static + ?core::marker::Sized
+pub fn acetone_store::TagObject::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_store::TagObject where T: ?core::marker::Sized
+pub fn acetone_store::TagObject::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_store::TagObject where T: ?core::marker::Sized
+pub fn acetone_store::TagObject::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_store::TagObject where T: core::clone::Clone
+pub unsafe fn acetone_store::TagObject::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_store::TagObject
+pub fn acetone_store::TagObject::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_store::TagObject
+pub type acetone_store::TagObject::Output = T
+pub const acetone_store::DEFAULT_MAX_CHUNK_SIZE: u64
+pub const acetone_store::MAX_SYMREF_DEPTH: usize
+pub const acetone_store::MAX_TAG_PEEL_DEPTH: usize
+pub trait acetone_store::ChunkStore
+pub fn acetone_store::ChunkStore::get(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<bytes::bytes::Bytes>, acetone_store::StoreError>
+pub fn acetone_store::ChunkStore::max_chunk_size(&self) -> u64
+pub fn acetone_store::ChunkStore::put(&self, &[u8]) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::ChunkStore::put_batch(&self, &[&[u8]]) -> core::result::Result<alloc::vec::Vec<acetone_store::Hash>, acetone_store::StoreError>
+impl acetone_store::ChunkStore for acetone_store::GitStore
+pub fn acetone_store::GitStore::get(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<bytes::bytes::Bytes>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::max_chunk_size(&self) -> u64
+pub fn acetone_store::GitStore::put(&self, &[u8]) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::put_batch(&self, &[&[u8]]) -> core::result::Result<alloc::vec::Vec<acetone_store::Hash>, acetone_store::StoreError>
+pub trait acetone_store::CommitStore
+pub fn acetone_store::CommitStore::create_commit(&self, &acetone_store::NewCommit<'_>) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::CommitStore::read_commit(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<acetone_store::Commit>, acetone_store::StoreError>
+impl acetone_store::CommitStore for acetone_store::GitStore
+pub fn acetone_store::GitStore::create_commit(&self, &acetone_store::NewCommit<'_>) -> core::result::Result<acetone_store::Hash, acetone_store::StoreError>
+pub fn acetone_store::GitStore::read_commit(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<acetone_store::Commit>, acetone_store::StoreError>
+pub trait acetone_store::RefStore
+pub fn acetone_store::RefStore::delete_ref(&self, &str) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::RefStore::list_refs(&self, &str) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, acetone_store::Hash)>, acetone_store::StoreError>
+pub fn acetone_store::RefStore::read_head(&self, &str) -> core::result::Result<core::option::Option<alloc::string::String>, acetone_store::StoreError>
+pub fn acetone_store::RefStore::read_ref(&self, &str) -> core::result::Result<core::option::Option<acetone_store::Hash>, acetone_store::StoreError>
+pub fn acetone_store::RefStore::set_head(&self, &str, &str) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::RefStore::write_ref(&self, &str, core::option::Option<&acetone_store::Hash>, &acetone_store::Hash) -> core::result::Result<(), acetone_store::StoreError>
+impl acetone_store::RefStore for acetone_store::GitStore
+pub fn acetone_store::GitStore::delete_ref(&self, &str) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::GitStore::list_refs(&self, &str) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, acetone_store::Hash)>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::read_head(&self, &str) -> core::result::Result<core::option::Option<alloc::string::String>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::read_ref(&self, &str) -> core::result::Result<core::option::Option<acetone_store::Hash>, acetone_store::StoreError>
+pub fn acetone_store::GitStore::set_head(&self, &str, &str) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::GitStore::write_ref(&self, &str, core::option::Option<&acetone_store::Hash>, &acetone_store::Hash) -> core::result::Result<(), acetone_store::StoreError>
+pub fn acetone_store::validate_trailer(&str, &str) -> core::result::Result<(), acetone_store::StoreError>

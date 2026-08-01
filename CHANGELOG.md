@@ -16,6 +16,16 @@ fine.)
 
 ## [Unreleased]
 
+### Changed
+
+- The public-API freeze gate now signature-tracks the library crates behind
+  the façade (`acetone-graph`, `acetone-model`, `acetone-store` and
+  `acetone-prolly` join `acetone-cypher` as full-signature snapshots,
+  alongside `acetone-core`'s re-export list), closing the blind spot the
+  0.4.0 notes described: a shape, attribute or method change to a
+  re-exported type now fails CI in the crate that hosts it, wherever it
+  lives. See STABILITY.md.
+
 ## [0.4.0] - 2026-08-01
 
 **At scale, and in conformance** (Phase 9). The query engine stops declining
