@@ -56,26 +56,36 @@ analogue of the format goldens:
   API is caught automatically.
 
 **A known blind spot** (`acetone-7qw.5`), and its exact extent. The core
-snapshot is a *list*, so a change **inside** a re-exported type — a new struct
-field, a new or removed enum variant, a `#[non_exhaustive]` attribute — does
-not move it. Whether CI sees such a change therefore depends on **which crate
-the type comes from**:
+snapshot is a *list* of `pub use` lines, so nothing **inside** a re-exported
+type moves it. Whether CI sees a change therefore depends on **which crate
+hosts the type**:
 
-- **Covered.** Types hosted by `acetone-cypher` (`Session`, `QueryLimits`,
-  `QueryResult`, `ResourceLimit`, `QueryValue`) are signature-tracked field by
-  field and variant by variant. ADR-0064's `max_scanned_candidates` field and
-  `ScannedCandidates` variant are both in the snapshot, as are the 0.4
-  `#[non_exhaustive]` attributes — that gate did its job.
-- **Not covered.** Types re-exported from `acetone-graph`, `acetone-model` and
-  `acetone-store` — `GraphError`, `Value`, `NodeKey`, `EdgeKey`, `NodeRecord`,
-  `EdgeRecord`, `Hash`, `ObjectFormat` — appear in the core list by name only.
-  `#[non_exhaustive]` on `GraphError` in 0.4 re-blessed to an **empty diff**
-  despite being source-breaking for downstream exhaustive matches.
+- **Covered — signature-tracked.** Types hosted by `acetone-cypher`:
+  `Session`, `Outcome`, `QueryError`, `QueryLimits`, `QueryResult`,
+  `ResourceLimit`, `QueryValue`. Recorded field by field, variant by variant,
+  method signature by method signature, attributes included. ADR-0064's
+  `max_scanned_candidates` and `ScannedCandidates` are both in the snapshot,
+  as are the 0.4 `#[non_exhaustive]` attributes — that gate did its job.
+- **Not covered — name only.** Everything hosted by `acetone-graph`,
+  `acetone-model` or `acetone-store`: `GraphError`, `Repository`,
+  `Transaction`, `Snapshot`, `InitOptions`, `LogEntry`, `FormatTransform`,
+  `Rechunk`, `MigrateReport`, `rewrite_history`, `DEFAULT_BRANCH`,
+  `DEFAULT_WORKSPACE`, `Value`, `NodeKey`, `EdgeKey`, `NodeRecord`,
+  `EdgeRecord`, `Hash`, `ObjectFormat`.
 
-For that second group, changes to a frozen type's *shape* must be caught by
-review and recorded in the CHANGELOG by hand. `GraphError`'s attribute is
-additionally pinned by a `compile_fail` doctest on its `acetone-core`
-re-export, which is a check the gate cannot make.
+For that second group the gap is **the whole signature surface**, not just
+type shape: a removed or re-signatured inherent method (`Repository::commit`,
+say) re-blesses to an empty diff exactly as a new field or variant does. The
+demonstration is `GraphError` — making it `#[non_exhaustive]` in 0.4 is
+source-breaking for every downstream exhaustive match, and produced **no
+snapshot diff at all**.
+
+So for those types, both shape and signature changes are guarded by **review
+only**, and must be recorded in the CHANGELOG by hand. A `compile_fail`
+doctest is not a substitute: a partial match over a large enum fails `E0004`
+whether or not the type is non-exhaustive, so such a test passes vacuously.
+The durable fix is to signature-track these crates as `acetone-cypher` is
+tracked — `acetone-7qw.20`; update this section when it lands.
 
 Any drift fails CI. After an **intentional** change, re-bless and commit the
 snapshots:
