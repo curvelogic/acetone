@@ -6,11 +6,14 @@
 
 The 0.4.0 release closed Phase 9 and with it the roadmap's last numbered
 phase. The direction discussion that followed weighed four options: a quality
-pass (the reopened `acetone-7qw` epic holds real security-labelled P2s — two
-order-of-magnitude resource-governor evasions, a quadratic import path — plus
+pass (`acetone-7qw`, reopened at the Phase 9 boundary — see
+docs/reports/phase-9.md — holds real security-labelled P2s: the scan
+budget's ~40× per-anchor under-count and a quadratic import path, alongside
+`allocated_size`'s byte-payload blindness (P3) and
 the public-API freeze gate's proven blind spot over re-exported types); a
-dogfooding phase (deferred at every boundary since 0.2, where the criterion
-was waived for want of users); a new capability from the unscheduled list; or
+dogfooding phase (the dogfood criterion has been carried as Greg's boundary
+judgement at every phase since 0.1, `acetone-cbl.6` still open); a new
+capability from the unscheduled list; or
 a deliberate format_version 2 boundary (`acetone-qjzy`).
 
 A concrete first tenant has now appeared: a private external application
@@ -34,6 +37,11 @@ the draft exit criteria. The roadmap's unscheduled section is retitled
 
 Choices embedded in the scope, made here rather than deferred:
 
+- **The phase owns `acetone-7qw`'s P2 tier**, not the whole epic's drain:
+  the remainder is triaged at the boundary (resolved, or re-homed with
+  justification per ADR-0054), and format-coupled residuals
+  (`acetone-7qw.16`) stay parked behind the format_version 2 gate
+  (`acetone-qjzy`) — in scope for that gate, not this phase.
 - **New capabilities are use-pulled, not roadmap-pushed.** Views, RDF
   projection, log/blame and the rest of the unscheduled list stay unscheduled
   until real use pulls them; the format_version 2 boundary waits until the
@@ -48,11 +56,17 @@ Choices embedded in the scope, made here rather than deferred:
 
 ## Consequences
 
-- The phase does not start until Greg opens it (phase-gating rule,
-  2026-07-24); he ratifies or amends the draft exit criteria at that moment
-  and the gate bead is updated to match.
+- The phase does not start until Greg opens it (the phase-start rule in
+  CLAUDE.md §Autonomous Working Protocol — a working agreement of
+  2026-07-24, recorded in the repo by this PR); he ratifies or amends the
+  draft exit criteria at that moment and the gate bead is updated to match.
 - `acetone-2ck` (Phase 9's epic) still holds its pre-Phase 9 remnants and
   stays open pending Greg's re-home-or-close ruling; nothing here moves them.
 - Target version 0.5 permits breaking library changes (pre-1.0 minor), which
   the freeze-gate work may need for re-blessing; any such change remains
   deliberate and snapshot-re-blessed per ADR-0046.
+
+Related: ADR-0032 and ADR-0055 (the roadmap-extension precedent this
+follows); ADR-0054 (in-phase follow-up resolution and the shipped-interface
+corollary the exit criteria apply prospectively); ADR-0060 (autodeclare);
+ADR-0046 (API freeze).
