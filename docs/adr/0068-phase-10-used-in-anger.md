@@ -1,6 +1,6 @@
 # ADR-0068: Phase 10 — Used in anger
 
-*Status: accepted — direction discussed and crystallised with Greg at the post-0.4.0 direction session (2026-08-01); exit criteria remain draft until Greg ratifies them at phase start · Date: 2026-08-01 · Bead: acetone-z093.3*
+*Status: accepted — direction discussed and crystallised with Greg at the post-0.4.0 direction session (2026-08-01); Greg opened the phase the same day, ratifying the exit criteria as drafted and ruling the criterion-4 bar at one complete cycle (recorded on gate bead acetone-z093.1) · Date: 2026-08-01 · Bead: acetone-z093.3*
 
 ## Context
 
