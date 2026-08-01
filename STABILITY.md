@@ -10,7 +10,9 @@ The **curated headline surface** — the items re-exported flat at the
 `acetone-core` crate root — is stable and follows semantic versioning:
 
 - Repository & history: `Repository`, `Transaction`, `Snapshot`, `InitOptions`,
-  `LogEntry`, `DEFAULT_BRANCH`, `DEFAULT_WORKSPACE`, `GraphError`.
+  `LogEntry`, `DEFAULT_BRANCH`, `DEFAULT_WORKSPACE`, `GraphError`
+  (`#[non_exhaustive]` from 0.4 — match it with a wildcard arm, and new
+  variants will never break your build).
 - Migrate: `FormatTransform`, `Rechunk`, `MigrateReport`, `rewrite_history`.
 - Query: `Session`, `Outcome`, `QueryError`, `QueryLimits`, `QueryResult`,
   `ResourceLimit`, and `QueryValue` — the value type of query result rows and
@@ -52,6 +54,28 @@ analogue of the format goldens:
   `acetone-cypher` (which hosts `Session`/`QueryLimits`/`QueryResult` and the
   runtime value carrier), so a signature-level change to the newest frozen query
   API is caught automatically.
+
+**A known blind spot** (`acetone-7qw.5`), and its exact extent. The core
+snapshot is a *list*, so a change **inside** a re-exported type — a new struct
+field, a new or removed enum variant, a `#[non_exhaustive]` attribute — does
+not move it. Whether CI sees such a change therefore depends on **which crate
+the type comes from**:
+
+- **Covered.** Types hosted by `acetone-cypher` (`Session`, `QueryLimits`,
+  `QueryResult`, `ResourceLimit`, `QueryValue`) are signature-tracked field by
+  field and variant by variant. ADR-0064's `max_scanned_candidates` field and
+  `ScannedCandidates` variant are both in the snapshot, as are the 0.4
+  `#[non_exhaustive]` attributes — that gate did its job.
+- **Not covered.** Types re-exported from `acetone-graph`, `acetone-model` and
+  `acetone-store` — `GraphError`, `Value`, `NodeKey`, `EdgeKey`, `NodeRecord`,
+  `EdgeRecord`, `Hash`, `ObjectFormat` — appear in the core list by name only.
+  `#[non_exhaustive]` on `GraphError` in 0.4 re-blessed to an **empty diff**
+  despite being source-breaking for downstream exhaustive matches.
+
+For that second group, changes to a frozen type's *shape* must be caught by
+review and recorded in the CHANGELOG by hand. `GraphError`'s attribute is
+additionally pinned by a `compile_fail` doctest on its `acetone-core`
+re-export, which is a check the gate cannot make.
 
 Any drift fails CI. After an **intentional** change, re-bless and commit the
 snapshots:

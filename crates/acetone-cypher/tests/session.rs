@@ -370,10 +370,7 @@ fn run_with_honours_an_explicit_governor_budget() {
     seed(&repo);
     // A zero-ish budget makes even a trivial query exceed the cap — proving the
     // limits are threaded through, not ignored.
-    let tight = QueryLimits {
-        max_work_units: 1,
-        ..QueryLimits::default()
-    };
+    let tight = QueryLimits::default().with_max_work_units(1);
     let err = Session::new(&repo)
         .run_with("MATCH (h:Host) RETURN h", &BTreeMap::new(), &tight)
         .expect_err("a 1-unit budget must be exceeded");

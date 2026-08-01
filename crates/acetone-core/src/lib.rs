@@ -54,9 +54,40 @@ pub use acetone_store as store;
 // Repository, transactions, history, and the migrate escape hatch.
 pub use acetone_graph::repo::{DEFAULT_BRANCH, DEFAULT_WORKSPACE, InitOptions, LogEntry};
 pub use acetone_graph::{
-    FormatTransform, GraphError, MigrateReport, Rechunk, Repository, Snapshot, Transaction,
-    rewrite_history,
+    FormatTransform, MigrateReport, Rechunk, Repository, Snapshot, Transaction, rewrite_history,
 };
+
+/// `GraphError` is `#[non_exhaustive]` from 0.4 (`acetone-fht`). The CI freeze
+/// gate cannot see that — `public-api.txt` lists the re-export, not the type's
+/// internals (`acetone-7qw.5`) — so the property is pinned here, as doctests
+/// compiled from outside `acetone-graph`, the only vantage point where the
+/// attribute has any effect at all.
+///
+/// Exhaustive matching is refused (`E0004`, non-exhaustive patterns — pinned
+/// by code so this cannot start passing for an unrelated compile error):
+///
+/// ```compile_fail,E0004
+/// use acetone_core::GraphError;
+/// fn describe(e: &GraphError) -> &'static str {
+///     match e {
+///         GraphError::NothingToCommit => "nothing to commit",
+///     }
+/// }
+/// ```
+///
+/// A wildcard arm is the supported form, and keeps compiling as variants land:
+///
+/// ```
+/// use acetone_core::GraphError;
+/// fn describe(e: &GraphError) -> &'static str {
+///     match e {
+///         GraphError::NothingToCommit => "nothing to commit",
+///         _ => "something else",
+///     }
+/// }
+/// assert_eq!(describe(&GraphError::NothingToCommit), "nothing to commit");
+/// ```
+pub use acetone_graph::GraphError;
 
 // The governed query entry point (ADR-0039) and its caps/result (ADR-0036/0043).
 pub use acetone_cypher::exec::{QueryLimits, QueryResult, ResourceLimit};
