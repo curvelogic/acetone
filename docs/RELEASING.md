@@ -39,7 +39,8 @@ The flow:
    commit. That publish is your approval — nothing is tagged before it. You may
    delegate the click: an explicit, informed, current instruction from you
    authorises an agent to publish the draft on your behalf (ADR-0067), with the
-   instruction recorded in the release record. Absent that, no agent publishes.
+   instruction recorded verbatim on the publish step's bead. Absent that, no
+   agent publishes.
 5. **Homebrew follows automatically**: publishing triggers the
    **Homebrew bump** workflow, which opens a formula PR on the tap (see below).
    Review and merge that PR.
@@ -67,8 +68,9 @@ bd mol wisp release --var version=<version>   # ephemeral run (recommended)
 bd mol squash <molecule-root>                 # digest it when done
 ```
 
-The `publish` step carries a human gate: the molecule parks until Greg
-publishes the draft and the gate is resolved (`bd gate resolve`). This
+The `publish` step carries a human gate: the molecule parks until the draft
+is published — by Greg, or by delegation per ADR-0067 — and the gate is
+resolved (`bd gate resolve`). This
 document remains the narrative authority — the formula deliberately contains
 pointers and acceptance criteria, not commands, so it cannot drift from what
 is written here or in `.github/workflows/release.yml`.
