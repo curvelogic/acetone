@@ -1,6 +1,6 @@
 # ADR-0057: Encode the release process as a beads formula
 
-*Status: ratified — proposed by Greg at the 0.3.0 release (2026-07-23), ratified by Greg at the 0.3.1 boundary (2026-07-24), which also adds `.beads/formulas/` to the governing-config enumeration in CLAUDE.md · Date: 2026-07-23 · Bead: acetone-bxv*
+*Status: ratified — proposed by Greg at the 0.3.0 release (2026-07-23), ratified by Greg at the 0.3.1 boundary (2026-07-24), which also adds `.beads/formulas/` to the governing-config enumeration in CLAUDE.md; the publish step's "No agent publishes" is amended by ADR-0067 (explicit-instruction delegation) · Date: 2026-07-23 · Bead: acetone-bxv*
 
 ## Context
 
@@ -40,6 +40,11 @@ preflight → prep → land → build → publish (human gate) → post-publish
   and smoke-test a binary.
 - **publish** — carries a `human` gate: the molecule parks until Greg publishes
   the draft (which creates the tag) and the gate is resolved. No agent publishes.
+
+  > **Amended by ADR-0067** (2026-08-01): an explicit, informed, current,
+  > first-hand instruction from Greg delegates the publish, recorded verbatim
+  > on the publish step's bead. Absent that, no agent publishes.
+
 - **post-publish** — verify and merge the *automated* Homebrew tap PR
   (`homebrew-bump.yml`, since PR #170 — not created by hand), verify tag and
   attestation, then `bd mol squash` to a digest.
