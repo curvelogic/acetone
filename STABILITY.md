@@ -74,7 +74,7 @@ hosts the type**:
   `EdgeRecord`, `Hash`, `ObjectFormat`.
 
 For that second group the gap is **the whole signature surface**, not just
-type shape: a removed or re-signatured inherent method (`Repository::commit`,
+type shape: a removed or re-signatured inherent method (`Transaction::commit`,
 say) re-blesses to an empty diff exactly as a new field or variant does. The
 demonstration is `GraphError` — making it `#[non_exhaustive]` in 0.4 is
 source-breaking for every downstream exhaustive match, and produced **no
