@@ -72,16 +72,13 @@ pub use acetone_graph::{
 /// assert_eq!(describe(&GraphError::NothingToCommit), "nothing to commit");
 /// ```
 ///
-/// **This example illustrates the attribute; it does not guard it.** No
-/// automated check does. `crates/acetone-core/public-api.txt` records this
-/// re-export by name only, so removing the attribute re-blesses to an empty
-/// diff (`acetone-7qw.5`), and a `compile_fail` doctest cannot help either: a
-/// partial match over a 40-plus-variant enum fails `E0004` whether or not the
-/// type is non-exhaustive, so such a test passes vacuously. Only an exhaustive
-/// enumeration of every variant would flip, and it would silently go vacuous
-/// again the first time a variant was added without updating it. The durable
-/// fix is to signature-track this crate's surface the way `acetone-cypher`'s
-/// is tracked — `acetone-7qw.20`. Until then: review.
+/// **This example illustrates the attribute; the freeze gate guards it.**
+/// `crates/acetone-graph/public-api.txt` signature-tracks this type in its
+/// hosting crate (variants, methods and attributes included, `acetone-7qw.20`),
+/// so removing the attribute — or removing a variant (`acetone-7qw.5`) — is a
+/// snapshot diff that fails CI until deliberately re-blessed. The core snapshot
+/// still records only the re-export by name; the signature coverage lives in
+/// the per-crate snapshots (see STABILITY.md, "How it is enforced").
 pub use acetone_graph::GraphError;
 
 // The governed query entry point (ADR-0039) and its caps/result (ADR-0036/0043).

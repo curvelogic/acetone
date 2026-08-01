@@ -98,22 +98,22 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: install cargo-public-api (pinned)
         run: cargo install cargo-public-api --locked --version 0.52.0
-      - name: check acetone-core façade surface
+      - name: check public-API snapshots (core façade + full signature surfaces)
+        # acetone-graph/-model/-store joined the snapshot set in Phase 10
+        # (acetone-7qw.20): the core façade lists re-exports by NAME only, so
+        # without full-crate snapshots the entire signature surface of the
+        # types those crates host was invisible to this gate — proven when
+        # GraphError's #[non_exhaustive] re-blessed to an empty diff (PR #233).
         run: |
-          cargo public-api --package acetone-core > /tmp/core-api.txt
-          if ! diff -u crates/acetone-core/public-api.txt /tmp/core-api.txt; then
-            echo "::error::acetone-core public surface changed. If intended, re-bless:"
-            echo "::error::  cargo public-api --package acetone-core > crates/acetone-core/public-api.txt"
-            exit 1
-          fi
-      - name: check acetone-cypher signature surface
-        run: |
-          cargo public-api --package acetone-cypher > /tmp/cypher-api.txt
-          if ! diff -u crates/acetone-cypher/public-api.txt /tmp/cypher-api.txt; then
-            echo "::error::acetone-cypher public surface changed. If intended, re-bless:"
-            echo "::error::  cargo public-api --package acetone-cypher > crates/acetone-cypher/public-api.txt"
-            exit 1
-          fi
+          failed=0
+          for crate in acetone-core acetone-cypher acetone-graph acetone-model acetone-store; do
+            cargo public-api --package "${crate}" > "/tmp/${crate}-api.txt"
+            if ! diff -u "crates/${crate}/public-api.txt" "/tmp/${crate}-api.txt"; then
+              echo "::error::${crate} public surface changed. If intended, re-bless with scripts/bless-public-api.sh and commit the diff."
+              failed=1
+            fi
+          done
+          exit "${failed}"
 
   tck:
     # openCypher TCK conformance (spec §5.1: the pass rate is published

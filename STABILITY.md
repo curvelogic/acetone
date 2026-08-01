@@ -45,47 +45,32 @@ nothing in this surface.
 
 ## How it is enforced
 
-Two committed snapshots, checked by the CI `public-api` job (ADR-0046) — the API
-analogue of the format goldens:
+Five committed snapshots, checked by the CI `public-api` job (ADR-0046) — the
+API analogue of the format goldens:
 
 - `crates/acetone-core/public-api.txt` — the curated re-export **list**, so a
   symbol added to or removed from the frozen surface is caught.
-- `crates/acetone-cypher/public-api.txt` — the **full-signature** surface of
-  `acetone-cypher` (which hosts `Session`/`QueryLimits`/`QueryResult` and the
-  runtime value carrier), so a signature-level change to the newest frozen query
-  API is caught automatically.
+- `crates/acetone-cypher/public-api.txt`, `crates/acetone-graph/public-api.txt`,
+  `crates/acetone-model/public-api.txt`, `crates/acetone-store/public-api.txt` —
+  the **full-signature** surfaces of the crates hosting every frozen type,
+  recorded field by field, variant by variant, method signature by method
+  signature, attributes included.
 
-**A known blind spot** (`acetone-7qw.5`), and its exact extent. The core
-snapshot is a *list* of `pub use` lines, so nothing **inside** a re-exported
-type moves it. Whether CI sees a change therefore depends on **which crate
-hosts the type**:
+Every type on the frozen surface is therefore **signature-tracked in the crate
+that hosts it**: a change *inside* a re-exported type — a new field or variant,
+a removed or re-signatured inherent method, an added `#[non_exhaustive]` — is a
+snapshot diff, wherever the type lives. (This closed `acetone-7qw.20`/`.5` in
+Phase 10: previously only `acetone-cypher` was signature-tracked, and making
+`GraphError` — hosted by `acetone-graph` — `#[non_exhaustive]` in 0.4 was
+source-breaking yet produced an empty snapshot diff.)
 
-- **Covered — signature-tracked.** Types hosted by `acetone-cypher`:
-  `Session`, `Outcome`, `QueryError`, `QueryLimits`, `QueryResult`,
-  `ResourceLimit`, `QueryValue`. Recorded field by field, variant by variant,
-  method signature by method signature, attributes included. ADR-0064's
-  `max_scanned_candidates` and `ScannedCandidates` are both in the snapshot,
-  as are the 0.4 `#[non_exhaustive]` attributes — that gate did its job.
-- **Not covered — name only.** Everything hosted by `acetone-graph`,
-  `acetone-model` or `acetone-store`: `GraphError`, `Repository`,
-  `Transaction`, `Snapshot`, `InitOptions`, `LogEntry`, `FormatTransform`,
-  `Rechunk`, `MigrateReport`, `rewrite_history`, `DEFAULT_BRANCH`,
-  `DEFAULT_WORKSPACE`, `Value`, `NodeKey`, `EdgeKey`, `NodeRecord`,
-  `EdgeRecord`, `Hash`, `ObjectFormat`.
-
-For that second group the gap is **the whole signature surface**, not just
-type shape: a removed or re-signatured inherent method (`Transaction::commit`,
-say) re-blesses to an empty diff exactly as a new field or variant does. The
-demonstration is `GraphError` — making it `#[non_exhaustive]` in 0.4 is
-source-breaking for every downstream exhaustive match, and produced **no
-snapshot diff at all**.
-
-So for those types, both shape and signature changes are guarded by **review
-only**, and must be recorded in the CHANGELOG by hand. A `compile_fail`
-doctest is not a substitute: a partial match over a large enum fails `E0004`
-whether or not the type is non-exhaustive, so such a test passes vacuously.
-The durable fix is to signature-track these crates as `acetone-cypher` is
-tracked — `acetone-7qw.20`; update this section when it lands.
+Note the graph/model/store snapshots record those crates' **entire** public
+surfaces, which is wider than the frozen contract: the deep-access surface
+(paths through the `graph`/`model`/`store` modules) remains explicitly
+unfrozen, so a diff in those snapshots is not automatically a contract break —
+it is a prompt for deliberate review and, where the curated surface is
+touched, a CHANGELOG entry. What is *promised* is still defined by this
+document; the snapshots define what is *seen*.
 
 Any drift fails CI. After an **intentional** change, re-bless and commit the
 snapshots:
