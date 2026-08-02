@@ -164,9 +164,16 @@ pub struct Governor {
 
 impl Governor {
     /// A governor enforcing `limits`. The wall-clock deadline (if any) is
-    /// anchored now, at construction — i.e. at the start of the query.
+    /// anchored now, at construction — i.e. at the start of the query. A
+    /// budget too large to represent as a deadline (`checked_add` overflow)
+    /// means no deadline — semantically identical, and it keeps
+    /// `with_wall_clock(Duration::MAX)` from panicking an embedder or the
+    /// CLI's `--timeout` from panicking on a huge value (PR #239 review
+    /// blocker 2).
     pub fn new(limits: QueryLimits) -> Self {
-        let deadline = limits.wall_clock.map(|budget| Instant::now() + budget);
+        let deadline = limits
+            .wall_clock
+            .and_then(|budget| Instant::now().checked_add(budget));
         Governor {
             limits,
             work: Cell::new(0),
@@ -363,6 +370,18 @@ mod tests {
             gov.work_units()
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn a_wall_clock_budget_too_large_for_a_deadline_does_not_panic() {
+        // PR #239 review blocker 2: `Instant::now() + Duration::MAX`
+        // panics; the CLI's `--timeout` maps user input straight into this
+        // field, so construction must degrade to "no deadline" instead.
+        let limits = QueryLimits::unbounded().with_wall_clock(Some(Duration::MAX));
+        let gov = Governor::new(limits);
+        for _ in 0..(CLOCK_POLL_STRIDE + 1) {
+            gov.hop().unwrap(); // crosses a poll stride without a deadline
+        }
     }
 
     #[test]

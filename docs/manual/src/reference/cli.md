@@ -251,7 +251,7 @@ schema reproduces identical map roots. With `--label` or `--edge`, export a
 single table (to stdout, or to `-o <file>`); with neither, `-o` names the
 directory to write one table per label and type into.
 
-### `acetone query <CYPHER> [--at <REF>] [-f table|json|csv] [--param KEY=VALUE]...`
+### `acetone query <CYPHER> [--at <REF>] [-f table|json|csv] [--param KEY=VALUE]... [--timeout <SECONDS>]`
 
 Run an openCypher read query (alias: `acetone cypher`). `--at` reads a past
 version — whole-query time travel. `--param KEY=VALUE` (repeatable) binds
@@ -265,14 +265,23 @@ silently, as in Neo4j. Advisories (non-error
 diagnostics, e.g. a match on an undeclared label) go to stderr and never
 affect rows or exit status.
 
-### `acetone shell`
+`--timeout <SECONDS>` sets the query's wall-clock budget — **60 seconds by
+default**, `0` disables it. The deterministic resource caps (the resource
+governor) apply regardless; the timeout bounds how long they may take to be
+reached on a large stored graph, and a query it cuts off fails with a typed
+error naming the flag. The library API sets no timeout by default — this is
+a CLI-surface backstop (ADR-0069).
+
+### `acetone shell [--timeout <SECONDS>]`
 
 Start an interactive Cypher shell (readline REPL). Enter queries — read or
 write — to run them against the current workspace state; a write advances the
 workspace (commit separately with `acetone commit`). Conveniences:
 `:checkout <ref>`, `:log`, `:format <table|json|csv>`,
 `:param <name> <literal>` (bind `$name` for later statements; bare `:param`
-lists, `:param-clear` drops), `:quit`.
+lists, `:param-clear` drops), `:quit`. Each statement runs under the same
+default 60-second wall-clock budget as `acetone query`; start the shell with
+`--timeout <SECONDS>` to change it (`0` disables).
 
 ## Maintenance commands
 

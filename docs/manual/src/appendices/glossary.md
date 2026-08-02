@@ -114,7 +114,10 @@ makes diff and merge fast.
 
 **resource governor** — the per-query budget (`QueryLimits`) the query
 engine enforces — caps on result rows and other resources — so a runaway
-query fails with a typed error instead of exhausting the process.
+query fails with a typed error instead of exhausting the process. The caps
+are deterministic *work* bounds; the CLI additionally arms a 60-second
+wall-clock backstop by default (`--timeout`), which the library does not
+(ADR-0069).
 
 **schema** — the declared shape of the graph, stored in the `schema` map and
 versioned with everything else: each label's key tuple and constraints

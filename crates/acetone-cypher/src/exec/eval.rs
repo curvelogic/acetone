@@ -9,7 +9,7 @@ use crate::ast::QuantifierKind;
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::bind::bound::{BoundExpr, BoundPathPattern, VarId};
 use crate::exec::source::GraphSource;
-use crate::exec::value::{MAX_VALUE_DEPTH, Ternary, Value};
+use crate::exec::value::{MAX_VALUE_DEPTH, NodeValue, Ternary, Value};
 use crate::span::Span;
 
 use thiserror::Error;
@@ -142,6 +142,116 @@ impl Row {
     }
 }
 
+/// An expansion-probe cache key: which node, walked which way, under which
+/// relationship types.
+type ExpandKey = (
+    crate::exec::value::EntityId,
+    crate::ast::Direction,
+    Vec<String>,
+);
+/// One shared expansion result: (relationship, neighbour) pairs.
+type ExpandEntry = std::rc::Rc<Vec<(crate::exec::value::RelValue, NodeValue)>>;
+
+/// Upper bound on the TOTAL (relationship, neighbour) tuples the expansion
+/// memo may retain per context. The memo is not bounded by the expansion
+/// budget — a probe that returns early charges one hop but caches the whole
+/// adjacency — so without this cap a wide graph could turn a typed refusal
+/// into an OOM (PR #239 review major 3). Past the cap, probes still run and
+/// still charge; their results just stop being retained, degrading to the
+/// pre-memo cost profile rather than growing memory. A deterministic
+/// constant, so cacheability — and therefore timing, but never charges or
+/// results — is reproducible.
+const EXPAND_MEMO_TUPLE_CAP: usize = 1_000_000;
+
+/// Whether a probe result of `len` tuples may be retained when `retained`
+/// tuples are already held. Extracted so the boundary is unit-testable —
+/// the cap is the mitigation for unbounded memo retention (PR #239 review
+/// major 3), and nothing else exercises the branch on small fixtures.
+fn retention_fits(retained: usize, len: usize) -> bool {
+    retained.saturating_add(len) <= EXPAND_MEMO_TUPLE_CAP
+}
+
+/// Memoises full label-scan materialisations for the lifetime of one
+/// evaluation context (acetone-7qw.6). A fresh (unbound) anchor in expression
+/// position — a pattern comprehension or pattern predicate — is evaluated
+/// once per row, and each evaluation used to re-materialise the whole
+/// candidate node set from the source (30–47 µs per node over the
+/// store-backed source), which is how the deterministic scan budget came to
+/// be reached through minutes of real work (Phase 9 security review;
+/// acetone-7qw.7, ADR-0069).
+///
+/// Correctness comes from context lifetime, not an invalidation protocol:
+/// the cache is held by [`EvalCtx`], which borrows the graph source, so any
+/// mutation of a write overlay requires the context — and its hold on the
+/// cache — to be gone. (Since the grouped-projection fix the cache sits
+/// behind `Rc`; the guarantee therefore also rests on the crate-internal
+/// discipline documented on [`EvalCtx::scans`]: derived contexts may share
+/// it only over the same graph, within the parent's borrow.) Governor
+/// charges are deliberately **not** affected: a cache hit
+/// charges exactly what a miss charges, so limits trip at the same point,
+/// just cheaply.
+///
+/// Only plain label scans and expansion probes are cached. Seek results
+/// (key/index/range) are pin-dependent and already cheap; pinned anchors are
+/// lookups, not scans.
+#[derive(Default)]
+pub(crate) struct ScanCache {
+    by_labels: std::cell::RefCell<HashMap<Vec<String>, std::rc::Rc<Vec<NodeValue>>>>,
+    /// Expansion probes, keyed by (node, direction, types). Measurement
+    /// showed these — not the anchor materialisation — dominate the shipped
+    /// path: every anchor candidate costs one `expand()` store read per
+    /// evaluation, and an edge-less anchor charges no hops, so the work was
+    /// both unmemoised and invisible to the expansion budget (ADR-0069).
+    expands: std::cell::RefCell<HashMap<ExpandKey, ExpandEntry>>,
+    /// Total tuples retained in `expands`, against [`EXPAND_MEMO_TUPLE_CAP`].
+    expand_tuples: std::cell::Cell<usize>,
+}
+
+impl ScanCache {
+    /// The nodes carrying `labels`, materialised from `graph` on first use
+    /// and shared thereafter.
+    pub(crate) fn nodes_by_labels(
+        &self,
+        graph: &dyn GraphSource,
+        labels: &[String],
+    ) -> std::rc::Rc<Vec<NodeValue>> {
+        if let Some(hit) = self.by_labels.borrow().get(labels) {
+            return std::rc::Rc::clone(hit);
+        }
+        let nodes = std::rc::Rc::new(graph.nodes_by_labels(labels));
+        self.by_labels
+            .borrow_mut()
+            .insert(labels.to_vec(), std::rc::Rc::clone(&nodes));
+        nodes
+    }
+
+    /// The expansion of `node` in `direction` under `types`, probed against
+    /// `graph` on first use and shared thereafter.
+    pub(crate) fn expand(
+        &self,
+        graph: &dyn GraphSource,
+        node: &crate::exec::value::EntityId,
+        direction: crate::ast::Direction,
+        types: &[String],
+    ) -> ExpandEntry {
+        let key = (node.clone(), direction, types.to_vec());
+        if let Some(hit) = self.expands.borrow().get(&key) {
+            return std::rc::Rc::clone(hit);
+        }
+        let result = std::rc::Rc::new(graph.expand(node, direction, types));
+        // Retention is capped (never the probe itself, and never its
+        // charges): past the cap the result is returned uncached.
+        let retained = self.expand_tuples.get();
+        if retention_fits(retained, result.len()) {
+            self.expand_tuples.set(retained + result.len());
+            self.expands
+                .borrow_mut()
+                .insert(key, std::rc::Rc::clone(&result));
+        }
+        result
+    }
+}
+
 pub struct EvalCtx<'a> {
     pub graph: &'a dyn GraphSource,
     pub parameters: &'a BTreeMap<String, Value>,
@@ -157,6 +267,19 @@ pub struct EvalCtx<'a> {
     /// hand a downstream aggregate the skipped one's value
     /// (acetone-2ck.8).
     pub aggregates: Option<&'a HashMap<usize, Value>>,
+    /// Per-clause label-scan/expansion memo (acetone-7qw.6), behind `Rc` so a
+    /// derived context (the grouped-projection inner context) SHARES its
+    /// parent's memo rather than starting cold — a per-group cold cache was
+    /// the residual 700-second pathology (PR #239 review blocker 1).
+    ///
+    /// **Invariant (crate-internal discipline, not compiler-enforced now
+    /// that the cache is behind `Rc`)**: clone this ONLY into a derived
+    /// context over the SAME graph, within the parent context's borrow. A
+    /// clone into a context over a different source, or one outliving the
+    /// parent's graph borrow, would compile and serve stale scans. Private:
+    /// external callers construct contexts through [`EvalCtx::new`], which
+    /// starts it empty.
+    pub(crate) scans: std::rc::Rc<ScanCache>,
 }
 
 impl<'a> EvalCtx<'a> {
@@ -170,6 +293,7 @@ impl<'a> EvalCtx<'a> {
             parameters,
             governor,
             aggregates: None,
+            scans: std::rc::Rc::new(ScanCache::default()),
         }
     }
 }
@@ -898,21 +1022,28 @@ fn slice_access(
 /// anchored on the row's bound variables? Pattern predicates cannot
 /// introduce variables (binder-enforced), so this is a pure probe.
 fn pattern_exists(pattern: &BoundPathPattern, row: &Row, ctx: &EvalCtx) -> Result<bool, ExecError> {
-    let starts = match &pattern.start.var {
+    let pinned: Vec<NodeValue>;
+    let scanned: std::rc::Rc<Vec<NodeValue>>;
+    let starts: &[NodeValue] = match &pattern.start.var {
         Some(var) => match row.get(*var) {
-            Value::Node(node) => vec![node],
+            Value::Node(node) => {
+                pinned = vec![node];
+                &pinned
+            }
             Value::Null => return Ok(false),
             _ => return Ok(false),
         },
         // An ANONYMOUS start node is a fresh anchor in expression
-        // position, and a pattern predicate is evaluated once per row, so
-        // this re-materialises the whole node map per row. Charge it like
-        // any other anchor scan (PR #219 review blocker 2 — the sibling
-        // path the match_path fix missed).
+        // position, and a pattern predicate is evaluated once per row.
+        // The materialisation is memoised per context (acetone-7qw.6),
+        // but every evaluation still charges like any other anchor scan
+        // (PR #219 review blocker 2 — the sibling path the match_path fix
+        // missed; charges are deliberately cache-oblivious, ADR-0069).
         None => {
-            let candidates = ctx.graph.nodes_by_labels(&pattern.start.labels);
+            let candidates = ctx.scans.nodes_by_labels(ctx.graph, &pattern.start.labels);
             ctx.governor.scan(candidates.len())?;
-            candidates
+            scanned = candidates;
+            &scanned
         }
     };
     for start in starts {
@@ -924,7 +1055,7 @@ fn pattern_exists(pattern: &BoundPathPattern, row: &Row, ctx: &EvalCtx) -> Resul
         {
             continue;
         }
-        if probe_steps(&pattern.steps, 0, &start, row, ctx)? {
+        if probe_steps(&pattern.steps, 0, start, row, ctx)? {
             return Ok(true);
         }
     }
@@ -950,9 +1081,14 @@ fn probe_steps(
             span: rel.span,
         });
     }
-    for (rel_value, neighbour) in ctx.graph.expand(&from.id, rel.direction, &rel.types) {
+    for (rel_value, neighbour) in ctx
+        .scans
+        .expand(ctx.graph, &from.id, rel.direction, &rel.types)
+        .iter()
+    {
         // Every edge considered is an expansion step, here as in
-        // match_path (PR #219 review blocker 2).
+        // match_path (PR #219 review blocker 2). Charged on cache hits
+        // too (ADR-0069).
         ctx.governor.hop()?;
         // A bound relationship variable pins the exact relationship.
         if let Some(var) = rel.var {
@@ -972,7 +1108,7 @@ fn probe_steps(
         if !node.labels.iter().all(|l| neighbour.labels.contains(l)) {
             continue;
         }
-        if probe_steps(steps, at + 1, &neighbour, row, ctx)? {
+        if probe_steps(steps, at + 1, neighbour, row, ctx)? {
             return Ok(true);
         }
     }
@@ -1076,5 +1212,84 @@ impl BoundExpr {
             | BoundExpr::HasLabels { span, .. }
             | BoundExpr::PatternComprehension { span, .. } => *span,
         }
+    }
+}
+
+#[cfg(test)]
+mod scan_cache_tests {
+    use super::*;
+
+    #[test]
+    fn retention_boundary_is_exact_and_overflow_safe() {
+        // The cap is the mitigation for unbounded memo retention (PR #239
+        // review major 3); this pins the branch nothing else crosses on
+        // small fixtures. A `<=`→`>=` flip fails here; a dropped
+        // accumulator update fails the sibling test below.
+        assert!(retention_fits(EXPAND_MEMO_TUPLE_CAP - 1, 1)); // exactly at cap
+        assert!(retention_fits(0, EXPAND_MEMO_TUPLE_CAP)); // one giant result
+        assert!(retention_fits(EXPAND_MEMO_TUPLE_CAP, 0)); // empty results always fit
+        assert!(!retention_fits(EXPAND_MEMO_TUPLE_CAP, 1)); // one past
+        assert!(!retention_fits(EXPAND_MEMO_TUPLE_CAP - 1, 2)); // straddles
+        assert!(!retention_fits(usize::MAX, 1)); // saturates, never wraps
+    }
+
+    #[test]
+    fn expand_accumulator_advances_by_result_len() {
+        // The predicate test above cannot catch a dropped
+        // `expand_tuples.set(...)` in `ScanCache::expand` (reviewer nit,
+        // PR #239 sign-off); this drives the cache itself and pins the
+        // accumulator.
+        use crate::ast::Direction;
+        use crate::exec::value::{EntityId, RelValue};
+
+        struct TwoEdges;
+        impl GraphSource for TwoEdges {
+            fn all_nodes(&self) -> Vec<NodeValue> {
+                Vec::new()
+            }
+            fn node(&self, _: &EntityId) -> Option<NodeValue> {
+                None
+            }
+            fn expand(
+                &self,
+                node: &EntityId,
+                _: Direction,
+                _: &[String],
+            ) -> Vec<(RelValue, NodeValue)> {
+                let neighbour = NodeValue {
+                    id: EntityId::from_bytes(b"x".to_vec()),
+                    labels: Vec::new(),
+                    properties: BTreeMap::new(),
+                };
+                (0..2)
+                    .map(|i| {
+                        (
+                            RelValue {
+                                id: EntityId::from_bytes(vec![i]),
+                                rel_type: "R".into(),
+                                start: node.clone(),
+                                end: neighbour.id.clone(),
+                                properties: BTreeMap::new(),
+                            },
+                            neighbour.clone(),
+                        )
+                    })
+                    .collect()
+            }
+        }
+
+        let cache = ScanCache::default();
+        let a = EntityId::from_bytes(b"a".to_vec());
+        let b = EntityId::from_bytes(b"b".to_vec());
+        cache.expand(&TwoEdges, &a, Direction::Out, &[]);
+        assert_eq!(cache.expand_tuples.get(), 2, "first probe retains 2 tuples");
+        cache.expand(&TwoEdges, &a, Direction::Out, &[]);
+        assert_eq!(cache.expand_tuples.get(), 2, "a hit retains nothing new");
+        cache.expand(&TwoEdges, &b, Direction::Out, &[]);
+        assert_eq!(
+            cache.expand_tuples.get(),
+            4,
+            "each distinct probe adds its len"
+        );
     }
 }

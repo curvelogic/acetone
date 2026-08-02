@@ -175,6 +175,8 @@ impl core::cmp::PartialEq for acetone_cypher::ast::Direction
 pub fn acetone_cypher::ast::Direction::eq(&self, &acetone_cypher::ast::Direction) -> bool
 impl core::fmt::Debug for acetone_cypher::ast::Direction
 pub fn acetone_cypher::ast::Direction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for acetone_cypher::ast::Direction
+pub fn acetone_cypher::ast::Direction::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for acetone_cypher::ast::Direction
 impl core::marker::StructuralPartialEq for acetone_cypher::ast::Direction
 impl core::marker::Freeze for acetone_cypher::ast::Direction

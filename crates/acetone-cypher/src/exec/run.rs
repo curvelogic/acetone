@@ -1126,12 +1126,15 @@ pub(crate) fn match_path(
     // Anchor at the leftmost node: a bound variable pins it; otherwise
     // scan by labels (the heuristic planner's LabelScan/AllNodesScan).
     let mut pinned = false;
-    let anchors: Vec<NodeValue> = match pattern.start.var {
+    let owned: Vec<NodeValue>;
+    let shared: std::rc::Rc<Vec<NodeValue>>;
+    let anchors: &[NodeValue] = match pattern.start.var {
         // Bound variable: pinned (bound null or non-node matches nothing).
         Some(var) if state.row.contains(var) => match state.row.get(var) {
             Value::Node(node) => {
                 pinned = true;
-                vec![node]
+                owned = vec![node];
+                &owned
             }
             _ => return Ok(Vec::new()),
         },
@@ -1139,10 +1142,21 @@ pub(crate) fn match_path(
         // binder attached a hint the source can serve (spec §5.3,
         // acetone-6g5.3.3), else a LabelScan. Either way `node_satisfies`
         // below still filters, so a seek only needs to return a
-        // candidate superset.
+        // candidate superset. The label-scan materialisation is memoised
+        // per evaluation context (acetone-7qw.6): a fresh anchor in a
+        // pattern comprehension is evaluated once per row, and re-reading
+        // the whole node set from the store each time is what made the
+        // scan budget minutes of real work (ADR-0069). Seek results are
+        // pin-dependent and stay uncached.
         _ => match seek_anchor(&pattern.start, &state.row, ctx)? {
-            Some(nodes) => nodes,
-            None => ctx.graph.nodes_by_labels(&pattern.start.labels),
+            Some(nodes) => {
+                owned = nodes;
+                &owned
+            }
+            None => {
+                shared = ctx.scans.nodes_by_labels(ctx.graph, &pattern.start.labels);
+                &shared
+            }
         },
     };
     // Examining anchor candidates is work whether or not any survives
@@ -1150,16 +1164,18 @@ pub(crate) fn match_path(
     // evaluated once per row, so an unbound anchor rescans the whole node map
     // per row — unbounded at zero charge until this call (Phase 9 security
     // review). Charged for seek results too: a candidate superset still costs
-    // what it costs. A PINNED anchor is a lookup, not a scan: charging it
-    // would let an ordinary row-by-row match burn the scan budget
-    // (PR #219 review finding 6).
+    // what it costs — and charged identically on cache hits, so memoisation
+    // changes where the time goes, never where a limit trips (ADR-0069). A
+    // PINNED anchor is a lookup, not a scan: charging it would let an
+    // ordinary row-by-row match burn the scan budget (PR #219 review
+    // finding 6).
     if !pinned {
         ctx.governor.scan(anchors.len())?;
     }
 
     let mut results = Vec::new();
     for anchor in anchors {
-        if !node_satisfies(&anchor, &pattern.start, &state.row, ctx)? {
+        if !node_satisfies(anchor, &pattern.start, &state.row, ctx)? {
             continue;
         }
         let mut row = state.row.clone();
@@ -1173,7 +1189,7 @@ pub(crate) fn match_path(
         walk_steps(
             pattern,
             0,
-            anchor,
+            anchor.clone(),
             MatchState {
                 row,
                 used_rels: state.used_rels.clone(),
@@ -1390,20 +1406,27 @@ fn walk_steps(
 
     match rel_pattern.var_length {
         None => {
-            for (rel, neighbour) in
-                ctx.graph
-                    .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
+            for (rel, neighbour) in ctx
+                .scans
+                .expand(
+                    ctx.graph,
+                    &from.id,
+                    rel_pattern.direction,
+                    &rel_pattern.types,
+                )
+                .iter()
             {
                 // Every edge traversal is an expansion step, so a dense
                 // fixed-length pattern is bounded like a var-length one.
+                // Charged on cache hits too (ADR-0069).
                 ctx.governor.hop()?;
                 if state.used_rels.contains(&rel.id) {
                     continue;
                 }
-                if !rel_satisfies(&rel, rel_pattern, &state.row, ctx)? {
+                if !rel_satisfies(rel, rel_pattern, &state.row, ctx)? {
                     continue;
                 }
-                if !node_satisfies(&neighbour, node_pattern, &state.row, ctx)? {
+                if !node_satisfies(neighbour, node_pattern, &state.row, ctx)? {
                     continue;
                 }
                 let mut next = MatchState {
@@ -1436,7 +1459,15 @@ fn walk_steps(
                 let mut next_path = path.clone();
                 next_path.rels.push(rel.clone());
                 next_path.nodes.push(neighbour.clone());
-                walk_steps(pattern, at + 1, neighbour, next, next_path, ctx, results)?;
+                walk_steps(
+                    pattern,
+                    at + 1,
+                    neighbour.clone(),
+                    next,
+                    next_path,
+                    ctx,
+                    results,
+                )?;
             }
         }
         Some(bounds) => {
@@ -1573,12 +1604,19 @@ fn expand_var_length(
         // Collect this node's expansions, then push them in reverse so the DFS
         // visits them in the same (forward) order the recursive form did.
         let mut children = Vec::new();
-        for (rel, neighbour) in
-            ctx.graph
-                .expand(&from.id, rel_pattern.direction, &rel_pattern.types)
+        for (rel, neighbour) in ctx
+            .scans
+            .expand(
+                ctx.graph,
+                &from.id,
+                rel_pattern.direction,
+                &rel_pattern.types,
+            )
+            .iter()
         {
             // Charge every edge considered — this is the primary bound on an
-            // unbounded `*` walk over a dense or cyclic graph.
+            // unbounded `*` walk over a dense or cyclic graph. Charged on
+            // cache hits too (ADR-0069).
             ctx.governor.hop()?;
             // A pinned sequence prunes to its next relationship (and to
             // its own length: past the end, nothing expands).
@@ -1591,7 +1629,7 @@ fn expand_var_length(
             if state.used_rels.contains(&rel.id) {
                 continue;
             }
-            if !rel_satisfies(&rel, rel_pattern, &state.row, ctx)? {
+            if !rel_satisfies(rel, rel_pattern, &state.row, ctx)? {
                 continue;
             }
             let mut next_state = MatchState {
@@ -1605,7 +1643,7 @@ fn expand_var_length(
             let mut next_hops = hops.clone();
             next_hops.push(rel.clone());
             children.push(VarHopFrame {
-                from: neighbour,
+                from: neighbour.clone(),
                 state: next_state,
                 path: next_path,
                 hops: next_hops,
@@ -1916,6 +1954,12 @@ fn eval_with_group(
         parameters: ctx.parameters,
         governor: ctx.governor,
         aggregates: Some(&slots),
+        // SHARE the outer context's memo — this function runs once per
+        // group per projection item, and a cold cache here re-materialised
+        // the store per group, reproducing the pre-fix pathology one clause
+        // shape sideways (PR #239 review blocker 1). Same graph borrow, so
+        // the ownership-invalidation argument is unchanged.
+        scans: std::rc::Rc::clone(&ctx.scans),
     };
     eval(expr, representative, &inner)
 }
