@@ -498,7 +498,7 @@ impl UniqueTracker {
         }
         // Three-way growth in lockstep: the id is minted from `owners.len()`
         // but later indexes `claim_keys` (apply_batch), so desync would be
-        // an out-of-order or missing report, not a type error.
+        // a wrong report or an index panic, not a type error.
         debug_assert_eq!(self.claim_keys.len(), self.owners.len());
         let id = u32::try_from(self.owners.len()).expect("claim ids fit u32");
         self.claim_ids.insert((pair, value_enc.clone()), id);
