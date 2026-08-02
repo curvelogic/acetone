@@ -284,7 +284,9 @@ pub struct RelPattern {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Hash`: `Direction` is part of the executor's expansion-memo key
+// (acetone-7qw.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     Out,
     In,

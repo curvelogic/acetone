@@ -41,6 +41,20 @@ impl Format {
     }
 }
 
+/// The shell shares the one-shot command's default wall-clock budget; there
+/// is no per-session override yet.
+const SHELL_TIMEOUT_SECS: u64 = 60;
+
+/// The CLI's query limits: the library defaults plus a wall-clock backstop
+/// (ADR-0069, acetone-7qw.21). The deterministic caps bound *work*, and on a
+/// store-backed graph reaching one can take minutes of real time — the CLI is
+/// an interactive product surface, not a deterministic embedding, so it arms
+/// a time bound too. `0` disables it.
+fn cli_limits(timeout_secs: u64) -> QueryLimits {
+    QueryLimits::default()
+        .with_wall_clock((timeout_secs > 0).then(|| std::time::Duration::from_secs(timeout_secs)))
+}
+
 /// Run one query and print the result. Orchestration (parse → bind → execute →
 /// for a write, persist and save) lives in the library [`Session`] (ADR-0039);
 /// the CLI keeps only presentation. `param_specs` are the raw `--param
@@ -51,9 +65,10 @@ pub fn run(
     at: Option<&str>,
     format: Format,
     param_specs: &[String],
+    timeout_secs: u64,
 ) -> Result<()> {
     let params = parse_params(param_specs)?;
-    let limits = QueryLimits::default();
+    let limits = cli_limits(timeout_secs);
     let repo = Repository::open(repo_path).context("opening repository")?;
     let session = Session::new(&repo);
     match at {
@@ -762,7 +777,7 @@ fn run_in_shell(
     // see it), exactly as `run` does — the shell never silently executes the read
     // side of a write. The user commits separately with `acetone commit`.
     let outcome = Session::new(&repo)
-        .run_with(cypher, params, &QueryLimits::default())
+        .run_with(cypher, params, &cli_limits(SHELL_TIMEOUT_SECS))
         .map_err(|e| anyhow!("{}", e.render(cypher)))?;
     render_outcome(&outcome, format, Some(SHELL_ROW_CAP));
     Ok(())

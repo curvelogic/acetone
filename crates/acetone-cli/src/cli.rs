@@ -396,6 +396,11 @@ pub enum Command {
         /// `--param 'name="billing"'`. The query reads it as `$KEY`.
         #[arg(long = "param", value_name = "KEY=VALUE")]
         param: Vec<String>,
+        /// Wall-clock budget in seconds (0 disables). The deterministic work
+        /// caps still apply either way; this bounds how long they may take to
+        /// be reached on a store-backed graph (ADR-0069).
+        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        timeout: u64,
     },
     /// Start an interactive Cypher shell (readline REPL).
     ///

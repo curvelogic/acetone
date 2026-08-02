@@ -9,7 +9,7 @@ use crate::ast::QuantifierKind;
 use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::bind::bound::{BoundExpr, BoundPathPattern, VarId};
 use crate::exec::source::GraphSource;
-use crate::exec::value::{MAX_VALUE_DEPTH, Ternary, Value};
+use crate::exec::value::{MAX_VALUE_DEPTH, NodeValue, Ternary, Value};
 use crate::span::Span;
 
 use thiserror::Error;
@@ -142,6 +142,85 @@ impl Row {
     }
 }
 
+/// An expansion-probe cache key: which node, walked which way, under which
+/// relationship types.
+type ExpandKey = (
+    crate::exec::value::EntityId,
+    crate::ast::Direction,
+    Vec<String>,
+);
+/// One shared expansion result: (relationship, neighbour) pairs.
+type ExpandEntry = std::rc::Rc<Vec<(crate::exec::value::RelValue, NodeValue)>>;
+
+/// Memoises full label-scan materialisations for the lifetime of one
+/// evaluation context (acetone-7qw.6). A fresh (unbound) anchor in expression
+/// position — a pattern comprehension or pattern predicate — is evaluated
+/// once per row, and each evaluation used to re-materialise the whole
+/// candidate node set from the source (30–47 µs per node over the
+/// store-backed source), which is how the deterministic scan budget came to
+/// be reached through minutes of real work (Phase 9 security review;
+/// acetone-7qw.7, ADR-0069).
+///
+/// Correctness comes from ownership, not an invalidation protocol: the cache
+/// lives inside [`EvalCtx`], which borrows the graph source, so any mutation
+/// of a write overlay requires the context — and the cache with it — to be
+/// gone. Governor charges are deliberately **not** affected: a cache hit
+/// charges exactly what a miss charges, so limits trip at the same point,
+/// just cheaply.
+///
+/// Only plain label scans and expansion probes are cached. Seek results
+/// (key/index/range) are pin-dependent and already cheap; pinned anchors are
+/// lookups, not scans.
+#[derive(Default)]
+pub(crate) struct ScanCache {
+    by_labels: std::cell::RefCell<HashMap<Vec<String>, std::rc::Rc<Vec<NodeValue>>>>,
+    /// Expansion probes, keyed by (node, direction, types). Measurement
+    /// showed these — not the anchor materialisation — dominate the shipped
+    /// path: every anchor candidate costs one `expand()` store read per
+    /// evaluation, and an edge-less anchor charges no hops, so the work was
+    /// both unmemoised and invisible to the expansion budget (ADR-0069).
+    expands: std::cell::RefCell<HashMap<ExpandKey, ExpandEntry>>,
+}
+
+impl ScanCache {
+    /// The nodes carrying `labels`, materialised from `graph` on first use
+    /// and shared thereafter.
+    pub(crate) fn nodes_by_labels(
+        &self,
+        graph: &dyn GraphSource,
+        labels: &[String],
+    ) -> std::rc::Rc<Vec<NodeValue>> {
+        if let Some(hit) = self.by_labels.borrow().get(labels) {
+            return std::rc::Rc::clone(hit);
+        }
+        let nodes = std::rc::Rc::new(graph.nodes_by_labels(labels));
+        self.by_labels
+            .borrow_mut()
+            .insert(labels.to_vec(), std::rc::Rc::clone(&nodes));
+        nodes
+    }
+
+    /// The expansion of `node` in `direction` under `types`, probed against
+    /// `graph` on first use and shared thereafter.
+    pub(crate) fn expand(
+        &self,
+        graph: &dyn GraphSource,
+        node: &crate::exec::value::EntityId,
+        direction: crate::ast::Direction,
+        types: &[String],
+    ) -> ExpandEntry {
+        let key = (node.clone(), direction, types.to_vec());
+        if let Some(hit) = self.expands.borrow().get(&key) {
+            return std::rc::Rc::clone(hit);
+        }
+        let result = std::rc::Rc::new(graph.expand(node, direction, types));
+        self.expands
+            .borrow_mut()
+            .insert(key, std::rc::Rc::clone(&result));
+        result
+    }
+}
+
 pub struct EvalCtx<'a> {
     pub graph: &'a dyn GraphSource,
     pub parameters: &'a BTreeMap<String, Value>,
@@ -157,6 +236,9 @@ pub struct EvalCtx<'a> {
     /// hand a downstream aggregate the skipped one's value
     /// (acetone-2ck.8).
     pub aggregates: Option<&'a HashMap<usize, Value>>,
+    /// Per-context label-scan memo (acetone-7qw.6). Private: external callers
+    /// construct contexts through [`EvalCtx::new`], which starts it empty.
+    pub(crate) scans: ScanCache,
 }
 
 impl<'a> EvalCtx<'a> {
@@ -170,6 +252,7 @@ impl<'a> EvalCtx<'a> {
             parameters,
             governor,
             aggregates: None,
+            scans: ScanCache::default(),
         }
     }
 }
@@ -898,21 +981,28 @@ fn slice_access(
 /// anchored on the row's bound variables? Pattern predicates cannot
 /// introduce variables (binder-enforced), so this is a pure probe.
 fn pattern_exists(pattern: &BoundPathPattern, row: &Row, ctx: &EvalCtx) -> Result<bool, ExecError> {
-    let starts = match &pattern.start.var {
+    let pinned: Vec<NodeValue>;
+    let scanned: std::rc::Rc<Vec<NodeValue>>;
+    let starts: &[NodeValue] = match &pattern.start.var {
         Some(var) => match row.get(*var) {
-            Value::Node(node) => vec![node],
+            Value::Node(node) => {
+                pinned = vec![node];
+                &pinned
+            }
             Value::Null => return Ok(false),
             _ => return Ok(false),
         },
         // An ANONYMOUS start node is a fresh anchor in expression
-        // position, and a pattern predicate is evaluated once per row, so
-        // this re-materialises the whole node map per row. Charge it like
-        // any other anchor scan (PR #219 review blocker 2 — the sibling
-        // path the match_path fix missed).
+        // position, and a pattern predicate is evaluated once per row.
+        // The materialisation is memoised per context (acetone-7qw.6),
+        // but every evaluation still charges like any other anchor scan
+        // (PR #219 review blocker 2 — the sibling path the match_path fix
+        // missed; charges are deliberately cache-oblivious, ADR-0069).
         None => {
-            let candidates = ctx.graph.nodes_by_labels(&pattern.start.labels);
+            let candidates = ctx.scans.nodes_by_labels(ctx.graph, &pattern.start.labels);
             ctx.governor.scan(candidates.len())?;
-            candidates
+            scanned = candidates;
+            &scanned
         }
     };
     for start in starts {
@@ -924,7 +1014,7 @@ fn pattern_exists(pattern: &BoundPathPattern, row: &Row, ctx: &EvalCtx) -> Resul
         {
             continue;
         }
-        if probe_steps(&pattern.steps, 0, &start, row, ctx)? {
+        if probe_steps(&pattern.steps, 0, start, row, ctx)? {
             return Ok(true);
         }
     }
@@ -950,9 +1040,14 @@ fn probe_steps(
             span: rel.span,
         });
     }
-    for (rel_value, neighbour) in ctx.graph.expand(&from.id, rel.direction, &rel.types) {
+    for (rel_value, neighbour) in ctx
+        .scans
+        .expand(ctx.graph, &from.id, rel.direction, &rel.types)
+        .iter()
+    {
         // Every edge considered is an expansion step, here as in
-        // match_path (PR #219 review blocker 2).
+        // match_path (PR #219 review blocker 2). Charged on cache hits
+        // too (ADR-0069).
         ctx.governor.hop()?;
         // A bound relationship variable pins the exact relationship.
         if let Some(var) = rel.var {
@@ -972,7 +1067,7 @@ fn probe_steps(
         if !node.labels.iter().all(|l| neighbour.labels.contains(l)) {
             continue;
         }
-        if probe_steps(steps, at + 1, &neighbour, row, ctx)? {
+        if probe_steps(steps, at + 1, neighbour, row, ctx)? {
             return Ok(true);
         }
     }
