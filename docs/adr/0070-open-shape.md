@@ -57,6 +57,13 @@ Reasons, in order of weight:
   is still checked at write time; seeks still trust declarations.
 - Relationship property types (acetone-7qw.12) follow the same open-shape
   rule when their enforcement lands.
+- **The traded-away behaviour, stated plainly**: a Strict-mode `MATCH`
+  pinning a typo'd property previously failed loudly at bind; it now binds,
+  matches nothing (the property exists on no node), and advises on stderr.
+  Zero-rows-plus-advisory is quieter than an error — the advisory fires at
+  bind time in exactly this case, and library consumers see it on
+  `QueryResult::advisories`, but a caller that ignores advisories loses the
+  signal. This is the cost of the decision, accepted knowingly.
 - A future *opt-in* closed shape (an explicit `CLOSED` declaration for
   registry-grade labels) remains open design space; nothing here precludes
   it — it would be a declared contract rather than an inference from

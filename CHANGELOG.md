@@ -18,6 +18,17 @@ fine.)
 
 ### Changed
 
+- **Declared property types no longer close a label's shape** (ADR-0070).
+  Previously, declaring any property type made node-pattern map literals
+  reject undeclared property names (`CREATE (:Host {…, ip: …})` failed
+  `unknown property`) while `SET` accepted them. Now undeclared properties
+  are legal on every path, symmetrically; on a typed label they produce a
+  stderr typo advisory (with did-you-mean) instead of an error. Note the
+  flip side: a Strict-mode `MATCH (h:Host {typo_prop: v})` that previously
+  errored now binds, matches nothing, and advises — check stderr when a
+  query unexpectedly returns 0 rows. Type *enforcement* on declared
+  properties (ADR-0066) is unchanged.
+
 - `acetone query` and `acetone shell` now arm a **60-second wall-clock
   budget by default** (each takes `--timeout <seconds>` to change it, `0`
   to disable; a cut-off query fails with a typed error naming the flag).
