@@ -412,17 +412,11 @@ fn stream_batches(
 }
 
 /// Streaming constraint enforcement (ADR-0062). Existence (`REQUIRE`) is
-/// per record. UNIQUE claims are tracked per `(label, property,
-/// canonical value encoding)` with the claiming keys — seeded by one
-/// pass over the workspace at import start (only when some label
-/// declares UNIQUE) and maintained across batches with replace-semantics
-/// unclaiming. Memory is O(claimed unique values), inherent without a
-/// persistent index (index-backed UNIQUE is acetone-ryg); with no UNIQUE
-/// constraints declared the tracker holds nothing.
-/// Streaming constraint enforcement (ADR-0062). Existence (`REQUIRE`) is
 /// per record. UNIQUE claims are tracked compactly: `(label, property)`
 /// pairs are interned to a small id, each distinct claimed value's
-/// canonical encoding is stored once under a claim id, and owners carry
+/// canonical encoding is interned under a claim id (with the inverse
+/// table `claim_keys` holding a second copy for O(1) violation
+/// reconstruction, acetone-7qw.2), and owners carry
 /// an *imported* flag so violations are reported only when an imported
 /// record is among the colliding owners — pre-existing breaches the
 /// import does not touch (or actively shrinks) stay fsck's business,
@@ -438,6 +432,13 @@ struct UniqueTracker {
     pair_ids: BTreeMap<(String, String), u16>,
     /// `(pair id, value encoding)` -> claim id.
     claim_ids: BTreeMap<(u16, Vec<u8>), u32>,
+    /// Claim id -> `(pair id, value encoding)` — the inverse of
+    /// `claim_ids`, grown at the same single site (`claim_id`), so
+    /// violation reconstruction is an index instead of a linear scan over
+    /// every interned claim (acetone-7qw.2: that scan made violation
+    /// handling O(violations × workspace unique values), minutes of stall
+    /// from one malformed CSV against a large graph).
+    claim_keys: Vec<(u16, Vec<u8>)>,
     /// Claim id -> owner key encodings, each flagged *imported*.
     owners: Vec<BTreeMap<Vec<u8>, bool>>,
     /// Owner key encoding -> the claim ids it currently holds.
@@ -454,6 +455,7 @@ impl UniqueTracker {
             pairs: Vec::new(),
             pair_ids: BTreeMap::new(),
             claim_ids: BTreeMap::new(),
+            claim_keys: Vec::new(),
             owners: Vec::new(),
             by_key: BTreeMap::new(),
             active: labels.values().any(|def| !def.unique().is_empty()),
@@ -494,8 +496,13 @@ impl UniqueTracker {
         if let Some(id) = self.claim_ids.get(&(pair, value_enc.clone())) {
             return *id;
         }
+        // Three-way growth in lockstep: the id is minted from `owners.len()`
+        // but later indexes `claim_keys` (apply_batch), so desync would be
+        // a wrong report or an index panic, not a type error.
+        debug_assert_eq!(self.claim_keys.len(), self.owners.len());
         let id = u32::try_from(self.owners.len()).expect("claim ids fit u32");
-        self.claim_ids.insert((pair, value_enc), id);
+        self.claim_ids.insert((pair, value_enc.clone()), id);
+        self.claim_keys.push((pair, value_enc));
         self.owners.push(BTreeMap::new());
         id
     }
@@ -587,12 +594,11 @@ impl UniqueTracker {
             }
             // Reconstruct the report from the interned claim: the pair
             // names, the value (decoded from its canonical encoding), and
-            // the owner keys (decoded from their encodings).
-            let ((pair, value_enc), _) = self
-                .claim_ids
-                .iter()
-                .find(|(_, id)| **id == claim)
-                .expect("touched claim is interned");
+            // the owner keys (decoded from their encodings). O(1) via the
+            // inverse table — the former linear scan over `claim_ids` made
+            // this loop quadratic in workspace unique values
+            // (acetone-7qw.2).
+            let (pair, value_enc) = &self.claim_keys[claim as usize];
             let (label, property) = &self.pairs[*pair as usize];
             let value = acetone_model::values::decode_value(value_enc)
                 .map_err(|e| GraphError::Import(ImportError::Mapping(e.to_string())))?;
@@ -799,6 +805,43 @@ fn default_message(provenance: &Provenance, nodes: usize, edges: usize) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claim_keys_stays_congruent_with_claim_ids() {
+        // The O(1) violation reconstruction (acetone-7qw.2) indexes
+        // `claim_keys` by claim id; this pins the two structures growing in
+        // lockstep at their single growth site, across re-interning of
+        // existing claims and interleaved pairs.
+        let mut tracker = UniqueTracker {
+            pairs: Vec::new(),
+            pair_ids: BTreeMap::new(),
+            claim_ids: BTreeMap::new(),
+            claim_keys: Vec::new(),
+            owners: Vec::new(),
+            by_key: BTreeMap::new(),
+            active: true,
+        };
+        let pair_a = tracker.pair_id("Host", "serial");
+        let pair_b = tracker.pair_id("Cert", "fingerprint");
+        // Intern claims across both pairs, re-interning every other one.
+        // `i / 2` puts the SAME value under both pairs, so the pair
+        // component of the key is load-bearing: the two claims must get
+        // distinct ids and distinct inverse entries (review minor 3).
+        for i in 0..100u8 {
+            let pair = if i % 2 == 0 { pair_a } else { pair_b };
+            let id = tracker.claim_id(pair, vec![i / 2]);
+            let again = tracker.claim_id(pair, vec![i / 2]);
+            assert_eq!(id, again, "re-interning must return the same id");
+        }
+        assert_eq!(tracker.claim_ids.len(), tracker.claim_keys.len());
+        assert_eq!(tracker.claim_keys.len(), tracker.owners.len());
+        for (key, id) in &tracker.claim_ids {
+            assert_eq!(
+                &tracker.claim_keys[*id as usize], key,
+                "claim_keys must be the exact inverse of claim_ids"
+            );
+        }
+    }
 
     fn coerce_ok(value: Value, ty: PropertyType) -> Value {
         coerce(value, Some(ty)).expect("coercion should succeed")
