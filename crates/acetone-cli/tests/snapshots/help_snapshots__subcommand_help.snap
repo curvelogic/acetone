@@ -1,6 +1,5 @@
 ---
 source: crates/acetone-cli/tests/help_snapshots.rs
-assertion_line: 92
 expression: combined
 ---
 ========== acetone init --help ==========

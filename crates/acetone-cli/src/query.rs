@@ -41,10 +41,6 @@ impl Format {
     }
 }
 
-/// The shell shares the one-shot command's default wall-clock budget; there
-/// is no per-session override yet.
-const SHELL_TIMEOUT_SECS: u64 = 60;
-
 /// The CLI's query limits: the library defaults plus a wall-clock backstop
 /// (ADR-0069, acetone-7qw.21). The deterministic caps bound *work*, and on a
 /// store-backed graph reaching one can take minutes of real time — the CLI is
@@ -76,7 +72,7 @@ pub fn run(
         Some(refspec) => {
             let result = session
                 .query_at_with(cypher, refspec, &params, &limits)
-                .map_err(|e| at_error(e, cypher))?;
+                .map_err(|e| at_error(e, cypher, timeout_secs))?;
             // One-shot command: never cap (a scripted `query --format table`
             // piped to a file must get every row).
             render(&result, format, None);
@@ -89,7 +85,7 @@ pub fn run(
         None => {
             let outcome = session
                 .run_with(cypher, &params, &limits)
-                .map_err(|e| anyhow!("{}", e.render(cypher)))?;
+                .map_err(|e| anyhow!("{}", render_query_error(&e, cypher, timeout_secs)))?;
             render_outcome(&outcome, format, None);
         }
     }
@@ -157,12 +153,42 @@ fn render_outcome(outcome: &QueryOutcome, format: Format, max_rows: Option<usize
 }
 
 /// Map a `--at` query error, giving the flag-specific hint for a write attempt.
-fn at_error(error: acetone_core::cypher::session::QueryError, cypher: &str) -> anyhow::Error {
+fn at_error(
+    error: acetone_core::cypher::session::QueryError,
+    cypher: &str,
+    timeout_secs: u64,
+) -> anyhow::Error {
     match error {
         acetone_core::cypher::session::QueryError::WriteAtVersion => {
             anyhow!("cannot write with --at: writes target the workspace, not a past version")
         }
-        other => anyhow!("{}", other.render(cypher)),
+        other => anyhow!("{}", render_query_error(&other, cypher, timeout_secs)),
+    }
+}
+
+/// Render a session error, appending an actionable hint when what tripped is
+/// the CLI's own wall-clock backstop (ADR-0069): unlike the deterministic
+/// work caps, the time budget is a CLI default the user can simply change.
+fn render_query_error(
+    error: &acetone_core::cypher::session::QueryError,
+    cypher: &str,
+    timeout_secs: u64,
+) -> String {
+    use acetone_core::cypher::exec::{ExecError, ResourceLimit};
+    let rendered = error.render(cypher);
+    if matches!(
+        error,
+        acetone_core::cypher::session::QueryError::Exec(ExecError::ResourceExceeded {
+            limit: ResourceLimit::WallClock,
+            ..
+        })
+    ) {
+        format!(
+            "{rendered}\n(the wall-clock budget is {timeout_secs}s — raise it with \
+--timeout <secs>, or disable it with --timeout 0)"
+        )
+    } else {
+        rendered
     }
 }
 
@@ -584,7 +610,7 @@ enum Outcome {
 /// `;` or on a blank line; meta-commands (`:help`, `:declare-*`, `:commit`,
 /// …) are handled at the start of a fresh statement, and `:quit`/`:cancel`
 /// work mid-statement too.
-pub fn shell(repo_path: &std::path::Path) -> Result<()> {
+pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
     let mut format = Format::Table;
     let mut buffer = String::new();
     // Session parameters (`:param`), passed to every statement as `$name`.
@@ -598,12 +624,23 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
             line.clear();
             if stdin.read_line(&mut line).context("reading input")? == 0 {
                 // Run an unterminated final statement.
-                flush_pending(repo_path, &mut buffer, &mut format, &mut params);
+                flush_pending(
+                    repo_path,
+                    &mut buffer,
+                    &mut format,
+                    &mut params,
+                    timeout_secs,
+                );
                 break; // EOF
             }
-            if let Outcome::Quit =
-                process_shell_line(repo_path, &mut buffer, &mut format, &mut params, &line)
-            {
+            if let Outcome::Quit = process_shell_line(
+                repo_path,
+                &mut buffer,
+                &mut format,
+                &mut params,
+                &line,
+                timeout_secs,
+            ) {
                 break;
             }
         }
@@ -629,9 +666,14 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
                 if !line.trim().is_empty() {
                     let _ = editor.add_history_entry(line.as_str());
                 }
-                if let Outcome::Quit =
-                    process_shell_line(repo_path, &mut buffer, &mut format, &mut params, &line)
-                {
+                if let Outcome::Quit = process_shell_line(
+                    repo_path,
+                    &mut buffer,
+                    &mut format,
+                    &mut params,
+                    &line,
+                    timeout_secs,
+                ) {
                     break;
                 }
             }
@@ -642,7 +684,13 @@ pub fn shell(repo_path: &std::path::Path) -> Result<()> {
             }
             // Ctrl-D: run an unterminated final statement, then exit.
             Err(rustyline::error::ReadlineError::Eof) => {
-                flush_pending(repo_path, &mut buffer, &mut format, &mut params);
+                flush_pending(
+                    repo_path,
+                    &mut buffer,
+                    &mut format,
+                    &mut params,
+                    timeout_secs,
+                );
                 break;
             }
             Err(e) => {
@@ -704,6 +752,7 @@ fn process_shell_line(
     format: &mut Format,
     params: &mut BTreeMap<String, Value>,
     raw: &str,
+    timeout_secs: u64,
 ) -> Outcome {
     let line = raw.trim_end_matches(['\n', '\r']);
     let trimmed = line.trim();
@@ -743,7 +792,7 @@ fn process_shell_line(
     if query.is_empty() {
         return Outcome::Continue;
     }
-    if let Err(e) = run_in_shell(repo_path, &query, *format, params) {
+    if let Err(e) = run_in_shell(repo_path, &query, *format, params, timeout_secs) {
         // Query errors go to stderr, keeping stdout as the pure result stream.
         errln!("error: {e:#}");
     }
@@ -758,10 +807,11 @@ fn flush_pending(
     buffer: &mut String,
     format: &mut Format,
     params: &mut BTreeMap<String, Value>,
+    timeout_secs: u64,
 ) {
     if !buffer.trim().is_empty() {
         // A blank line is already a statement terminator; reuse that path.
-        let _ = process_shell_line(repo_path, buffer, format, params, "");
+        let _ = process_shell_line(repo_path, buffer, format, params, "", timeout_secs);
     }
 }
 
@@ -770,6 +820,7 @@ fn run_in_shell(
     cypher: &str,
     format: Format,
     params: &BTreeMap<String, Value>,
+    timeout_secs: u64,
 ) -> Result<()> {
     let repo = Repository::open(repo_path)?;
     // The library `Session` dispatches read vs write: a write goes through the
@@ -777,8 +828,8 @@ fn run_in_shell(
     // see it), exactly as `run` does — the shell never silently executes the read
     // side of a write. The user commits separately with `acetone commit`.
     let outcome = Session::new(&repo)
-        .run_with(cypher, params, &cli_limits(SHELL_TIMEOUT_SECS))
-        .map_err(|e| anyhow!("{}", e.render(cypher)))?;
+        .run_with(cypher, params, &cli_limits(timeout_secs))
+        .map_err(|e| anyhow!("{}", render_query_error(&e, cypher, timeout_secs)))?;
     render_outcome(&outcome, format, Some(SHELL_ROW_CAP));
     Ok(())
 }

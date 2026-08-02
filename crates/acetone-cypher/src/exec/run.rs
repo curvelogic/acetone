@@ -1954,10 +1954,12 @@ fn eval_with_group(
         parameters: ctx.parameters,
         governor: ctx.governor,
         aggregates: Some(&slots),
-        // A fresh memo: the group's per-row scans went through the outer
-        // context's cache during accumulation; the representative pass is a
-        // single evaluation.
-        scans: Default::default(),
+        // SHARE the outer context's memo — this function runs once per
+        // group per projection item, and a cold cache here re-materialised
+        // the store per group, reproducing the pre-fix pathology one clause
+        // shape sideways (PR #239 review blocker 1). Same graph borrow, so
+        // the ownership-invalidation argument is unchanged.
+        scans: std::rc::Rc::clone(&ctx.scans),
     };
     eval(expr, representative, &inner)
 }

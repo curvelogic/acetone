@@ -18,12 +18,17 @@ fine.)
 
 ### Changed
 
-- `acetone query` and the shell now arm a **60-second wall-clock budget by
-  default** (`--timeout <seconds>` to change it, `0` to disable). The
-  deterministic work caps are unchanged and still apply; the timeout bounds
-  how long they may take to be reached on a store-backed graph (ADR-0069).
-  The library's `QueryLimits::default()` is untouched — embeddings stay
-  deterministic unless they opt in.
+- `acetone query` and `acetone shell` now arm a **60-second wall-clock
+  budget by default** (each takes `--timeout <seconds>` to change it, `0`
+  to disable; a cut-off query fails with a typed error naming the flag).
+  The deterministic work caps are unchanged and still apply; the timeout
+  bounds how long they may take to be reached on a store-backed graph
+  (ADR-0069). The library's `QueryLimits::default()` is untouched —
+  embeddings stay deterministic unless they opt in.
+- Deep-access API: `acetone-cypher`'s `EvalCtx` gained a private cache
+  field, so it can no longer be constructed by struct literal outside the
+  crate (use `EvalCtx::new`), and it is no longer `Freeze`. The curated
+  `acetone-core` surface is unaffected.
 
 ### Fixed
 
@@ -33,7 +38,9 @@ fine.)
   memoised per evaluation context, while the governor's deterministic
   charges stay byte-identical — limits trip at exactly the same point as
   before (measured on the shipped CLI against a 20k-node store-backed
-  repository: 702.9 s → 9.9 s to the typed refusal).
+  repository: 702.9 s → 9.9 s to the typed refusal). The expansion memo's
+  retention is capped (1M cached tuples per context); past the cap probes
+  still run and still charge, they just stop being retained.
 
 - The public-API freeze gate now signature-tracks the library crates behind
   the façade (`acetone-graph`, `acetone-model`, `acetone-store` and

@@ -18,15 +18,27 @@ the budget in store work, lower the default caps, or bound time directly.
 
 ## Decision
 
-**1. Memoise label scans; keep every charge byte-identical.** A per-clause
-scan cache (owned by the clause's evaluation context, so the borrow checker
-— not an invalidation protocol — guarantees it cannot survive a mutation of
-the underlying overlay) makes the second and later evaluations of a fresh
-anchor a cache lookup instead of a store materialisation. The governor still
-charges the full candidate count on every evaluation: limits trip at exactly
-the same point as before, deterministically — they are simply reached in
-seconds of real work rather than minutes. No budget re-denomination, no
-change to `QueryLimits::default()`, no new cap.
+**1. Memoise the per-row store work — label scans *and* expansion probes —
+keeping every charge byte-identical.** Measurement during implementation
+showed the anchor materialisation was only the visible half: the dominant
+cost was an `expand()` store probe **per anchor candidate per row**, which
+charges no hops when the anchor has no edges — uncharged and unmemoised.
+The `ScanCache` (held by the evaluation context and shared into derived
+group contexts, so the borrow checker — not an invalidation protocol —
+guarantees it cannot survive a mutation of the underlying overlay) memoises
+both: label-scan materialisations keyed by label set, and expansion results
+keyed by (node, direction, types). The governor still charges the full
+candidate count and every hop on every evaluation, hit or miss: limits trip
+at exactly the same point as before, deterministically — they are simply
+reached in seconds of real work rather than minutes. No budget
+re-denomination, no change to `QueryLimits::default()`, no new cap.
+
+The expansion memo is a **memory-for-time trade with a hard bound**: probes
+past a deterministic retention cap (1M cached tuples per context) still run
+and still charge but stop being retained, so a wide graph degrades to the
+pre-memo cost profile rather than converting the governor's typed refusal
+into unbounded retention. The cap governs cacheability only — never
+results, never charges.
 
 **2. The CLI arms a wall-clock backstop by default; the library does not.**
 `acetone query` gains `--timeout <seconds>` (default **60**, `0` disables),

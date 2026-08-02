@@ -152,6 +152,17 @@ type ExpandKey = (
 /// One shared expansion result: (relationship, neighbour) pairs.
 type ExpandEntry = std::rc::Rc<Vec<(crate::exec::value::RelValue, NodeValue)>>;
 
+/// Upper bound on the TOTAL (relationship, neighbour) tuples the expansion
+/// memo may retain per context. The memo is not bounded by the expansion
+/// budget — a probe that returns early charges one hop but caches the whole
+/// adjacency — so without this cap a wide graph could turn a typed refusal
+/// into an OOM (PR #239 review major 3). Past the cap, probes still run and
+/// still charge; their results just stop being retained, degrading to the
+/// pre-memo cost profile rather than growing memory. A deterministic
+/// constant, so cacheability — and therefore timing, but never charges or
+/// results — is reproducible.
+const EXPAND_MEMO_TUPLE_CAP: usize = 1_000_000;
+
 /// Memoises full label-scan materialisations for the lifetime of one
 /// evaluation context (acetone-7qw.6). A fresh (unbound) anchor in expression
 /// position — a pattern comprehension or pattern predicate — is evaluated
@@ -180,6 +191,8 @@ pub(crate) struct ScanCache {
     /// evaluation, and an edge-less anchor charges no hops, so the work was
     /// both unmemoised and invisible to the expansion budget (ADR-0069).
     expands: std::cell::RefCell<HashMap<ExpandKey, ExpandEntry>>,
+    /// Total tuples retained in `expands`, against [`EXPAND_MEMO_TUPLE_CAP`].
+    expand_tuples: std::cell::Cell<usize>,
 }
 
 impl ScanCache {
@@ -214,9 +227,15 @@ impl ScanCache {
             return std::rc::Rc::clone(hit);
         }
         let result = std::rc::Rc::new(graph.expand(node, direction, types));
-        self.expands
-            .borrow_mut()
-            .insert(key, std::rc::Rc::clone(&result));
+        // Retention is capped (never the probe itself, and never its
+        // charges): past the cap the result is returned uncached.
+        let retained = self.expand_tuples.get();
+        if retained.saturating_add(result.len()) <= EXPAND_MEMO_TUPLE_CAP {
+            self.expand_tuples.set(retained + result.len());
+            self.expands
+                .borrow_mut()
+                .insert(key, std::rc::Rc::clone(&result));
+        }
         result
     }
 }
@@ -236,9 +255,13 @@ pub struct EvalCtx<'a> {
     /// hand a downstream aggregate the skipped one's value
     /// (acetone-2ck.8).
     pub aggregates: Option<&'a HashMap<usize, Value>>,
-    /// Per-context label-scan memo (acetone-7qw.6). Private: external callers
-    /// construct contexts through [`EvalCtx::new`], which starts it empty.
-    pub(crate) scans: ScanCache,
+    /// Per-clause label-scan/expansion memo (acetone-7qw.6), behind `Rc` so a
+    /// derived context (the grouped-projection inner context) SHARES its
+    /// parent's memo rather than starting cold — a per-group cold cache was
+    /// the residual 700-second pathology (PR #239 review blocker 1). Private:
+    /// external callers construct contexts through [`EvalCtx::new`], which
+    /// starts it empty.
+    pub(crate) scans: std::rc::Rc<ScanCache>,
 }
 
 impl<'a> EvalCtx<'a> {
@@ -252,7 +275,7 @@ impl<'a> EvalCtx<'a> {
             parameters,
             governor,
             aggregates: None,
-            scans: ScanCache::default(),
+            scans: std::rc::Rc::new(ScanCache::default()),
         }
     }
 }

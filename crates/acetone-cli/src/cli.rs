@@ -408,7 +408,12 @@ pub enum Command {
     /// workspace state; a write advances the workspace (commit separately with
     /// `acetone commit`). Conveniences: `:checkout <ref>`, `:log`,
     /// `:format <table|json|csv>`, `:quit`.
-    Shell,
+    Shell {
+        /// Wall-clock budget per query in seconds (0 disables) — the same
+        /// backstop as `acetone query --timeout` (ADR-0069).
+        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        timeout: u64,
+    },
 
     // ---- Maintenance ----
     /// Verify repository integrity.
