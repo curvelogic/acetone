@@ -2234,6 +2234,7 @@ pub fn acetone_cypher::bind::bound::lookup_procedure(&str) -> core::option::Opti
 pub mod acetone_cypher::bind::catalogue
 pub struct acetone_cypher::bind::catalogue::Catalogue
 impl acetone_cypher::bind::catalogue::Catalogue
+pub fn acetone_cypher::bind::catalogue::Catalogue::declares_property(&self, &str, &str) -> bool
 pub fn acetone_cypher::bind::catalogue::Catalogue::empty() -> Self
 pub fn acetone_cypher::bind::catalogue::Catalogue::from_entries(impl core::iter::traits::collect::IntoIterator<Item = acetone_model::schema::SchemaEntry>) -> Self
 pub fn acetone_cypher::bind::catalogue::Catalogue::index_on(&self, &str, &str) -> core::option::Option<(&str, &acetone_model::schema::IndexDef)>
@@ -2945,6 +2946,7 @@ impl<T> typenum::type_operators::Same for acetone_cypher::bind::bound::BoundQuer
 pub type acetone_cypher::bind::bound::BoundQuery::Output = T
 pub struct acetone_cypher::bind::Catalogue
 impl acetone_cypher::bind::catalogue::Catalogue
+pub fn acetone_cypher::bind::catalogue::Catalogue::declares_property(&self, &str, &str) -> bool
 pub fn acetone_cypher::bind::catalogue::Catalogue::empty() -> Self
 pub fn acetone_cypher::bind::catalogue::Catalogue::from_entries(impl core::iter::traits::collect::IntoIterator<Item = acetone_model::schema::SchemaEntry>) -> Self
 pub fn acetone_cypher::bind::catalogue::Catalogue::index_on(&self, &str, &str) -> core::option::Option<(&str, &acetone_model::schema::IndexDef)>

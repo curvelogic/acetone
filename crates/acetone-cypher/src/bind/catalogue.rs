@@ -95,7 +95,13 @@ impl Catalogue {
             || def.types().contains_key(property)
             || def.exists().iter().any(|p| p == property)
             || def.unique().iter().any(|p| p == property)
-            || self.index_on(label, property).is_some()
+            // ANY declared index naming the property counts — composite
+            // components included (PR #241 review nit 12; `index_on` is
+            // single-property by design for the range path).
+            || self
+                .indexes
+                .values()
+                .any(|d| d.label() == label && d.properties().iter().any(|p| p == property))
     }
 
     /// The declared index best serving an equality seek over `pinned`
