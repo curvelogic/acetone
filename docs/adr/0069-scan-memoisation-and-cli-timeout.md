@@ -24,8 +24,10 @@ showed the anchor materialisation was only the visible half: the dominant
 cost was an `expand()` store probe **per anchor candidate per row**, which
 charges no hops when the anchor has no edges — uncharged and unmemoised.
 The `ScanCache` (held by the evaluation context and shared into derived
-group contexts, so the borrow checker — not an invalidation protocol —
-guarantees it cannot survive a mutation of the underlying overlay) memoises
+group contexts over the same graph, within the parent's borrow — so context
+lifetime, backed by that crate-internal discipline rather than an
+invalidation protocol, guarantees it cannot survive a mutation of the
+underlying overlay) memoises
 both: label-scan materialisations keyed by label set, and expansion results
 keyed by (node, direction, types). The governor still charges the full
 candidate count and every hop on every evaluation, hit or miss: limits trip
@@ -38,7 +40,17 @@ past a deterministic retention cap (1M cached tuples per context) still run
 and still charge but stop being retained, so a wide graph degrades to the
 pre-memo cost profile rather than converting the governor's typed refusal
 into unbounded retention. The cap governs cacheability only — never
-results, never charges.
+results, never charges. In bytes rather than tuples: a cached tuple is a
+cloned relationship plus neighbour, properties included, so 1M tuples is
+roughly **0.2–0.5 GB at typical lab-graph record sizes and multiple GB at
+pathologically fat records** — a ceiling denominated in entries, accepted
+because the cap is an internal mechanism (like the governor's clock-poll
+stride), not an operator promise. The label-scan memo is deliberately
+*not* separately capped: its entry count is bounded by the clause's
+distinct label sets (structurally small), and each entry's first fill is
+charged in full against the scan budget, so its retention is already
+bounded by `max_scanned_candidates` — looser than the expansion cap, but
+charged, where the expansion memo's growth was the uncharged path.
 
 **2. The CLI arms a wall-clock backstop by default; the library does not.**
 `acetone query` gains `--timeout <seconds>` (default **60**, `0` disables),

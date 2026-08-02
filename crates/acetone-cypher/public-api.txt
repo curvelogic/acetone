@@ -3315,7 +3315,7 @@ pub acetone_cypher::exec::eval::EvalCtx::graph: &'a dyn acetone_cypher::exec::so
 pub acetone_cypher::exec::eval::EvalCtx::parameters: &'a alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>
 impl<'a> acetone_cypher::exec::eval::EvalCtx<'a>
 pub fn acetone_cypher::exec::eval::EvalCtx<'a>::new(&'a dyn acetone_cypher::exec::source::GraphSource, &'a alloc::collections::btree::map::BTreeMap<alloc::string::String, acetone_cypher::exec::value::Value>, &'a acetone_cypher::exec::governor::Governor) -> Self
-impl<'a> !core::marker::Freeze for acetone_cypher::exec::eval::EvalCtx<'a>
+impl<'a> core::marker::Freeze for acetone_cypher::exec::eval::EvalCtx<'a>
 impl<'a> !core::marker::Send for acetone_cypher::exec::eval::EvalCtx<'a>
 impl<'a> !core::marker::Sync for acetone_cypher::exec::eval::EvalCtx<'a>
 impl<'a> core::marker::Unpin for acetone_cypher::exec::eval::EvalCtx<'a>

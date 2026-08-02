@@ -258,16 +258,25 @@ fn var_length_expansion_probes_are_memoised() {
     // anchors, plus the walk from n0's neighbour n1 — all cached across the
     // 10 rows.
     let graph = CountingSource::new(small_graph());
+    // Sum the sizes so the traversal RESULT is pinned too (review minor 4):
+    // on this fixture each row's comprehension finds exactly one path
+    // (n0→n1; no length-2 path exists), so the sum over 10 rows is 10 —
+    // a DFS regression changes the value, not just the probe count.
     let rows = run(
-        "UNWIND range(1, 10) AS i RETURN count(size([(x)-[*1..2]->(y) | 1])) AS c",
+        "UNWIND range(1, 10) AS i RETURN sum(size([(x)-[*1..2]->(y) | 1])) AS s",
         &graph,
     )
     .expect("query executes");
-    assert_eq!(int(&rows[0][0]), 10);
-    let probes = graph.expands.get();
-    assert!(
-        probes <= 4,
-        "distinct (node, direction, types) probes must be cached across rows; got {probes}"
+    assert_eq!(
+        int(&rows[0][0]),
+        10,
+        "one length-1 path per row, none at length 2"
+    );
+    assert_eq!(
+        graph.expands.get(),
+        3,
+        "exactly one probe per distinct (node, direction, types) — the three \
+         anchors; the DFS's step from n1 reuses n1's cached probe"
     );
 }
 
@@ -288,6 +297,13 @@ fn merge_per_row_evaluation_sees_earlier_rows_writes() {
     // one scan cache) out of the row loop, row 2 would re-match against a
     // stale scan, MERGE-create a duplicate, and the final count here would
     // drift (PR #239 review test-gap note).
+    //
+    // CAVEAT (review minor 5): the teeth depend on the fixture NOT serving
+    // key seeks — MemoryGraph leaves nodes_by_key at the trait default
+    // (None), so MERGE's pinned key falls through to the memoised label
+    // scan. On a seek-serving source the anchor takes the uncached
+    // seek_anchor path and this scenario cannot arise. If this fixture ever
+    // grows seek support, re-point the test at a non-seeking source.
     let graph = small_graph();
     let rows = run(
         "UNWIND [1, 2, 3] AS i MERGE (n:N {id: 99}) \

@@ -163,6 +163,14 @@ type ExpandEntry = std::rc::Rc<Vec<(crate::exec::value::RelValue, NodeValue)>>;
 /// results — is reproducible.
 const EXPAND_MEMO_TUPLE_CAP: usize = 1_000_000;
 
+/// Whether a probe result of `len` tuples may be retained when `retained`
+/// tuples are already held. Extracted so the boundary is unit-testable —
+/// the cap is the mitigation for unbounded memo retention (PR #239 review
+/// major 3), and nothing else exercises the branch on small fixtures.
+fn retention_fits(retained: usize, len: usize) -> bool {
+    retained.saturating_add(len) <= EXPAND_MEMO_TUPLE_CAP
+}
+
 /// Memoises full label-scan materialisations for the lifetime of one
 /// evaluation context (acetone-7qw.6). A fresh (unbound) anchor in expression
 /// position — a pattern comprehension or pattern predicate — is evaluated
@@ -172,10 +180,14 @@ const EXPAND_MEMO_TUPLE_CAP: usize = 1_000_000;
 /// be reached through minutes of real work (Phase 9 security review;
 /// acetone-7qw.7, ADR-0069).
 ///
-/// Correctness comes from ownership, not an invalidation protocol: the cache
-/// lives inside [`EvalCtx`], which borrows the graph source, so any mutation
-/// of a write overlay requires the context — and the cache with it — to be
-/// gone. Governor charges are deliberately **not** affected: a cache hit
+/// Correctness comes from context lifetime, not an invalidation protocol:
+/// the cache is held by [`EvalCtx`], which borrows the graph source, so any
+/// mutation of a write overlay requires the context — and its hold on the
+/// cache — to be gone. (Since the grouped-projection fix the cache sits
+/// behind `Rc`; the guarantee therefore also rests on the crate-internal
+/// discipline documented on [`EvalCtx::scans`]: derived contexts may share
+/// it only over the same graph, within the parent's borrow.) Governor
+/// charges are deliberately **not** affected: a cache hit
 /// charges exactly what a miss charges, so limits trip at the same point,
 /// just cheaply.
 ///
@@ -230,7 +242,7 @@ impl ScanCache {
         // Retention is capped (never the probe itself, and never its
         // charges): past the cap the result is returned uncached.
         let retained = self.expand_tuples.get();
-        if retained.saturating_add(result.len()) <= EXPAND_MEMO_TUPLE_CAP {
+        if retention_fits(retained, result.len()) {
             self.expand_tuples.set(retained + result.len());
             self.expands
                 .borrow_mut()
@@ -258,7 +270,13 @@ pub struct EvalCtx<'a> {
     /// Per-clause label-scan/expansion memo (acetone-7qw.6), behind `Rc` so a
     /// derived context (the grouped-projection inner context) SHARES its
     /// parent's memo rather than starting cold — a per-group cold cache was
-    /// the residual 700-second pathology (PR #239 review blocker 1). Private:
+    /// the residual 700-second pathology (PR #239 review blocker 1).
+    ///
+    /// **Invariant (crate-internal discipline, not compiler-enforced now
+    /// that the cache is behind `Rc`)**: clone this ONLY into a derived
+    /// context over the SAME graph, within the parent context's borrow. A
+    /// clone into a context over a different source, or one outliving the
+    /// parent's graph borrow, would compile and serve stale scans. Private:
     /// external callers construct contexts through [`EvalCtx::new`], which
     /// starts it empty.
     pub(crate) scans: std::rc::Rc<ScanCache>,
@@ -1194,5 +1212,24 @@ impl BoundExpr {
             | BoundExpr::HasLabels { span, .. }
             | BoundExpr::PatternComprehension { span, .. } => *span,
         }
+    }
+}
+
+#[cfg(test)]
+mod scan_cache_tests {
+    use super::*;
+
+    #[test]
+    fn retention_boundary_is_exact_and_overflow_safe() {
+        // The cap is the mitigation for unbounded memo retention (PR #239
+        // review major 3); this pins the branch nothing else crosses on
+        // small fixtures. A `<=`→`>=` flip or a dropped accumulator update
+        // fails here.
+        assert!(retention_fits(EXPAND_MEMO_TUPLE_CAP - 1, 1)); // exactly at cap
+        assert!(retention_fits(0, EXPAND_MEMO_TUPLE_CAP)); // one giant result
+        assert!(retention_fits(EXPAND_MEMO_TUPLE_CAP, 0)); // empty results always fit
+        assert!(!retention_fits(EXPAND_MEMO_TUPLE_CAP, 1)); // one past
+        assert!(!retention_fits(EXPAND_MEMO_TUPLE_CAP - 1, 2)); // straddles
+        assert!(!retention_fits(usize::MAX, 1)); // saturates, never wraps
     }
 }
