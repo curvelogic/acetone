@@ -1223,13 +1223,73 @@ mod scan_cache_tests {
     fn retention_boundary_is_exact_and_overflow_safe() {
         // The cap is the mitigation for unbounded memo retention (PR #239
         // review major 3); this pins the branch nothing else crosses on
-        // small fixtures. A `<=`→`>=` flip or a dropped accumulator update
-        // fails here.
+        // small fixtures. A `<=`→`>=` flip fails here; a dropped
+        // accumulator update fails the sibling test below.
         assert!(retention_fits(EXPAND_MEMO_TUPLE_CAP - 1, 1)); // exactly at cap
         assert!(retention_fits(0, EXPAND_MEMO_TUPLE_CAP)); // one giant result
         assert!(retention_fits(EXPAND_MEMO_TUPLE_CAP, 0)); // empty results always fit
         assert!(!retention_fits(EXPAND_MEMO_TUPLE_CAP, 1)); // one past
         assert!(!retention_fits(EXPAND_MEMO_TUPLE_CAP - 1, 2)); // straddles
         assert!(!retention_fits(usize::MAX, 1)); // saturates, never wraps
+    }
+
+    #[test]
+    fn expand_accumulator_advances_by_result_len() {
+        // The predicate test above cannot catch a dropped
+        // `expand_tuples.set(...)` in `ScanCache::expand` (reviewer nit,
+        // PR #239 sign-off); this drives the cache itself and pins the
+        // accumulator.
+        use crate::ast::Direction;
+        use crate::exec::value::{EntityId, RelValue};
+
+        struct TwoEdges;
+        impl GraphSource for TwoEdges {
+            fn all_nodes(&self) -> Vec<NodeValue> {
+                Vec::new()
+            }
+            fn node(&self, _: &EntityId) -> Option<NodeValue> {
+                None
+            }
+            fn expand(
+                &self,
+                node: &EntityId,
+                _: Direction,
+                _: &[String],
+            ) -> Vec<(RelValue, NodeValue)> {
+                let neighbour = NodeValue {
+                    id: EntityId::from_bytes(b"x".to_vec()),
+                    labels: Vec::new(),
+                    properties: BTreeMap::new(),
+                };
+                (0..2)
+                    .map(|i| {
+                        (
+                            RelValue {
+                                id: EntityId::from_bytes(vec![i]),
+                                rel_type: "R".into(),
+                                start: node.clone(),
+                                end: neighbour.id.clone(),
+                                properties: BTreeMap::new(),
+                            },
+                            neighbour.clone(),
+                        )
+                    })
+                    .collect()
+            }
+        }
+
+        let cache = ScanCache::default();
+        let a = EntityId::from_bytes(b"a".to_vec());
+        let b = EntityId::from_bytes(b"b".to_vec());
+        cache.expand(&TwoEdges, &a, Direction::Out, &[]);
+        assert_eq!(cache.expand_tuples.get(), 2, "first probe retains 2 tuples");
+        cache.expand(&TwoEdges, &a, Direction::Out, &[]);
+        assert_eq!(cache.expand_tuples.get(), 2, "a hit retains nothing new");
+        cache.expand(&TwoEdges, &b, Direction::Out, &[]);
+        assert_eq!(
+            cache.expand_tuples.get(),
+            4,
+            "each distinct probe adds its len"
+        );
     }
 }
