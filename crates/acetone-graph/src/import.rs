@@ -412,17 +412,11 @@ fn stream_batches(
 }
 
 /// Streaming constraint enforcement (ADR-0062). Existence (`REQUIRE`) is
-/// per record. UNIQUE claims are tracked per `(label, property,
-/// canonical value encoding)` with the claiming keys — seeded by one
-/// pass over the workspace at import start (only when some label
-/// declares UNIQUE) and maintained across batches with replace-semantics
-/// unclaiming. Memory is O(claimed unique values), inherent without a
-/// persistent index (index-backed UNIQUE is acetone-ryg); with no UNIQUE
-/// constraints declared the tracker holds nothing.
-/// Streaming constraint enforcement (ADR-0062). Existence (`REQUIRE`) is
 /// per record. UNIQUE claims are tracked compactly: `(label, property)`
 /// pairs are interned to a small id, each distinct claimed value's
-/// canonical encoding is stored once under a claim id, and owners carry
+/// canonical encoding is interned under a claim id (with the inverse
+/// table `claim_keys` holding a second copy for O(1) violation
+/// reconstruction, acetone-7qw.2), and owners carry
 /// an *imported* flag so violations are reported only when an imported
 /// record is among the colliding owners — pre-existing breaches the
 /// import does not touch (or actively shrinks) stay fsck's business,
@@ -502,6 +496,10 @@ impl UniqueTracker {
         if let Some(id) = self.claim_ids.get(&(pair, value_enc.clone())) {
             return *id;
         }
+        // Three-way growth in lockstep: the id is minted from `owners.len()`
+        // but later indexes `claim_keys` (apply_batch), so desync would be
+        // an out-of-order or missing report, not a type error.
+        debug_assert_eq!(self.claim_keys.len(), self.owners.len());
         let id = u32::try_from(self.owners.len()).expect("claim ids fit u32");
         self.claim_ids.insert((pair, value_enc.clone()), id);
         self.claim_keys.push((pair, value_enc));
@@ -826,10 +824,13 @@ mod tests {
         let pair_a = tracker.pair_id("Host", "serial");
         let pair_b = tracker.pair_id("Cert", "fingerprint");
         // Intern claims across both pairs, re-interning every other one.
+        // `i / 2` puts the SAME value under both pairs, so the pair
+        // component of the key is load-bearing: the two claims must get
+        // distinct ids and distinct inverse entries (review minor 3).
         for i in 0..100u8 {
             let pair = if i % 2 == 0 { pair_a } else { pair_b };
-            let id = tracker.claim_id(pair, vec![i]);
-            let again = tracker.claim_id(pair, vec![i]);
+            let id = tracker.claim_id(pair, vec![i / 2]);
+            let again = tracker.claim_id(pair, vec![i / 2]);
             assert_eq!(id, again, "re-interning must return the same id");
         }
         assert_eq!(tracker.claim_ids.len(), tracker.claim_keys.len());
