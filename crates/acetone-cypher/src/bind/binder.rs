@@ -310,6 +310,7 @@ impl<'a> Binder<'a> {
                 ast::RemoveItem::Property { var, key, span } => {
                     let target = self.entity_target(var, *span, true)?;
                     self.reject_key_property(target, key, *span)?;
+                    self.note_undeclared_set_property(target, key);
                     BoundRemoveItem::Property {
                         target,
                         key: key.clone(),
@@ -983,55 +984,48 @@ impl<'a> Binder<'a> {
         let ast::Expr::MapLiteral { entries, span: _ } = properties else {
             return; // parameter property maps carry no static names
         };
-        for label in labels {
-            let Some(def) = self.catalogue.label(label) else {
-                continue;
-            };
-            if def.types().is_empty() {
-                continue; // shapeless label: nothing to compare against
-            }
-            for (property, _) in entries {
-                let declared =
-                    def.types().contains_key(property) || def.key().iter().any(|k| k == property);
-                if !declared {
-                    let suggestion = self.property_suggestion(label, property).0;
-                    self.undeclared_shape_properties.push((
-                        label.clone(),
-                        property.clone(),
-                        suggestion,
-                    ));
-                }
-            }
+        for (property, _) in entries {
+            self.note_undeclared_property(labels, property);
         }
     }
 
-    /// The `SET` counterpart of [`Binder::note_undeclared_properties`]:
-    /// the same open-shape advisory for a single property name against the
-    /// target variable's statically-known labels (ADR-0070 — SET and map
-    /// literals now behave identically).
+    /// The membership test behind the advisory, for one property against a
+    /// pattern's labels as a WHOLE: declared anywhere on ANY of them — key,
+    /// type, `--require`, UNIQUE, or index (PR #241 review majors 1/8: a
+    /// property the schema mandates is not a typo, and a property declared
+    /// on a sibling label of the same pattern is not one either). Advises
+    /// only when at least one label carries declared types, attributed to
+    /// the first such label.
+    fn note_undeclared_property(&mut self, labels: &[String], property: &str) {
+        if labels
+            .iter()
+            .any(|label| self.catalogue.declares_property(label, property))
+        {
+            return;
+        }
+        let Some(shaped) = labels.iter().find(|label| {
+            self.catalogue
+                .label(label)
+                .is_some_and(|def| !def.types().is_empty())
+        }) else {
+            return; // no label with declared types: nothing to compare against
+        };
+        let suggestion = self.property_suggestion(shaped, property).0;
+        self.undeclared_shape_properties
+            .push((shaped.clone(), property.to_string(), suggestion));
+    }
+
+    /// The `SET`/`REMOVE` counterpart of
+    /// [`Binder::note_undeclared_properties`]: the same open-shape advisory
+    /// for a single property name against the target variable's
+    /// statically-known labels (ADR-0070 — map literals, SET and REMOVE
+    /// behave identically).
     fn note_undeclared_set_property(&mut self, target: VarId, property: &str) {
         if self.mode != BindMode::Strict {
             return;
         }
         let labels = self.variables[target.0 as usize].labels.clone();
-        for label in &labels {
-            let Some(def) = self.catalogue.label(label) else {
-                continue;
-            };
-            if def.types().is_empty() {
-                continue;
-            }
-            let declared =
-                def.types().contains_key(property) || def.key().iter().any(|k| k == property);
-            if !declared {
-                let suggestion = self.property_suggestion(label, property).0;
-                self.undeclared_shape_properties.push((
-                    label.clone(),
-                    property.to_string(),
-                    suggestion,
-                ));
-            }
-        }
+        self.note_undeclared_property(&labels, property);
     }
 
     /// Planner hint: does the pattern's property map pin the leading key

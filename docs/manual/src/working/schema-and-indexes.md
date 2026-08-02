@@ -214,9 +214,12 @@ speed: 10})` succeeds with `speed` undeclared; the declared types
 constrain only the properties they name. What you get instead of a
 refusal is a typo advisory on stderr: on a label that *has* declared
 types, an off-catalogue name is likelier a mistake than a deliberate
-extension, so the query is accepted and a note like `note: property is
-not among the label's declared types: "Interface"."sped" (did you mean
-"speed"?)` follows. Advisories never change rows or exit status.
+extension, so the query is accepted and a note follows — misspell the
+declared `mtu` as `mtuu` and it reads `note: property is not among the
+label's declared types: "Interface"."mtuu" (did you mean "mtu"?)`. The
+did-you-mean draws on the declared set (key, typed, `--require` and
+`--unique` properties alike); a wholly novel name like `speed` is noted
+without a suggestion. Advisories never change rows or exit status.
 
 ### Why this is not just tidiness
 

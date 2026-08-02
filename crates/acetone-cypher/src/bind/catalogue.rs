@@ -64,9 +64,12 @@ impl Catalogue {
         self.rel_types.keys().map(String::as_str)
     }
 
-    /// The property names a `label` declares — its key tuple plus any typed
-    /// (shape) properties — for suggestions on an unknown property. Empty if
-    /// the label is undeclared.
+    /// The property names a `label` declares ANYWHERE in its definition —
+    /// key tuple, typed properties, existence (`--require`) and UNIQUE
+    /// constraints — for suggestions on an unknown property and for the
+    /// open-shape advisory's declared-set membership (ADR-0070; PR #241
+    /// review major 1: a property mandated by `--require` is declared, not
+    /// a typo). Empty if the label is undeclared.
     pub fn property_names(&self, label: &str) -> Vec<&str> {
         match self.labels.get(label) {
             Some(def) => def
@@ -74,9 +77,25 @@ impl Catalogue {
                 .iter()
                 .map(String::as_str)
                 .chain(def.types().keys().map(String::as_str))
+                .chain(def.exists().iter().map(String::as_str))
+                .chain(def.unique().iter().map(String::as_str))
                 .collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Whether `label` declares `property` anywhere in its definition
+    /// (key, type, `--require`, UNIQUE) or as a declared index property —
+    /// the membership test behind the open-shape advisory (ADR-0070).
+    pub fn declares_property(&self, label: &str, property: &str) -> bool {
+        let Some(def) = self.labels.get(label) else {
+            return false;
+        };
+        def.key().iter().any(|k| k == property)
+            || def.types().contains_key(property)
+            || def.exists().iter().any(|p| p == property)
+            || def.unique().iter().any(|p| p == property)
+            || self.index_on(label, property).is_some()
     }
 
     /// The declared index best serving an equality seek over `pinned`
