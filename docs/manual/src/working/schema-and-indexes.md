@@ -206,17 +206,20 @@ presence is `--require`'s business, not the type's. And as with the other
 constraints, declaring a type over data that already contradicts it is
 refused with the offending nodes named, so backfill comes first.
 
-One side effect to know about before you declare: once a label declares
-*any* property type, a node-pattern map literal on that label — in
-`CREATE`, `MATCH` or `MERGE` alike — may only name declared or key
-properties. `CREATE (:Interface {host: "db1", name: "eth1", speed: 10})`
-is refused with `unknown property "speed"` if `speed` is not in the
-declaration, and so is `MATCH (i:Interface {speed: 10})`, which closes a
-read path too. `SET i.speed = 10` on a matched node is the one open
-exception: it is still accepted, and the property reads back. The shape
-closes only once a first type is declared; whether that closure (and its
-asymmetry with `SET`) is the right rule is an open design question
-(`acetone-7qw.17`).
+Declaring types does **not** close the label's shape (ADR-0070):
+properties outside the declaration remain legal everywhere — `CREATE`,
+`MATCH` and `MERGE` map literals, `SET`, and the plumbing commands all
+behave identically. `CREATE (:Interface {host: "db1", name: "eth1",
+speed: 10})` succeeds with `speed` undeclared; the declared types
+constrain only the properties they name. What you get instead of a
+refusal is a typo advisory on stderr: on a label that *has* declared
+types, an off-catalogue name is likelier a mistake than a deliberate
+extension, so the query is accepted and a note follows — misspell the
+declared `mtu` as `mtuu` and it reads `note: property is not among the
+label's declared types: "Interface"."mtuu" (did you mean "mtu"?)`. The
+did-you-mean draws on the declared set (key, typed, `--require` and
+`--unique` properties alike); a wholly novel name like `speed` is noted
+without a suggestion. Advisories never change rows or exit status.
 
 ### Why this is not just tidiness
 

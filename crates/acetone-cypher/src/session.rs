@@ -206,6 +206,7 @@ impl<'r> Session<'r> {
         result
             .advisories
             .extend(expression_label_advisories(&bound));
+        result.advisories.extend(shape_property_advisories(&bound));
         Ok(result)
     }
 
@@ -238,6 +239,7 @@ impl<'r> Session<'r> {
         result
             .advisories
             .extend(expression_label_advisories(&bound));
+        result.advisories.extend(shape_property_advisories(&bound));
         Ok(result)
     }
 }
@@ -332,6 +334,39 @@ fn expression_label_advisories(bound: &crate::bind::bound::BoundQuery) -> Vec<St
     vec![format!(
         "note: {plural} {names} in a label predicate not declared in this \
          repository's schema — check for a typo, or declare the label."
+    )]
+}
+
+/// Advisory for property names a types()-bearing label does not declare,
+/// used in a node-pattern map literal or a `SET` target (acetone-7qw.17,
+/// ADR-0070). Open shape: the write/read proceeds — declared types
+/// constrain only the properties they name — but on a label that HAS
+/// declared types, an off-catalogue name is likelier a typo than a
+/// deliberate extension, so it earns a note. Collected at bind time,
+/// Strict mode only, so Lenient/TCK sessions are unaffected.
+fn shape_property_advisories(bound: &crate::bind::bound::BoundQuery) -> Vec<String> {
+    if bound.undeclared_shape_properties.is_empty() {
+        return Vec::new();
+    }
+    let items = bound
+        .undeclared_shape_properties
+        .iter()
+        .map(|(label, property, suggestion)| match suggestion {
+            Some(candidate) => {
+                format!("{label:?}.{property:?} (did you mean {candidate:?}?)")
+            }
+            None => format!("{label:?}.{property:?}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let plural = if bound.undeclared_shape_properties.len() == 1 {
+        "property is"
+    } else {
+        "properties are"
+    };
+    vec![format!(
+        "note: {plural} not among the label's declared types: {items} — accepted \
+         (declared types do not close a label's shape, ADR-0070), but check for a typo."
     )]
 }
 

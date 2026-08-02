@@ -223,9 +223,19 @@ mod tests {
         // Unknown relationship type.
         let err = bind_strict("MATCH (h:Host)-[:GLUES]->(x:Host) RETURN h").unwrap_err();
         assert!(matches!(err, BindError::UnknownRelType { .. }));
-        // Undeclared property on a shaped label.
-        let err = bind_strict("MATCH (h:Host {shoe_size: 9}) RETURN h").unwrap_err();
-        assert!(matches!(err, BindError::UnknownProperty { .. }));
+        // Undeclared property on a shaped label: accepted — open shape
+        // (ADR-0070) — and collected for the typo advisory instead.
+        let bound = bind_strict("MATCH (h:Host {shoe_size: 9}) RETURN h").unwrap();
+        assert_eq!(
+            bound.undeclared_shape_properties,
+            vec![("Host".to_owned(), "shoe_size".to_owned(), None)]
+        );
+        // The same collection covers SET, closing the old asymmetry.
+        let bound = bind_strict("MATCH (h:Host) SET h.shoe_size = 9").unwrap();
+        assert_eq!(
+            bound.undeclared_shape_properties,
+            vec![("Host".to_owned(), "shoe_size".to_owned(), None)]
+        );
         // Lenient mode accepts all of these.
         assert!(bind_lenient("MATCH (x:Rogue {shoe_size: 9})-[:GLUES]->(y) RETURN x").is_ok());
     }
@@ -234,7 +244,6 @@ mod tests {
         match err {
             BindError::UnknownLabel { suggestion, .. }
             | BindError::UnknownRelType { suggestion, .. }
-            | BindError::UnknownProperty { suggestion, .. }
             | BindError::UnknownFunction { suggestion, .. } => suggestion.0.clone(),
             other => panic!("not a suggestion-bearing error: {other}"),
         }
@@ -308,13 +317,18 @@ mod tests {
             None
         );
 
-        // Property on a shaped label.
-        let err = bind_suggest("MATCH (h:Host {hstname: 'a'}) RETURN h");
-        assert!(matches!(err, BindError::UnknownProperty { .. }));
-        assert_eq!(suggestion_of(&err), Some("hostname".to_owned()));
+        // Property on a shaped label: advisory-side suggestion (ADR-0070 —
+        // the miss binds fine; the did-you-mean travels with the advisory).
+        let query = "MATCH (h:Host {hstname: 'a'}) RETURN h";
+        let parsed = parse(query).expect("query must parse");
+        let bound = bind(query, &parsed, &suggestion_catalogue(), BindMode::Strict).unwrap();
         assert_eq!(
-            suggestion_of(&bind_suggest("MATCH (h:Host {zzzzzzz: 1}) RETURN h")),
-            None
+            bound.undeclared_shape_properties,
+            vec![(
+                "Host".to_owned(),
+                "hstname".to_owned(),
+                Some("hostname".to_owned())
+            )]
         );
 
         // Function (mode-independent).

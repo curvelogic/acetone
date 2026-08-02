@@ -126,12 +126,15 @@ const STRICT_DIAGNOSTICS: &[(&str, &str)] = &[
         "bind/unknown-rel-type-nonsense",
         "MATCH (h:Host)-[:ZZZZZZ]->(x:Host) RETURN h",
     ),
+    // Open shape (ADR-0070): undeclared properties on a typed label BIND
+    // CLEANLY — the typo signal is a session advisory, not a bind error.
+    // These entries document the absence deliberately.
     (
-        "bind/unknown-property-typo",
+        "bind/undeclared-property-typo-is-not-an-error (ADR-0070)",
         "MATCH (h:Host {hstname: 'a'}) RETURN h",
     ),
     (
-        "bind/unknown-property-nonsense",
+        "bind/undeclared-property-nonsense-is-not-an-error (ADR-0070)",
         "MATCH (h:Host {zzzzzzz: 1}) RETURN h",
     ),
 ];

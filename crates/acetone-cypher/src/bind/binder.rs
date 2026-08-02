@@ -43,6 +43,7 @@ pub fn bind(
         variables: Vec::new(),
         scope: HashMap::new(),
         undeclared_expr_labels: Vec::new(),
+        undeclared_shape_properties: Vec::new(),
     };
     let mut clauses = Vec::new();
     for clause in &query.clauses {
@@ -51,10 +52,14 @@ pub fn bind(
     let mut undeclared_expr_labels = binder.undeclared_expr_labels;
     undeclared_expr_labels.sort();
     undeclared_expr_labels.dedup();
+    let mut undeclared_shape_properties = binder.undeclared_shape_properties;
+    undeclared_shape_properties.sort();
+    undeclared_shape_properties.dedup();
     Ok(BoundQuery {
         clauses,
         variables: binder.variables,
         undeclared_expr_labels,
+        undeclared_shape_properties,
     })
 }
 
@@ -71,6 +76,11 @@ struct Binder<'a> {
     /// advisories — a typo'd label otherwise filters everything with no
     /// signal (acetone-2ck.3).
     undeclared_expr_labels: Vec<String>,
+    /// Property names in node-pattern map literals / SET targets that a
+    /// types()-bearing label does not declare, with a did-you-mean
+    /// suggestion. Open shape (ADR-0070): collected for advisories, never
+    /// errors.
+    undeclared_shape_properties: Vec<(String, String, Option<String>)>,
 }
 
 /// Expression context: where aggregates may appear.
@@ -228,6 +238,7 @@ impl<'a> Binder<'a> {
             } => {
                 let target = self.entity_target(var, *span, true)?;
                 self.reject_key_property(target, key, *span)?;
+                self.note_undeclared_set_property(target, key);
                 let value = self.expr(value, NO_AGG)?;
                 Ok(BoundSetItem::Property {
                     target,
@@ -260,6 +271,7 @@ impl<'a> Binder<'a> {
                 if let ast::Expr::MapLiteral { entries, .. } = value {
                     for (property, _) in entries {
                         self.reject_key_property(target, property, *span)?;
+                        self.note_undeclared_set_property(target, property);
                     }
                 }
                 let value = self.expr(value, NO_AGG)?;
@@ -298,6 +310,7 @@ impl<'a> Binder<'a> {
                 ast::RemoveItem::Property { var, key, span } => {
                     let target = self.entity_target(var, *span, true)?;
                     self.reject_key_property(target, key, *span)?;
+                    self.note_undeclared_set_property(target, key);
                     BoundRemoveItem::Property {
                         target,
                         key: key.clone(),
@@ -862,7 +875,7 @@ impl<'a> Binder<'a> {
         };
         let properties = match &node.properties {
             Some(expr) => {
-                self.check_declared_properties(&node.labels, expr)?;
+                self.note_undeclared_properties(&node.labels, expr);
                 Some(self.expr(expr, NO_AGG)?)
             }
             None => None,
@@ -954,46 +967,65 @@ impl<'a> Binder<'a> {
         })
     }
 
-    /// Strict mode: a property map on a node whose label declares a shape
-    /// may only use declared property names.
+    /// Strict mode, open shape (ADR-0070): a property name a
+    /// types()-bearing label does not declare is COLLECTED for a typo
+    /// advisory — never an error. Declared types constrain the properties
+    /// they name (spec §2, "optional for shape"); the closure this method
+    /// once enforced was an accident of reachability and punished
+    /// incremental typing (acetone-7qw.17).
     ///
-    /// Deliberate narrowing of the bead's recorded design (noted at bead
-    /// close, tracked in acetone-1qj): property ACCESS expressions
-    /// (`n.zzz` in WHERE/RETURN) are not checked — openCypher property
-    /// access on a missing property yields null, and flagging it belongs
-    /// with the workbench lint surface, not hard binding errors.
-    fn check_declared_properties(
-        &self,
-        labels: &[String],
-        properties: &ast::Expr,
-    ) -> Result<(), BindError> {
+    /// Property ACCESS expressions (`n.zzz` in WHERE/RETURN) remain
+    /// unexamined — openCypher property access on a missing property
+    /// yields null; that lint belongs elsewhere (acetone-1qj).
+    fn note_undeclared_properties(&mut self, labels: &[String], properties: &ast::Expr) {
         if self.mode != BindMode::Strict {
-            return Ok(());
+            return;
         }
-        let ast::Expr::MapLiteral { entries, span } = properties else {
-            return Ok(()); // parameter property maps are checked at run time
+        let ast::Expr::MapLiteral { entries, span: _ } = properties else {
+            return; // parameter property maps carry no static names
         };
-        for label in labels {
-            let Some(def) = self.catalogue.label(label) else {
-                continue;
-            };
-            if def.types().is_empty() {
-                continue; // shapeless label: any property is allowed
-            }
-            for (property, _) in entries {
-                let declared =
-                    def.types().contains_key(property) || def.key().iter().any(|k| k == property);
-                if !declared {
-                    return Err(BindError::UnknownProperty {
-                        label: label.clone(),
-                        property: property.clone(),
-                        span: *span,
-                        suggestion: self.property_suggestion(label, property),
-                    });
-                }
-            }
+        for (property, _) in entries {
+            self.note_undeclared_property(labels, property);
         }
-        Ok(())
+    }
+
+    /// The membership test behind the advisory, for one property against a
+    /// pattern's labels as a WHOLE: declared anywhere on ANY of them — key,
+    /// type, `--require`, UNIQUE, or index (PR #241 review majors 1/8: a
+    /// property the schema mandates is not a typo, and a property declared
+    /// on a sibling label of the same pattern is not one either). Advises
+    /// only when at least one label carries declared types, attributed to
+    /// the first such label.
+    fn note_undeclared_property(&mut self, labels: &[String], property: &str) {
+        if labels
+            .iter()
+            .any(|label| self.catalogue.declares_property(label, property))
+        {
+            return;
+        }
+        let Some(shaped) = labels.iter().find(|label| {
+            self.catalogue
+                .label(label)
+                .is_some_and(|def| !def.types().is_empty())
+        }) else {
+            return; // no label with declared types: nothing to compare against
+        };
+        let suggestion = self.property_suggestion(shaped, property).0;
+        self.undeclared_shape_properties
+            .push((shaped.clone(), property.to_string(), suggestion));
+    }
+
+    /// The `SET`/`REMOVE` counterpart of
+    /// [`Binder::note_undeclared_properties`]: the same open-shape advisory
+    /// for a single property name against the target variable's
+    /// statically-known labels (ADR-0070 — map literals, SET and REMOVE
+    /// behave identically).
+    fn note_undeclared_set_property(&mut self, target: VarId, property: &str) {
+        if self.mode != BindMode::Strict {
+            return;
+        }
+        let labels = self.variables[target.0 as usize].labels.clone();
+        self.note_undeclared_property(&labels, property);
     }
 
     /// Planner hint: does the pattern's property map pin the leading key

@@ -782,3 +782,95 @@ fn declared_rel_type_in_expression_position_is_not_advised() {
     assert_eq!(result.rows.len(), 1);
     assert!(result.advisories.is_empty(), "{:?}", result.advisories);
 }
+
+/// ADR-0070 (acetone-7qw.17): declared types do not close a label's shape —
+/// an undeclared property in a map literal, `SET` or `REMOVE` binds and
+/// executes, and in a Strict schema-backed session carries a typo advisory
+/// instead. Mirrors `undeclared_expression_label_carries_an_advisory`, which
+/// exists because PR #216's review found bugs in exactly this kind of
+/// wiring; PR #241's review demanded the same for this advisory (major 3).
+#[test]
+fn undeclared_shape_property_carries_an_advisory() {
+    let (_dir, repo) = repo();
+    {
+        // A typed label with the full declaration menu: key, a typed
+        // property, `--require` and UNIQUE — the last two are DECLARED
+        // properties and must never be flagged (PR #241 review major 1).
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::Label {
+            name: "Svc".into(),
+            def: LabelDef::new(
+                vec!["name".into()],
+                BTreeMap::from([("os".to_owned(), acetone_model::schema::PropertyType::String)]),
+                ["ip".to_owned()],
+                ["serial".to_owned()],
+            )
+            .expect("label"),
+        })
+        .expect("schema");
+        txn.save().expect("save");
+    }
+    let session = Session::new(&repo);
+
+    // WRITE path: schema-mandated (`ip`, `serial`) and typed (`os`)
+    // properties are silent; the genuinely undeclared `rack` advises.
+    let result = match session
+        .run("CREATE (:Svc {name: 'a', os: 'linux', ip: '10.0.0.1', serial: 'S1', rack: 'r1'})")
+        .expect("write")
+    {
+        Outcome::Write(result) => result,
+        Outcome::Read(_) => panic!("CREATE is a write"),
+    };
+    assert_eq!(result.stats.nodes_created, 1, "open shape: the write lands");
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+    assert!(
+        result.advisories[0].contains("\"Svc\"") && result.advisories[0].contains("\"rack\""),
+        "names the pair: {}",
+        result.advisories[0]
+    );
+    assert!(
+        !result.advisories[0].contains("\"ip\"") && !result.advisories[0].contains("\"serial\""),
+        "required/UNIQUE properties are declared, not typos: {}",
+        result.advisories[0]
+    );
+
+    // READ path: the old hard error is now zero rows plus the advisory,
+    // with a did-you-mean against the declared set.
+    let result = match session
+        .run("MATCH (s:Svc {oss: 'linux'}) RETURN s")
+        .expect("read")
+    {
+        Outcome::Read(result) => result,
+        Outcome::Write(_) => panic!("MATCH is a read"),
+    };
+    assert!(result.rows.is_empty(), "matches nothing, never errors");
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+    assert!(
+        result.advisories[0].contains("did you mean \"os\""),
+        "suggestion travels with the advisory: {}",
+        result.advisories[0]
+    );
+
+    // SET and REMOVE are symmetric with map literals (the old asymmetry).
+    let result = match session.run("MATCH (s:Svc) SET s.oz = 'x'").expect("write") {
+        Outcome::Write(result) => result,
+        Outcome::Read(_) => panic!("SET is a write"),
+    };
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+    let result = match session.run("MATCH (s:Svc) REMOVE s.oz").expect("write") {
+        Outcome::Write(result) => result,
+        Outcome::Read(_) => panic!("REMOVE is a write"),
+    };
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+
+    // Fully-declared usage is silent — the advisory earns its keep by
+    // staying quiet on disciplined queries.
+    let result = match session
+        .run("MATCH (s:Svc {name: 'a'}) SET s.os = 'bsd'")
+        .expect("write")
+    {
+        Outcome::Write(result) => result,
+        Outcome::Read(_) => panic!("SET is a write"),
+    };
+    assert!(result.advisories.is_empty(), "{:?}", result.advisories);
+}

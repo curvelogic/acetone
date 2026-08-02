@@ -98,10 +98,10 @@ error:  line 1, column 15: unknown relationship type "RUNZ" — declare it first
 input:  MATCH (h:Host)-[:ZZZZZZ]->(x:Host) RETURN h
 error:  line 1, column 15: unknown relationship type "ZZZZZZ" — declare it first with `acetone declare-rel-type "ZZZZZZ"`
 
-### bind/unknown-property-typo (strict)
+### bind/undeclared-property-typo-is-not-an-error (ADR-0070) (strict)
 input:  MATCH (h:Host {hstname: 'a'}) RETURN h
-error:  line 1, column 15: unknown property "hstname" on label "Host" — did you mean "hostname"?
+error:  (*no diagnostic: parses and binds cleanly*)
 
-### bind/unknown-property-nonsense (strict)
+### bind/undeclared-property-nonsense-is-not-an-error (ADR-0070) (strict)
 input:  MATCH (h:Host {zzzzzzz: 1}) RETURN h
-error:  line 1, column 15: unknown property "zzzzzzz" on label "Host"
+error:  (*no diagnostic: parses and binds cleanly*)
