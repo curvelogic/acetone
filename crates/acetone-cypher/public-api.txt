@@ -1957,6 +1957,7 @@ pub type acetone_cypher::bind::bound::BoundProjectionItem::Output = T
 pub struct acetone_cypher::bind::bound::BoundQuery
 pub acetone_cypher::bind::bound::BoundQuery::clauses: alloc::vec::Vec<acetone_cypher::bind::bound::BoundClause>
 pub acetone_cypher::bind::bound::BoundQuery::undeclared_expr_labels: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::bind::bound::BoundQuery::undeclared_shape_properties: alloc::vec::Vec<(alloc::string::String, alloc::string::String, core::option::Option<alloc::string::String>)>
 pub acetone_cypher::bind::bound::BoundQuery::variables: alloc::vec::Vec<acetone_cypher::bind::bound::VarBinding>
 impl core::fmt::Debug for acetone_cypher::bind::bound::BoundQuery
 pub fn acetone_cypher::bind::bound::BoundQuery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -2332,11 +2333,6 @@ pub acetone_cypher::bind::error::BindError::UnknownLabel
 pub acetone_cypher::bind::error::BindError::UnknownLabel::name: alloc::string::String
 pub acetone_cypher::bind::error::BindError::UnknownLabel::span: acetone_cypher::span::Span
 pub acetone_cypher::bind::error::BindError::UnknownLabel::suggestion: acetone_cypher::bind::error::Suggestion
-pub acetone_cypher::bind::error::BindError::UnknownProperty
-pub acetone_cypher::bind::error::BindError::UnknownProperty::label: alloc::string::String
-pub acetone_cypher::bind::error::BindError::UnknownProperty::property: alloc::string::String
-pub acetone_cypher::bind::error::BindError::UnknownProperty::span: acetone_cypher::span::Span
-pub acetone_cypher::bind::error::BindError::UnknownProperty::suggestion: acetone_cypher::bind::error::Suggestion
 pub acetone_cypher::bind::error::BindError::UnknownRelType
 pub acetone_cypher::bind::error::BindError::UnknownRelType::declare_cmd: alloc::string::String
 pub acetone_cypher::bind::error::BindError::UnknownRelType::name: alloc::string::String
@@ -2510,11 +2506,6 @@ pub acetone_cypher::bind::BindError::UnknownLabel
 pub acetone_cypher::bind::BindError::UnknownLabel::name: alloc::string::String
 pub acetone_cypher::bind::BindError::UnknownLabel::span: acetone_cypher::span::Span
 pub acetone_cypher::bind::BindError::UnknownLabel::suggestion: acetone_cypher::bind::error::Suggestion
-pub acetone_cypher::bind::BindError::UnknownProperty
-pub acetone_cypher::bind::BindError::UnknownProperty::label: alloc::string::String
-pub acetone_cypher::bind::BindError::UnknownProperty::property: alloc::string::String
-pub acetone_cypher::bind::BindError::UnknownProperty::span: acetone_cypher::span::Span
-pub acetone_cypher::bind::BindError::UnknownProperty::suggestion: acetone_cypher::bind::error::Suggestion
 pub acetone_cypher::bind::BindError::UnknownRelType
 pub acetone_cypher::bind::BindError::UnknownRelType::declare_cmd: alloc::string::String
 pub acetone_cypher::bind::BindError::UnknownRelType::name: alloc::string::String
@@ -2923,6 +2914,7 @@ pub type acetone_cypher::bind::bound::IndexHint::Output = T
 pub struct acetone_cypher::bind::BoundQuery
 pub acetone_cypher::bind::BoundQuery::clauses: alloc::vec::Vec<acetone_cypher::bind::bound::BoundClause>
 pub acetone_cypher::bind::BoundQuery::undeclared_expr_labels: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::bind::BoundQuery::undeclared_shape_properties: alloc::vec::Vec<(alloc::string::String, alloc::string::String, core::option::Option<alloc::string::String>)>
 pub acetone_cypher::bind::BoundQuery::variables: alloc::vec::Vec<acetone_cypher::bind::bound::VarBinding>
 impl core::fmt::Debug for acetone_cypher::bind::bound::BoundQuery
 pub fn acetone_cypher::bind::bound::BoundQuery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result

@@ -53,6 +53,11 @@ pub struct BoundQuery {
     /// Expression-position labels (`n:Label`) absent from a non-empty
     /// catalogue — advisory material, never an error (acetone-2ck.3).
     pub undeclared_expr_labels: Vec<String>,
+    /// `(label, property, suggestion)` for property names used in node-pattern
+    /// map literals or `SET` targets that a types()-bearing label does not
+    /// declare. Open shape (ADR-0070): these bind and execute normally — the
+    /// session renders them as typo advisories, never errors.
+    pub undeclared_shape_properties: Vec<(String, String, Option<String>)>,
 }
 
 #[derive(Debug)]

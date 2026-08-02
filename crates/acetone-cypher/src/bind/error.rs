@@ -130,14 +130,6 @@ pub enum BindError {
         suggestion: Suggestion,
     },
 
-    #[error("unknown property {property:?} on label {label:?}{suggestion}")]
-    UnknownProperty {
-        label: String,
-        property: String,
-        span: Span,
-        suggestion: Suggestion,
-    },
-
     #[error("unknown procedure '{name}'")]
     ProcedureNotFound { name: String, span: Span },
 
@@ -193,7 +185,6 @@ impl BindError {
             | BindError::NoExpressionAlias { span }
             | BindError::UnknownLabel { span, .. }
             | BindError::UnknownRelType { span, .. }
-            | BindError::UnknownProperty { span, .. }
             | BindError::ProcedureNotFound { span, .. }
             | BindError::UnknownYieldColumn { span, .. }
             | BindError::NewVariableInPatternPredicate { span, .. }
@@ -238,7 +229,6 @@ impl BindError {
             BindError::SetKeyProperty { .. } => None,
             BindError::UnknownLabel { .. }
             | BindError::UnknownRelType { .. }
-            | BindError::UnknownProperty { .. }
             | BindError::UnknownYieldColumn { .. } => None,
         }
     }
