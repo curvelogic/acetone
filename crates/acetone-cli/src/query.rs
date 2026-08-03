@@ -886,7 +886,7 @@ fn handle_meta(
             outln!("  :log                          commit history, newest first");
             outln!("  :schema [--at <ref>]          the declared schema");
             outln!("  :declare-label <L> --key <p>... [--require <p>...] [--unique <p>...]");
-            outln!("  :declare-rel-type <TYPE>");
+            outln!("  :declare-rel-type <TYPE> [--type P:T ...]");
             outln!("  :declare-index <name> --label <L> --property <p>...");
             outln!("  :format, :f <table|json|csv>  result format");
             outln!(
@@ -969,10 +969,12 @@ fn handle_meta(
             crate::commands::declare_label(repo_path, label, &key, &types, &require, &unique)?;
         }
         "declare-rel-type" => {
-            if rest.is_empty() {
-                anyhow::bail!("usage: :declare-rel-type <TYPE>");
-            }
-            crate::commands::declare_rel_type(repo_path, rest)?;
+            let (pos, flags) = parse_meta_args(rest);
+            let rtype = pos.first().ok_or_else(|| {
+                anyhow!("usage: :declare-rel-type <TYPE> [--type P:T ...] [--type P:T ...]")
+            })?;
+            let types = flags.get("type").cloned().unwrap_or_default();
+            crate::commands::declare_rel_type(repo_path, rtype, &types)?;
         }
         "declare-index" => {
             let (pos, flags) = parse_meta_args(rest);

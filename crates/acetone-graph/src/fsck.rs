@@ -1195,9 +1195,16 @@ fn check_constraint_violations(
         return;
     };
     let mut labels = std::collections::BTreeMap::new();
+    let mut rel_types = std::collections::BTreeMap::new();
     for entry in entries {
-        if let acetone_model::schema::SchemaEntry::Label { name, def } = entry {
-            labels.insert(name, def);
+        match entry {
+            acetone_model::schema::SchemaEntry::Label { name, def } => {
+                labels.insert(name, def);
+            }
+            acetone_model::schema::SchemaEntry::RelType { name, def } => {
+                rel_types.insert(name, def);
+            }
+            _ => {}
         }
     }
     // Fast path: no declared constraints, nothing to materialise.
@@ -1210,11 +1217,57 @@ fn check_constraint_violations(
     // merge's responsibility rule deliberately leaves an untouched
     // pre-existing breach alone. Reporting "clean" over an index that
     // under-selects is the worst answer available here.
+    let typed_rels = rel_types.values().any(|def| !def.types().is_empty());
     if labels
         .values()
         .all(|def| def.exists().is_empty() && def.unique().is_empty() && def.types().is_empty())
+        && !typed_rels
     {
         return;
+    }
+    // Relationship property types (acetone-7qw.12): fsck is the detector
+    // for manifests assembled outside a transaction (spec §2/§10 — a
+    // FormatTransform, or a repository written before enforcement), for
+    // edges exactly as for nodes.
+    if typed_rels && let Ok(edge_list) = snapshot.edges() {
+        let mut reported = 0usize;
+        let mut total = 0usize;
+        for (key, record) in edge_list {
+            let Some(def) = rel_types.get(key.rtype()) else {
+                continue;
+            };
+            for (property, declared, actual) in
+                crate::constraints::rel_type_violations(&key, &record, def)
+            {
+                total += 1;
+                if reported < crate::constraints::REPORT_LIMIT {
+                    reported += 1;
+                    report.push(
+                        FindingKind::ConstraintViolation,
+                        origin,
+                        Some(MapId::EdgesFwd),
+                        format!(
+                            "relationship {} property {} is declared {} but holds a {} value",
+                            acetone_model::display::format_edge_key(&key),
+                            acetone_model::display::format_label(&property),
+                            declared.as_str(),
+                            actual.as_str()
+                        ),
+                    );
+                }
+            }
+        }
+        if total > reported {
+            report.push(
+                FindingKind::ConstraintViolation,
+                origin,
+                Some(MapId::EdgesFwd),
+                format!(
+                    "… and {} more relationship type violation(s)",
+                    total - reported
+                ),
+            );
+        }
     }
     let Ok(node_list) = snapshot.nodes() else {
         return;

@@ -112,6 +112,23 @@ pub enum PersistError {
         /// The written value's type name.
         actual: &'static str,
     },
+    #[error(
+        "property {property:?} of relationship {key} is declared {declared} but the value \
+         written is of type {actual}. Declared relationship property types are enforced like \
+         node ones (spec §2, acetone-7qw.12); unlike node types no seek relies on them, so \
+         this guards the declaration's honesty. Write a value of type {declared}, or \
+         redeclare the property's type."
+    )]
+    RelWrongType {
+        /// The edge identity, rendered (self-describing: includes the type).
+        key: String,
+        /// The mistyped property.
+        property: String,
+        /// The declared type name.
+        declared: &'static str,
+        /// The written value's type name.
+        actual: &'static str,
+    },
     #[error("cannot persist a {0} as a stored property value")]
     Value(&'static str),
     #[error(
@@ -263,13 +280,58 @@ pub fn persist_changes(
                 });
             }
             let record = EdgeRecord::new(convert_map(&rel.properties)?);
+            check_rel_types(catalogue, &edge, &record)?;
             txn.put_edge(&edge, &record)?;
         }
     }
     for rel in &changes.modified_rels {
         let edge = edge_key(rel, &entity_to_key)?;
         let record = EdgeRecord::new(convert_map(&rel.properties)?);
+        check_rel_types(catalogue, &edge, &record)?;
         txn.put_edge(&edge, &record)?;
+    }
+    Ok(())
+}
+
+/// The relationship counterpart of the node declared-type check above
+/// (acetone-7qw.12): judged against the CONVERTED record — what will
+/// actually be stored — with the friendlier Cypher-path message; the
+/// `Transaction` chokepoint re-checks the same rule for every other
+/// writer. The discriminator's value lives in the edge key.
+fn check_rel_types(
+    catalogue: &Catalogue,
+    edge: &EdgeKey,
+    record: &EdgeRecord,
+) -> Result<(), PersistError> {
+    let Some(def) = catalogue.rel_type(edge.rtype()) else {
+        return Ok(());
+    };
+    if def.types().is_empty() {
+        return Ok(());
+    }
+    for (property, declared) in def.types() {
+        // Both positions for a discriminator-named property — the record
+        // value is what a reader sees (PR #243 review blocker 1).
+        let mut candidates: [Option<&acetone_model::Value>; 2] =
+            [record.properties().get(property), None];
+        if def.discriminator() == Some(property.as_str()) {
+            candidates[1] = Some(edge.disc());
+        }
+        for value in candidates.into_iter().flatten() {
+            if declared.matches(value) {
+                continue;
+            }
+            // `None` is Null, which conforms to every declaration.
+            let Some(actual) = acetone_model::schema::PropertyType::of(value) else {
+                continue;
+            };
+            return Err(PersistError::RelWrongType {
+                key: acetone_model::display::format_edge_key(edge),
+                property: property.clone(),
+                declared: declared.as_str(),
+                actual: actual.as_str(),
+            });
+        }
     }
     Ok(())
 }

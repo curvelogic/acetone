@@ -406,6 +406,11 @@ pub acetone_graph::error::GraphError::DanglingEdge::endpoint: alloc::string::Str
 pub acetone_graph::error::GraphError::DanglingEdge::role: &'static str
 pub acetone_graph::error::GraphError::DanglingEdge::rtype: alloc::string::String
 pub acetone_graph::error::GraphError::DirtyWorkspace
+pub acetone_graph::error::GraphError::EdgePropertyTypeViolation
+pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::actual: &'static str
+pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::declared: &'static str
+pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::edge: alloc::string::String
+pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::property: alloc::string::String
 pub acetone_graph::error::GraphError::EmptyTagMessage
 pub acetone_graph::error::GraphError::ExistingAcetoneWorkspace
 pub acetone_graph::error::GraphError::GraphExists
@@ -464,6 +469,8 @@ pub acetone_graph::error::GraphError::RecordEncode(acetone_model::records::Recor
 pub acetone_graph::error::GraphError::RekeyConflict
 pub acetone_graph::error::GraphError::RekeyConflict::key: alloc::string::String
 pub acetone_graph::error::GraphError::RekeyConflict::label: alloc::string::String
+pub acetone_graph::error::GraphError::RelDiscriminatorChanged
+pub acetone_graph::error::GraphError::RelDiscriminatorChanged::rtype: alloc::string::String
 pub acetone_graph::error::GraphError::Schema(acetone_model::schema::SchemaError)
 pub acetone_graph::error::GraphError::Store(acetone_store::error::StoreError)
 pub acetone_graph::error::GraphError::TagExists
@@ -1283,6 +1290,11 @@ pub acetone_graph::merge::GraphViolation::DanglingEdge
 pub acetone_graph::merge::GraphViolation::DanglingEdge::edge: alloc::vec::Vec<u8>
 pub acetone_graph::merge::GraphViolation::DanglingEdge::endpoint: alloc::vec::Vec<u8>
 pub acetone_graph::merge::GraphViolation::DanglingEdge::role: acetone_graph::merge::Endpoint
+pub acetone_graph::merge::GraphViolation::EdgeWrongType
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::actual: acetone_model::schema::PropertyType
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::declared: acetone_model::schema::PropertyType
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::edge: alloc::vec::Vec<u8>
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::property: alloc::string::String
 pub acetone_graph::merge::GraphViolation::MissingRequired
 pub acetone_graph::merge::GraphViolation::MissingRequired::node: alloc::vec::Vec<u8>
 pub acetone_graph::merge::GraphViolation::MissingRequired::property: alloc::string::String
@@ -2054,6 +2066,11 @@ pub acetone_graph::GraphError::DanglingEdge::endpoint: alloc::string::String
 pub acetone_graph::GraphError::DanglingEdge::role: &'static str
 pub acetone_graph::GraphError::DanglingEdge::rtype: alloc::string::String
 pub acetone_graph::GraphError::DirtyWorkspace
+pub acetone_graph::GraphError::EdgePropertyTypeViolation
+pub acetone_graph::GraphError::EdgePropertyTypeViolation::actual: &'static str
+pub acetone_graph::GraphError::EdgePropertyTypeViolation::declared: &'static str
+pub acetone_graph::GraphError::EdgePropertyTypeViolation::edge: alloc::string::String
+pub acetone_graph::GraphError::EdgePropertyTypeViolation::property: alloc::string::String
 pub acetone_graph::GraphError::EmptyTagMessage
 pub acetone_graph::GraphError::ExistingAcetoneWorkspace
 pub acetone_graph::GraphError::GraphExists
@@ -2112,6 +2129,8 @@ pub acetone_graph::GraphError::RecordEncode(acetone_model::records::RecordEncode
 pub acetone_graph::GraphError::RekeyConflict
 pub acetone_graph::GraphError::RekeyConflict::key: alloc::string::String
 pub acetone_graph::GraphError::RekeyConflict::label: alloc::string::String
+pub acetone_graph::GraphError::RelDiscriminatorChanged
+pub acetone_graph::GraphError::RelDiscriminatorChanged::rtype: alloc::string::String
 pub acetone_graph::GraphError::Schema(acetone_model::schema::SchemaError)
 pub acetone_graph::GraphError::Store(acetone_store::error::StoreError)
 pub acetone_graph::GraphError::TagExists

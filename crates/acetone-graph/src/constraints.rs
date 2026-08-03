@@ -31,9 +31,9 @@ use std::fmt;
 
 use acetone_model::Value;
 use acetone_model::display::{format_label, format_node_key, format_value};
-use acetone_model::graph_keys::NodeKey;
-use acetone_model::records::{NodeRecord, RecordEncodeError};
-use acetone_model::schema::{LabelDef, PropertyType};
+use acetone_model::graph_keys::{EdgeKey, NodeKey};
+use acetone_model::records::{EdgeRecord, NodeRecord, RecordEncodeError};
+use acetone_model::schema::{LabelDef, PropertyType, RelTypeDef};
 use acetone_model::values::encode_value;
 
 use crate::error::GraphError;
@@ -200,6 +200,49 @@ pub(crate) fn type_violations(
             continue;
         };
         out.push((property.clone(), *declared, actual));
+    }
+    out
+}
+
+/// The relationship counterpart of [`type_violations`] (acetone-7qw.12,
+/// implementing ADR-0066's model on the edge surface): same conformance
+/// rule — absent and null values conform, a declared type refuses a
+/// mismatched value — with the one positional value being the
+/// discriminator, whose value lives in the edge key rather than the
+/// record. Unlike labels, nothing at read time TRUSTS a relationship's
+/// declared type (indexes are node-only, spec §3.3), so this closes a
+/// false-promise surface, not a seek-soundness hole.
+pub(crate) fn rel_type_violations(
+    key: &EdgeKey,
+    record: &EdgeRecord,
+    def: &RelTypeDef,
+) -> Vec<(String, PropertyType, PropertyType)> {
+    if def.types().is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (property, declared) in def.types() {
+        // A discriminator-named property is judged in BOTH positions: its
+        // canonical value lives in the edge key, but nothing stops a writer
+        // putting the same name in the record — and the record value is
+        // what a reader sees — so checking the key alone made a declared
+        // type on the discriminator a false promise (PR #243 review
+        // blocker 1). Any position's violation counts.
+        let mut candidates: [Option<&Value>; 2] = [record.properties().get(property), None];
+        if def.discriminator() == Some(property.as_str()) {
+            candidates[1] = Some(key.disc());
+        }
+        for value in candidates.into_iter().flatten() {
+            if declared.matches(value) {
+                continue;
+            }
+            // `None` is Null, which conforms to every declaration.
+            let Some(actual) = PropertyType::of(value) else {
+                continue;
+            };
+            out.push((property.clone(), *declared, actual));
+            break;
+        }
     }
     out
 }

@@ -198,6 +198,20 @@ pub enum GraphError {
         /// The label whose key tuple the change would alter.
         label: String,
     },
+    /// A schema change would alter a relationship type's discriminator
+    /// while relationships of that type exist (acetone-7qw.12) — the edge
+    /// counterpart of [`GraphError::LabelKeyChanged`].
+    #[error(
+        "cannot change relationship type {rtype:?}'s discriminator while relationships of \
+         that type exist: the discriminator decides which stored position a declared type \
+         governs and which parallel relationships are distinct, so changing it needs an \
+         explicit migrate (note `declare-rel-type` cannot express a discriminator, so \
+         redeclaring a discriminated type through the CLI would silently drop it)"
+    )]
+    RelDiscriminatorChanged {
+        /// The relationship type whose discriminator would change.
+        rtype: String,
+    },
     /// A write would leave an edge without one of its endpoint nodes present
     /// (referential integrity — Invariant #3 / ADR-0028). The transaction is
     /// rejected before it can commit a structurally invalid graph.
@@ -278,6 +292,27 @@ pub enum GraphError {
     PropertyTypeViolation {
         /// The offending node's key, rendered and escaped for display.
         node: String,
+        /// The mistyped property.
+        property: String,
+        /// The declared type's name.
+        declared: &'static str,
+        /// The written value's type name.
+        actual: &'static str,
+    },
+    /// A relationship record holds a value contradicting its type's
+    /// declared property type (spec §2, acetone-7qw.12) — the edge
+    /// counterpart of [`GraphError::PropertyTypeViolation`], with an
+    /// honest rationale (no seek relies on rel declarations).
+    #[error(
+        "relationship {edge} property {property:?} is declared {declared} but holds a value \
+         of type {actual}. Declared relationship property types are enforced like node ones \
+         (spec §2, acetone-7qw.12); unlike node types no seek relies on them, so this guards \
+         the declaration's honesty. Write a value of type {declared}, or redeclare the \
+         property's type."
+    )]
+    EdgePropertyTypeViolation {
+        /// The offending edge's identity, rendered and escaped for display.
+        edge: String,
         /// The mistyped property.
         property: String,
         /// The declared type's name.

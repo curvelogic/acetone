@@ -207,3 +207,262 @@ fn an_unrelated_schema_change_does_not_re_judge_a_pre_existing_breach() {
     txn.save()
         .expect("a satisfied declaration must not be blocked by an unrelated pre-existing breach");
 }
+
+// ─── Relationship property types (acetone-7qw.12) ───────────────────────────
+// The edge counterparts of the checks above: declarable-but-inert until this
+// unit, so each test pins one of the three enforcement points.
+
+fn rel_type(types: BTreeMap<String, PropertyType>) -> SchemaEntry {
+    SchemaEntry::RelType {
+        name: "LINKS".into(),
+        def: acetone_model::schema::RelTypeDef::new(None, types, []).expect("rel type"),
+    }
+}
+
+fn seeded_edge_repo() -> (tempfile::TempDir, Repository) {
+    let (dir, repo) = repo();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&label("id", BTreeMap::new()))
+        .expect("label");
+    txn.put_schema(&rel_type(BTreeMap::new()))
+        .expect("rel type");
+    for id in ["a", "b"] {
+        txn.put_node(
+            &NodeKey::new("Blob", vec![Value::String(id.into())]).expect("key"),
+            &NodeRecord::new([], BTreeMap::new()),
+        )
+        .expect("node");
+    }
+    txn.save().expect("seed");
+    (dir, repo)
+}
+
+fn edge_key() -> acetone_model::graph_keys::EdgeKey {
+    acetone_model::graph_keys::EdgeKey::new(
+        NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+        "LINKS",
+        NodeKey::new("Blob", vec![Value::String("b".into())]).expect("key"),
+        Value::Null,
+    )
+    .expect("edge key")
+}
+
+/// Write-time chokepoint: a staged edge record contradicting the declared
+/// relationship property type is refused at save, whatever wrote it.
+#[test]
+fn a_wrongly_typed_edge_property_is_refused_at_save() {
+    let (_dir, repo) = seeded_edge_repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&rel_type(BTreeMap::from([(
+            "weight".to_owned(),
+            PropertyType::Int,
+        )])))
+        .expect("retype");
+        txn.save().expect("no edges yet: retype lands clean");
+    }
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_edge(
+        &edge_key(),
+        &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+            "weight".to_owned(),
+            Value::String("heavy".into()),
+        )])),
+    )
+    .expect("stage edge");
+    let err = txn
+        .save()
+        .expect_err("a string where int is declared must be refused");
+    assert!(
+        matches!(err, GraphError::EdgePropertyTypeViolation { ref property, declared, actual, .. }
+            if property == "weight" && declared == "int" && actual == "string"),
+        "expected the edge chokepoint to refuse, got: {err}"
+    );
+}
+
+/// Declare-time backfill: retyping a relationship property around existing
+/// edges is refused — and the retype-plus-rewrite-in-one-transaction path
+/// still lands, exactly as for labels.
+#[test]
+fn retyping_a_rel_property_around_existing_edges_is_refused() {
+    let (_dir, repo) = seeded_edge_repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_edge(
+            &edge_key(),
+            &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+                "weight".to_owned(),
+                Value::String("heavy".into()),
+            )])),
+        )
+        .expect("edge under no declaration");
+        txn.save().expect("save");
+    }
+    // Schema-only transaction: must be refused by the edge backfill.
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&rel_type(BTreeMap::from([(
+        "weight".to_owned(),
+        PropertyType::Int,
+    )])))
+    .expect("stage retype");
+    let err = txn
+        .save()
+        .expect_err("declaring weight:int over a string-valued edge must refuse");
+    assert!(
+        matches!(err, GraphError::EdgePropertyTypeViolation { ref property, .. } if property == "weight"),
+        "expected the edge backfill to refuse, got: {err}"
+    );
+    // Retype AND repair in one transaction: allowed (the touched-edge skip).
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&rel_type(BTreeMap::from([(
+        "weight".to_owned(),
+        PropertyType::Int,
+    )])))
+    .expect("stage retype");
+    txn.put_edge(
+        &edge_key(),
+        &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+            "weight".to_owned(),
+            Value::Int(9),
+        )])),
+    )
+    .expect("stage repair");
+    txn.save()
+        .expect("a retype and its backfill may land in one transaction");
+}
+
+/// PR #243 review blocker 1(a): a discriminator-named property is judged
+/// in BOTH positions — the record value is what a reader sees, so a
+/// wrong-typed record value must refuse even though the canonical
+/// discriminator lives in the edge key.
+#[test]
+fn a_disc_named_record_property_is_checked_in_both_positions() {
+    let (_dir, repo) = repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&label("id", BTreeMap::new()))
+            .expect("label");
+        txn.put_schema(&SchemaEntry::RelType {
+            name: "LINKS".into(),
+            def: acetone_model::schema::RelTypeDef::new(
+                Some("seq".to_owned()),
+                BTreeMap::from([("seq".to_owned(), PropertyType::Int)]),
+                [],
+            )
+            .expect("rel type"),
+        })
+        .expect("rel schema");
+        for id in ["a", "b"] {
+            txn.put_node(
+                &NodeKey::new("Blob", vec![Value::String(id.into())]).expect("key"),
+                &NodeRecord::new([], BTreeMap::new()),
+            )
+            .expect("node");
+        }
+        txn.save().expect("seed");
+    }
+    let key = acetone_model::graph_keys::EdgeKey::new(
+        NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+        "LINKS",
+        NodeKey::new("Blob", vec![Value::String("b".into())]).expect("key"),
+        Value::Int(1), // key-position disc conforms
+    )
+    .expect("edge key");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_edge(
+        &key,
+        &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+            "seq".to_owned(),
+            Value::String("not-an-int".into()),
+        )])),
+    )
+    .expect("stage");
+    let err = txn
+        .save()
+        .expect_err("a wrong-typed RECORD value under the disc's name must refuse");
+    assert!(
+        matches!(err, GraphError::EdgePropertyTypeViolation { ref property, .. }
+            if property == "seq"),
+        "expected the record-position check, got: {err}"
+    );
+}
+
+/// PR #243 review blocker 1(b): changing a relationship type's
+/// discriminator while edges of that type exist is refused — including
+/// the wipe (`Some` → `None`) that a definition-replacing redeclare
+/// performs. A repair may not ride in the same transaction (the
+/// discriminator is key-positional; delete-and-recreate via migrate is
+/// the route), mirroring the label key-stability rule.
+#[test]
+fn changing_a_discriminator_over_existing_edges_is_refused() {
+    let (_dir, repo) = seeded_edge_repo();
+    {
+        // Give LINKS a discriminator and an edge under it.
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&SchemaEntry::RelType {
+            name: "LINKS".into(),
+            def: acetone_model::schema::RelTypeDef::new(
+                Some("seq".to_owned()),
+                BTreeMap::new(),
+                [],
+            )
+            .expect("rel type"),
+        })
+        .expect("redeclare with disc");
+        txn.put_edge(
+            &acetone_model::graph_keys::EdgeKey::new(
+                NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+                "LINKS",
+                NodeKey::new("Blob", vec![Value::String("b".into())]).expect("key"),
+                Value::Int(1),
+            )
+            .expect("edge key"),
+            &acetone_model::records::EdgeRecord::new(BTreeMap::new()),
+        )
+        .expect("edge");
+        txn.save().expect("seed disc'd edge");
+    }
+    // The wipe a types-only redeclare performs must refuse.
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&rel_type(BTreeMap::from([(
+        "weight".to_owned(),
+        PropertyType::Int,
+    )])))
+    .expect("stage disc-wiping redeclare");
+    let err = txn
+        .save()
+        .expect_err("dropping the discriminator over existing edges must refuse");
+    assert!(
+        matches!(err, GraphError::RelDiscriminatorChanged { ref rtype } if rtype == "LINKS"),
+        "expected RelDiscriminatorChanged, got: {err}"
+    );
+}
+
+/// PR #243 review minor 10: the delete-and-repair allowance — a violating
+/// edge deleted in the same transaction as the retype must not refuse
+/// (mirrors the label rule's delete case).
+#[test]
+fn deleting_the_violating_edge_in_the_retype_transaction_lands() {
+    let (_dir, repo) = seeded_edge_repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_edge(
+            &edge_key(),
+            &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+                "weight".to_owned(),
+                Value::String("heavy".into()),
+            )])),
+        )
+        .expect("edge under no declaration");
+        txn.save().expect("save");
+    }
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&rel_type(BTreeMap::from([(
+        "weight".to_owned(),
+        PropertyType::Int,
+    )])))
+    .expect("stage retype");
+    txn.delete_edge(&edge_key()).expect("stage delete");
+    txn.save()
+        .expect("a retype and the violating edge's deletion may land together");
+}

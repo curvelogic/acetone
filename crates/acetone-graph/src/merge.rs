@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord, RecordEncodeError};
-use acetone_model::schema::{LabelDef, PropertyType, SchemaEntry};
+use acetone_model::schema::{LabelDef, PropertyType, RelTypeDef, SchemaEntry};
 use acetone_model::values::encode_value;
 use acetone_prolly::{
     BatchOp, ChunkParams, Root, apply_batch, diff as prolly_diff, empty, get,
@@ -161,6 +161,19 @@ pub enum GraphViolation {
         /// The type the merged value actually has.
         actual: PropertyType,
     },
+    /// A merged edge holds a value contradicting the type its relationship
+    /// type declares for that property (spec §2; acetone-7qw.12 — the edge
+    /// counterpart of `WrongType`, same either-side-legal merge story).
+    EdgeWrongType {
+        /// The offending forward edge key (encoded).
+        edge: Vec<u8>,
+        /// The mistyped property.
+        property: String,
+        /// The type the merged schema declares.
+        declared: PropertyType,
+        /// The type the merged value actually has.
+        actual: PropertyType,
+    },
     /// Two or more merged nodes of `label` share a value for a UNIQUE
     /// property (spec §2). `nodes` are the colliding node keys (encoded),
     /// in key order.
@@ -247,6 +260,21 @@ impl std::fmt::Display for GraphViolation {
                     "node {} is missing required property {}",
                     display_node_key(node),
                     format_label(property)
+                )
+            }
+            GraphViolation::EdgeWrongType {
+                edge,
+                property,
+                declared,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "relationship {} property {} is declared {} but the merged value is of type {}",
+                    display_edge_key(edge),
+                    format_label(property),
+                    declared.as_str(),
+                    actual.as_str()
                 )
             }
             GraphViolation::UniqueViolation {
@@ -565,7 +593,8 @@ fn rebuild_reverse<S: ChunkStore>(
 /// (Invariant #4).
 ///
 /// Note the persisted conflicts map sorts `WrongType` *last* rather than
-/// third: its entry-key tag is 3, assigned after UNIQUE's 2 so existing
+/// third: its entry-key tag is 3;
+/// relationship type breaches carry tag 4, assigned after UNIQUE's 2 so existing
 /// conflict keys did not move. Both orders are deterministic, so Invariant #4
 /// holds either way, but `GraphError::MergeViolations` and
 /// `CALL acetone.conflicts()` therefore list the same merge's categories in
@@ -613,12 +642,17 @@ pub(crate) fn validate_merged<S: ChunkStore>(
             (false, false) => {}
         }
     }
-    // Forward edges the merge added (may reference an absent endpoint).
+    // Forward edges the merge added (may reference an absent endpoint) and
+    // changed (added or modified — to re-validate declared types on).
     let mut added_edges: BTreeSet<Vec<u8>> = BTreeSet::new();
+    let mut changed_edges: BTreeSet<Vec<u8>> = BTreeSet::new();
     for entry in prolly_diff(store, &base_edges, &merged_edges)? {
         let entry = entry?;
-        if entry.before.is_none() && entry.after.is_some() {
-            added_edges.insert(entry.key.to_vec());
+        if entry.after.is_some() {
+            changed_edges.insert(entry.key.to_vec());
+            if entry.before.is_none() {
+                added_edges.insert(entry.key.to_vec());
+            }
         }
     }
 
@@ -718,6 +752,38 @@ pub(crate) fn validate_merged<S: ChunkStore>(
         }
     }
 
+    // Declared relationship property types (acetone-7qw.12), same
+    // responsibility rule as the node check above: an edge the merge
+    // changed, or a property the merged schema newly declares/retypes.
+    let rel_types = rel_type_defs(store, &merged.schema.to_root(params)?)?;
+    let base_rel_types = rel_type_defs(store, &base.schema.to_root(params)?)?;
+    if rel_types.values().any(|def| !def.types().is_empty()) {
+        for item in scan(store, &merged_edges, ..)? {
+            let (raw_key, value) = item?;
+            let edge = EdgeKey::decode_fwd(&raw_key)?;
+            let Some(def) = rel_types.get(edge.rtype()) else {
+                continue;
+            };
+            let record = EdgeRecord::decode(&value)?;
+            let changed = changed_edges.contains(raw_key.as_ref());
+            for (property, declared, actual) in
+                crate::constraints::rel_type_violations(&edge, &record, def)
+            {
+                let newly_declared = base_rel_types
+                    .get(edge.rtype())
+                    .is_none_or(|b| b.types().get(&property) != Some(&declared));
+                if changed || newly_declared {
+                    violations.push(GraphViolation::EdgeWrongType {
+                        edge: raw_key.to_vec(),
+                        property,
+                        declared,
+                        actual,
+                    });
+                }
+            }
+        }
+    }
+
     // UNIQUE: group merged nodes by (label, property, value); a group of two
     // or more is a collision. Report it when the merge is responsible — a
     // colliding node changed, or the constraint is newly declared.
@@ -767,6 +833,21 @@ fn schema_entries<S: ChunkStore>(store: &S, schema: &Root) -> Result<Vec<SchemaE
         out.push(SchemaEntry::decode(&key, &value)?);
     }
     Ok(out)
+}
+
+/// The relationship-type definitions in a schema root (acetone-7qw.12).
+fn rel_type_defs<S: ChunkStore>(
+    store: &S,
+    schema: &Root,
+) -> Result<BTreeMap<String, RelTypeDef>, GraphError> {
+    let mut rel_types = BTreeMap::new();
+    for item in scan(store, schema, ..)? {
+        let (key, value) = item?;
+        if let SchemaEntry::RelType { name, def } = SchemaEntry::decode(&key, &value)? {
+            rel_types.insert(name, def);
+        }
+    }
+    Ok(rel_types)
 }
 
 fn label_defs<S: ChunkStore>(

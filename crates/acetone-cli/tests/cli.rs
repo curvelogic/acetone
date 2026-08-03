@@ -2643,7 +2643,17 @@ fn schema_json_lists_labels_types_and_indexes() {
     assert_eq!(label["required"], serde_json::json!(["os"]));
     assert_eq!(label["unique"], serde_json::json!(["ip"]));
     assert_eq!(label["surrogate"], false);
-    assert_eq!(v["relationship_types"], serde_json::json!(["RUNS"]));
+    // Objects since acetone-7qw.12 (bare name strings before; the --json
+    // shape is explicitly unstable pre-1.0).
+    assert_eq!(
+        v["relationship_types"],
+        serde_json::json!([{
+            "name": "RUNS",
+            "discriminator": null,
+            "types": {},
+            "required": [],
+        }])
+    );
     let index = &v["indexes"][0];
     assert_eq!(index["name"], "host_by_os");
     assert_eq!(index["label"], "Host");
@@ -3430,4 +3440,77 @@ fn tag_creates_lists_and_deletes_through_the_graph_namespace() {
             .success()
     );
     assert!(!acetone(&repo, &["tag", "-m", "msg"]).status.success());
+}
+
+#[test]
+fn call_conflicts_surfaces_a_merged_rel_type_breach() {
+    // acetone-7qw.12 (PR #243 review minor 6): a relationship-type breach
+    // only the MERGE composes — ours writes a string-weighted edge under an
+    // untyped declaration, theirs retypes weight:int on a branch with no
+    // edges (so the backfill passes) — surfaces through CALL
+    // acetone.conflicts() with its own kind, the relationship type in the
+    // label column, and blocks completion until addressed.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    for args in [
+        vec!["declare-label", "Host", "--key", "id"],
+        vec!["declare-rel-type", "LINKS"],
+        vec!["commit", "-m", "schema"],
+        vec!["branch", "typed"],
+        // ours (main): nodes and the string-weighted edge, legal here.
+        vec!["put-node", "Host", "1"],
+        vec!["put-node", "Host", "2"],
+    ] {
+        let args: Vec<&str> = args;
+        let out = acetone(&repo, &args);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+    }
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "MATCH (a:Host {id: 1}), (b:Host {id: 2}) \
+             CREATE (a)-[:LINKS {weight: 'heavy'}]->(b)",
+        ],
+    );
+    assert!(out.status.success(), "edge: {}", stderr(&out));
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+    // theirs: retype on the edge-free branch — the backfill passes.
+    assert!(acetone(&repo, &["checkout", "typed"]).status.success());
+    let out = acetone(
+        &repo,
+        &["declare-rel-type", "LINKS", "--type", "weight:int"],
+    );
+    assert!(out.status.success(), "retype: {}", stderr(&out));
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    // Merge ours in: both sides individually legal, merged state breaches.
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    let _ = acetone(&repo, &["merge", "typed", "-m", "merge"]);
+
+    let rows = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD kind, label, key, base, ours \
+             WHERE kind = 'rel-wrong-type' RETURN label, key, base, ours",
+            "--format",
+            "csv",
+        ],
+    );
+    let text = stdout(&rows);
+    assert!(
+        text.contains("LINKS") && text.contains("int") && text.contains("string"),
+        "the rel-wrong-type row names the type and both sides: {text}"
+    );
+
+    // fsck sees the same breach (PR #243 review major 3): the mid-merge
+    // workspace is a manifest holding a declaration its edges contradict —
+    // exactly the outside-a-transaction state fsck exists to surface.
+    let fsck = acetone(&repo, &["fsck"]);
+    let report = format!("{}{}", stdout(&fsck), stderr(&fsck));
+    assert!(
+        report.contains("weight") && report.contains("declared int"),
+        "fsck names the relationship type violation: {report}"
+    );
 }

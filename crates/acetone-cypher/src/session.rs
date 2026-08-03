@@ -730,6 +730,30 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                         node_col,
                                     ]);
                                 }
+                                GraphViolation::EdgeWrongType {
+                                    edge,
+                                    property,
+                                    declared,
+                                    actual,
+                                } => {
+                                    // The edge counterpart of wrong-type
+                                    // (acetone-7qw.12): same column story,
+                                    // with the relationship type where a
+                                    // node row carries its label and no
+                                    // node column (the subject is an edge).
+                                    let edge_key =
+                                        EdgeKey::decode_fwd(&edge).map_err(|e| e.to_string())?;
+                                    rows.push(vec![
+                                        Value::String("rel-wrong-type".into()),
+                                        Value::String(edge_key.rtype().to_string()),
+                                        Value::String(format_edge_key(&edge_key)),
+                                        Value::String(property),
+                                        Value::String(declared.as_str().to_string()),
+                                        Value::String(actual.as_str().to_string()),
+                                        Value::Null,
+                                        Value::Null,
+                                    ]);
+                                }
                                 GraphViolation::UniqueViolation {
                                     label,
                                     property,
