@@ -2643,7 +2643,12 @@ fn schema_json_lists_labels_types_and_indexes() {
     assert_eq!(label["required"], serde_json::json!(["os"]));
     assert_eq!(label["unique"], serde_json::json!(["ip"]));
     assert_eq!(label["surrogate"], false);
-    assert_eq!(v["relationship_types"], serde_json::json!(["RUNS"]));
+    // Objects since acetone-7qw.12 (bare name strings before; the --json
+    // shape is explicitly unstable pre-1.0).
+    assert_eq!(
+        v["relationship_types"],
+        serde_json::json!([{"name": "RUNS", "types": {}}])
+    );
     let index = &v["indexes"][0];
     assert_eq!(index["name"], "host_by_os");
     assert_eq!(index["label"], "Host");
