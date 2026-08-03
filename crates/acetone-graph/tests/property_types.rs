@@ -207,3 +207,126 @@ fn an_unrelated_schema_change_does_not_re_judge_a_pre_existing_breach() {
     txn.save()
         .expect("a satisfied declaration must not be blocked by an unrelated pre-existing breach");
 }
+
+// ─── Relationship property types (acetone-7qw.12) ───────────────────────────
+// The edge counterparts of the checks above: declarable-but-inert until this
+// unit, so each test pins one of the three enforcement points.
+
+fn rel_type(types: BTreeMap<String, PropertyType>) -> SchemaEntry {
+    SchemaEntry::RelType {
+        name: "LINKS".into(),
+        def: acetone_model::schema::RelTypeDef::new(None, types, []).expect("rel type"),
+    }
+}
+
+fn seeded_edge_repo() -> (tempfile::TempDir, Repository) {
+    let (dir, repo) = repo();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&label("id", BTreeMap::new()))
+        .expect("label");
+    txn.put_schema(&rel_type(BTreeMap::new()))
+        .expect("rel type");
+    for id in ["a", "b"] {
+        txn.put_node(
+            &NodeKey::new("Blob", vec![Value::String(id.into())]).expect("key"),
+            &NodeRecord::new([], BTreeMap::new()),
+        )
+        .expect("node");
+    }
+    txn.save().expect("seed");
+    (dir, repo)
+}
+
+fn edge_key() -> acetone_model::graph_keys::EdgeKey {
+    acetone_model::graph_keys::EdgeKey::new(
+        NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+        "LINKS",
+        NodeKey::new("Blob", vec![Value::String("b".into())]).expect("key"),
+        Value::Null,
+    )
+    .expect("edge key")
+}
+
+/// Write-time chokepoint: a staged edge record contradicting the declared
+/// relationship property type is refused at save, whatever wrote it.
+#[test]
+fn a_wrongly_typed_edge_property_is_refused_at_save() {
+    let (_dir, repo) = seeded_edge_repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_schema(&rel_type(BTreeMap::from([(
+            "weight".to_owned(),
+            PropertyType::Int,
+        )])))
+        .expect("retype");
+        txn.save().expect("no edges yet: retype lands clean");
+    }
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_edge(
+        &edge_key(),
+        &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+            "weight".to_owned(),
+            Value::String("heavy".into()),
+        )])),
+    )
+    .expect("stage edge");
+    let err = txn
+        .save()
+        .expect_err("a string where int is declared must be refused");
+    assert!(
+        matches!(err, GraphError::PropertyTypeViolation { ref property, declared, actual, .. }
+            if property == "weight" && declared == "int" && actual == "string"),
+        "expected the edge chokepoint to refuse, got: {err}"
+    );
+}
+
+/// Declare-time backfill: retyping a relationship property around existing
+/// edges is refused — and the retype-plus-rewrite-in-one-transaction path
+/// still lands, exactly as for labels.
+#[test]
+fn retyping_a_rel_property_around_existing_edges_is_refused() {
+    let (_dir, repo) = seeded_edge_repo();
+    {
+        let mut txn = repo.begin_write().expect("begin");
+        txn.put_edge(
+            &edge_key(),
+            &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+                "weight".to_owned(),
+                Value::String("heavy".into()),
+            )])),
+        )
+        .expect("edge under no declaration");
+        txn.save().expect("save");
+    }
+    // Schema-only transaction: must be refused by the edge backfill.
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&rel_type(BTreeMap::from([(
+        "weight".to_owned(),
+        PropertyType::Int,
+    )])))
+    .expect("stage retype");
+    let err = txn
+        .save()
+        .expect_err("declaring weight:int over a string-valued edge must refuse");
+    assert!(
+        matches!(err, GraphError::PropertyTypeViolation { ref property, .. } if property == "weight"),
+        "expected the edge backfill to refuse, got: {err}"
+    );
+    // Retype AND repair in one transaction: allowed (the touched-edge skip).
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&rel_type(BTreeMap::from([(
+        "weight".to_owned(),
+        PropertyType::Int,
+    )])))
+    .expect("stage retype");
+    txn.put_edge(
+        &edge_key(),
+        &acetone_model::records::EdgeRecord::new(BTreeMap::from([(
+            "weight".to_owned(),
+            Value::Int(9),
+        )])),
+    )
+    .expect("stage repair");
+    txn.save()
+        .expect("a retype and its backfill may land in one transaction");
+}

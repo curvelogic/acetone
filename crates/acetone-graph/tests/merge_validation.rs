@@ -13,7 +13,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_model::schema::{IndexDef, LabelDef, PropertyType, SchemaEntry};
+use acetone_model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
 use acetone_prolly::{BatchOp, apply_batch, scan};
 use acetone_store::GitStore;
 use std::collections::BTreeMap;
@@ -1036,4 +1036,72 @@ fn a_pre_existing_type_violation_is_not_attributed_to_a_disjoint_merge() {
         merge(&repo, &base_m, &ours_m, &theirs_m),
         ManifestMerge::Clean(_)
     ));
+}
+
+/// The edge counterpart of the retype-merge case above (acetone-7qw.12):
+/// one side tightens a relationship property's type while the other side's
+/// data — untouched by this merge — already contradicts it. Neither side
+/// is individually illegal; only the merged state breaches, surfaced as
+/// `EdgeWrongType` on the same responsibility rule.
+#[test]
+fn a_rel_retype_merged_over_contradicting_edges_is_a_violation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let untyped_rel = SchemaEntry::RelType {
+        name: "LINKS".to_string(),
+        def: RelTypeDef::new(None, BTreeMap::new(), []).expect("untyped"),
+    };
+    let typed_rel = SchemaEntry::RelType {
+        name: "LINKS".to_string(),
+        def: RelTypeDef::new(
+            None,
+            BTreeMap::from([("weight".to_string(), PropertyType::Int)]),
+            [],
+        )
+        .expect("typed"),
+    };
+    let edge = EdgeKey::new(node(1), "LINKS", node(2), Value::Null).expect("edge");
+    let (b, o, t) = diverge(
+        &repo,
+        // Base: label, rel type (untyped), two nodes and the string-weighted
+        // edge every later state carries untouched.
+        |tx| {
+            tx.put_schema(&untyped_rel).expect("rel schema");
+            tx.put_node(&node(1), &record(&[])).expect("put");
+            tx.put_node(&node(2), &record(&[])).expect("put");
+            tx.put_edge(
+                &edge,
+                &EdgeRecord::new(BTreeMap::from([(
+                    "weight".to_owned(),
+                    Value::String("heavy".into()),
+                )])),
+            )
+            .expect("edge");
+        },
+        // ours: an unrelated node.
+        |tx| {
+            tx.put_node(&node(3), &record(&[])).expect("put");
+        },
+        // theirs: no committed change; the retype is spliced in below.
+        |tx| {
+            tx.put_node(&node(4), &record(&[])).expect("put");
+        },
+    );
+    let t = with_schema_spliced(repo.store(), &t, &typed_rel);
+
+    let vs = violations(merge(&repo, &b, &o, &t));
+    assert_eq!(
+        vs.len(),
+        1,
+        "one wrong-type on the untouched edge, got {vs:?}"
+    );
+    match &vs[0] {
+        GraphViolation::EdgeWrongType {
+            edge: e, property, ..
+        } => {
+            assert_eq!(*e, edge.encode_fwd().expect("enc"));
+            assert_eq!(property, "weight");
+        }
+        other => panic!("expected EdgeWrongType, got {other:?}"),
+    }
 }

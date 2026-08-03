@@ -265,6 +265,16 @@ pub enum Command {
     DeclareRelType {
         /// The relationship type.
         rtype: String,
+        /// Declare a property's type as `<property>:<type>`; repeat.
+        ///
+        /// Types: bool, int, float, string, bytes, date, time, datetime,
+        /// duration, list. Enforced on write and checked against existing
+        /// relationships at declare time, exactly as node property types
+        /// are (spec §2, acetone-7qw.12); unlike node types, no seek relies
+        /// on them (indexes are node-only), so this guards honesty, not
+        /// query results. Declared types do not close the shape (ADR-0070).
+        #[arg(long = "type", value_name = "PROPERTY:TYPE")]
+        r#type: Vec<String>,
     },
     /// Declare a property index over `(label, properties)`.
     ///

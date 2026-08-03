@@ -1283,6 +1283,11 @@ pub acetone_graph::merge::GraphViolation::DanglingEdge
 pub acetone_graph::merge::GraphViolation::DanglingEdge::edge: alloc::vec::Vec<u8>
 pub acetone_graph::merge::GraphViolation::DanglingEdge::endpoint: alloc::vec::Vec<u8>
 pub acetone_graph::merge::GraphViolation::DanglingEdge::role: acetone_graph::merge::Endpoint
+pub acetone_graph::merge::GraphViolation::EdgeWrongType
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::actual: acetone_model::schema::PropertyType
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::declared: acetone_model::schema::PropertyType
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::edge: alloc::vec::Vec<u8>
+pub acetone_graph::merge::GraphViolation::EdgeWrongType::property: alloc::string::String
 pub acetone_graph::merge::GraphViolation::MissingRequired
 pub acetone_graph::merge::GraphViolation::MissingRequired::node: alloc::vec::Vec<u8>
 pub acetone_graph::merge::GraphViolation::MissingRequired::property: alloc::string::String

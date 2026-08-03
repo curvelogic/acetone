@@ -31,9 +31,9 @@ use std::fmt;
 
 use acetone_model::Value;
 use acetone_model::display::{format_label, format_node_key, format_value};
-use acetone_model::graph_keys::NodeKey;
-use acetone_model::records::{NodeRecord, RecordEncodeError};
-use acetone_model::schema::{LabelDef, PropertyType};
+use acetone_model::graph_keys::{EdgeKey, NodeKey};
+use acetone_model::records::{EdgeRecord, NodeRecord, RecordEncodeError};
+use acetone_model::schema::{LabelDef, PropertyType, RelTypeDef};
 use acetone_model::values::encode_value;
 
 use crate::error::GraphError;
@@ -188,6 +188,43 @@ pub(crate) fn type_violations(
         let value = match def.key().iter().position(|k| k == property) {
             Some(i) => key.key().get(i),
             None => record.properties().get(property),
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        if declared.matches(value) {
+            continue;
+        }
+        // `None` is Null, which conforms to every declaration.
+        let Some(actual) = PropertyType::of(value) else {
+            continue;
+        };
+        out.push((property.clone(), *declared, actual));
+    }
+    out
+}
+
+/// The relationship counterpart of [`type_violations`] (acetone-7qw.12,
+/// implementing ADR-0066's model on the edge surface): same conformance
+/// rule — absent and null values conform, a declared type refuses a
+/// mismatched value — with the one positional value being the
+/// discriminator, whose value lives in the edge key rather than the
+/// record. Unlike labels, nothing at read time TRUSTS a relationship's
+/// declared type (indexes are node-only, spec §3.3), so this closes a
+/// false-promise surface, not a seek-soundness hole.
+pub(crate) fn rel_type_violations(
+    key: &EdgeKey,
+    record: &EdgeRecord,
+    def: &RelTypeDef,
+) -> Vec<(String, PropertyType, PropertyType)> {
+    if def.types().is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (property, declared) in def.types() {
+        let value = match def.discriminator() {
+            Some(d) if d == property => Some(key.disc()),
+            _ => record.properties().get(property),
         };
         let Some(value) = value else {
             continue;

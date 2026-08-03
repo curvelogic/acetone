@@ -56,7 +56,7 @@ use acetone_model::Value;
 use acetone_model::graph_keys::{EdgeKey, NodeKey};
 use acetone_model::manifest::{Manifest, MapRoot};
 use acetone_model::records::{EdgeRecord, NodeRecord};
-use acetone_model::schema::{IndexDef, LabelDef, PropertyType, SchemaEntry};
+use acetone_model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
 use acetone_prolly::{BatchOp, ChunkParams, Root, collect_reachable_chunks};
 use acetone_store::{
     ChunkStore, Commit, CommitStore, ConsolidateOptions, ConsolidateStats, GitStore,
@@ -1760,6 +1760,84 @@ fn check_retyped_labels(
     Ok(())
 }
 
+/// The edge counterpart of [`check_retyped_labels`] (acetone-7qw.12): a
+/// newly declared or retyped relationship property type must hold over the
+/// edges that already exist. Same responsibility rule — only changed
+/// properties are judged, and edges this transaction also writes or
+/// deletes are [`Transaction::check_staged_edge_types`]'s business, which
+/// is what lets a retype and its backfill land in one transaction.
+///
+/// Cost note, unlike labels: the forward edge map is keyed by SOURCE node,
+/// not relationship type, so there is no per-type prefix to scan — a
+/// rel-type retype streams the whole edge map once (all retyped rel types
+/// judged in that single pass). Still streaming, still schema-change-only.
+fn check_retyped_rel_types(
+    store: &GitStore,
+    params: ChunkParams,
+    base_edges: &MapRoot,
+    old_entries: &[SchemaEntry],
+    new_entries: &[SchemaEntry],
+    touched: &BTreeSet<Vec<u8>>,
+) -> Result<(), GraphError> {
+    let old_types: BTreeMap<&str, &BTreeMap<String, PropertyType>> = old_entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SchemaEntry::RelType { name, def } => Some((name.as_str(), def.types())),
+            _ => None,
+        })
+        .collect();
+    // (rel type, def, changed property set) for every retype this save lands.
+    let mut retyped: BTreeMap<&str, (&RelTypeDef, BTreeSet<&str>)> = BTreeMap::new();
+    for entry in new_entries {
+        let SchemaEntry::RelType { name, def } = entry else {
+            continue;
+        };
+        if def.types().is_empty() {
+            continue;
+        }
+        let previous = old_types.get(name.as_str()).copied();
+        let changed: BTreeSet<&str> = def
+            .types()
+            .iter()
+            .filter(|(property, declared)| {
+                previous.and_then(|types| types.get(*property)) != Some(*declared)
+            })
+            .map(|(property, _)| property.as_str())
+            .collect();
+        if !changed.is_empty() {
+            retyped.insert(name.as_str(), (def, changed));
+        }
+    }
+    if retyped.is_empty() {
+        return Ok(());
+    }
+    let root = base_edges.to_root(params)?;
+    for item in acetone_prolly::scan(store, &root, ..)? {
+        let (key, value) = item?;
+        if touched.contains(&key[..]) {
+            continue;
+        }
+        let edge = EdgeKey::decode_fwd(&key)?;
+        let Some((def, changed)) = retyped.get(edge.rtype()) else {
+            continue;
+        };
+        let record = EdgeRecord::decode(&value)?;
+        if let Some((property, declared, actual)) =
+            crate::constraints::rel_type_violations(&edge, &record, def)
+                .into_iter()
+                .find(|(property, _, _)| changed.contains(property.as_str()))
+        {
+            return Err(GraphError::PropertyTypeViolation {
+                node: acetone_model::display::format_edge_key(&edge),
+                property,
+                declared: declared.as_str(),
+                actual: actual.as_str(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A `GraphError::DanglingEdge` naming the offending edge and missing endpoint.
 fn dangling_edge(rtype: &str, role: &'static str, endpoint: &NodeKey) -> GraphError {
     GraphError::DanglingEdge {
@@ -2138,6 +2216,58 @@ impl<'r> Transaction<'r> {
         Ok(())
     }
 
+    /// The edge counterpart of [`Transaction::check_staged_node_types`]
+    /// (acetone-7qw.12): enforce declared relationship property types over
+    /// the edge records staged in this transaction. Only the forward map
+    /// is examined — `edges_rev` is derived from it (Invariant #5) and
+    /// carries the same records.
+    fn check_staged_edge_types(
+        store: &GitStore,
+        params: ChunkParams,
+        schema: &MapRoot,
+        staged: &[BatchOp],
+    ) -> Result<(), GraphError> {
+        if staged.iter().all(|op| matches!(op, BatchOp::Delete(_))) {
+            return Ok(());
+        }
+        let mut typed_rel_types: BTreeMap<String, RelTypeDef> = BTreeMap::new();
+        let schema_root = schema.to_root(params)?;
+        for item in acetone_prolly::scan(store, &schema_root, ..)? {
+            let (key, value) = item?;
+            if let SchemaEntry::RelType { name, def } = SchemaEntry::decode(&key, &value)?
+                && !def.types().is_empty()
+            {
+                typed_rel_types.insert(name, def);
+            }
+        }
+        if typed_rel_types.is_empty() {
+            return Ok(());
+        }
+        for op in staged {
+            let BatchOp::Put(key, value) = op else {
+                continue;
+            };
+            let edge = EdgeKey::decode_fwd(key)?;
+            let Some(def) = typed_rel_types.get(edge.rtype()) else {
+                continue;
+            };
+            let record = EdgeRecord::decode(value)?;
+            if let Some((property, declared, actual)) =
+                crate::constraints::rel_type_violations(&edge, &record, def)
+                    .into_iter()
+                    .next()
+            {
+                return Err(GraphError::PropertyTypeViolation {
+                    node: acetone_model::display::format_edge_key(&edge),
+                    property,
+                    declared: declared.as_str(),
+                    actual: actual.as_str(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Apply staged ops to one map, returning the new root and the
     /// `(new_chunk, predecessor)` base hints the splice discovered — recorded
     /// for a later `gc` so rewritten chunks delta against their predecessors
@@ -2197,6 +2327,12 @@ impl<'r> Transaction<'r> {
         let base_indexes = self.manifest.indexes.clone();
         let touched_nodes: Vec<Vec<u8>> = self
             .nodes
+            .iter()
+            .map(|op| batch_op_key(op).to_vec())
+            .collect();
+        let base_edges = self.manifest.edges_fwd;
+        let touched_edges: Vec<Vec<u8>> = self
+            .edges_fwd
             .iter()
             .map(|op| batch_op_key(op).to_vec())
             .collect();
@@ -2270,6 +2406,13 @@ impl<'r> Transaction<'r> {
         // Staged ops are validated by reference before they are consumed, so
         // this costs no extra allocation on a large batched import.
         Self::check_staged_node_types(store, params, &new_schema, &self.nodes)?;
+        // The edge counterpart (acetone-7qw.12): relationship property
+        // types were declarable-but-inert — stored, round-tripped, and
+        // enforced nowhere. Same chokepoint argument; the one difference
+        // is stakes, not rule: no seek trusts a relationship declaration
+        // (indexes are node-only), so this closes a false promise rather
+        // than a soundness hole.
+        Self::check_staged_edge_types(store, params, &new_schema, &self.edges_fwd)?;
         let mut manifest = Manifest {
             chunk_params: params,
             schema: new_schema,
@@ -2314,6 +2457,19 @@ impl<'r> Transaction<'r> {
                 &old_entries,
                 &new_entries,
                 &touched_nodes.iter().cloned().collect(),
+            )?;
+            // The edge counterpart (acetone-7qw.12): a relationship
+            // property (re)declaration must hold over the edges already
+            // present. Nothing at read time trusts it (indexes are
+            // node-only), so unlike the label check this guards the
+            // declaration's honesty, not seek soundness.
+            check_retyped_rel_types(
+                store,
+                params,
+                &base_edges,
+                &old_entries,
+                &new_entries,
+                &touched_edges.iter().cloned().collect(),
             )?;
         }
         // Maintain the derived `idx/<name>` maps (spec §3.3, Invariant #5).

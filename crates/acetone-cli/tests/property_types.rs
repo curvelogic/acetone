@@ -687,3 +687,81 @@ fn a_cli_built_graph_answers_a_string_key_lookup_like_the_scan() {
         "exactly one row, got:\n{seek}"
     );
 }
+
+// ─── Relationship property types through the shipped CLI (acetone-7qw.12) ───
+
+/// The whole rel-type path through the binary: declare with `--type`,
+/// render in `acetone schema` (text and JSON), enforce on a Cypher write,
+/// and refuse a declare over contradicting stored edges.
+#[test]
+fn rel_property_types_round_trip_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = dir.path();
+    assert!(init(repo).status.success(), "init");
+    assert!(
+        acetone(repo, &["declare-label", "Host", "--key", "hostname"])
+            .status
+            .success(),
+        "declare-label"
+    );
+    // Declare with a typed property.
+    let out = acetone(repo, &["declare-rel-type", "LINKS", "--type", "weight:int"]);
+    assert!(out.status.success(), "declare-rel-type: {}", stderr(&out));
+    assert!(
+        acetone(repo, &["commit", "-m", "schema"]).status.success(),
+        "commit"
+    );
+
+    // Rendered in the schema listing, both formats.
+    let out = acetone(repo, &["schema"]);
+    let text = stdout(&out);
+    assert!(
+        text.contains("LINKS") && text.contains(r#""weight": int"#),
+        "text schema shows the typed rel property: {text}"
+    );
+    let out = acetone(repo, &["schema", "--json"]);
+    let json = stdout(&out);
+    assert!(
+        json.contains("LINKS") && json.contains(r#""weight""#) && json.contains(r#""int""#),
+        "JSON schema carries the object shape (acetone-7qw.12): {json}"
+    );
+
+    // Enforced on a Cypher write, with the rel-flavoured message.
+    for q in [
+        "CREATE (:Host {hostname: 'a'})",
+        "CREATE (:Host {hostname: 'b'})",
+        "MATCH (a:Host {hostname: 'a'}), (b:Host {hostname: 'b'}) \
+         CREATE (a)-[:LINKS {weight: 3}]->(b)",
+    ] {
+        let out = acetone(repo, &["query", q]);
+        assert!(out.status.success(), "setup {q}: {}", stderr(&out));
+    }
+    let out = acetone(
+        repo,
+        &[
+            "query",
+            "MATCH (a:Host {hostname: 'a'})-[l:LINKS]->(b) SET l.weight = 'heavy'",
+        ],
+    );
+    assert!(!out.status.success(), "wrong-typed SET must fail");
+    let err = stderr(&out);
+    assert!(
+        err.contains("weight") && err.contains("declared int") && err.contains("relationship"),
+        "the refusal names the rel property and types: {err}"
+    );
+
+    // Backfill: declaring a contradicting type over stored edges refuses.
+    let out = acetone(
+        repo,
+        &["declare-rel-type", "LINKS", "--type", "weight:string"],
+    );
+    assert!(
+        !out.status.success(),
+        "retyping around a stored int weight must refuse"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("weight"),
+        "the backfill refusal names the property: {err}"
+    );
+}

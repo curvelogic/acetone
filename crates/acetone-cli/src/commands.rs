@@ -80,7 +80,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             require,
             unique,
         } => declare_label(repo_path, &label, &key, &r#type, &require, &unique),
-        Command::DeclareRelType { rtype } => declare_rel_type(repo_path, &rtype),
+        Command::DeclareRelType { rtype, r#type } => declare_rel_type(repo_path, &rtype, &r#type),
         Command::DeclareIndex {
             name,
             label,
@@ -842,9 +842,10 @@ pub(crate) fn declare_label(
     Ok(())
 }
 
-pub(crate) fn declare_rel_type(repo_path: &Path, rtype: &str) -> Result<()> {
+pub(crate) fn declare_rel_type(repo_path: &Path, rtype: &str, type_specs: &[String]) -> Result<()> {
     use acetone_core::model::schema::{RelTypeDef, SchemaEntry};
-    let def = RelTypeDef::new(None, BTreeMap::new(), [])
+    let types = parse_property_types(type_specs)?;
+    let def = RelTypeDef::new(None, types, [])
         .with_context(|| format!("declaring relationship type {rtype:?}"))?;
     let entry = SchemaEntry::RelType {
         name: rtype.to_owned(),
@@ -914,12 +915,12 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
     // schema map's key order, which is grouped and sorted by (kind, name); we
     // keep that order within each group.
     let mut labels: Vec<(&str, &acetone_core::model::schema::LabelDef)> = Vec::new();
-    let mut rel_types: Vec<&str> = Vec::new();
+    let mut rel_types: Vec<(&str, &acetone_core::model::schema::RelTypeDef)> = Vec::new();
     let mut indexes: Vec<(&str, &acetone_core::model::schema::IndexDef)> = Vec::new();
     for entry in &entries {
         match entry {
             SchemaEntry::Label { name, def } => labels.push((name, def)),
-            SchemaEntry::RelType { name, .. } => rel_types.push(name),
+            SchemaEntry::RelType { name, def } => rel_types.push((name, def)),
             SchemaEntry::Index { name, def } => indexes.push((name, def)),
         }
     }
@@ -946,9 +947,21 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
                 })
             })
             .collect();
+        // Objects since acetone-7qw.12 (previously bare name strings — the
+        // --json shape is explicitly unstable pre-1.0; CHANGELOG notes it).
         let rel_json: Vec<Json> = rel_types
             .iter()
-            .map(|n| Json::String((*n).to_owned()))
+            .map(|(name, def)| {
+                json!({
+                    "name": name,
+                    "types": Json::Object(
+                        def.types()
+                            .iter()
+                            .map(|(p, t)| (p.clone(), Json::String(t.as_str().to_owned())))
+                            .collect(),
+                    ),
+                })
+            })
             .collect();
         let index_json: Vec<Json> = indexes
             .iter()
@@ -1027,8 +1040,18 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
     if rel_types.is_empty() {
         outln!("  (none)");
     } else {
-        for name in &rel_types {
-            outln!("  {}", format_label(name));
+        for (name, def) in &rel_types {
+            if def.types().is_empty() {
+                outln!("  {}", format_label(name));
+            } else {
+                // Same `property: type` rendering as labels (acetone-7qw.12).
+                let pairs: Vec<String> = def
+                    .types()
+                    .iter()
+                    .map(|(property, ty)| format!("{}: {}", format_label(property), ty.as_str()))
+                    .collect();
+                outln!("  {}  types ({})", format_label(name), pairs.join(", "));
+            }
         }
     }
 

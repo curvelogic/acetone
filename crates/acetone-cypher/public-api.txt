@@ -5375,6 +5375,12 @@ pub acetone_cypher::persist::PersistError::MissingRequired
 pub acetone_cypher::persist::PersistError::MissingRequired::key: alloc::string::String
 pub acetone_cypher::persist::PersistError::MissingRequired::label: alloc::string::String
 pub acetone_cypher::persist::PersistError::MissingRequired::property: alloc::string::String
+pub acetone_cypher::persist::PersistError::RelWrongType
+pub acetone_cypher::persist::PersistError::RelWrongType::actual: &'static str
+pub acetone_cypher::persist::PersistError::RelWrongType::declared: &'static str
+pub acetone_cypher::persist::PersistError::RelWrongType::key: alloc::string::String
+pub acetone_cypher::persist::PersistError::RelWrongType::property: alloc::string::String
+pub acetone_cypher::persist::PersistError::RelWrongType::rtype: alloc::string::String
 pub acetone_cypher::persist::PersistError::UniqueViolation
 pub acetone_cypher::persist::PersistError::UniqueViolation::label: alloc::string::String
 pub acetone_cypher::persist::PersistError::UniqueViolation::property: alloc::string::String

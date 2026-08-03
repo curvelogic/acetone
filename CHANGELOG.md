@@ -16,6 +16,19 @@ fine.)
 
 ## [Unreleased]
 
+### Added
+
+- **Relationship property types are now real** (acetone-7qw.12):
+  `declare-rel-type` takes repeatable `--type <property>:<type>` flags,
+  `acetone schema` renders them (JSON note: `relationship_types` entries
+  are now objects `{name, types}` rather than bare name strings — the
+  `--json` shape is unstable pre-1.0), and declared types are enforced
+  exactly as node ones are — on write, at declare time against existing
+  relationships, and re-validated at merge (a new `wrong-type` conflict
+  row kind covers edges in `CALL acetone.conflicts()`). Previously a
+  relationship property type was declarable through the library, stored,
+  and silently meaningless.
+
 ### Changed
 
 - **Declared property types no longer close a label's shape** (ADR-0070).

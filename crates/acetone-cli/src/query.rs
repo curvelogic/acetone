@@ -969,10 +969,12 @@ fn handle_meta(
             crate::commands::declare_label(repo_path, label, &key, &types, &require, &unique)?;
         }
         "declare-rel-type" => {
-            if rest.is_empty() {
-                anyhow::bail!("usage: :declare-rel-type <TYPE>");
-            }
-            crate::commands::declare_rel_type(repo_path, rest)?;
+            let (pos, flags) = parse_meta_args(rest);
+            let rtype = pos
+                .first()
+                .ok_or_else(|| anyhow!("usage: :declare-rel-type <TYPE> [--type P:T ...]"))?;
+            let types = flags.get("type").cloned().unwrap_or_default();
+            crate::commands::declare_rel_type(repo_path, rtype, &types)?;
         }
         "declare-index" => {
             let (pos, flags) = parse_meta_args(rest);

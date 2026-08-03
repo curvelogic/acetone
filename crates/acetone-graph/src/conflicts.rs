@@ -161,6 +161,20 @@ fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
                     push_field(&mut key, declared.as_str().as_bytes());
                     push_field(&mut key, node);
                 }
+                GraphViolation::EdgeWrongType {
+                    edge,
+                    property,
+                    declared,
+                    ..
+                } => {
+                    // 4: the edge counterpart of WrongType's 3 — same
+                    // (property, declared) discrimination, edge key last
+                    // (acetone-7qw.12).
+                    key.push(4);
+                    push_field(&mut key, property.as_bytes());
+                    push_field(&mut key, declared.as_str().as_bytes());
+                    push_field(&mut key, edge);
+                }
                 GraphViolation::UniqueViolation {
                     label,
                     property,
