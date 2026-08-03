@@ -1657,6 +1657,61 @@ fn check_label_key_stability(
     Ok(())
 }
 
+/// The relationship counterpart of [`check_label_key_stability`]
+/// (acetone-7qw.12, PR #243 review blocker 1): a schema change must not
+/// alter a relationship type's DISCRIMINATOR while edges of that type
+/// exist. The discriminator decides which stored position a declared type
+/// governs (key vs record) and which parallel edges are distinct — so a
+/// silent change (including the wipe `declare-rel-type` performs by
+/// construction, since the CLI cannot express a discriminator) would
+/// falsify declarations and violate spec §2's parallel-edge rule without
+/// any writer noticing. Such a change needs an explicit `migrate`.
+///
+/// Cost: the forward edge map has no per-type prefix, so existence is one
+/// streaming scan bailing at the first edge of any disc-changed type —
+/// schema-change-only, like its label sibling.
+fn check_rel_disc_stability(
+    store: &GitStore,
+    params: ChunkParams,
+    base_edges: &MapRoot,
+    old_entries: &[SchemaEntry],
+    new_entries: &[SchemaEntry],
+) -> Result<(), GraphError> {
+    let old_discs: BTreeMap<&str, Option<&str>> = old_entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SchemaEntry::RelType { name, def } => Some((name.as_str(), def.discriminator())),
+            _ => None,
+        })
+        .collect();
+    let mut changed: BTreeSet<&str> = BTreeSet::new();
+    for entry in new_entries {
+        let SchemaEntry::RelType { name, def } = entry else {
+            continue;
+        };
+        // Absent from the old schema = fresh declaration, not a change.
+        if let Some(old_disc) = old_discs.get(name.as_str())
+            && *old_disc != def.discriminator()
+        {
+            changed.insert(name.as_str());
+        }
+    }
+    if changed.is_empty() {
+        return Ok(());
+    }
+    let root = base_edges.to_root(params)?;
+    for item in acetone_prolly::scan(store, &root, ..)? {
+        let (key, _) = item?;
+        let edge = EdgeKey::decode_fwd(&key)?;
+        if changed.contains(edge.rtype()) {
+            return Err(GraphError::RelDiscriminatorChanged {
+                rtype: edge.rtype().to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A newly declared or retyped property type must hold over the data that
 /// already exists, or the declaration would be false the moment it landed.
 ///
@@ -1827,8 +1882,8 @@ fn check_retyped_rel_types(
                 .into_iter()
                 .find(|(property, _, _)| changed.contains(property.as_str()))
         {
-            return Err(GraphError::PropertyTypeViolation {
-                node: acetone_model::display::format_edge_key(&edge),
+            return Err(GraphError::EdgePropertyTypeViolation {
+                edge: acetone_model::display::format_edge_key(&edge),
                 property,
                 declared: declared.as_str(),
                 actual: actual.as_str(),
@@ -2257,8 +2312,8 @@ impl<'r> Transaction<'r> {
                     .into_iter()
                     .next()
             {
-                return Err(GraphError::PropertyTypeViolation {
-                    node: acetone_model::display::format_edge_key(&edge),
+                return Err(GraphError::EdgePropertyTypeViolation {
+                    edge: acetone_model::display::format_edge_key(&edge),
                     property,
                     declared: declared.as_str(),
                     actual: actual.as_str(),
@@ -2447,6 +2502,7 @@ impl<'r> Transaction<'r> {
             let old_keys = crate::index::schema_index_info(&old_entries).1;
             let new_keys = crate::index::schema_index_info(&new_entries).1;
             check_label_key_stability(store, params, &base_nodes, &old_keys, &new_keys)?;
+            check_rel_disc_stability(store, params, &base_edges, &old_entries, &new_entries)?;
             // A declaration must be true of the data already present, not just
             // of what this transaction writes — otherwise a seek that trusts
             // the declaration under-selects (see the function's own comment).

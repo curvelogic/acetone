@@ -196,10 +196,21 @@ Redeclaring a label replaces its whole constraint set, and a declaration that
 existing nodes of the label would violate is refused with the violating nodes
 named — backfill first, declare after.
 
-### `acetone declare-rel-type <RTYPE>`
+### `acetone declare-rel-type <RTYPE> [--type PROPERTY:TYPE]...`
 
 Declare a relationship type — required before Cypher can create relationships
-of this type under a declared schema.
+of this type under a declared schema. `--type <property>:<type>` (repeatable)
+declares a property's type, enforced exactly as node property types are: on
+write, at declare time against existing relationships, and re-validated at
+merge (acetone-7qw.12). Unlike node types, no seek relies on them — indexes
+are node-only — so they guard the declaration's honesty rather than query
+results, and declared types do not close the shape (ADR-0070).
+
+Redeclaring a relationship type **replaces its whole definition**, and the
+CLI cannot express a discriminator or existence constraint — so redeclaring a
+type that was given a discriminator through the library would drop it, and is
+therefore **refused while relationships of that type exist** (change it with
+an explicit `migrate`).
 
 ### `acetone declare-index <NAME> --label <LABEL> --property <PROPERTY>...`
 

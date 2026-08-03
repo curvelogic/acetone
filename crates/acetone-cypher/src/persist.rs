@@ -113,15 +113,14 @@ pub enum PersistError {
         actual: &'static str,
     },
     #[error(
-        "property {property:?} of relationship type {rtype:?} {key} is declared {declared} but \
-         the value written is of type {actual}. Declared relationship property types are \
-         enforced like node ones (spec §2, acetone-7qw.12) so a declaration is never a false \
-         promise. Write a value of type {declared}, or redeclare the property's type."
+        "property {property:?} of relationship {key} is declared {declared} but the value \
+         written is of type {actual}. Declared relationship property types are enforced like \
+         node ones (spec §2, acetone-7qw.12); unlike node types no seek relies on them, so \
+         this guards the declaration's honesty. Write a value of type {declared}, or \
+         redeclare the property's type."
     )]
     RelWrongType {
-        /// The relationship type declaring the property type.
-        rtype: String,
-        /// The edge identity, rendered.
+        /// The edge identity, rendered (self-describing: includes the type).
         key: String,
         /// The mistyped property.
         property: String,
@@ -311,27 +310,28 @@ fn check_rel_types(
         return Ok(());
     }
     for (property, declared) in def.types() {
-        let value = match def.discriminator() {
-            Some(d) if d == property => Some(edge.disc()),
-            _ => record.properties().get(property),
-        };
-        let Some(value) = value else {
-            continue;
-        };
-        if declared.matches(value) {
-            continue;
+        // Both positions for a discriminator-named property — the record
+        // value is what a reader sees (PR #243 review blocker 1).
+        let mut candidates: [Option<&acetone_model::Value>; 2] =
+            [record.properties().get(property), None];
+        if def.discriminator() == Some(property.as_str()) {
+            candidates[1] = Some(edge.disc());
         }
-        // `None` is Null, which conforms to every declaration.
-        let Some(actual) = acetone_model::schema::PropertyType::of(value) else {
-            continue;
-        };
-        return Err(PersistError::RelWrongType {
-            rtype: edge.rtype().to_string(),
-            key: acetone_model::display::format_edge_key(edge),
-            property: property.clone(),
-            declared: declared.as_str(),
-            actual: actual.as_str(),
-        });
+        for value in candidates.into_iter().flatten() {
+            if declared.matches(value) {
+                continue;
+            }
+            // `None` is Null, which conforms to every declaration.
+            let Some(actual) = acetone_model::schema::PropertyType::of(value) else {
+                continue;
+            };
+            return Err(PersistError::RelWrongType {
+                key: acetone_model::display::format_edge_key(edge),
+                property: property.clone(),
+                declared: declared.as_str(),
+                actual: actual.as_str(),
+            });
+        }
     }
     Ok(())
 }

@@ -222,21 +222,27 @@ pub(crate) fn rel_type_violations(
     }
     let mut out = Vec::new();
     for (property, declared) in def.types() {
-        let value = match def.discriminator() {
-            Some(d) if d == property => Some(key.disc()),
-            _ => record.properties().get(property),
-        };
-        let Some(value) = value else {
-            continue;
-        };
-        if declared.matches(value) {
-            continue;
+        // A discriminator-named property is judged in BOTH positions: its
+        // canonical value lives in the edge key, but nothing stops a writer
+        // putting the same name in the record — and the record value is
+        // what a reader sees — so checking the key alone made a declared
+        // type on the discriminator a false promise (PR #243 review
+        // blocker 1). Any position's violation counts.
+        let mut candidates: [Option<&Value>; 2] = [record.properties().get(property), None];
+        if def.discriminator() == Some(property.as_str()) {
+            candidates[1] = Some(key.disc());
         }
-        // `None` is Null, which conforms to every declaration.
-        let Some(actual) = PropertyType::of(value) else {
-            continue;
-        };
-        out.push((property.clone(), *declared, actual));
+        for value in candidates.into_iter().flatten() {
+            if declared.matches(value) {
+                continue;
+            }
+            // `None` is Null, which conforms to every declaration.
+            let Some(actual) = PropertyType::of(value) else {
+                continue;
+            };
+            out.push((property.clone(), *declared, actual));
+            break;
+        }
     }
     out
 }

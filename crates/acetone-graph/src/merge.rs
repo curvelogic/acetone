@@ -593,7 +593,7 @@ fn rebuild_reverse<S: ChunkStore>(
 /// (Invariant #4).
 ///
 /// Note the persisted conflicts map sorts `WrongType` *last* rather than
-/// third: its entry-key tag is 3, assigned after UNIQUE's 2 so existing
+/// third: its entry-key tag is 3 (relationship type breaches tag 4), assigned after UNIQUE's 2 so existing
 /// conflict keys did not move. Both orders are deterministic, so Invariant #4
 /// holds either way, but `GraphError::MergeViolations` and
 /// `CALL acetone.conflicts()` therefore list the same merge's categories in

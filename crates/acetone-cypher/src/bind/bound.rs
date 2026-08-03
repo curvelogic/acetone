@@ -660,7 +660,10 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         max_args: 0,
         // `kind` classifies the conflict (acetone-jm8): `cell` for a cell-level
         // clash, or a graph-level violation class — `dangling-edge`,
-        // `missing-required`, `unique` — re-derived live over the workspace
+        // `missing-required`, `wrong-type` (a node's declared-type breach),
+        // `rel-wrong-type` (a relationship's, acetone-7qw.12 — its `label`
+        // column carries the RELATIONSHIP TYPE and `node` is null),
+        // `unique` — re-derived live over the workspace
         // graph once every cell conflict is resolved (ADR-0058), so a
         // violation the merge composed or a resolution introduced is visible
         // before `commit` refuses it. A UNIQUE collision yields one row per
@@ -682,7 +685,8 @@ pub const PROCEDURES: &[ProcedureDef] = &[
             "kind", "label", "key", "property", "base", "ours", "theirs", "node",
         ],
         // `kind` is a fixed vocabulary (cell / dangling-edge / missing-required
-        // / unique), not repository text, so it is not an identifier yield.
+        // / wrong-type / rel-wrong-type / unique), not repository text, so it
+        // is not an identifier yield.
         identifier_yields: &["label", "property"],
     },
 ];

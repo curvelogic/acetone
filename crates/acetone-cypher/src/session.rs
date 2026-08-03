@@ -744,7 +744,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                     let edge_key =
                                         EdgeKey::decode_fwd(&edge).map_err(|e| e.to_string())?;
                                     rows.push(vec![
-                                        Value::String("wrong-type".into()),
+                                        Value::String("rel-wrong-type".into()),
                                         Value::String(edge_key.rtype().to_string()),
                                         Value::String(format_edge_key(&edge_key)),
                                         Value::String(property),

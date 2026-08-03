@@ -954,12 +954,20 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
             .map(|(name, def)| {
                 json!({
                     "name": name,
+                    // Complete shape in one break (PR #243 review minor 8):
+                    // discriminator and required ride along now rather than
+                    // forcing a second --json change later.
+                    "discriminator": match def.discriminator() {
+                        Some(d) => Json::String(d.to_owned()),
+                        None => Json::Null,
+                    },
                     "types": Json::Object(
                         def.types()
                             .iter()
                             .map(|(p, t)| (p.clone(), Json::String(t.as_str().to_owned())))
                             .collect(),
                     ),
+                    "required": strings(def.exists()),
                 })
             })
             .collect();
@@ -1041,16 +1049,26 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
         outln!("  (none)");
     } else {
         for (name, def) in &rel_types {
-            if def.types().is_empty() {
-                outln!("  {}", format_label(name));
-            } else {
+            let mut clauses: Vec<String> = Vec::new();
+            if let Some(disc) = def.discriminator() {
+                clauses.push(format!("discriminator {}", format_label(disc)));
+            }
+            if !def.types().is_empty() {
                 // Same `property: type` rendering as labels (acetone-7qw.12).
                 let pairs: Vec<String> = def
                     .types()
                     .iter()
                     .map(|(property, ty)| format!("{}: {}", format_label(property), ty.as_str()))
                     .collect();
-                outln!("  {}  types ({})", format_label(name), pairs.join(", "));
+                clauses.push(format!("types ({})", pairs.join(", ")));
+            }
+            if !def.exists().is_empty() {
+                clauses.push(format!("required {}", name_list(def.exists())));
+            }
+            if clauses.is_empty() {
+                outln!("  {}", format_label(name));
+            } else {
+                outln!("  {}  {}", format_label(name), clauses.join("  "));
             }
         }
     }
