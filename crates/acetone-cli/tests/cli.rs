@@ -3462,7 +3462,7 @@ fn call_conflicts_surfaces_a_merged_rel_type_breach() {
         vec!["put-node", "Host", "1"],
         vec!["put-node", "Host", "2"],
     ] {
-        let out = acetone(&repo, &args.iter().map(|s| *s).collect::<Vec<_>>());
+        let out = acetone(&repo, &args.iter().copied().collect::<Vec<_>>());
         assert!(out.status.success(), "{args:?}: {}", stderr(&out));
     }
     let out = acetone(
