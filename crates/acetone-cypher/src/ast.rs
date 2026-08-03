@@ -491,6 +491,39 @@ impl Expr {
                 Expr::PatternComprehension { pattern, .. } => pattern_size(pattern),
                 _ => 0,
             });
+            // Payload bytes, not just node count: a node holding a long
+            // string or identifier costs its bytes on every clone, so
+            // counting it as 1 left a ~780x gap between this bound and the
+            // real allocation — a 4MB query transiently reached 3.1GB
+            // inside the cap (acetone-7qw.8). String-bearing fields weigh
+            // their byte lengths; unit-sized nodes stay 1.
+            n = n.saturating_add(match expr {
+                Expr::Literal {
+                    value: Literal::String(s),
+                    ..
+                } => s.len(),
+                Expr::Variable { name, .. } | Expr::Parameter { name, .. } => name.len(),
+                // Binder-position identifiers are unbounded and cloned by
+                // the chain desugar exactly like literals — missing them
+                // left the amplifier open through reduce/quantifier/
+                // comprehension variables (PR #242 review blocker 1).
+                Expr::ListComprehension { variable, .. } | Expr::Quantifier { variable, .. } => {
+                    variable.len()
+                }
+                Expr::Reduce {
+                    accumulator,
+                    variable,
+                    ..
+                } => accumulator.len().saturating_add(variable.len()),
+                Expr::FunctionCall { name, .. } => name.iter().map(String::len).sum(),
+                Expr::Property { key, .. } => key.len(),
+                // Collection items (map keys, labels) weigh 1 + bytes:
+                // they had no unit of their own before, and the floor
+                // keeps a zero-length name from costing nothing.
+                Expr::MapLiteral { entries, .. } => entries.iter().map(|(k, _)| 1 + k.len()).sum(),
+                Expr::HasLabels { labels, .. } => labels.iter().map(|l| 1 + l.len()).sum(),
+                _ => 0,
+            });
             stack.extend(expr.children());
         }
         n
@@ -714,10 +747,21 @@ impl Drop for Expr {
 /// relationship types and var-length bounds. Counted because the chain
 /// desugar clones patterns wholesale (see [`Expr::allocated_size`]).
 fn pattern_size(pattern: &PathPattern) -> usize {
-    let node_size = |node: &NodePattern| 1 + node.labels.len() + node.properties.iter().count();
-    let mut n = node_size(&pattern.start);
+    // Labels and types weigh their byte lengths, not 1 each: a cloned
+    // pattern carries its name strings, and unit-counting them leaves the
+    // same payload gap allocated_size had for literals (acetone-7qw.8).
+    let name_bytes = |names: &[String]| names.iter().map(|s| 1 + s.len()).sum::<usize>();
+    // Pattern variables are unbounded identifiers cloned with the pattern
+    // (PR #242 review blocker 1).
+    let var_bytes = |v: &Option<String>| v.as_ref().map_or(0, String::len);
+    let node_size = |node: &NodePattern| {
+        1 + var_bytes(&node.variable) + name_bytes(&node.labels) + node.properties.iter().count()
+    };
+    let mut n = node_size(&pattern.start).saturating_add(var_bytes(&pattern.variable));
     for (rel, node) in &pattern.steps {
-        n = n.saturating_add(1 + rel.types.len() + rel.properties.iter().count());
+        n = n.saturating_add(
+            1 + var_bytes(&rel.variable) + name_bytes(&rel.types) + rel.properties.iter().count(),
+        );
         n = n.saturating_add(node_size(node));
     }
     n

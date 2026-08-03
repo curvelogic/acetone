@@ -20,8 +20,8 @@ pub use run::{
     execute_with_governor, execute_with_limits, execute_write, execute_write_with_limits,
 };
 pub use source::{
-    EmptyGraph, GraphSource, MemoryGraph, NoProcedures, ProcedureProvider, SingleVersion,
-    VersionResolver,
+    EmptyGraph, GraphSource, MemoryGraph, NoProcedures, ProcedureProvider, SeekProbe,
+    SingleVersion, VersionResolver,
 };
 pub use store_source::StoreBackedSource;
 pub use value::Value;

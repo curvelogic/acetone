@@ -48,7 +48,7 @@ use std::ops::Bound;
 
 use crate::ast::Direction;
 use crate::exec::adapter::{node_value, rel_value};
-use crate::exec::source::GraphSource;
+use crate::exec::source::{GraphSource, SeekProbe};
 use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
 /// Whether a raw probe on the *string* encoding can be trusted not to miss a
@@ -383,103 +383,7 @@ impl GraphSource for StoreBackedSource<'_> {
     }
 
     fn nodes_by_key(&self, label: &str, key_values: &[Value]) -> Option<Vec<NodeValue>> {
-        // A primary-key pin is an exact lookup in the nodes map — the
-        // cheapest seek there is, and the one the shipped read path was
-        // missing entirely (Phase 9 security review finding 7).
-        //
-        // Candidate-superset semantics as everywhere else: probe both
-        // numeric encodings (3 == 3.0 in openCypher but they encode
-        // differently), and a probe set we cannot form means "cannot
-        // serve" — scan — never "definitively absent".
-        //
-        // Only trust the recorded key types when their arity matches the pin,
-        // so a positional type lookup is never read against a key of a
-        // different shape — a hint may have been bound against another
-        // version's catalogue (AT clauses), which the index path guards the
-        // same way (PR #206 review finding 4).
-        //
-        // Defensive, not load-bearing, and deliberately untested: a pin whose
-        // arity differs from the label's key encodes to a tuple no stored key
-        // can equal, so it finds nothing, leaves `served` false and declines
-        // whether this filter is here or not. It cannot change an answer
-        // today; it keeps the code honest if partial-key pins ever become
-        // servable.
-        let key_types = self
-            .key_types
-            .get(label)
-            .filter(|types| types.len() == key_values.len());
-        let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(key_values.len());
-        for (component, value) in key_values.iter().enumerate() {
-            let alternatives = match value {
-                // Null/NaN can never be a key value (keys are non-null),
-                // so nothing matches — but say "cannot serve" rather than
-                // asserting absence.
-                Value::Null => return None,
-                Value::Float(f) if f.is_nan() => return None,
-                Value::Int(n) => vec![ModelValue::Int(*n), ModelValue::Float(*n as f64)],
-                Value::Float(f) => {
-                    // An integral float >= 2^53 has a non-unique i64
-                    // preimage; a single probe would under-select.
-                    if f.fract() == 0.0 && f.abs() >= 9_007_199_254_740_992.0 {
-                        return None;
-                    }
-                    let mut alts = vec![ModelValue::Float(*f)];
-                    if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
-                        alts.push(ModelValue::Int(*f as i64));
-                    }
-                    alts
-                }
-                // A STRING pin is served only when the key property's
-                // DECLARED type rules out a deferred value — the same
-                // guard, and the same shared predicate, that `probe_value`
-                // applies to an index pin. Without it, a Bytes/temporal key
-                // value compares equal to its string *rendering* at runtime
-                // (ADR-0038 carriers decay under eq3) while the stored
-                // encodings differ, so a probe on the string encoding alone
-                // would MISS such a node — under-selection, which
-                // candidate-superset semantics forbid (PR #219 review
-                // blocker 3, a wrong-answer regression). Keys had no guard
-                // until `acetone-2ck.17`, so every string key pin scanned:
-                // a primary-key point lookup, the most valuable seek there
-                // is, cost a full 110,200-node scan.
-                Value::String(s) => {
-                    let declared = key_types
-                        .and_then(|types| types.get(component))
-                        .copied()
-                        .flatten();
-                    if !string_probe_is_exact(declared) {
-                        return None;
-                    }
-                    vec![ModelValue::String(s.clone())]
-                }
-                // A carrier pin has the same hazard from the other side.
-                Value::Stored(_) => return None,
-                other => vec![crate::exec::adapter::model_value_of(other)?],
-            };
-            per_component.push(alternatives);
-        }
-        // `product()` wraps on overflow in release, so a key of >=64
-        // numeric components made the cap vacuous and the tuple loop
-        // allocate unboundedly (PR #219 review finding 4).
-        let mut combinations: usize = 1;
-        for alternatives in &per_component {
-            combinations = combinations.checked_mul(alternatives.len())?;
-            if combinations > 16 {
-                return None;
-            }
-        }
-        let mut tuples: Vec<Vec<ModelValue>> = vec![Vec::new()];
-        for alternatives in &per_component {
-            let mut next = Vec::with_capacity(tuples.len() * alternatives.len());
-            for prefix in &tuples {
-                for alt in alternatives {
-                    let mut tuple = prefix.clone();
-                    tuple.push(alt.clone());
-                    next.push(tuple);
-                }
-            }
-            tuples = next;
-        }
+        let tuples = self.key_probe_tuples(label, key_values)?;
         let mut out = Vec::new();
         let mut served = false;
         for tuple in tuples {
@@ -507,49 +411,7 @@ impl GraphSource for StoreBackedSource<'_> {
         properties: &[String],
         values: &[&Value],
     ) -> Option<Vec<NodeValue>> {
-        let info = self.indexes.get(index_name)?;
-        // The hint may have been bound against another version's catalogue
-        // (AT clauses); a same-named index over different properties must
-        // not serve it (PR #206 review finding 4), and the value tuple
-        // must match the declared arity.
-        if info.properties.as_slice() != properties || values.len() != properties.len() {
-            return None;
-        }
-        // Per-component probe alternatives, then their bounded cartesian
-        // (mirrors adapter.rs::cartesian_probes over byte encodings —
-        // keep caps and bail rules aligned): a composite entry's key is
-        // the ordered value tuple (ADR-0027).
-        let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(values.len());
-        for (component, value) in values.iter().enumerate() {
-            let probes = self.probe_value(info, component, value)?;
-            if probes.is_empty() {
-                // A null/NaN component matches nothing (null-blind index).
-                return Some(Vec::new());
-            }
-            per_component.push(probes);
-        }
-        let combinations: usize = per_component.iter().map(Vec::len).product();
-        if combinations > 16 {
-            return None;
-        }
-        let mut tuples: Vec<Vec<ModelValue>> = vec![Vec::new()];
-        for alternatives in &per_component {
-            let mut next = Vec::with_capacity(tuples.len() * alternatives.len());
-            for prefix in &tuples {
-                for alt in alternatives {
-                    let mut tuple = prefix.clone();
-                    tuple.push(alt.clone());
-                    next.push(tuple);
-                }
-            }
-            tuples = next;
-        }
-        // The equality/composite path had no budget at all: it fired
-        // however unselective the probe was, which is what made declaring
-        // an index able to make a query slower (acetone-2ck.2).
-        let candidates = self.within_budget(|cap| {
-            self.equality_candidates(index_name, &info.label, properties, &tuples, cap)
-        })?;
+        let candidates = self.index_equality_keys(index_name, properties, values)?;
         // Only now, with the whole candidate set known to be under budget,
         // pay for the point reads.
         let mut out = Vec::with_capacity(candidates.len());
@@ -568,74 +430,7 @@ impl GraphSource for StoreBackedSource<'_> {
         lower: Option<(&Value, bool)>,
         upper: Option<(&Value, bool)>,
     ) -> Option<Vec<NodeValue>> {
-        // Ranges serve single-property indexes only, and the hint may have
-        // been bound against another version's catalogue (AT clauses), so
-        // the registry entry must be exactly [property].
-        let info = self.indexes.get(index_name)?;
-        if info.properties.len() != 1 || info.properties[0] != property {
-            return None;
-        }
-        // Serve NUMERIC bounds only. The hazard is a deferred-typed
-        // (Bytes/temporal) stored value, which the runtime compares as its
-        // string *rendering* while the index holds its own encoding — so a
-        // byte range could miss it. A numeric bound is immune, exactly as
-        // `probe_value` argues for equality pins: a string rendering never
-        // compares less/greater than a number in openCypher (the
-        // comparison is null), so no row that the predicate would accept
-        // is left out. A non-numeric bound has no such guarantee, so it
-        // declines and the scan answers.
-        //
-        // Gating on the *bounds* rather than on a declared property type is
-        // still the right call, though no longer for the original reason:
-        // that argument was "`declare-label` does not take property types, so
-        // a declared-type test declines on ordinary graphs and the seek never
-        // fires". `acetone-2ck.18` gave `declare-label` a `--type` flag, so
-        // that premise is gone. What remains is the substantive half — the
-        // bounds are what the range actually walks, and an untyped property
-        // holding numerics is a perfectly ordinary graph a bounds test serves
-        // and a declared-type test would not.
-        let numeric_bound = |b: &Option<(&Value, bool)>| {
-            b.is_none_or(|(v, _)| matches!(v, Value::Int(_) | Value::Float(_)))
-        };
-        if !numeric_bound(&lower) || !numeric_bound(&upper) {
-            return None;
-        }
-        // The value ranges themselves come from the same reviewed helper
-        // the in-memory source uses (dual int/float families, precision
-        // hazards, zero-widening), then are lifted into index-key space.
-        let families = crate::exec::adapter::range_families(lower, upper)?;
-        if families.is_empty() {
-            return Some(Vec::new());
-        }
-        // An index key is encode_key([label, [property], [value]]) ++ node
-        // key. Everything before the value list is constant, and with ONE
-        // element in that list the bytes after `TAG_LIST` sort exactly as
-        // the value does — which is what makes a byte range sound here.
-        // Derived from the encoder rather than by hand: encode the key
-        // with an EMPTY value list and drop the list terminator, leaving
-        // exactly the bytes every entry for this index shares, up to and
-        // including the value list's opening tag. This cannot drift from
-        // the encoding the way a hand-written tag byte could.
-        let mut head = acetone_model::keys::encode_key(&[
-            ModelValue::String(info.label.clone()),
-            ModelValue::List(vec![ModelValue::String(property.to_owned())]),
-            ModelValue::List(Vec::new()),
-        ])
-        .ok()?;
-        head.pop()?;
-
-        // A range seek does one RANDOM point read per matching entry;
-        // the label scan it replaces reads the nodes map sequentially. So
-        // the seek wins only while the range is selective, and loses
-        // badly when it is not — measured at up to 37x SLOWER than the
-        // scan for a range covering the whole label (PR #221 review
-        // blocker). Declining past a cap keeps the selective win and
-        // removes the cliff: `None` is the trait's "cannot serve, scan
-        // instead", and the scan is always correct.
-        //
-        // Sized from the estimated scan cost (acetone-2ck.2).
-        let candidates =
-            self.within_budget(|cap| self.range_candidates(index_name, &head, &families, cap))?;
+        let candidates = self.index_range_keys(index_name, property, lower, upper)?;
         // Point reads only once the whole set is known to be under budget.
         let mut out = Vec::with_capacity(candidates.len());
         for key in &candidates {
@@ -644,6 +439,38 @@ impl GraphSource for StoreBackedSource<'_> {
             }
         }
         Some(out)
+    }
+
+    fn seek_count(&self, probe: &SeekProbe) -> Option<usize> {
+        match probe {
+            // A key pin's cost is bounded by its probe tuples (≤16, no
+            // store reads to size) — the cheapest seek, and sized as such.
+            SeekProbe::Key { label, values } => {
+                self.key_probe_tuples(label, values).map(|t| t.len())
+            }
+            SeekProbe::Index {
+                name,
+                properties,
+                values,
+            } => {
+                let refs: Vec<&Value> = values.iter().collect();
+                self.index_equality_keys(name, properties, &refs)
+                    .map(|keys| keys.len())
+            }
+            SeekProbe::Range {
+                name,
+                property,
+                lower,
+                upper,
+            } => self
+                .index_range_keys(
+                    name,
+                    property,
+                    lower.as_ref().map(|(v, i)| (v, *i)),
+                    upper.as_ref().map(|(v, i)| (v, *i)),
+                )
+                .map(|keys| keys.len()),
+        }
     }
 
     fn expand(
@@ -804,6 +631,247 @@ impl StoreBackedSource<'_> {
             }
         }
         Some(Candidates::Complete(candidates))
+    }
+
+    /// The probe tuples a primary-key pin expands to (numeric dual
+    /// encodings, declared-type string guard, ≤16 combinations) — the
+    /// candidate stage of [`GraphSource::nodes_by_key`], separated so
+    /// costed anchor choice can size a `KeySeek` without touching the
+    /// store (acetone-7qw.10): the tuple count bounds the point reads the
+    /// seek would pay.
+    fn key_probe_tuples(&self, label: &str, key_values: &[Value]) -> Option<Vec<Vec<ModelValue>>> {
+        // A primary-key pin is an exact lookup in the nodes map — the
+        // cheapest seek there is, and the one the shipped read path was
+        // missing entirely (Phase 9 security review finding 7).
+        //
+        // Candidate-superset semantics as everywhere else: probe both
+        // numeric encodings (3 == 3.0 in openCypher but they encode
+        // differently), and a probe set we cannot form means "cannot
+        // serve" — scan — never "definitively absent".
+        //
+        // Only trust the recorded key types when their arity matches the pin,
+        // so a positional type lookup is never read against a key of a
+        // different shape — a hint may have been bound against another
+        // version's catalogue (AT clauses), which the index path guards the
+        // same way (PR #206 review finding 4).
+        //
+        // Defensive, not load-bearing, and deliberately untested: a pin whose
+        // arity differs from the label's key encodes to a tuple no stored key
+        // can equal, so it finds nothing, leaves `served` false and declines
+        // whether this filter is here or not. It cannot change an answer
+        // today; it keeps the code honest if partial-key pins ever become
+        // servable.
+        let key_types = self
+            .key_types
+            .get(label)
+            .filter(|types| types.len() == key_values.len());
+        let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(key_values.len());
+        for (component, value) in key_values.iter().enumerate() {
+            let alternatives = match value {
+                // Null/NaN can never be a key value (keys are non-null),
+                // so nothing matches — but say "cannot serve" rather than
+                // asserting absence.
+                Value::Null => return None,
+                Value::Float(f) if f.is_nan() => return None,
+                Value::Int(n) => vec![ModelValue::Int(*n), ModelValue::Float(*n as f64)],
+                Value::Float(f) => {
+                    // An integral float >= 2^53 has a non-unique i64
+                    // preimage; a single probe would under-select.
+                    if f.fract() == 0.0 && f.abs() >= 9_007_199_254_740_992.0 {
+                        return None;
+                    }
+                    let mut alts = vec![ModelValue::Float(*f)];
+                    if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
+                        alts.push(ModelValue::Int(*f as i64));
+                    }
+                    alts
+                }
+                // A STRING pin is served only when the key property's
+                // DECLARED type rules out a deferred value — the same
+                // guard, and the same shared predicate, that `probe_value`
+                // applies to an index pin. Without it, a Bytes/temporal key
+                // value compares equal to its string *rendering* at runtime
+                // (ADR-0038 carriers decay under eq3) while the stored
+                // encodings differ, so a probe on the string encoding alone
+                // would MISS such a node — under-selection, which
+                // candidate-superset semantics forbid (PR #219 review
+                // blocker 3, a wrong-answer regression). Keys had no guard
+                // until `acetone-2ck.17`, so every string key pin scanned:
+                // a primary-key point lookup, the most valuable seek there
+                // is, cost a full 110,200-node scan.
+                Value::String(s) => {
+                    let declared = key_types
+                        .and_then(|types| types.get(component))
+                        .copied()
+                        .flatten();
+                    if !string_probe_is_exact(declared) {
+                        return None;
+                    }
+                    vec![ModelValue::String(s.clone())]
+                }
+                // A carrier pin has the same hazard from the other side.
+                Value::Stored(_) => return None,
+                other => vec![crate::exec::adapter::model_value_of(other)?],
+            };
+            per_component.push(alternatives);
+        }
+        // `product()` wraps on overflow in release, so a key of >=64
+        // numeric components made the cap vacuous and the tuple loop
+        // allocate unboundedly (PR #219 review finding 4).
+        let mut combinations: usize = 1;
+        for alternatives in &per_component {
+            combinations = combinations.checked_mul(alternatives.len())?;
+            if combinations > 16 {
+                return None;
+            }
+        }
+        let mut tuples: Vec<Vec<ModelValue>> = vec![Vec::new()];
+        for alternatives in &per_component {
+            let mut next = Vec::with_capacity(tuples.len() * alternatives.len());
+            for prefix in &tuples {
+                for alt in alternatives {
+                    let mut tuple = prefix.clone();
+                    tuple.push(alt.clone());
+                    next.push(tuple);
+                }
+            }
+            tuples = next;
+        }
+        Some(tuples)
+    }
+
+    /// The candidate keys an equality index seek would materialise —
+    /// validation, probe expansion and the budgeted index scan, WITHOUT
+    /// the per-candidate point reads. Shared by the seek itself and by
+    /// costed anchor sizing (acetone-7qw.10).
+    fn index_equality_keys(
+        &self,
+        index_name: &str,
+        properties: &[String],
+        values: &[&Value],
+    ) -> Option<Vec<NodeKey>> {
+        let info = self.indexes.get(index_name)?;
+        // The hint may have been bound against another version's catalogue
+        // (AT clauses); a same-named index over different properties must
+        // not serve it (PR #206 review finding 4), and the value tuple
+        // must match the declared arity.
+        if info.properties.as_slice() != properties || values.len() != properties.len() {
+            return None;
+        }
+        // Per-component probe alternatives, then their bounded cartesian
+        // (mirrors adapter.rs::cartesian_probes over byte encodings —
+        // keep caps and bail rules aligned): a composite entry's key is
+        // the ordered value tuple (ADR-0027).
+        let mut per_component: Vec<Vec<ModelValue>> = Vec::with_capacity(values.len());
+        for (component, value) in values.iter().enumerate() {
+            let probes = self.probe_value(info, component, value)?;
+            if probes.is_empty() {
+                // A null/NaN component matches nothing (null-blind index).
+                return Some(Vec::new());
+            }
+            per_component.push(probes);
+        }
+        let combinations: usize = per_component.iter().map(Vec::len).product();
+        if combinations > 16 {
+            return None;
+        }
+        let mut tuples: Vec<Vec<ModelValue>> = vec![Vec::new()];
+        for alternatives in &per_component {
+            let mut next = Vec::with_capacity(tuples.len() * alternatives.len());
+            for prefix in &tuples {
+                for alt in alternatives {
+                    let mut tuple = prefix.clone();
+                    tuple.push(alt.clone());
+                    next.push(tuple);
+                }
+            }
+            tuples = next;
+        }
+        // The equality/composite path had no budget at all: it fired
+        // however unselective the probe was, which is what made declaring
+        // an index able to make a query slower (acetone-2ck.2).
+        self.within_budget(|cap| {
+            self.equality_candidates(index_name, &info.label, properties, &tuples, cap)
+        })
+    }
+
+    /// The candidate keys a range index scan would materialise — the
+    /// counterpart of [`Self::index_equality_keys`] for bounds
+    /// (acetone-7qw.10).
+    fn index_range_keys(
+        &self,
+        index_name: &str,
+        property: &str,
+        lower: Option<(&Value, bool)>,
+        upper: Option<(&Value, bool)>,
+    ) -> Option<Vec<NodeKey>> {
+        // Ranges serve single-property indexes only, and the hint may have
+        // been bound against another version's catalogue (AT clauses), so
+        // the registry entry must be exactly [property].
+        let info = self.indexes.get(index_name)?;
+        if info.properties.len() != 1 || info.properties[0] != property {
+            return None;
+        }
+        // Serve NUMERIC bounds only. The hazard is a deferred-typed
+        // (Bytes/temporal) stored value, which the runtime compares as its
+        // string *rendering* while the index holds its own encoding — so a
+        // byte range could miss it. A numeric bound is immune, exactly as
+        // `probe_value` argues for equality pins: a string rendering never
+        // compares less/greater than a number in openCypher (the
+        // comparison is null), so no row that the predicate would accept
+        // is left out. A non-numeric bound has no such guarantee, so it
+        // declines and the scan answers.
+        //
+        // Gating on the *bounds* rather than on a declared property type is
+        // still the right call, though no longer for the original reason:
+        // that argument was "`declare-label` does not take property types, so
+        // a declared-type test declines on ordinary graphs and the seek never
+        // fires". `acetone-2ck.18` gave `declare-label` a `--type` flag, so
+        // that premise is gone. What remains is the substantive half — the
+        // bounds are what the range actually walks, and an untyped property
+        // holding numerics is a perfectly ordinary graph a bounds test serves
+        // and a declared-type test would not.
+        let numeric_bound = |b: &Option<(&Value, bool)>| {
+            b.is_none_or(|(v, _)| matches!(v, Value::Int(_) | Value::Float(_)))
+        };
+        if !numeric_bound(&lower) || !numeric_bound(&upper) {
+            return None;
+        }
+        // The value ranges themselves come from the same reviewed helper
+        // the in-memory source uses (dual int/float families, precision
+        // hazards, zero-widening), then are lifted into index-key space.
+        let families = crate::exec::adapter::range_families(lower, upper)?;
+        if families.is_empty() {
+            return Some(Vec::new());
+        }
+        // An index key is encode_key([label, [property], [value]]) ++ node
+        // key. Everything before the value list is constant, and with ONE
+        // element in that list the bytes after `TAG_LIST` sort exactly as
+        // the value does — which is what makes a byte range sound here.
+        // Derived from the encoder rather than by hand: encode the key
+        // with an EMPTY value list and drop the list terminator, leaving
+        // exactly the bytes every entry for this index shares, up to and
+        // including the value list's opening tag. This cannot drift from
+        // the encoding the way a hand-written tag byte could.
+        let mut head = acetone_model::keys::encode_key(&[
+            ModelValue::String(info.label.clone()),
+            ModelValue::List(vec![ModelValue::String(property.to_owned())]),
+            ModelValue::List(Vec::new()),
+        ])
+        .ok()?;
+        head.pop()?;
+
+        // A range seek does one RANDOM point read per matching entry;
+        // the label scan it replaces reads the nodes map sequentially. So
+        // the seek wins only while the range is selective, and loses
+        // badly when it is not — measured at up to 37x SLOWER than the
+        // scan for a range covering the whole label (PR #221 review
+        // blocker). Declining past a cap keeps the selective win and
+        // removes the cliff: `None` is the trait's "cannot serve, scan
+        // instead", and the scan is always correct.
+        //
+        // Sized from the estimated scan cost (acetone-2ck.2).
+        self.within_budget(|cap| self.range_candidates(index_name, &head, &families, cap))
     }
 
     /// The candidate keys of an equality/composite probe set, stopping once
