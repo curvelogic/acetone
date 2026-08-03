@@ -21,16 +21,24 @@ fine.)
 - **Relationship property types are now real** (acetone-7qw.12):
   `declare-rel-type` takes repeatable `--type <property>:<type>` flags,
   `acetone schema` renders them (JSON note: `relationship_types` entries
-  are now objects `{name, types}` rather than bare name strings — the
-  `--json` shape is unstable pre-1.0), and declared types are enforced
-  exactly as node ones are — on write, at declare time against existing
-  relationships, and re-validated at merge (a new `wrong-type` conflict
-  row kind covers edges in `CALL acetone.conflicts()`). Previously a
-  relationship property type was declarable through the library, stored,
-  and silently meaningless.
+  are now objects `{name, discriminator, types, required}` rather than
+  bare name strings — the `--json` shape is unstable pre-1.0), and
+  declared types are enforced exactly as node ones are — on write, at
+  declare time against existing relationships, re-validated at merge (a
+  new `rel-wrong-type` conflict row kind in `CALL acetone.conflicts()`,
+  with the relationship type in the `label` column), and checked by
+  `fsck` as an advisory. Previously a relationship property type was
+  declarable through the library, stored, and silently meaningless.
+  A discriminator-named property is judged in both stored positions.
 
 ### Changed
 
+- **Changing a relationship type's discriminator while relationships of
+  that type exist is now refused** (`GraphError::RelDiscriminatorChanged`)
+  — including the silent wipe a definition-replacing redeclare performed:
+  a library caller that redeclared a discriminated relationship type over
+  live relationships previously succeeded and dropped the discriminator;
+  it now errors and requires an explicit `migrate`.
 - **Declared property types no longer close a label's shape** (ADR-0070).
   Previously, declaring any property type made node-pattern map literals
   reject undeclared property names (`CREATE (:Host {…, ip: …})` failed
