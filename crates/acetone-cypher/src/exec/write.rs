@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::Direction;
-use crate::exec::source::GraphSource;
+use crate::exec::source::{GraphSource, SeekProbe};
 use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
 /// Reserved first byte for synthesised overlay identities. Chosen to sit
@@ -626,7 +626,7 @@ impl GraphSource for MutableGraph<'_> {
         self.current_node(id)
     }
 
-    fn seek_count(&self, probe: &crate::exec::source::SeekProbe) -> Option<usize> {
+    fn seek_count(&self, probe: &SeekProbe) -> Option<usize> {
         // Sizing follows the same authority rule as the seeks themselves:
         // once any write has landed in the overlay, the base's indexes and
         // key maps are no longer authoritative, so neither are its counts

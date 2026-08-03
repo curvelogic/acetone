@@ -160,3 +160,15 @@ exactly.
 - The **UNIQUE checker is deliberately uncapped**. It is constraint
   enforcement, not optimisation: a capped walk could miss a collision and
   admit a duplicate.
+
+> **Amended in Phase 10** (2026-08-03, `acetone-7qw.10`, PR #242): costed
+> choice is now implemented. Every resolvable hint is sized via
+> `GraphSource::seek_count` — the candidate enumeration without the point
+> reads — and only the smallest materialises; ties keep binder order,
+> unsizable sources keep serve order. The accepted price is unmetered
+> sizing work bounded by ~2×(floor + `candidate_cap`) per probe, and one
+> asymmetry is recorded rather than resolved: a `KeySeek` sizes as its
+> probe-tuple count (an upper bound on point reads, blind to existence)
+> while index/range sizes are exact candidate counts — so a sized winner
+> can decline at materialisation, which the executor handles by falling
+> through in hint order.

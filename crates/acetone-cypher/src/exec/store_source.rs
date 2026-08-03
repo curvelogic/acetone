@@ -48,7 +48,7 @@ use std::ops::Bound;
 
 use crate::ast::Direction;
 use crate::exec::adapter::{node_value, rel_value};
-use crate::exec::source::GraphSource;
+use crate::exec::source::{GraphSource, SeekProbe};
 use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
 /// Whether a raw probe on the *string* encoding can be trusted not to miss a
@@ -441,8 +441,7 @@ impl GraphSource for StoreBackedSource<'_> {
         Some(out)
     }
 
-    fn seek_count(&self, probe: &crate::exec::source::SeekProbe) -> Option<usize> {
-        use crate::exec::source::SeekProbe;
+    fn seek_count(&self, probe: &SeekProbe) -> Option<usize> {
         match probe {
             // A key pin's cost is bounded by its probe tuples (≤16, no
             // store reads to size) — the cheapest seek, and sized as such.
@@ -634,11 +633,6 @@ impl StoreBackedSource<'_> {
         Some(Candidates::Complete(candidates))
     }
 
-    /// The candidate keys of an equality/composite probe set, stopping once
-    /// more than `cap` have been walked. Every probe's keys are gathered
-    /// before the total is judged: an earlier version tested per probe, so a
-    /// composite whose rows split across probes paid the point reads for the
-    /// first probe before declining on the second (PR #224 review finding 5).
     /// The probe tuples a primary-key pin expands to (numeric dual
     /// encodings, declared-type string guard, ≤16 combinations) — the
     /// candidate stage of [`GraphSource::nodes_by_key`], separated so
@@ -880,6 +874,11 @@ impl StoreBackedSource<'_> {
         self.within_budget(|cap| self.range_candidates(index_name, &head, &families, cap))
     }
 
+    /// The candidate keys of an equality/composite probe set, stopping once
+    /// more than `cap` have been walked. Every probe's keys are gathered
+    /// before the total is judged: an earlier version tested per probe, so a
+    /// composite whose rows split across probes paid the point reads for the
+    /// first probe before declining on the second (PR #224 review finding 5).
     fn equality_candidates(
         &self,
         index_name: &str,

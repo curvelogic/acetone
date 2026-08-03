@@ -2140,8 +2140,36 @@ mod tests {
         let q = format!("RETURN '{big}'");
         parse(&q).expect("an un-duplicated long string is not capped");
         // …and short-operand chains are untouched.
-        parse("RETURN 1 < 2 < 3 RETURN 1").err(); // parse result irrelevant
         parse("MATCH (n) WHERE 1 < n.num < 3 RETURN n").expect("short chain unaffected");
+    }
+
+    #[test]
+    fn chain_expansion_counts_identifier_payload_bytes() {
+        // PR #242 review blocker 1: binder-position identifiers and
+        // pattern variables are unbounded and cloned by the desugar
+        // exactly like string literals — each position must weigh its
+        // bytes. One case per formerly-missed arm.
+        let id = "v".repeat(8192);
+        for q in [
+            // Reduce accumulator and variable.
+            format!("RETURN 1 < reduce({id} = 0, y IN [1] | 0) < 3"),
+            format!("RETURN 1 < reduce(a = 0, {id} IN [1] | 0) < 3"),
+            // Quantifier variable.
+            format!("RETURN 1 < size([x IN [1] WHERE all({id} IN [1] WHERE true) | x]) < 3"),
+            // List-comprehension variable.
+            format!("RETURN 1 < size([{id} IN [1] | 0]) < 3"),
+            // Pattern variable inside a pattern comprehension.
+            format!("RETURN 1 < size([({id})-->() | 1]) < 3"),
+        ] {
+            assert!(
+                matches!(parse(&q), Err(ParseError::QueryStructure { .. })),
+                "an 8KB identifier duplicated by a chain must refuse: {}",
+                &q[..60]
+            );
+        }
+        // Positive control: the same positions un-duplicated are fine.
+        let q = format!("RETURN reduce({id} = 0, y IN [1] | 0)");
+        parse(&q).expect("un-duplicated long identifier is not capped");
     }
 
     #[test]

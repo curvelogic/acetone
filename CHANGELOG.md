@@ -48,9 +48,13 @@ fine.)
 - With several usable index hints on one pattern, the planner now sizes
   every alternative (candidate counts only — no point reads) and
   materialises the smallest, instead of taking the first that fits its
-  budget: an at-cap equality no longer beats a far more selective range on
-  the same pattern (previously measured 65× off the best available plan).
-  Sources that cannot size keep the previous serve-order behaviour.
+  budget: an under-cap unselective equality no longer beats a far more
+  selective range on the same pattern (previously measured 65× off the
+  best available plan). Sources that cannot size keep the previous
+  serve-order behaviour. Two knock-ons worth knowing: sizing is unmetered
+  enumeration work (bounded per probe by the cost model's candidate cap),
+  and a store read error on a *losing* probe's index can now surface on a
+  query that previously never touched that index — stricter, not looser.
 - The chained-comparison expansion budget now counts string payload bytes
   as well as expression nodes, so a long string literal duplicated by a
   comparison chain is refused up front rather than admitted at ~1/780th of

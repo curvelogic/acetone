@@ -1228,7 +1228,11 @@ fn seek_anchor(
     // hint up front, ask the source to SIZE each (the candidate
     // enumeration without the point reads), and materialise the smallest.
     // Unsized probes (a source that cannot count, or a seek that would
-    // decline) keep the original serve-order fallback.
+    // decline) keep the original serve-order fallback. Sizing cost: the
+    // candidate enumeration runs once per sized probe plus once for the
+    // winner's materialisation — unmetered work bounded by
+    // 2 x (floor + candidate_cap) per probe, the price ADR-0065's
+    // amendment accepts for never materialising the wrong plan.
     let mut probes = Vec::new();
     for hint in &pattern.index_hints {
         if let Some(probe) = resolve_probe(hint, pattern, row, ctx)? {
@@ -1250,9 +1254,14 @@ fn seek_anchor(
             if let Some(nodes) = materialise_probe(&probes[i], ctx) {
                 return Ok(Some(nodes));
             }
-            // The sized winner declined at materialisation (cannot happen
-            // over one snapshot today; defensive): fall through in order,
-            // skipping it.
+            // The sized winner declined at materialisation. This is a
+            // ROUTINE path, not a defensive one: sizing is not an
+            // existence check — a KeySeek sizes as its probe-tuple count
+            // (1..16) whether or not the key exists, and nodes_by_key
+            // declines when no probe hits — so the first missing-key pin
+            // lands here (PR #242 review major 3). Sizing units are also
+            // not fully commensurate: a KeySeek's count bounds point
+            // READS while Index/Range counts are exact candidates.
             for (j, probe) in probes.iter().enumerate() {
                 if j == i {
                     continue;

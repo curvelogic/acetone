@@ -29,6 +29,10 @@ struct TwoIndexSource {
     /// Whether `seek_count` answers; `false` = sizing unavailable, the
     /// executor must fall back to serve order.
     sizable: bool,
+    /// The range DECLINES at materialisation while still sizing small —
+    /// the KeySeek-shaped asymmetry (sizing is a probe-shape count, not an
+    /// existence check), exercising the winner-declined fall-through.
+    range_declines: Cell<bool>,
     equality_materialised: Cell<usize>,
     range_materialised: Cell<usize>,
     equality_sized: Cell<usize>,
@@ -62,6 +66,7 @@ impl TwoIndexSource {
             range_materialised: Cell::new(0),
             equality_sized: Cell::new(0),
             range_sized: Cell::new(0),
+            range_declines: Cell::new(false),
         }
     }
 }
@@ -97,6 +102,9 @@ impl GraphSource for TwoIndexSource {
         assert_eq!(name, "idx_u");
         self.range_materialised
             .set(self.range_materialised.get() + 1);
+        if self.range_declines.get() {
+            return None;
+        }
         Some(self.range_bucket.clone())
     }
     fn seek_count(&self, probe: &SeekProbe) -> Option<usize> {
@@ -193,5 +201,28 @@ fn an_unsizable_source_keeps_serve_order() {
         graph.equality_materialised.get() + graph.range_materialised.get(),
         1,
         "exactly one seek serves, in hint order"
+    );
+}
+
+#[test]
+fn a_sized_winner_that_declines_falls_through_in_order() {
+    // Sizing is not an existence check (a KeySeek sizes on probe shape,
+    // and any source may decline at materialisation), so the chosen
+    // winner CAN decline — the fall-through must then try the remaining
+    // probes in order rather than losing the plan (PR #242 review
+    // major 3: this branch is routine, not defensive, and was untested).
+    let graph = TwoIndexSource::new(true);
+    graph.range_declines.set(true);
+    let rows = run(&graph);
+    assert_eq!(rows, 3, "the equality plan still answers correctly");
+    assert_eq!(
+        graph.range_materialised.get(),
+        1,
+        "the small-sized range wins the choice and is attempted first"
+    );
+    assert_eq!(
+        graph.equality_materialised.get(),
+        1,
+        "on the winner's decline, the fall-through serves the equality"
     );
 }

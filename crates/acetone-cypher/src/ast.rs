@@ -503,10 +503,25 @@ impl Expr {
                     ..
                 } => s.len(),
                 Expr::Variable { name, .. } | Expr::Parameter { name, .. } => name.len(),
+                // Binder-position identifiers are unbounded and cloned by
+                // the chain desugar exactly like literals — missing them
+                // left the amplifier open through reduce/quantifier/
+                // comprehension variables (PR #242 review blocker 1).
+                Expr::ListComprehension { variable, .. } | Expr::Quantifier { variable, .. } => {
+                    variable.len()
+                }
+                Expr::Reduce {
+                    accumulator,
+                    variable,
+                    ..
+                } => accumulator.len().saturating_add(variable.len()),
                 Expr::FunctionCall { name, .. } => name.iter().map(String::len).sum(),
                 Expr::Property { key, .. } => key.len(),
-                Expr::MapLiteral { entries, .. } => entries.iter().map(|(k, _)| k.len()).sum(),
-                Expr::HasLabels { labels, .. } => labels.iter().map(String::len).sum(),
+                // Collection items (map keys, labels) weigh 1 + bytes:
+                // they had no unit of their own before, and the floor
+                // keeps a zero-length name from costing nothing.
+                Expr::MapLiteral { entries, .. } => entries.iter().map(|(k, _)| 1 + k.len()).sum(),
+                Expr::HasLabels { labels, .. } => labels.iter().map(|l| 1 + l.len()).sum(),
                 _ => 0,
             });
             stack.extend(expr.children());
@@ -736,11 +751,17 @@ fn pattern_size(pattern: &PathPattern) -> usize {
     // pattern carries its name strings, and unit-counting them leaves the
     // same payload gap allocated_size had for literals (acetone-7qw.8).
     let name_bytes = |names: &[String]| names.iter().map(|s| 1 + s.len()).sum::<usize>();
-    let node_size =
-        |node: &NodePattern| 1 + name_bytes(&node.labels) + node.properties.iter().count();
-    let mut n = node_size(&pattern.start);
+    // Pattern variables are unbounded identifiers cloned with the pattern
+    // (PR #242 review blocker 1).
+    let var_bytes = |v: &Option<String>| v.as_ref().map_or(0, String::len);
+    let node_size = |node: &NodePattern| {
+        1 + var_bytes(&node.variable) + name_bytes(&node.labels) + node.properties.iter().count()
+    };
+    let mut n = node_size(&pattern.start).saturating_add(var_bytes(&pattern.variable));
     for (rel, node) in &pattern.steps {
-        n = n.saturating_add(1 + name_bytes(&rel.types) + rel.properties.iter().count());
+        n = n.saturating_add(
+            1 + var_bytes(&rel.variable) + name_bytes(&rel.types) + rel.properties.iter().count(),
+        );
         n = n.saturating_add(node_size(node));
     }
     n
