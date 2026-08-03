@@ -4495,6 +4495,54 @@ impl<T> core::convert::From<T> for acetone_cypher::exec::eval::ResourceLimit
 pub fn acetone_cypher::exec::eval::ResourceLimit::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::exec::eval::ResourceLimit
 pub type acetone_cypher::exec::eval::ResourceLimit::Output = T
+pub enum acetone_cypher::exec::SeekProbe
+pub acetone_cypher::exec::SeekProbe::Index
+pub acetone_cypher::exec::SeekProbe::Index::name: alloc::string::String
+pub acetone_cypher::exec::SeekProbe::Index::properties: alloc::vec::Vec<alloc::string::String>
+pub acetone_cypher::exec::SeekProbe::Index::values: alloc::vec::Vec<acetone_cypher::exec::value::Value>
+pub acetone_cypher::exec::SeekProbe::Key
+pub acetone_cypher::exec::SeekProbe::Key::label: alloc::string::String
+pub acetone_cypher::exec::SeekProbe::Key::values: alloc::vec::Vec<acetone_cypher::exec::value::Value>
+pub acetone_cypher::exec::SeekProbe::Range
+pub acetone_cypher::exec::SeekProbe::Range::lower: core::option::Option<(acetone_cypher::exec::value::Value, bool)>
+pub acetone_cypher::exec::SeekProbe::Range::name: alloc::string::String
+pub acetone_cypher::exec::SeekProbe::Range::property: alloc::string::String
+pub acetone_cypher::exec::SeekProbe::Range::upper: core::option::Option<(acetone_cypher::exec::value::Value, bool)>
+impl core::clone::Clone for acetone_cypher::exec::source::SeekProbe
+pub fn acetone_cypher::exec::source::SeekProbe::clone(&self) -> acetone_cypher::exec::source::SeekProbe
+impl core::fmt::Debug for acetone_cypher::exec::source::SeekProbe
+pub fn acetone_cypher::exec::source::SeekProbe::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_cypher::exec::source::SeekProbe
+impl core::marker::Send for acetone_cypher::exec::source::SeekProbe
+impl core::marker::Sync for acetone_cypher::exec::source::SeekProbe
+impl core::marker::Unpin for acetone_cypher::exec::source::SeekProbe
+impl core::marker::UnsafeUnpin for acetone_cypher::exec::source::SeekProbe
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_cypher::exec::source::SeekProbe
+impl core::panic::unwind_safe::UnwindSafe for acetone_cypher::exec::source::SeekProbe
+impl<T, U> core::convert::Into<U> for acetone_cypher::exec::source::SeekProbe where U: core::convert::From<T>
+pub fn acetone_cypher::exec::source::SeekProbe::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_cypher::exec::source::SeekProbe where U: core::convert::Into<T>
+pub type acetone_cypher::exec::source::SeekProbe::Error = core::convert::Infallible
+pub fn acetone_cypher::exec::source::SeekProbe::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_cypher::exec::source::SeekProbe where U: core::convert::TryFrom<T>
+pub type acetone_cypher::exec::source::SeekProbe::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_cypher::exec::source::SeekProbe::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_cypher::exec::source::SeekProbe where T: core::clone::Clone
+pub type acetone_cypher::exec::source::SeekProbe::Owned = T
+pub fn acetone_cypher::exec::source::SeekProbe::clone_into(&self, &mut T)
+pub fn acetone_cypher::exec::source::SeekProbe::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_cypher::exec::source::SeekProbe where T: 'static + ?core::marker::Sized
+pub fn acetone_cypher::exec::source::SeekProbe::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_cypher::exec::source::SeekProbe where T: ?core::marker::Sized
+pub fn acetone_cypher::exec::source::SeekProbe::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_cypher::exec::source::SeekProbe where T: ?core::marker::Sized
+pub fn acetone_cypher::exec::source::SeekProbe::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_cypher::exec::source::SeekProbe where T: core::clone::Clone
+pub unsafe fn acetone_cypher::exec::source::SeekProbe::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_cypher::exec::source::SeekProbe
+pub fn acetone_cypher::exec::source::SeekProbe::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_cypher::exec::source::SeekProbe
+pub type acetone_cypher::exec::source::SeekProbe::Output = T
 pub enum acetone_cypher::exec::Value
 pub acetone_cypher::exec::Value::Bool(bool)
 pub acetone_cypher::exec::Value::Float(f64)
