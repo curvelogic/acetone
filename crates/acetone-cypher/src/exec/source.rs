@@ -84,6 +84,58 @@ pub trait GraphSource {
 
     /// A node by id (path/pattern re-anchoring).
     fn node(&self, id: &EntityId) -> Option<NodeValue>;
+
+    /// How many candidates the corresponding seek WOULD materialise for
+    /// `probe`, when this source can size it without paying the
+    /// per-candidate point reads — the sizing pass behind costed anchor
+    /// choice (acetone-7qw.10): with several hints on one pattern, the
+    /// executor sizes them all and materialises only the smallest, so an
+    /// unselective equality that merely fits its budget no longer beats a
+    /// far more selective range (measured 65× off the best plan).
+    ///
+    /// `None` means "cannot size cheaply" or "this seek would decline" —
+    /// the caller falls back to hint order. Sizing must never cost more
+    /// than the candidate enumeration the seek itself performs before
+    /// materialising. The default cannot size.
+    fn seek_count(&self, _probe: &SeekProbe) -> Option<usize> {
+        None
+    }
+}
+
+/// A fully-resolved seek a planner hint would perform — the shape shared
+/// by sizing ([`GraphSource::seek_count`]) and materialisation, so a
+/// multi-hint anchor can cost every alternative before materialising any
+/// (acetone-7qw.10). Values are owned: resolution (parameter lookup,
+/// inline-map evaluation) happens once, up front.
+#[derive(Debug, Clone)]
+pub enum SeekProbe {
+    /// A primary-key point lookup (`KeySeek`).
+    Key {
+        /// The pinned label.
+        label: String,
+        /// The pinned key values, in declared key order.
+        values: Vec<Value>,
+    },
+    /// An equality index seek (`IndexSeek`).
+    Index {
+        /// The declared index name.
+        name: String,
+        /// The indexed properties, in declared order.
+        properties: Vec<String>,
+        /// The pinned values, aligned to `properties`.
+        values: Vec<Value>,
+    },
+    /// An ordered index range scan (`IndexRange`).
+    Range {
+        /// The declared index name.
+        name: String,
+        /// The indexed property.
+        property: String,
+        /// The lower bound, if any: (value, inclusive).
+        lower: Option<(Value, bool)>,
+        /// The upper bound, if any: (value, inclusive).
+        upper: Option<(Value, bool)>,
+    },
 }
 
 /// Runs `CALL acetone.*` procedures (spec §5.2). The executor knows the

@@ -19,7 +19,7 @@ use crate::exec::eval::ResourceLimit;
 use crate::exec::eval::{EvalCtx, ExecError, Row, eval, truth};
 use crate::exec::governor::{Governor, QueryLimits};
 use crate::exec::source::{
-    GraphSource, NoProcedures, ProcedureProvider, SingleVersion, VersionResolver,
+    GraphSource, NoProcedures, ProcedureProvider, SeekProbe, SingleVersion, VersionResolver,
 };
 use crate::exec::value::{EntityId, MAX_VALUE_DEPTH, NodeValue, PathValue, RelValue, Value};
 use crate::exec::write::{MutableGraph, WriteChanges, WriteSummary};
@@ -1216,24 +1216,99 @@ fn seek_anchor(
 ) -> Result<Option<Vec<NodeValue>>, ExecError> {
     // Hints are ordered candidates, not a single choice: a hint that
     // DECLINES at runtime (the cost model judged it unselective) falls
-    // through to the next rather than losing the plan entirely. Before
-    // this, an equality hint that declined discarded a far more selective
-    // range that the binder had skipped attaching — measured 80-91x worse
-    // than no hint at all (PR #224 review blocker 2).
+    // through to the next rather than losing the plan entirely — an
+    // equality hint that declined once discarded a far more selective
+    // range the binder had skipped attaching, measured 80-91x worse than
+    // no hint at all (PR #224 review blocker 2).
+    //
+    // With SEVERAL resolvable hints, first-serve is not enough: in the
+    // band where an unselective equality just fits its budget, it used to
+    // win over a far more selective range on the same pattern — measured
+    // 65x off the best available plan (acetone-7qw.10). So: resolve every
+    // hint up front, ask the source to SIZE each (the candidate
+    // enumeration without the point reads), and materialise the smallest.
+    // Unsized probes (a source that cannot count, or a seek that would
+    // decline) keep the original serve-order fallback.
+    let mut probes = Vec::new();
     for hint in &pattern.index_hints {
-        if let Some(nodes) = seek_with(hint, pattern, row, ctx)? {
+        if let Some(probe) = resolve_probe(hint, pattern, row, ctx)? {
+            probes.push(probe);
+        }
+    }
+    if probes.len() > 1 {
+        let mut best: Option<(usize, usize)> = None; // (count, index)
+        for (i, probe) in probes.iter().enumerate() {
+            if let Some(count) = ctx.graph.seek_count(probe) {
+                // Strict `<`: ties keep the earliest (binder-preferred)
+                // hint, so the choice is deterministic in hint order.
+                if best.is_none_or(|(c, _)| count < c) {
+                    best = Some((count, i));
+                }
+            }
+        }
+        if let Some((_, i)) = best {
+            if let Some(nodes) = materialise_probe(&probes[i], ctx) {
+                return Ok(Some(nodes));
+            }
+            // The sized winner declined at materialisation (cannot happen
+            // over one snapshot today; defensive): fall through in order,
+            // skipping it.
+            for (j, probe) in probes.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                if let Some(nodes) = materialise_probe(probe, ctx) {
+                    return Ok(Some(nodes));
+                }
+            }
+            return Ok(None);
+        }
+    }
+    // Zero or one resolvable hint, or nothing sizeable: serve in order.
+    for probe in &probes {
+        if let Some(nodes) = materialise_probe(probe, ctx) {
             return Ok(Some(nodes));
         }
     }
     Ok(None)
 }
 
-fn seek_with(
+/// Dispatch a resolved probe to the source method that materialises it.
+fn materialise_probe(probe: &SeekProbe, ctx: &EvalCtx) -> Option<Vec<NodeValue>> {
+    match probe {
+        SeekProbe::Key { label, values } => ctx.graph.nodes_by_key(label, values),
+        SeekProbe::Index {
+            name,
+            properties,
+            values,
+        } => {
+            let refs: Vec<&Value> = values.iter().collect();
+            ctx.graph.nodes_by_index(name, properties, &refs)
+        }
+        SeekProbe::Range {
+            name,
+            property,
+            lower,
+            upper,
+        } => ctx.graph.nodes_by_index_range(
+            name,
+            property,
+            lower.as_ref().map(|(v, i)| (v, *i)),
+            upper.as_ref().map(|(v, i)| (v, *i)),
+        ),
+    }
+}
+
+/// Resolve one planner hint into a [`SeekProbe`] — parameter lookups and
+/// inline-map evaluation happen here, once, so sizing and materialisation
+/// share the resolved values. `None` = the hint cannot resolve on this row
+/// (missing parameter, partial pin): fall through, exactly as before.
+fn resolve_probe(
     hint: &IndexHint,
     pattern: &BoundNodePattern,
     row: &Row,
     ctx: &EvalCtx,
-) -> Result<Option<Vec<NodeValue>>, ExecError> {
+) -> Result<Option<SeekProbe>, ExecError> {
     match hint {
         IndexHint::KeySeek {
             label,
@@ -1271,7 +1346,10 @@ fn seek_with(
                     }
                 }
             }
-            Ok(ctx.graph.nodes_by_key(label, &key_values))
+            Ok(Some(SeekProbe::Key {
+                label: label.clone(),
+                values: key_values,
+            }))
         }
         IndexHint::KeySeek { .. } => Ok(None),
         IndexHint::IndexSeek {
@@ -1282,8 +1360,7 @@ fn seek_with(
         } => {
             // WHERE-sourced pins carry their own values (acetone-7qw.9);
             // pattern-sourced ones read them from the inline map.
-            let resolved: Vec<Value>;
-            let values: Vec<&Value> = match pinned {
+            let values: Vec<Value> = match pinned {
                 Some(bounds) => {
                     let mut out = Vec::with_capacity(bounds.len());
                     for bound in bounds {
@@ -1297,8 +1374,7 @@ fn seek_with(
                             },
                         }
                     }
-                    resolved = out;
-                    resolved.iter().collect()
+                    out
                 }
                 None => {
                     let Some(props) = &pattern.properties else {
@@ -1310,15 +1386,19 @@ fn seek_with(
                     let mut values = Vec::with_capacity(properties.len());
                     for property in properties {
                         match map.get(property) {
-                            Some(value) => values.push(value),
+                            Some(value) => values.push(value.clone()),
                             // A composite index needs every component pinned.
                             None => return Ok(None),
                         }
                     }
-                    return Ok(ctx.graph.nodes_by_index(name, properties, &values));
+                    values
                 }
             };
-            Ok(ctx.graph.nodes_by_index(name, properties, &values))
+            Ok(Some(SeekProbe::Index {
+                name: name.clone(),
+                properties: properties.clone(),
+                values,
+            }))
         }
         IndexHint::IndexRange {
             name,
@@ -1351,12 +1431,12 @@ fn seek_with(
             if (lower.is_none() && declared_lower) || (upper.is_none() && declared_upper) {
                 return Ok(None);
             }
-            Ok(ctx.graph.nodes_by_index_range(
-                name,
-                property,
-                lower.as_ref().map(|(v, i)| (v, *i)),
-                upper.as_ref().map(|(v, i)| (v, *i)),
-            ))
+            Ok(Some(SeekProbe::Range {
+                name: name.clone(),
+                property: property.clone(),
+                lower,
+                upper,
+            }))
         }
     }
 }

@@ -626,6 +626,18 @@ impl GraphSource for MutableGraph<'_> {
         self.current_node(id)
     }
 
+    fn seek_count(&self, probe: &crate::exec::source::SeekProbe) -> Option<usize> {
+        // Sizing follows the same authority rule as the seeks themselves:
+        // once any write has landed in the overlay, the base's indexes and
+        // key maps are no longer authoritative, so neither are its counts
+        // (acetone-7qw.10 — without this delegation the costed-choice pass
+        // silently never ran: every read is executed through this wrapper).
+        if self.overlay_dirty() {
+            return None;
+        }
+        self.base.seek_count(probe)
+    }
+
     fn nodes_by_index(
         &self,
         name: &str,

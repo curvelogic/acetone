@@ -35,7 +35,11 @@ pub const MAX_AST_DEPTH: usize = 256;
 /// Cap on the total size of the operands a chained comparison duplicates
 /// (`a < b < c` evaluates `b` in both conjuncts). Without it a ~160-byte
 /// query of nested chains expands to gigabytes of AST *during parsing*,
-/// before any Governor exists (Phase 9 security review).
+/// before any Governor exists (Phase 9 security review). Denominated in
+/// `allocated_size` units — expression nodes PLUS string payload bytes
+/// (acetone-7qw.8): counting a 4MB string literal as one node left a ~780x
+/// gap between this bound and the real allocation, so a query inside the
+/// cap could still transiently allocate gigabytes.
 pub const MAX_CHAIN_EXPANSION: usize = 4096;
 
 /// Words that cannot be used as variable names, aliases or yield items
@@ -1147,7 +1151,8 @@ impl Parser<'_> {
             return Err(ParseError::QueryStructure {
                 message: format!(
                     "chained comparisons in this query duplicate more than the \
-                     {MAX_CHAIN_EXPANSION}-node expansion budget (a chain \
+                     {MAX_CHAIN_EXPANSION}-unit expansion budget, counting \
+                     expression nodes and string payload bytes (a chain \
                      evaluates each interior operand twice); bind the shared \
                      operand with WITH and compare it twice instead"
                 ),
@@ -2118,6 +2123,25 @@ mod tests {
         }
         // A trailing WHERE stays within the standalone call.
         parse_ok("CALL acetone.diff('a', 'b') YIELD * WHERE kind = 'added'");
+    }
+
+    #[test]
+    fn chain_expansion_counts_string_payload_bytes() {
+        // acetone-7qw.8: a chain duplicates its interior operands, and an
+        // interior operand carrying a long string used to count as ONE
+        // node — a 4MB literal inside the 4096-unit budget transiently
+        // allocated gigabytes. Bytes now count, so an 8KB interior string
+        // refuses…
+        let big = "x".repeat(8192);
+        let q = format!("RETURN 1 < '{big}' < 3");
+        assert!(matches!(parse(&q), Err(ParseError::QueryStructure { .. })));
+        // …while the same string OUTSIDE a chain parses fine (the cap
+        // governs duplication, not query size)…
+        let q = format!("RETURN '{big}'");
+        parse(&q).expect("an un-duplicated long string is not capped");
+        // …and short-operand chains are untouched.
+        parse("RETURN 1 < 2 < 3 RETURN 1").err(); // parse result irrelevant
+        parse("MATCH (n) WHERE 1 < n.num < 3 RETURN n").expect("short chain unaffected");
     }
 
     #[test]
