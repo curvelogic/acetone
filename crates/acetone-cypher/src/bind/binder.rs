@@ -686,6 +686,34 @@ impl<'a> Binder<'a> {
             .map(|(index, _)| index)
             .collect();
 
+        // Families (a)/(d) of acetone-1qj, the TCK's grouping-key rule:
+        // inside an aggregate-containing projection item, a variable or
+        // property access is legal only when its source text matches a
+        // sibling grouping item (With6/Return6: [18][19] valid — the
+        // referenced var/property IS projected; [8] invalid — me.age not
+        // projected; [9] invalid — a COMPLEX projected expression cannot
+        // be referenced piecewise, so only simple matches count and the
+        // stray me.age fails). Validated on the AST so source text is
+        // available for the match.
+        if aggregating {
+            let grouping_texts = self.projection_item_texts(p, false);
+            for item in &p.items {
+                if let ast::ProjectionItem::Expr { expr, span, .. } = item
+                    && ast_contains_aggregate(expr)
+                {
+                    self.validate_aggregate_mixture(
+                        expr,
+                        &grouping_texts,
+                        None,
+                        true,
+                        RefErrorMode::Ambiguous,
+                        *span,
+                        &mut Vec::new(),
+                    )?;
+                }
+            }
+        }
+
         // SKIP/LIMIT bind before re-scoping and cannot aggregate.
         let skip = match &p.skip {
             Some(expr) => Some(self.expr(expr, NO_AGG)?),
@@ -750,11 +778,37 @@ impl<'a> Binder<'a> {
             .map(|(k, v)| (k.clone(), *v))
             .chain(new_scope.iter().map(|(k, v)| (k.clone(), *v)))
             .collect();
-        self.scope = union_scope;
+        // ORDER BY binds in the UNION scope — pre-projection names must
+        // RESOLVE even after aggregation/DISTINCT, because an ordering
+        // expression may reference them exactly as far as it reduces to
+        // projected grouping keys, aliases and constants (acetone-1qj; TCK
+        // WithOrderBy2 [22]-[24]: `WITH a.name AS name, count(*) … ORDER
+        // BY a.name` is valid). The REFERENCE rule is enforced on the AST
+        // below; the aggregate-position rule here: aggregates in ORDER BY
+        // are only meaningful when the projection aggregates
+        // (ReturnOrderBy2 [14] — InvalidAggregation).
+        self.scope = union_scope.clone();
+        if p.distinct || aggregating {
+            let projected_texts = self.projection_item_texts(p, !aggregating);
+            let output_names: std::collections::BTreeSet<String> =
+                new_scope.keys().cloned().collect();
+            for sort in &p.order_by {
+                self.validate_aggregate_mixture(
+                    &sort.expr,
+                    &projected_texts,
+                    Some(&output_names),
+                    aggregating,
+                    RefErrorMode::Undefined,
+                    sort.expr.span(),
+                    &mut Vec::new(),
+                )?;
+            }
+        }
+        let order_ctx = if aggregating { AGG_OK } else { NO_AGG };
         let order_by_result: Result<Vec<(BoundExpr, bool)>, BindError> = p
             .order_by
             .iter()
-            .map(|sort| Ok((self.expr(&sort.expr, AGG_OK)?, sort.descending)))
+            .map(|sort| Ok((self.expr(&sort.expr, order_ctx)?, sort.descending)))
             .collect();
         let order_by = order_by_result?;
         let where_clause = match &p.where_clause {
@@ -776,6 +830,269 @@ impl<'a> Binder<'a> {
             aggregating,
             span: p.span,
         })
+    }
+
+    /// The source texts of this projection's items usable as reference
+    /// targets (acetone-1qj): non-aggregate item expressions — the grouping
+    /// keys — or, with `all_items`, every item (the DISTINCT case, where
+    /// each projected expression is a dedup key).
+    fn projection_item_texts(
+        &self,
+        p: &ast::Projection,
+        all_items: bool,
+    ) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for item in &p.items {
+            if let ast::ProjectionItem::Expr { expr, .. } = item
+                && (all_items || !ast_contains_aggregate(expr))
+            {
+                out.insert(self.expr_text(expr).to_owned());
+            }
+        }
+        out
+    }
+
+    /// The trimmed source slice of an AST expression.
+    fn expr_text(&self, expr: &ast::Expr) -> &str {
+        let span = expr.span();
+        self.source[span.start..span.end].trim()
+    }
+
+    /// The TCK's grouping-key reference rule (acetone-1qj), shared by
+    /// aggregate-containing projection items and post-aggregation/DISTINCT
+    /// ORDER BY: an expression may reference projected item texts, output
+    /// aliases (`outputs`, ORDER BY only), constants, parameters,
+    /// iteration-locals, and — when `aggregates_ok` — aggregate calls
+    /// (whose arguments are aggregated and exempt). Any OTHER variable
+    /// reference errors: `Ambiguous` for a projection item (With6 [8][9]),
+    /// `Undefined` for ORDER BY (ReturnOrderBy2 [13], ReturnOrderBy6 [4]).
+    /// A property access matches as a WHOLE or fails at its base variable —
+    /// which is exactly why a complex projected expression cannot be
+    /// referenced piecewise (With6 [9]).
+    #[allow(clippy::too_many_arguments)]
+    fn validate_aggregate_mixture(
+        &self,
+        expr: &ast::Expr,
+        projected: &std::collections::BTreeSet<String>,
+        outputs: Option<&std::collections::BTreeSet<String>>,
+        aggregates_ok: bool,
+        mode: RefErrorMode,
+        item_span: Span,
+        locals: &mut Vec<String>,
+    ) -> Result<(), BindError> {
+        // A projection ITEM may only reference SIMPLE grouping keys — a
+        // variable or property access — never a complex projected
+        // expression piecewise or verbatim (With6 [9]); ORDER BY may also
+        // match a whole projected expression (ordering by an output
+        // column's defining expression).
+        let simple = matches!(
+            expr,
+            ast::Expr::Variable { .. } | ast::Expr::Property { .. }
+        );
+        let whole_match_ok = match mode {
+            RefErrorMode::Ambiguous => simple,
+            RefErrorMode::Undefined => true,
+        };
+        if whole_match_ok && projected.contains(self.expr_text(expr)) {
+            return Ok(());
+        }
+        match expr {
+            ast::Expr::Literal { .. } | ast::Expr::Parameter { .. } => Ok(()),
+            ast::Expr::Variable { name, span } => {
+                if locals.iter().any(|l| l == name) || outputs.is_some_and(|o| o.contains(name)) {
+                    return Ok(());
+                }
+                Err(match mode {
+                    RefErrorMode::Ambiguous => BindError::AmbiguousAggregation { span: item_span },
+                    RefErrorMode::Undefined => BindError::UndefinedVariable {
+                        name: name.clone(),
+                        span: *span,
+                    },
+                })
+            }
+            ast::Expr::FunctionCall {
+                name, span, args, ..
+            } if lookup_aggregate(&name.join(".")).is_some() => {
+                if aggregates_ok {
+                    let _ = args;
+                    Ok(()) // arguments are aggregated: exempt from the rule
+                } else {
+                    Err(BindError::InvalidAggregation { span: *span })
+                }
+            }
+            ast::Expr::ListComprehension {
+                variable,
+                list,
+                where_clause,
+                map,
+                ..
+            } => {
+                self.validate_aggregate_mixture(
+                    list,
+                    projected,
+                    outputs,
+                    aggregates_ok,
+                    mode,
+                    item_span,
+                    locals,
+                )?;
+                locals.push(variable.clone());
+                let result = where_clause
+                    .as_deref()
+                    .map_or(Ok(()), |e| {
+                        self.validate_aggregate_mixture(
+                            e,
+                            projected,
+                            outputs,
+                            aggregates_ok,
+                            mode,
+                            item_span,
+                            locals,
+                        )
+                    })
+                    .and_then(|()| {
+                        map.as_deref().map_or(Ok(()), |e| {
+                            self.validate_aggregate_mixture(
+                                e,
+                                projected,
+                                outputs,
+                                aggregates_ok,
+                                mode,
+                                item_span,
+                                locals,
+                            )
+                        })
+                    });
+                locals.pop();
+                result
+            }
+            ast::Expr::Quantifier {
+                variable,
+                list,
+                predicate,
+                ..
+            } => {
+                self.validate_aggregate_mixture(
+                    list,
+                    projected,
+                    outputs,
+                    aggregates_ok,
+                    mode,
+                    item_span,
+                    locals,
+                )?;
+                locals.push(variable.clone());
+                let result = self.validate_aggregate_mixture(
+                    predicate,
+                    projected,
+                    outputs,
+                    aggregates_ok,
+                    mode,
+                    item_span,
+                    locals,
+                );
+                locals.pop();
+                result
+            }
+            ast::Expr::Reduce {
+                accumulator,
+                init,
+                variable,
+                list,
+                expr: body,
+                ..
+            } => {
+                self.validate_aggregate_mixture(
+                    init,
+                    projected,
+                    outputs,
+                    aggregates_ok,
+                    mode,
+                    item_span,
+                    locals,
+                )?;
+                self.validate_aggregate_mixture(
+                    list,
+                    projected,
+                    outputs,
+                    aggregates_ok,
+                    mode,
+                    item_span,
+                    locals,
+                )?;
+                locals.push(accumulator.clone());
+                locals.push(variable.clone());
+                let result = self.validate_aggregate_mixture(
+                    body,
+                    projected,
+                    outputs,
+                    aggregates_ok,
+                    mode,
+                    item_span,
+                    locals,
+                );
+                locals.pop();
+                locals.pop();
+                result
+            }
+            ast::Expr::PatternComprehension {
+                pattern,
+                where_clause,
+                map,
+                span: _,
+            } => {
+                let depth = locals.len();
+                locals.extend(pattern.variable.iter().cloned());
+                locals.extend(pattern.start.variable.iter().cloned());
+                for (rel, node) in &pattern.steps {
+                    locals.extend(rel.variable.iter().cloned());
+                    locals.extend(node.variable.iter().cloned());
+                }
+                let check = |e: &ast::Expr, locals: &mut Vec<String>| {
+                    self.validate_aggregate_mixture(
+                        e,
+                        projected,
+                        outputs,
+                        aggregates_ok,
+                        mode,
+                        item_span,
+                        locals,
+                    )
+                };
+                let mut result = Ok(());
+                for e in pattern
+                    .start
+                    .properties
+                    .iter()
+                    .chain(pattern.steps.iter().flat_map(|(rel, node)| {
+                        rel.properties.iter().chain(node.properties.iter())
+                    }))
+                    .chain(where_clause.as_deref())
+                    .chain(std::iter::once(&**map))
+                {
+                    result = check(e, locals);
+                    if result.is_err() {
+                        break;
+                    }
+                }
+                locals.truncate(depth);
+                result
+            }
+            other => {
+                for child in other.children() {
+                    self.validate_aggregate_mixture(
+                        child,
+                        projected,
+                        outputs,
+                        aggregates_ok,
+                        mode,
+                        item_span,
+                        locals,
+                    )?;
+                }
+                Ok(())
+            }
+        }
     }
 
     // --- patterns ----------------------------------------------------------
@@ -1682,6 +1999,30 @@ fn collect_range_bounds(expr: &BoundExpr, out: &mut RangeBounds) {
         }
         _ => {}
     }
+}
+
+/// Which error a disallowed reference raises (acetone-1qj): a projection
+/// item's mixture is `AmbiguousAggregationExpression`; an ORDER BY
+/// reference that fails to reduce is `UndefinedVariable` (the name has no
+/// value in the post-projection row).
+#[derive(Clone, Copy)]
+enum RefErrorMode {
+    Ambiguous,
+    Undefined,
+}
+
+/// Does an AST expression contain an aggregate call (before binding)?
+fn ast_contains_aggregate(expr: &ast::Expr) -> bool {
+    let mut stack = vec![expr];
+    while let Some(expr) = stack.pop() {
+        if let ast::Expr::FunctionCall { name, .. } = expr
+            && lookup_aggregate(&name.join(".")).is_some()
+        {
+            return true;
+        }
+        stack.extend(expr.children());
+    }
+    false
 }
 
 fn contains_aggregate(expr: &BoundExpr) -> bool {

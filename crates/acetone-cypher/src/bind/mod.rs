@@ -156,6 +156,51 @@ mod tests {
     }
 
     #[test]
+    fn order_by_and_aggregation_scoping_families() {
+        // acetone-1qj: the four TCK-pinned compile-time error families.
+        // (a) aggregate in ORDER BY after a non-aggregating projection.
+        let err = bind_lenient("MATCH (n) RETURN n.x ORDER BY count(n)").unwrap_err();
+        assert!(matches!(err, BindError::InvalidAggregation { .. }), "{err}");
+        // (b) ORDER BY on a non-projected name after DISTINCT.
+        let err = bind_lenient("MATCH (n) RETURN DISTINCT n.x AS x ORDER BY n.y").unwrap_err();
+        assert!(matches!(err, BindError::UndefinedVariable { .. }), "{err}");
+        // (c) post-aggregation ORDER BY referencing a name that reduces to
+        // no grouping key.
+        let err =
+            bind_lenient("MATCH (n) RETURN n.x AS x, count(n) AS c ORDER BY n.y").unwrap_err();
+        assert!(matches!(err, BindError::UndefinedVariable { .. }), "{err}");
+        // (d) an item mixing an aggregate with an unprojected variable.
+        let err = bind_lenient("MATCH (n)--(m) RETURN n.x + count(m)").unwrap_err();
+        assert!(
+            matches!(err, BindError::AmbiguousAggregation { .. }),
+            "{err}"
+        );
+        // (d) piecewise reference to a COMPLEX projected expression is
+        // still ambiguous (With6 [9]).
+        let err = bind_lenient(
+            "MATCH (n)--(m) WITH n.x + m.x AS grp, n.x + m.x + count(*) AS agg RETURN *",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, BindError::AmbiguousAggregation { .. }),
+            "{err}"
+        );
+
+        // The valid shapes stay valid: grouping-key references ([18][19],
+        // WithOrderBy2 [22]), aliases, iteration locals over aggregates.
+        for query in [
+            "MATCH (n)--(m) RETURN n, n.x + count(m)",
+            "MATCH (n)--(m) RETURN n.x, n.x + count(m)",
+            "MATCH (a) WITH a.name AS name, count(*) AS cnt ORDER BY a.name RETURN name, cnt",
+            "MATCH (n) RETURN n.x AS x, count(n) AS c ORDER BY x, c",
+            "MATCH p = (n)-->() WITH [x IN collect(p) | x] AS ps, count(n) AS c RETURN ps, c",
+            "MATCH (n) RETURN DISTINCT n.x AS x ORDER BY x",
+        ] {
+            assert!(bind_lenient(query).is_ok(), "must stay valid: {query}");
+        }
+    }
+
+    #[test]
     fn aggregates_in_iteration_bodies_are_invalid() {
         // acetone-2ck.7 (TCK List12[7]): comprehension where/map,
         // quantifier predicates and reduce bodies run per element,

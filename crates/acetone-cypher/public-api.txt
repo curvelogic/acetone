@@ -2286,6 +2286,8 @@ impl<T> typenum::type_operators::Same for acetone_cypher::bind::catalogue::Catal
 pub type acetone_cypher::bind::catalogue::Catalogue::Output = T
 pub mod acetone_cypher::bind::error
 pub enum acetone_cypher::bind::error::BindError
+pub acetone_cypher::bind::error::BindError::AmbiguousAggregation
+pub acetone_cypher::bind::error::BindError::AmbiguousAggregation::span: acetone_cypher::span::Span
 pub acetone_cypher::bind::error::BindError::ColumnNameConflict
 pub acetone_cypher::bind::error::BindError::ColumnNameConflict::name: alloc::string::String
 pub acetone_cypher::bind::error::BindError::ColumnNameConflict::span: acetone_cypher::span::Span
@@ -2459,6 +2461,8 @@ pub fn acetone_cypher::bind::error::Suggestion::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_cypher::bind::error::Suggestion
 pub type acetone_cypher::bind::error::Suggestion::Output = T
 pub enum acetone_cypher::bind::BindError
+pub acetone_cypher::bind::BindError::AmbiguousAggregation
+pub acetone_cypher::bind::BindError::AmbiguousAggregation::span: acetone_cypher::span::Span
 pub acetone_cypher::bind::BindError::ColumnNameConflict
 pub acetone_cypher::bind::BindError::ColumnNameConflict::name: alloc::string::String
 pub acetone_cypher::bind::BindError::ColumnNameConflict::span: acetone_cypher::span::Span

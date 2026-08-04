@@ -33,6 +33,15 @@ fine.)
 
 ### Changed
 
+- **ORDER BY and aggregation scoping now enforce the openCypher
+  grouping-key rules** (acetone-1qj): an aggregate in ORDER BY after a
+  non-aggregating projection, an ORDER BY reference that does not reduce
+  to projected grouping keys/aliases after DISTINCT or aggregation, and a
+  projection item mixing an aggregate with anything but simple projected
+  grouping keys are now compile-time errors (`InvalidAggregation`,
+  `UndefinedVariable`, `AmbiguousAggregationExpression`) instead of
+  over-accepted. Published TCK pass rate rises 2185 → 2218 of 3897
+  (56.07% → 56.92%), still with zero failures.
 - **Changing a relationship type's discriminator while relationships of
   that type exist is now refused** (`GraphError::RelDiscriminatorChanged`)
   — including the silent wipe a definition-replacing redeclare performed:

@@ -15,10 +15,10 @@ statement records the pass rate, how it is measured, what the measurement does
 
 ## Pass rate
 
-**2185 / 3897 scenarios pass (56.07%). 0 / 3897 fail.**
+**2218 / 3897 scenarios pass (56.92%). 0 / 3897 fail.**
 
-Percentages are shown to 2dp and never rounded up to clear a bar: 2185/3897 is
-56.0688%, published as 56.07%. The discipline exists because a rounded number
+Percentages are shown to 2dp and never rounded up to clear a bar: 2218/3897 is
+56.9156%, published as 56.92%. The discipline exists because a rounded number
 once read as "55.0%" while the exact fraction (2142/3897 = 54.9654%) sat below
 the 55% bar (PR #200) — so the fraction, not the rendering, is the claim.
 
