@@ -1757,8 +1757,10 @@ fn collect_range_bounds(expr: &BoundExpr, out: &mut RangeBounds) {
 /// equal when they are a corresponding local pair (PR #244 re-review:
 /// without this, `ORDER BY` repeating a projected comprehension that
 /// captures a free outer variable was rejected). Patterns remain
-/// conservatively unequal — safe, because the validation walk then
-/// recurses into the expression and accepts pattern variables as locals.
+/// conservatively unequal — safe for the pattern's OWN variables (the
+/// validation walk pushes them as locals) but not for other free
+/// variables captured in the body, so ORDER BY repeating such a pattern
+/// comprehension verbatim over-rejects (recorded in acetone-7qw.24).
 fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
     same_bound_in(a, b, &mut Vec::new())
 }
