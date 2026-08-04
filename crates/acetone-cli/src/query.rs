@@ -62,11 +62,12 @@ pub fn run(
     format: Format,
     param_specs: &[String],
     timeout_secs: u64,
+    autodeclare: bool,
 ) -> Result<()> {
     let params = parse_params(param_specs)?;
     let limits = cli_limits(timeout_secs);
     let repo = Repository::open(repo_path).context("opening repository")?;
-    let session = Session::new(&repo);
+    let session = Session::new(&repo).autodeclare(autodeclare);
     match at {
         // A read against a past version; a write with `--at` is rejected.
         Some(refspec) => {
@@ -141,7 +142,21 @@ fn render_outcome(outcome: &QueryOutcome, format: Format, max_rows: Option<usize
         render(outcome.result(), format, max_rows);
     }
     if outcome.is_write() {
-        render_write_summary(&outcome.result().stats);
+        // A coining write may mutate the schema while writing no data
+        // (bind-time coinage, e.g. a CREATE whose MATCH found nothing) —
+        // "(no changes)" would be false then. The advisory prefix is the
+        // session's coinage announcement (kept in step with
+        // `Session::run_write`).
+        let coined = outcome
+            .result()
+            .advisories
+            .iter()
+            .any(|a| a.starts_with("autodeclared relationship type"));
+        if outcome.result().stats.is_empty() && coined {
+            outln!("(no data changes; schema changed)");
+        } else {
+            render_write_summary(&outcome.result().stats);
+        }
     }
     // Non-error advisories (e.g. a schema-free MATCH on an undeclared label that
     // matched nothing, acetone-7bn.5) go to stderr, so they never pollute the
@@ -615,6 +630,8 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
     let mut buffer = String::new();
     // Session parameters (`:param`), passed to every statement as `$name`.
     let mut params: BTreeMap<String, Value> = BTreeMap::new();
+    // Relationship-type autodeclare (ADR-0060), toggled by `:autodeclare`.
+    let mut autodeclare = false;
 
     if !io::stdin().is_terminal() {
         // Non-interactive: read lines plainly, no editing/history/prompts.
@@ -630,6 +647,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
                     &mut format,
                     &mut params,
                     timeout_secs,
+                    &mut autodeclare,
                 );
                 break; // EOF
             }
@@ -640,6 +658,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
                 &mut params,
                 &line,
                 timeout_secs,
+                &mut autodeclare,
             ) {
                 break;
             }
@@ -673,6 +692,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
                     &mut params,
                     &line,
                     timeout_secs,
+                    &mut autodeclare,
                 ) {
                     break;
                 }
@@ -690,6 +710,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
                     &mut format,
                     &mut params,
                     timeout_secs,
+                    &mut autodeclare,
                 );
                 break;
             }
@@ -753,6 +774,7 @@ fn process_shell_line(
     params: &mut BTreeMap<String, Value>,
     raw: &str,
     timeout_secs: u64,
+    autodeclare: &mut bool,
 ) -> Outcome {
     let line = raw.trim_end_matches(['\n', '\r']);
     let trimmed = line.trim();
@@ -763,7 +785,7 @@ fn process_shell_line(
         let cmd = body.split_whitespace().next().unwrap_or("");
         let escapes = matches!(cmd, "quit" | "q" | "exit" | "cancel");
         if buffer.is_empty() || escapes {
-            match handle_meta(repo_path, trimmed, format, params, buffer) {
+            match handle_meta(repo_path, trimmed, format, params, buffer, autodeclare) {
                 Ok(true) => return Outcome::Quit,
                 Ok(false) => {}
                 // Errors go to stderr so they never interleave with result
@@ -792,7 +814,14 @@ fn process_shell_line(
     if query.is_empty() {
         return Outcome::Continue;
     }
-    if let Err(e) = run_in_shell(repo_path, &query, *format, params, timeout_secs) {
+    if let Err(e) = run_in_shell(
+        repo_path,
+        &query,
+        *format,
+        params,
+        timeout_secs,
+        *autodeclare,
+    ) {
         // Query errors go to stderr, keeping stdout as the pure result stream.
         errln!("error: {e:#}");
     }
@@ -808,10 +837,19 @@ fn flush_pending(
     format: &mut Format,
     params: &mut BTreeMap<String, Value>,
     timeout_secs: u64,
+    autodeclare: &mut bool,
 ) {
     if !buffer.trim().is_empty() {
         // A blank line is already a statement terminator; reuse that path.
-        let _ = process_shell_line(repo_path, buffer, format, params, "", timeout_secs);
+        let _ = process_shell_line(
+            repo_path,
+            buffer,
+            format,
+            params,
+            "",
+            timeout_secs,
+            autodeclare,
+        );
     }
 }
 
@@ -821,6 +859,7 @@ fn run_in_shell(
     format: Format,
     params: &BTreeMap<String, Value>,
     timeout_secs: u64,
+    autodeclare: bool,
 ) -> Result<()> {
     let repo = Repository::open(repo_path)?;
     // The library `Session` dispatches read vs write: a write goes through the
@@ -828,6 +867,7 @@ fn run_in_shell(
     // see it), exactly as `run` does — the shell never silently executes the read
     // side of a write. The user commits separately with `acetone commit`.
     let outcome = Session::new(&repo)
+        .autodeclare(autodeclare)
         .run_with(cypher, params, &cli_limits(timeout_secs))
         .map_err(|e| anyhow!("{}", render_query_error(&e, cypher, timeout_secs)))?;
     render_outcome(&outcome, format, Some(SHELL_ROW_CAP));
@@ -863,6 +903,7 @@ fn handle_meta(
     format: &mut Format,
     params: &mut BTreeMap<String, Value>,
     buffer: &mut String,
+    autodeclare: &mut bool,
 ) -> Result<bool> {
     let body = &line[1..];
     let (command, rest) = match body.find(char::is_whitespace) {
@@ -889,6 +930,7 @@ fn handle_meta(
             outln!("  :declare-rel-type <TYPE> [--type P:T ...]");
             outln!("  :declare-index <name> --label <L> --property <p>...");
             outln!("  :format, :f <table|json|csv>  result format");
+            outln!("  :autodeclare [on|off]         let writes coin relationship types");
             outln!(
                 "  :param [<name> <literal>]     bind $name for later statements; bare :param lists"
             );
@@ -940,6 +982,18 @@ fn handle_meta(
                 *format = Format::parse(rest)?;
             }
         }
+        "autodeclare" => match rest {
+            "" => outln!("autodeclare is {}", if *autodeclare { "on" } else { "off" }),
+            "on" => {
+                *autodeclare = true;
+                outln!("autodeclare on — writes may coin relationship types (ADR-0060)");
+            }
+            "off" => {
+                *autodeclare = false;
+                outln!("autodeclare off");
+            }
+            _ => anyhow::bail!("usage: :autodeclare [on|off]"),
+        },
         "status" => crate::commands::status(repo_path, false)?,
         "commit" => {
             if rest.is_empty() {

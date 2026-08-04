@@ -108,11 +108,26 @@ impl QueryError {
 /// `CALL acetone.*` history procedures (ADR-0039).
 pub struct Session<'r> {
     repo: &'r Repository,
+    autodeclare: bool,
 }
 
 impl<'r> Session<'r> {
     pub fn new(repo: &'r Repository) -> Self {
-        Session { repo }
+        Session {
+            repo,
+            autodeclare: false,
+        }
+    }
+
+    /// Opt in to relationship-type autodeclare (ADR-0060, off by
+    /// default): a write may coin an unknown relationship type in
+    /// CREATE/MERGE position, appending it to the schema — an empty,
+    /// deterministic definition, no discriminator or property types — in
+    /// the same transaction as the data. Reads never coin; an unknown
+    /// type in a match position remains an error either way.
+    pub fn autodeclare(mut self, on: bool) -> Self {
+        self.autodeclare = on;
+        self
     }
 
     /// Run `cypher` against the workspace with default parameters and resource
@@ -224,7 +239,26 @@ impl<'r> Session<'r> {
         // Read the workspace the transaction locked, and run the query over it.
         let snapshot = self.repo.workspace_snapshot()?;
         let (base, catalogue, mode) = build_base(&snapshot)?;
-        let bound = bind(cypher, parsed, &catalogue, mode)?;
+        let bound = crate::bind::bind_with(cypher, parsed, &catalogue, mode, self.autodeclare)?;
+        // A conflicted schema entry is ABSENT from the merged schema map,
+        // so mid-merge the binder would see the type as unknown and coin
+        // it — and a staged schema write silently resolves the conflict
+        // by-write with the empty definition, discarding the other
+        // branch's declaration (PR #245 review). Declaration stays
+        // deliberate (ADR-0060): refuse until the merge completes.
+        if !bound.autodeclared_rel_types.is_empty() && snapshot.merge_in_progress() {
+            return Err(acetone_graph::GraphError::MergeInProgress.into());
+        }
+        // ADR-0060: coined types join the schema in this same transaction,
+        // before the data that uses them — one workspace save carries both.
+        for name in &bound.autodeclared_rel_types {
+            let def = acetone_model::schema::RelTypeDef::new(None, Default::default(), [])
+                .expect("the empty relationship-type definition is always valid");
+            txn.put_schema(&acetone_model::schema::SchemaEntry::RelType {
+                name: name.clone(),
+                def,
+            })?;
+        }
         let resolver = RepoResolver {
             repo: self.repo,
             base,
@@ -240,6 +274,12 @@ impl<'r> Session<'r> {
             .advisories
             .extend(expression_label_advisories(&bound));
         result.advisories.extend(shape_property_advisories(&bound));
+        for name in &bound.autodeclared_rel_types {
+            result.advisories.push(format!(
+                "autodeclared relationship type {}",
+                acetone_model::display::format_label(name)
+            ));
+        }
         Ok(result)
     }
 }

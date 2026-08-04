@@ -31,6 +31,18 @@ fine.)
   declarable through the library, stored, and silently meaningless.
   A discriminator-named property is judged in both stored positions.
 
+### Added
+
+- **Relationship-type autodeclare, strictly opt-in** (ADR-0060,
+  acetone-nc91): `acetone query --autodeclare`, the shell's
+  `:autodeclare on|off`, and the library's `Session::autodeclare(bool)`
+  let a write coin an unknown relationship type in `CREATE`/`MERGE`
+  position — a deterministic empty definition appended to the schema in
+  the same transaction as the data, announced by an advisory. Off by default;
+  reads never coin a type; while a merge is unresolved a coining write is
+  refused (it would otherwise silently resolve a schema conflict by-write).
+  Convergent coinage of the same type on two branches merges cleanly.
+
 ### Changed
 
 - **ORDER BY and aggregation scoping now enforce the openCypher

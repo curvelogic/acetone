@@ -36,6 +36,21 @@ pub fn bind(
     catalogue: &Catalogue,
     mode: BindMode,
 ) -> Result<BoundQuery, BindError> {
+    bind_with(source, query, catalogue, mode, false)
+}
+
+/// As [`bind`], with relationship-type autodeclare (ADR-0060): in Strict
+/// mode an unknown type in CREATE/MERGE position is recorded in
+/// [`BoundQuery::autodeclared_rel_types`] instead of erroring. Match
+/// positions still error — autodeclare never coins a type on read — except
+/// for types this same query coins earlier in clause order.
+pub fn bind_with(
+    source: &str,
+    query: &ast::Query,
+    catalogue: &Catalogue,
+    mode: BindMode,
+    autodeclare: bool,
+) -> Result<BoundQuery, BindError> {
     let mut binder = Binder {
         source,
         catalogue,
@@ -43,6 +58,8 @@ pub fn bind(
         variables: Vec::new(),
         scope: HashMap::new(),
         undeclared_expr_labels: Vec::new(),
+        autodeclare,
+        autodeclared_rel_types: Vec::new(),
         undeclared_shape_properties: Vec::new(),
     };
     let mut clauses = Vec::new();
@@ -52,6 +69,9 @@ pub fn bind(
     let mut undeclared_expr_labels = binder.undeclared_expr_labels;
     undeclared_expr_labels.sort();
     undeclared_expr_labels.dedup();
+    let mut autodeclared_rel_types = binder.autodeclared_rel_types;
+    autodeclared_rel_types.sort();
+    autodeclared_rel_types.dedup();
     let mut undeclared_shape_properties = binder.undeclared_shape_properties;
     undeclared_shape_properties.sort();
     undeclared_shape_properties.dedup();
@@ -59,6 +79,7 @@ pub fn bind(
         clauses,
         variables: binder.variables,
         undeclared_expr_labels,
+        autodeclared_rel_types,
         undeclared_shape_properties,
     })
 }
@@ -76,6 +97,8 @@ struct Binder<'a> {
     /// advisories — a typo'd label otherwise filters everything with no
     /// signal (acetone-2ck.3).
     undeclared_expr_labels: Vec<String>,
+    autodeclare: bool,
+    autodeclared_rel_types: Vec<String>,
     /// Property names in node-pattern map literals / SET targets that a
     /// types()-bearing label does not declare, with a did-you-mean
     /// suggestion. Open shape (ADR-0070): collected for advisories, never
@@ -483,6 +506,14 @@ impl<'a> Binder<'a> {
         if self.mode == BindMode::Strict {
             for rel_type in &rel.types {
                 if self.catalogue.rel_type(rel_type).is_none() {
+                    if self.autodeclare {
+                        // ADR-0060: coin it — the session appends the
+                        // type to the schema in the write transaction.
+                        if !self.autodeclared_rel_types.contains(rel_type) {
+                            self.autodeclared_rel_types.push(rel_type.clone());
+                        }
+                        continue;
+                    }
                     return Err(BindError::UnknownRelType {
                         name: rel_type.clone(),
                         declare_cmd: acetone_model::display::format_label(rel_type),
@@ -960,7 +991,13 @@ impl<'a> Binder<'a> {
     ) -> Result<BoundRelPattern, BindError> {
         if self.mode == BindMode::Strict {
             for rel_type in &rel.types {
-                if self.catalogue.rel_type(rel_type).is_none() {
+                if self.catalogue.rel_type(rel_type).is_none()
+                    // A type this query already coined (clause order)
+                    // reads as declared; a MATCH of a genuinely unknown
+                    // type stays an error — autodeclare never coins on
+                    // read (ADR-0060).
+                    && !self.autodeclared_rel_types.contains(rel_type)
+                {
                     return Err(BindError::UnknownRelType {
                         name: rel_type.clone(),
                         declare_cmd: acetone_model::display::format_label(rel_type),

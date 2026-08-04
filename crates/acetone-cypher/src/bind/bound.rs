@@ -53,6 +53,12 @@ pub struct BoundQuery {
     /// Expression-position labels (`n:Label`) absent from a non-empty
     /// catalogue — advisory material, never an error (acetone-2ck.3).
     pub undeclared_expr_labels: Vec<String>,
+    /// Relationship types coined by this query under autodeclare
+    /// (ADR-0060): create-position types the catalogue does not know,
+    /// recorded instead of erroring when the session opts in. Sorted and
+    /// deduplicated. The write path appends each to the schema in the
+    /// same transaction as the data it carries.
+    pub autodeclared_rel_types: Vec<String>,
     /// `(label, property, suggestion)` for property names used in node-pattern
     /// map literals or `SET` targets that a types()-bearing label does not
     /// declare. Open shape (ADR-0070): these bind and execute normally — the

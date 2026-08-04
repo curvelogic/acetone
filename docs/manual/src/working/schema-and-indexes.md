@@ -168,6 +168,14 @@ $ acetone query 'MATCH (i:Interface {host: "db1", name: "eth0"}), (h:Host {name:
 1 relationship created
 ```
 
+For experimentation and open-vocabulary ingestion there is a sanctioned
+fast path: `acetone query --autodeclare` (or the shell's
+`:autodeclare on`) lets a **write** coin the relationship type on first
+use, appending it to the schema in the same transaction as the data
+(ADR-0060). It is off by default, never coins on a read, and refuses
+while a merge is unresolved — see the
+[CLI reference](../reference/cli.md).
+
 An `ON_HOST` edge *is* referentially guarded: delete the host and the merge
 and commit machinery will flag the dangling edge, exactly as in the
 [history chapter](history-branch-merge.md).
