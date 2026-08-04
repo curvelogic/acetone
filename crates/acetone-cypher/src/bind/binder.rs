@@ -686,6 +686,38 @@ impl<'a> Binder<'a> {
             .map(|(index, _)| index)
             .collect();
 
+        // Families (a)/(d) of acetone-1qj, the TCK's grouping-key rule,
+        // validated on the BOUND trees so parenthesisation, backticks,
+        // whitespace and multi-line formatting are transparent (PR #244
+        // review major 1) and `*` items — already expanded into
+        // bound_items — contribute grouping keys (major 2): inside an
+        // aggregate-containing item, a variable or property access is
+        // legal only when it structurally matches a sibling non-aggregate
+        // item (Return6 [18][19] valid; With6 [8] invalid — unprojected;
+        // With6 [9] invalid — a COMPLEX projected expression cannot be
+        // referenced, piecewise or verbatim, so only simple matches
+        // count).
+        if aggregating {
+            let keys: Vec<&BoundExpr> = bound_items
+                .iter()
+                .filter(|(expr, _, _)| !contains_aggregate(expr))
+                .map(|(expr, _, _)| expr)
+                .collect();
+            for (expr, _, span) in &bound_items {
+                if contains_aggregate(expr) {
+                    validate_grouping_refs(
+                        expr,
+                        &keys,
+                        &[],
+                        RefErrorMode::Ambiguous,
+                        *span,
+                        &mut Vec::new(),
+                        &self.variables,
+                    )?;
+                }
+            }
+        }
+
         // SKIP/LIMIT bind before re-scoping and cannot aggregate.
         let skip = match &p.skip {
             Some(expr) => Some(self.expr(expr, NO_AGG)?),
@@ -728,35 +760,66 @@ impl<'a> Binder<'a> {
         }
         // ORDER BY and WITH ... WHERE see both the pre-projection scope
         // and the new output names (openCypher: "WHERE sees a variable
-        // bound before but not after WITH" is valid); only afterwards
-        // does the scope narrow to the projected names.
-        //
-        // CONCEDED LIMITS (bead acetone-1qj): this union scope is only
-        // correct for non-aggregating, non-DISTINCT projections. The
-        // binder currently over-accepts, deferring to later phases, four
-        // forms the TCK pins as compile-time errors: aggregates in ORDER
-        // BY after a non-aggregating RETURN (ReturnOrderBy2 [14],
-        // InvalidAggregation); ORDER BY on non-projected names after
-        // DISTINCT (ReturnOrderBy2 [13], UndefinedVariable);
-        // post-aggregation ORDER BY seeing the pre-scope (ReturnOrderBy6
-        // [4], UndefinedVariable); and projection items mixing aggregates
-        // with unaggregated pre-scope variables (With6 [8][9],
-        // AmbiguousAggregationExpression) — for which grouping_items also
-        // carries no planner signal yet. All classification-honest
-        // (never credited as Passed).
+        // bound before but not after WITH" is valid); the scope narrows to
+        // the projected names afterwards. The union is REFERENCE
+        // resolution only — after DISTINCT or aggregation the grouping-key
+        // rule below constrains what a resolved reference may actually be
+        // (acetone-1qj; formerly a conceded over-accept, now enforced).
+        // WITH … WHERE remains unvalidated against the grouping rule — a
+        // recorded residual (PR #244 review finding 7.1, bead filed).
         let union_scope: HashMap<String, VarId> = self
             .scope
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .chain(new_scope.iter().map(|(k, v)| (k.clone(), *v)))
             .collect();
+        // ORDER BY binds in the UNION scope — pre-projection names must
+        // RESOLVE even after aggregation/DISTINCT, because an ordering
+        // expression may reference them exactly as far as it reduces to
+        // projected grouping keys, aliases and constants (acetone-1qj; TCK
+        // WithOrderBy2 [22]-[24]: `WITH a.name AS name, count(*) … ORDER
+        // BY a.name` is valid). Aggregates in ORDER BY are only meaningful
+        // when the projection aggregates (ReturnOrderBy2 [14] —
+        // InvalidAggregation); the reference rule is validated on the
+        // bound trees after binding.
         self.scope = union_scope;
+        let order_ctx = if aggregating { AGG_OK } else { NO_AGG };
         let order_by_result: Result<Vec<(BoundExpr, bool)>, BindError> = p
             .order_by
             .iter()
-            .map(|sort| Ok((self.expr(&sort.expr, AGG_OK)?, sort.descending)))
+            .map(|sort| Ok((self.expr(&sort.expr, order_ctx)?, sort.descending)))
             .collect();
         let order_by = order_by_result?;
+        if p.distinct || aggregating {
+            // Reference targets: every item for DISTINCT (each projected
+            // expression is a dedup key); non-aggregate items when
+            // aggregating. Aliases resolve to output VarIds because the
+            // union scope lets new names win, so the walk accepts them by
+            // id. NOTE (PR #244 review finding 7): ORDER BY permits a
+            // WHOLE match on a complex projected expression — needed for
+            // the DISTINCT case — which will admit WithOrderBy4 [20] /
+            // ReturnOrderBy6 [5] (TCK: AmbiguousAggregationExpression)
+            // once aggregate-outside-projection execution lands; those
+            // scenarios are held Unsupported today by that limitation
+            // alone (bead filed at review).
+            let keys: Vec<&BoundExpr> = items
+                .iter()
+                .filter(|item| !aggregating || !contains_aggregate(&item.expr))
+                .map(|item| &item.expr)
+                .collect();
+            let output_ids: Vec<u32> = new_scope.values().map(|v| v.0).collect();
+            for (bound, _) in &order_by {
+                validate_grouping_refs(
+                    bound,
+                    &keys,
+                    &output_ids,
+                    RefErrorMode::Undefined,
+                    p.span,
+                    &mut Vec::new(),
+                    &self.variables,
+                )?;
+            }
+        }
         let where_clause = match &p.where_clause {
             Some(expr) => Some(self.expr(expr, NO_AGG)?),
             None => None,
@@ -1682,6 +1745,537 @@ fn collect_range_bounds(expr: &BoundExpr, out: &mut RangeBounds) {
         }
         _ => {}
     }
+}
+
+/// Span-insensitive structural equality over bound expressions — the
+/// grouping-key match relation (acetone-1qj, PR #244 review major 1):
+/// bound trees are already free of parenthesisation, backtick and
+/// whitespace variance, and `VarId` equality is meaningful because
+/// projection items bind in the pre-scope the ORDER BY union shares.
+/// Iteration constructs compare via a local-correspondence stack — their
+/// locally-declared `VarId`s differ per binding site, so two ids are also
+/// equal when they are a corresponding local pair (PR #244 re-review:
+/// without this, `ORDER BY` repeating a projected comprehension that
+/// captures a free outer variable was rejected). Patterns remain
+/// conservatively unequal — safe for the pattern's OWN variables (the
+/// validation walk pushes them as locals) but not for other free
+/// variables captured in the body, so ORDER BY repeating such a pattern
+/// comprehension verbatim over-rejects (recorded in acetone-7qw.24).
+fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
+    same_bound_in(a, b, &mut Vec::new())
+}
+
+fn same_bound_in(a: &BoundExpr, b: &BoundExpr, pairs: &mut Vec<(u32, u32)>) -> bool {
+    use BoundExpr as E;
+    match (a, b) {
+        (E::Literal { value: a, .. }, E::Literal { value: b, .. }) => a == b,
+        (E::Parameter { name: a, .. }, E::Parameter { name: b, .. }) => a == b,
+        (E::Variable { id: a, .. }, E::Variable { id: b, .. }) => {
+            a == b || pairs.iter().rev().any(|(x, y)| (x, y) == (&a.0, &b.0))
+        }
+        (
+            E::Property {
+                base: ab, key: ak, ..
+            },
+            E::Property {
+                base: bb, key: bk, ..
+            },
+        ) => ak == bk && same_bound_in(ab, bb, pairs),
+        (
+            E::Unary {
+                op: ao,
+                operand: aa,
+                ..
+            },
+            E::Unary {
+                op: bo,
+                operand: ba,
+                ..
+            },
+        ) => ao == bo && same_bound_in(aa, ba, pairs),
+        (
+            E::Binary {
+                op: ao,
+                lhs: al,
+                rhs: ar,
+                ..
+            },
+            E::Binary {
+                op: bo,
+                lhs: bl,
+                rhs: br,
+                ..
+            },
+        ) => ao == bo && same_bound_in(al, bl, pairs) && same_bound_in(ar, br, pairs),
+        (
+            E::IsNull {
+                operand: aa,
+                negated: an,
+                ..
+            },
+            E::IsNull {
+                operand: ba,
+                negated: bn,
+                ..
+            },
+        ) => an == bn && same_bound_in(aa, ba, pairs),
+        (
+            E::HasLabels {
+                subject: aa,
+                labels: al,
+                ..
+            },
+            E::HasLabels {
+                subject: ba,
+                labels: bl,
+                ..
+            },
+        ) => al == bl && same_bound_in(aa, ba, pairs),
+        (
+            E::Function {
+                def: ad, args: aa, ..
+            },
+            E::Function {
+                def: bd, args: ba, ..
+            },
+        ) => {
+            ad.name == bd.name
+                && aa.len() == ba.len()
+                && aa.iter().zip(ba).all(|(x, y)| same_bound_in(x, y, pairs))
+        }
+        (
+            E::Aggregate {
+                def: ad,
+                distinct: adi,
+                arg: aa,
+                ..
+            },
+            E::Aggregate {
+                def: bd,
+                distinct: bdi,
+                arg: ba,
+                ..
+            },
+        ) => {
+            ad.name == bd.name
+                && adi == bdi
+                && match (aa, ba) {
+                    (None, None) => true,
+                    (Some(x), Some(y)) => same_bound_in(x, y, pairs),
+                    _ => false,
+                }
+        }
+        (
+            E::Case {
+                operand: ao,
+                whens: aw,
+                else_expr: ae,
+                ..
+            },
+            E::Case {
+                operand: bo,
+                whens: bw,
+                else_expr: be,
+                ..
+            },
+        ) => {
+            let opt = |x: &Option<Box<BoundExpr>>,
+                       y: &Option<Box<BoundExpr>>,
+                       pairs: &mut Vec<(u32, u32)>| match (x, y) {
+                (None, None) => true,
+                (Some(x), Some(y)) => same_bound_in(x, y, pairs),
+                _ => false,
+            };
+            opt(ao, bo, pairs)
+                && opt(ae, be, pairs)
+                && aw.len() == bw.len()
+                && aw.iter().zip(bw).all(|((ac, av), (bc, bv))| {
+                    same_bound_in(ac, bc, pairs) && same_bound_in(av, bv, pairs)
+                })
+        }
+        (E::ListLiteral { items: aa, .. }, E::ListLiteral { items: ba, .. }) => {
+            aa.len() == ba.len() && aa.iter().zip(ba).all(|(x, y)| same_bound_in(x, y, pairs))
+        }
+        (E::MapLiteral { entries: aa, .. }, E::MapLiteral { entries: ba, .. }) => {
+            aa.len() == ba.len()
+                && aa
+                    .iter()
+                    .zip(ba)
+                    .all(|((ak, av), (bk, bv))| ak == bk && same_bound_in(av, bv, pairs))
+        }
+        (
+            E::Index {
+                base: ab,
+                index: ai,
+                ..
+            },
+            E::Index {
+                base: bb,
+                index: bi,
+                ..
+            },
+        ) => same_bound_in(ab, bb, pairs) && same_bound_in(ai, bi, pairs),
+        (
+            E::Slice {
+                base: ab,
+                from: af,
+                to: at,
+                ..
+            },
+            E::Slice {
+                base: bb,
+                from: bf,
+                to: bt,
+                ..
+            },
+        ) => {
+            let opt = |x: &Option<Box<BoundExpr>>,
+                       y: &Option<Box<BoundExpr>>,
+                       pairs: &mut Vec<(u32, u32)>| match (x, y) {
+                (None, None) => true,
+                (Some(x), Some(y)) => same_bound_in(x, y, pairs),
+                _ => false,
+            };
+            same_bound_in(ab, bb, pairs) && opt(af, bf, pairs) && opt(at, bt, pairs)
+        }
+        (
+            E::ListComprehension {
+                variable: av,
+                list: al,
+                where_clause: aw,
+                map: am,
+                ..
+            },
+            E::ListComprehension {
+                variable: bv,
+                list: bl,
+                where_clause: bw,
+                map: bm,
+                ..
+            },
+        ) => {
+            if !same_bound_in(al, bl, pairs) {
+                return false;
+            }
+            pairs.push((av.0, bv.0));
+            let opt = |x: &Option<Box<BoundExpr>>,
+                       y: &Option<Box<BoundExpr>>,
+                       pairs: &mut Vec<(u32, u32)>| match (x, y) {
+                (None, None) => true,
+                (Some(x), Some(y)) => same_bound_in(x, y, pairs),
+                _ => false,
+            };
+            let eq = opt(aw, bw, pairs) && opt(am, bm, pairs);
+            pairs.pop();
+            eq
+        }
+        (
+            E::Quantifier {
+                kind: ak,
+                variable: av,
+                list: al,
+                predicate: ap,
+                ..
+            },
+            E::Quantifier {
+                kind: bk,
+                variable: bv,
+                list: bl,
+                predicate: bp,
+                ..
+            },
+        ) => {
+            if ak != bk || !same_bound_in(al, bl, pairs) {
+                return false;
+            }
+            pairs.push((av.0, bv.0));
+            let eq = same_bound_in(ap, bp, pairs);
+            pairs.pop();
+            eq
+        }
+        (
+            E::Reduce {
+                accumulator: aa,
+                init: ai,
+                variable: av,
+                list: al,
+                expr: ae,
+                ..
+            },
+            E::Reduce {
+                accumulator: ba,
+                init: bi,
+                variable: bv,
+                list: bl,
+                expr: be,
+                ..
+            },
+        ) => {
+            if !same_bound_in(ai, bi, pairs) || !same_bound_in(al, bl, pairs) {
+                return false;
+            }
+            pairs.push((aa.0, ba.0));
+            pairs.push((av.0, bv.0));
+            let eq = same_bound_in(ae, be, pairs);
+            pairs.pop();
+            pairs.pop();
+            eq
+        }
+        // Patterns: conservatively unequal — see the doc comment.
+        _ => false,
+    }
+}
+
+/// Push every direct child of a bound expression — the shared traversal
+/// behind [`contains_aggregate`] and the grouping-reference walk's
+/// catch-all arm. Aggregate arguments ARE pushed; callers that must not
+/// descend into aggregates handle that variant before consulting this.
+fn push_bound_children<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
+    match expr {
+        BoundExpr::Aggregate { arg, .. } => out.extend(arg.iter().map(|b| &**b)),
+        BoundExpr::Literal { .. } | BoundExpr::Parameter { .. } | BoundExpr::Variable { .. } => {}
+        BoundExpr::Property { base, .. } => out.push(base),
+        BoundExpr::Unary { operand, .. } | BoundExpr::IsNull { operand, .. } => out.push(operand),
+        BoundExpr::Binary { lhs, rhs, .. } => {
+            out.push(lhs);
+            out.push(rhs);
+        }
+        BoundExpr::HasLabels { subject, .. } => out.push(subject),
+        BoundExpr::Function { args, .. } => out.extend(args.iter()),
+        BoundExpr::Case {
+            operand,
+            whens,
+            else_expr,
+            ..
+        } => {
+            out.extend(operand.iter().map(|b| &**b));
+            for (condition, value) in whens {
+                out.push(condition);
+                out.push(value);
+            }
+            out.extend(else_expr.iter().map(|b| &**b));
+        }
+        BoundExpr::ListLiteral { items, .. } => out.extend(items.iter()),
+        BoundExpr::MapLiteral { entries, .. } => {
+            out.extend(entries.iter().map(|(_, value)| value));
+        }
+        BoundExpr::Index { base, index, .. } => {
+            out.push(base);
+            out.push(index);
+        }
+        BoundExpr::Slice { base, from, to, .. } => {
+            out.push(base);
+            out.extend(from.iter().map(|b| &**b));
+            out.extend(to.iter().map(|b| &**b));
+        }
+        BoundExpr::ListComprehension {
+            list,
+            where_clause,
+            map,
+            ..
+        } => {
+            out.push(list);
+            out.extend(where_clause.iter().map(|b| &**b));
+            out.extend(map.iter().map(|b| &**b));
+        }
+        BoundExpr::Quantifier {
+            list, predicate, ..
+        } => {
+            out.push(list);
+            out.push(predicate);
+        }
+        BoundExpr::Reduce {
+            init, list, expr, ..
+        } => {
+            out.push(init);
+            out.push(list);
+            out.push(expr);
+        }
+        BoundExpr::PatternComprehension {
+            pattern,
+            where_clause,
+            map,
+            ..
+        } => {
+            out.extend(pattern.start.properties.iter());
+            for (rel, node) in &pattern.steps {
+                out.extend(rel.properties.iter());
+                out.extend(node.properties.iter());
+            }
+            out.extend(where_clause.iter().map(|b| &**b));
+            out.push(map);
+        }
+        BoundExpr::PatternPredicate { pattern, .. } => {
+            out.extend(pattern.start.properties.iter());
+            for (rel, node) in &pattern.steps {
+                out.extend(rel.properties.iter());
+                out.extend(node.properties.iter());
+            }
+        }
+    }
+}
+
+/// The grouping-key reference walk over a BOUND expression
+/// (acetone-1qj): a node matching one of `keys` (structurally,
+/// span-insensitively — for `RefErrorMode::Ambiguous` only simple
+/// variable/property nodes may match; ORDER BY may whole-match) is a
+/// projected grouping key and stops the walk; aggregates stop it (their
+/// arguments are aggregated); a `Variable` is accepted when it is an
+/// output alias (`output_ids`) or an iteration-local; anything else that
+/// reaches a `Variable` errors per `mode`. `variables` supplies the name
+/// for the `UndefinedVariable` rendering.
+#[allow(clippy::too_many_arguments)]
+fn validate_grouping_refs(
+    expr: &BoundExpr,
+    keys: &[&BoundExpr],
+    output_ids: &[u32],
+    mode: RefErrorMode,
+    item_span: Span,
+    locals: &mut Vec<u32>,
+    variables: &[crate::bind::bound::VarBinding],
+) -> Result<(), BindError> {
+    let simple = matches!(
+        expr,
+        BoundExpr::Variable { .. } | BoundExpr::Property { .. }
+    );
+    let whole_match_ok = match mode {
+        RefErrorMode::Ambiguous => simple,
+        RefErrorMode::Undefined => true,
+    };
+    if whole_match_ok && keys.iter().any(|key| same_bound(key, expr)) {
+        return Ok(());
+    }
+    match expr {
+        BoundExpr::Aggregate { .. } => Ok(()),
+        BoundExpr::Literal { .. } | BoundExpr::Parameter { .. } => Ok(()),
+        BoundExpr::Variable { id, span } => {
+            if locals.contains(&id.0) || output_ids.contains(&id.0) {
+                return Ok(());
+            }
+            Err(match mode {
+                RefErrorMode::Ambiguous => BindError::AmbiguousAggregation { span: item_span },
+                RefErrorMode::Undefined => BindError::UndefinedVariable {
+                    name: variables
+                        .get(id.0 as usize)
+                        .map(|v| v.name.clone())
+                        .unwrap_or_default(),
+                    span: *span,
+                },
+            })
+        }
+        BoundExpr::ListComprehension {
+            variable,
+            list,
+            where_clause,
+            map,
+            ..
+        } => {
+            validate_grouping_refs(list, keys, output_ids, mode, item_span, locals, variables)?;
+            locals.push(variable.0);
+            let result = where_clause
+                .as_deref()
+                .map_or(Ok(()), |e| {
+                    validate_grouping_refs(e, keys, output_ids, mode, item_span, locals, variables)
+                })
+                .and_then(|()| {
+                    map.as_deref().map_or(Ok(()), |e| {
+                        validate_grouping_refs(
+                            e, keys, output_ids, mode, item_span, locals, variables,
+                        )
+                    })
+                });
+            locals.pop();
+            result
+        }
+        BoundExpr::Quantifier {
+            variable,
+            list,
+            predicate,
+            ..
+        } => {
+            validate_grouping_refs(list, keys, output_ids, mode, item_span, locals, variables)?;
+            locals.push(variable.0);
+            let result = validate_grouping_refs(
+                predicate, keys, output_ids, mode, item_span, locals, variables,
+            );
+            locals.pop();
+            result
+        }
+        BoundExpr::Reduce {
+            accumulator,
+            init,
+            variable,
+            list,
+            expr: body,
+            ..
+        } => {
+            validate_grouping_refs(init, keys, output_ids, mode, item_span, locals, variables)?;
+            validate_grouping_refs(list, keys, output_ids, mode, item_span, locals, variables)?;
+            locals.push(accumulator.0);
+            locals.push(variable.0);
+            let result =
+                validate_grouping_refs(body, keys, output_ids, mode, item_span, locals, variables);
+            locals.pop();
+            locals.pop();
+            result
+        }
+        BoundExpr::PatternComprehension {
+            pattern,
+            where_clause,
+            map,
+            ..
+        } => {
+            // Pattern variables shadow outer names for the body — a
+            // deliberate over-acceptance in the safe direction (PR #244
+            // review finding 7.3).
+            let depth = locals.len();
+            locals.extend(pattern.start.var.iter().map(|v| v.0));
+            for (rel, node) in &pattern.steps {
+                locals.extend(rel.var.iter().map(|v| v.0));
+                locals.extend(node.var.iter().map(|v| v.0));
+            }
+            let mut result = Ok(());
+            for e in
+                pattern
+                    .start
+                    .properties
+                    .iter()
+                    .chain(pattern.steps.iter().flat_map(|(rel, node)| {
+                        rel.properties.iter().chain(node.properties.iter())
+                    }))
+                    .chain(where_clause.as_deref())
+                    .chain(std::iter::once(&**map))
+            {
+                result =
+                    validate_grouping_refs(e, keys, output_ids, mode, item_span, locals, variables);
+                if result.is_err() {
+                    break;
+                }
+            }
+            locals.truncate(depth);
+            result
+        }
+        other => {
+            let mut children: Vec<&BoundExpr> = Vec::new();
+            push_bound_children(other, &mut children);
+            for child in children {
+                validate_grouping_refs(
+                    child, keys, output_ids, mode, item_span, locals, variables,
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Which error a disallowed reference raises (acetone-1qj): a projection
+/// item's mixture is `AmbiguousAggregationExpression`; an ORDER BY
+/// reference that fails to reduce is `UndefinedVariable` (the name has no
+/// value in the post-projection row).
+#[derive(Clone, Copy)]
+enum RefErrorMode {
+    Ambiguous,
+    Undefined,
 }
 
 fn contains_aggregate(expr: &BoundExpr) -> bool {

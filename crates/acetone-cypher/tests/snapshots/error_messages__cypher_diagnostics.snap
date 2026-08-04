@@ -98,6 +98,10 @@ error:  line 1, column 15: unknown relationship type "RUNZ" — declare it first
 input:  MATCH (h:Host)-[:ZZZZZZ]->(x:Host) RETURN h
 error:  line 1, column 15: unknown relationship type "ZZZZZZ" — declare it first with `acetone declare-rel-type "ZZZZZZ"`
 
+### bind/ambiguous-aggregation (acetone-1qj) (strict)
+input:  MATCH (n)--(m) RETURN n.x + count(m)
+error:  line 1, column 23: this expression mixes an aggregate with an unaggregated variable, which is ambiguous: project the non-aggregated part as its own column and refer to that
+
 ### bind/undeclared-property-typo-is-not-an-error (ADR-0070) (strict)
 input:  MATCH (h:Host {hstname: 'a'}) RETURN h
 error:  (*no diagnostic: parses and binds cleanly*)

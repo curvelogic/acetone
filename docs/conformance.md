@@ -8,33 +8,33 @@ statement records the pass rate, how it is measured, what the measurement does
 > Measured against TCK commit `677cbafabb8c3c5eed458fd3b1ec0daec8d67d23`. The
 > live number is produced by the CI job "openCypher TCK conformance report"
 > (`cargo run --release -p acetone-tck --bin tck_runner`); this document is
-> refreshed at each release. Last refreshed 2026-07-31 (Phase 9 boundary,
-> post-reopening) by running the runner on `main`; every figure was
-> re-verified identical after the criterion-3 remediation PRs (#224–#230),
-> which touched no TCK-visible behaviour.
+> refreshed at each release. Last refreshed 2026-08-04 (Phase 10,
+> acetone-1qj) by running the runner on `main` and on the branch that
+> enforces the ORDER BY/aggregation grouping-key rules; the branch
+> figures below were additionally reproduced by an independent reviewer.
 
 ## Pass rate
 
-**2185 / 3897 scenarios pass (56.07%). 0 / 3897 fail.**
+**2218 / 3897 scenarios pass (56.92%). 0 / 3897 fail.**
 
-Percentages are shown to 2dp and never rounded up to clear a bar: 2185/3897 is
-56.0688%, published as 56.07%. The discipline exists because a rounded number
+Percentages are shown to 2dp and never rounded up to clear a bar: 2218/3897 is
+56.9156%, published as 56.92%. The discipline exists because a rounded number
 once read as "55.0%" while the exact fraction (2142/3897 = 54.9654%) sat below
 the 55% bar (PR #200) — so the fraction, not the rendering, is the claim.
 
 | Area | Scenarios | Passing | Rate |
 |------|-----------|---------|------|
 | expressions | 2616 | 1241 | 47.44% |
-| clauses | 1251 | 933 | 74.58% |
+| clauses | 1251 | 966 | 77.22% |
 | useCases | 30 | 11 | 36.67% |
 
 The full outcome breakdown:
 
 | Outcome | Count | Meaning |
 |---------|-------|---------|
-| **passed** | 2185 | executed and matched the TCK-expected result — or correctly refused a query the TCK required to be refused (274 of the 2185; see disclosures) |
+| **passed** | 2218 | executed and matched the TCK-expected result — or correctly refused a query the TCK required to be refused (307 of the 2218; see disclosures) |
 | unsupported (deferred syntax) | 1138 | a feature acetone declines by design — mostly at *bind* time, not parse: 1114 of the 1138 parse fine |
-| unsupported (compile classification) | 307 | a compile-time error the TCK expects that acetone classifies differently |
+| unsupported (compile classification) | 274 | a compile-time error the TCK expects that acetone classifies differently |
 | unsupported (executor) | 267 | parsed and planned, but the executor lacks the operator |
 | **failed** | 0 | acetone rejects a query the TCK requires to be valid, or returns a wrong result |
 
@@ -101,8 +101,8 @@ matter.
 
 ### Can convert a defect into a pass
 
-- **274 of the 2185 passes (12.5%) never execute the query.** They are credited
-  on a front-end rejection where the TCK expected a compile-time error. 247 of
+- **307 of the 2218 passes (13.8%) never execute the query.** They are credited
+  on a front-end rejection where the TCK expected a compile-time error. 280 of
   those are *binder* rejections matched on both the error class and the TCK's
   detail string — a genuinely strong check. The other **27 are parse rejections
   where the rejection reason is not verified at all**: any parse error
@@ -158,10 +158,10 @@ check in this repository:
   committed tests — a reader can read the reasoning but cannot re-run it, which
   is a weaker guarantee than the two properties above.
 
-The 12.5% of passes credited without executing (see the disclosures above) is
+The 13.8% of passes credited without executing (see the disclosures above) is
 the standing caveat on all of this: the rate measures conformance *including*
 correctly-refused invalid queries, which is what the TCK asks for, but it is
-not 2185 successfully executed queries.
+not 2218 successfully executed queries.
 
 ## What is solid
 
@@ -187,7 +187,7 @@ names suggest, so they are given here by what the queries actually contain.
 | Other unimplemented functions (`rand`, `percentileDisc`/`percentileCont`) | deferred syntax | ~78 scenarios | — |
 | `UNION` / `UNION ALL` and existential subqueries | deferred syntax | 22 scenarios | — |
 | Assorted remainder of that bucket (the two Set1 write-escape scenarios, six that parse but carry a deferred token, five other bind rejections) | deferred syntax | 13 scenarios | — |
-| Compile-time error **classification** differences: acetone raises a typed error, but a different class or detail than the TCK names | compile classification | 307 scenarios | — |
+| Compile-time error **classification** differences: acetone raises a typed error, but a different class or detail than the TCK names | compile classification | 274 scenarios | — |
 | Executor operators not yet implemented | executor | 267 scenarios (expressions 130, clauses 118, useCases 19) | — |
 
 Two corrections to the impression the bucket names give. First, "deferred

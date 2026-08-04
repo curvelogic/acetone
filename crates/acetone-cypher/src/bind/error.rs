@@ -87,6 +87,15 @@ pub enum BindError {
 
     #[error("aggregation is not allowed here")]
     InvalidAggregation { span: Span },
+    /// A projection or ordering expression mixes an aggregate with an
+    /// unaggregated variable reference (TCK `AmbiguousAggregationExpression`,
+    /// acetone-1qj): `me.age + count(you.age)` is ambiguous even when the
+    /// non-aggregate part is separately projected.
+    #[error(
+        "this expression mixes an aggregate with an unaggregated variable, which is \
+         ambiguous: project the non-aggregated part as its own column and refer to that"
+    )]
+    AmbiguousAggregation { span: Span },
 
     #[error("aggregate functions cannot be nested")]
     NestedAggregation { span: Span },
@@ -179,6 +188,7 @@ impl BindError {
             | BindError::UnknownFunction { span, .. }
             | BindError::InvalidNumberOfArguments { span, .. }
             | BindError::InvalidAggregation { span }
+            | BindError::AmbiguousAggregation { span }
             | BindError::NestedAggregation { span }
             | BindError::ColumnNameConflict { span, .. }
             | BindError::NoVariablesInScope { span }
@@ -210,6 +220,7 @@ impl BindError {
             BindError::UnknownFunction { .. } => Some("UnknownFunction"),
             BindError::InvalidNumberOfArguments { .. } => Some("InvalidNumberOfArguments"),
             BindError::InvalidAggregation { .. } => Some("InvalidAggregation"),
+            BindError::AmbiguousAggregation { .. } => Some("AmbiguousAggregationExpression"),
             BindError::NestedAggregation { .. } => Some("NestedAggregation"),
             BindError::ColumnNameConflict { .. } => Some("ColumnNameConflict"),
             BindError::NoVariablesInScope { .. } => Some("NoVariablesInScope"),
