@@ -262,7 +262,7 @@ schema reproduces identical map roots. With `--label` or `--edge`, export a
 single table (to stdout, or to `-o <file>`); with neither, `-o` names the
 directory to write one table per label and type into.
 
-### `acetone query <CYPHER> [--at <REF>] [-f table|json|csv] [--param KEY=VALUE]... [--timeout <SECONDS>]`
+### `acetone query <CYPHER> [--at <REF>] [-f table|json|csv] [--param KEY=VALUE]... [--timeout <SECONDS>] [--autodeclare]`
 
 Run an openCypher read query (alias: `acetone cypher`). `--at` reads a past
 version — whole-query time travel. `--param KEY=VALUE` (repeatable) binds
@@ -283,6 +283,16 @@ reached on a large stored graph, and a query it cuts off fails with a typed
 error naming the flag. The library API sets no timeout by default — this is
 a CLI-surface backstop (ADR-0069).
 
+`--autodeclare` opts this invocation into **relationship-type autodeclare**
+(ADR-0060, off by default): a write may use a relationship type the schema
+does not declare in `CREATE`/`MERGE` position, and the type is appended to
+the schema — an empty definition: no discriminator, no property types — in
+the **same commit as the data**, announced by an advisory. Reads never coin
+a type: an unknown type in a match position stays an error, flag or no
+flag, so a typo'd `MATCH` cannot silently mutate the schema. Declaration
+stays deliberate by default; this is the sanctioned fast path for
+experimentation and open-vocabulary ingestion.
+
 ### `acetone shell [--timeout <SECONDS>]`
 
 Start an interactive Cypher shell (readline REPL). Enter queries — read or
@@ -290,7 +300,9 @@ write — to run them against the current workspace state; a write advances the
 workspace (commit separately with `acetone commit`). Conveniences:
 `:checkout <ref>`, `:log`, `:format <table|json|csv>`,
 `:param <name> <literal>` (bind `$name` for later statements; bare `:param`
-lists, `:param-clear` drops), `:quit`. Each statement runs under the same
+lists, `:param-clear` drops), `:autodeclare on|off` (let writes coin
+relationship types for the rest of the session — ADR-0060, off by default;
+bare `:autodeclare` shows the state), `:quit`. Each statement runs under the same
 default 60-second wall-clock budget as `acetone query`; start the shell with
 `--timeout <SECONDS>` to change it (`0` disables).
 

@@ -7,7 +7,7 @@ pub mod bound;
 pub mod catalogue;
 pub mod error;
 
-pub use binder::{BindMode, bind};
+pub use binder::{BindMode, bind, bind_with};
 pub use bound::{BoundClause, BoundExpr, BoundQuery, EntityKind, IndexHint, VarId};
 pub use catalogue::Catalogue;
 pub use error::BindError;

@@ -411,6 +411,12 @@ pub enum Command {
         /// be reached on a store-backed graph (ADR-0069).
         #[arg(long, value_name = "SECONDS", default_value_t = 60)]
         timeout: u64,
+        /// Opt in to relationship-type autodeclare (ADR-0060): a write may
+        /// coin an unknown relationship type in CREATE/MERGE position,
+        /// appending it to the schema in the same commit as the data. Off
+        /// by default; reads never coin a type.
+        #[arg(long)]
+        autodeclare: bool,
     },
     /// Start an interactive Cypher shell (readline REPL).
     ///

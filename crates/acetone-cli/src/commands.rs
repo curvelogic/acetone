@@ -130,9 +130,18 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             format,
             param,
             timeout,
+            autodeclare,
         } => {
             let format = crate::query::Format::parse(&format)?;
-            crate::query::run(repo_path, &cypher, at.as_deref(), format, &param, timeout)
+            crate::query::run(
+                repo_path,
+                &cypher,
+                at.as_deref(),
+                format,
+                &param,
+                timeout,
+                autodeclare,
+            )
         }
         Command::Shell { timeout } => crate::query::shell(repo_path, timeout),
         Command::Fsck => fsck(repo_path),
