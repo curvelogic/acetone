@@ -43,6 +43,16 @@ fine.)
   refused (it would otherwise silently resolve a schema conflict by-write).
   Convergent coinage of the same type on two branches merges cleanly.
 
+- **`acetone schema apply`** (acetone-yx1o.1): consume the `schema
+  --json` document declaratively — diff against the current schema,
+  report per-entry outcomes, stage additions and changes in one
+  transaction (a declare-time refusal rejects the whole document),
+  never remove, idempotent on re-apply; `--dry-run` prints the plan.
+  Within an entry the document is desired state (omitting a facet drops
+  it — the plan says so); across entries apply never removes. Also the
+  first CLI surface that can declare a surrogate label
+  (`"surrogate": true`) — declaration-only until `_id` minting ships.
+
 ### Changed
 
 - **ORDER BY and aggregation scoping now enforce the openCypher

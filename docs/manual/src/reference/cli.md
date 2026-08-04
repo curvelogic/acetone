@@ -212,6 +212,47 @@ type that was given a discriminator through the library would drop it, and is
 therefore **refused while relationships of that type exist** (change it with
 an explicit `migrate`).
 
+### `acetone schema apply <FILE> [--dry-run]`
+
+Apply a declarative schema document — the exact shape `acetone schema
+--json` exports, closing define/import/export with acetone's own JSON as
+the interchange format (no cross-vendor standard exists; GQL graph types
+are the future alignment target). `-` reads stdin. The document is diffed
+against the current schema and each entry reported (`add` / `change` /
+unchanged); only additions and changes are staged, **in one transaction**,
+so a change any declare-time check refuses — key or discriminator
+stability, the type backfill check against existing data — rejects the
+whole document and nothing lands. Entries in the repository but absent
+from the document are left untouched and counted: **`apply` never
+removes** (removal stays with `migrate`, keeping schema deliberate
+history). Re-applying an applied document stages nothing and leaves the
+workspace clean. Unknown fields and unknown type names are refused —
+typo protection for hand-edited documents (note: a *duplicated JSON
+field* within one object is last-wins, per JSON parsing convention —
+only duplicate entry names are detected). A label entry with
+`"surrogate": true` declares a `KEY SURROGATE` label — the first CLI
+surface for surrogate declaration — but surrogate labels are
+**declaration-only for now**: nothing yet mints the `_id` key at
+`CREATE`, so nodes of a surrogate label cannot be created through
+Cypher until minting ships (tracked as a bead).
+
+**Within an entry the document is desired state**: an entry named in
+the document *wholly replaces* the repository's definition, so omitting
+`types`, `required` or `unique` for an existing label **drops them** —
+the plan names what a change drops (`change (drops unique ("serial"))`)
+so a `--dry-run` shows it before anything lands. The entry-level rule
+is the opposite: entries absent from the document are never touched.
+
+`schema apply` can also express what the imperative commands cannot: a
+relationship type **with a discriminator**. Redeclaring such a type
+with `declare-rel-type` would drop the discriminator, and is refused
+while relationships of the type exist.
+
+`--dry-run` prints the plan and applies nothing. It diffs only — the
+declare-time data checks (type backfill, require/unique violations) run
+at apply, so a clean dry run is a plan preview, not a promise the apply
+will be accepted.
+
 ### `acetone declare-index <NAME> --label <LABEL> --property <PROPERTY>...`
 
 Declare a property index `idx/<name>`. The index is built from the current

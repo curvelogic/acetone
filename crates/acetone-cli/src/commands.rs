@@ -87,7 +87,18 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             property,
         } => declare_index(repo_path, &name, &label, &property),
         Command::Reindex => reindex(repo_path),
-        Command::Schema { at, json } => schema(repo_path, at.as_deref(), json),
+        Command::Schema { action, at, json } => match action {
+            Some(crate::cli::SchemaAction::Apply { file, dry_run }) => {
+                // The export flags would otherwise be silently ignored
+                // (PR #246 review minor 5) — `--at` especially reads as
+                // "diff against that ref", which apply does not do.
+                if at.is_some() || json {
+                    bail!("--at/--json apply to `schema` (export), not `schema apply`");
+                }
+                schema_apply(repo_path, &file, dry_run)
+            }
+            None => schema(repo_path, at.as_deref(), json),
+        },
         Command::Migrate {
             min_bytes,
             mask_bits,
@@ -905,6 +916,341 @@ fn reindex(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
     repo.reindex().context("reindexing")?;
     outln!("reindexed");
+    Ok(())
+}
+
+/// `acetone schema apply` (acetone-yx1o.1): consume the `schema --json`
+/// document declaratively. Diff against the current schema; stage only
+/// additions and changes; one transaction, so a declare-time refusal
+/// (key/discriminator stability, backfill checks — all at the
+/// `Transaction` save chokepoint) rejects the whole document and nothing
+/// lands. Entries in the repository but absent from the document are left
+/// untouched: `apply` never removes (removal is `migrate` territory —
+/// schema stays deliberate history). Unchanged entries stage nothing, so
+/// re-applying a document is idempotent and leaves the workspace clean.
+pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Result<()> {
+    use acetone_core::model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
+    use std::collections::BTreeMap;
+
+    let text = if file == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("reading the schema document from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(file)
+            .with_context(|| format!("reading schema document {file:?}"))?
+    };
+    let doc: Json = serde_json::from_str(&text).context("parsing the schema document")?;
+
+    // --- strict manual decoding: unknown fields are typo traps, refused ---
+    fn obj<'j>(v: &'j Json, what: &str) -> Result<&'j serde_json::Map<String, Json>> {
+        v.as_object()
+            .with_context(|| format!("{what} must be a JSON object"))
+    }
+    fn check_keys(map: &serde_json::Map<String, Json>, allowed: &[&str], what: &str) -> Result<()> {
+        for key in map.keys() {
+            if !allowed.contains(&key.as_str()) {
+                anyhow::bail!(
+                    "unknown field {key:?} in {what} (allowed: {})",
+                    allowed.join(", ")
+                );
+            }
+        }
+        Ok(())
+    }
+    fn string_list(v: Option<&Json>, what: &str) -> Result<Vec<String>> {
+        match v {
+            None => Ok(Vec::new()),
+            Some(v) => v
+                .as_array()
+                .with_context(|| format!("{what} must be an array of strings"))?
+                .iter()
+                .map(|s| {
+                    s.as_str()
+                        .map(str::to_owned)
+                        .with_context(|| format!("{what} must contain only strings"))
+                })
+                .collect(),
+        }
+    }
+    fn required_str<'j>(
+        map: &'j serde_json::Map<String, Json>,
+        key: &str,
+        what: &str,
+    ) -> Result<&'j str> {
+        map.get(key)
+            .and_then(Json::as_str)
+            .with_context(|| format!("{what} needs a string {key:?} field"))
+    }
+    fn type_map(v: Option<&Json>, what: &str) -> Result<BTreeMap<String, PropertyType>> {
+        let mut out = BTreeMap::new();
+        if let Some(v) = v {
+            for (property, ty) in obj(v, &format!("{what}.types"))? {
+                let name = ty
+                    .as_str()
+                    .with_context(|| format!("{what}.types values must be type-name strings"))?;
+                let parsed = PropertyType::parse(name)
+                    .with_context(|| format!("{what}.types[{property:?}]"))?;
+                out.insert(property.clone(), parsed);
+            }
+        }
+        Ok(out)
+    }
+
+    let root = obj(&doc, "the schema document")?;
+    check_keys(
+        root,
+        &["labels", "relationship_types", "indexes"],
+        "the schema document",
+    )?;
+    let section = |key: &str| -> Result<Vec<&Json>> {
+        match root.get(key) {
+            None => Ok(Vec::new()),
+            Some(v) => Ok(v
+                .as_array()
+                .with_context(|| format!("{key:?} must be an array"))?
+                .iter()
+                .collect()),
+        }
+    };
+
+    let mut desired: Vec<SchemaEntry> = Vec::new();
+    for entry in section("labels")? {
+        let map = obj(entry, "a label entry")?;
+        check_keys(
+            map,
+            &["name", "key", "types", "required", "unique", "surrogate"],
+            "a label entry",
+        )?;
+        let name = required_str(map, "name", "a label entry")?;
+        let what = format!("label {name:?}");
+        let types = type_map(map.get("types"), &what)?;
+        let required = string_list(map.get("required"), &format!("{what}.required"))?;
+        let unique = string_list(map.get("unique"), &format!("{what}.unique"))?;
+        let surrogate = match map.get("surrogate") {
+            None => false,
+            Some(v) => v
+                .as_bool()
+                .with_context(|| format!("{what}.surrogate must be true or false"))?,
+        };
+        let key = string_list(map.get("key"), &format!("{what}.key"))?;
+        let def = if surrogate {
+            // The export writes the minted key property; accept it (or an
+            // omitted key), refuse anything else as a contradiction.
+            if !key.is_empty() && key != ["_id"] {
+                anyhow::bail!("{what}: a surrogate label cannot also declare key {key:?}");
+            }
+            LabelDef::surrogate(types, required, unique)
+        } else {
+            LabelDef::new(key, types, required, unique)
+        }
+        .with_context(|| what.clone())?;
+        desired.push(SchemaEntry::Label {
+            name: name.to_owned(),
+            def,
+        });
+    }
+    for entry in section("relationship_types")? {
+        let map = obj(entry, "a relationship-type entry")?;
+        check_keys(
+            map,
+            &["name", "discriminator", "types", "required"],
+            "a relationship-type entry",
+        )?;
+        let name = required_str(map, "name", "a relationship-type entry")?;
+        let what = format!("relationship type {name:?}");
+        let discriminator = match map.get("discriminator") {
+            None | Some(Json::Null) => None,
+            Some(v) => Some(
+                v.as_str()
+                    .with_context(|| format!("{what}.discriminator must be a string or null"))?
+                    .to_owned(),
+            ),
+        };
+        let types = type_map(map.get("types"), &what)?;
+        let required = string_list(map.get("required"), &format!("{what}.required"))?;
+        let def = RelTypeDef::new(discriminator, types, required).with_context(|| what.clone())?;
+        desired.push(SchemaEntry::RelType {
+            name: name.to_owned(),
+            def,
+        });
+    }
+    for entry in section("indexes")? {
+        let map = obj(entry, "an index entry")?;
+        check_keys(map, &["name", "label", "properties"], "an index entry")?;
+        let name = required_str(map, "name", "an index entry")?;
+        let what = format!("index {name:?}");
+        let label = required_str(map, "label", &what)?;
+        let properties = string_list(map.get("properties"), &format!("{what}.properties"))?;
+        let def = IndexDef::new(label, properties).with_context(|| what.clone())?;
+        desired.push(SchemaEntry::Index {
+            name: name.to_owned(),
+            def,
+        });
+    }
+
+    // Duplicate names within a section are almost certainly an editing
+    // mistake — last-wins would silently drop the earlier entry.
+    {
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in &desired {
+            let key = match entry {
+                SchemaEntry::Label { name, .. } => format!("label {name}"),
+                SchemaEntry::RelType { name, .. } => format!("relationship type {name}"),
+                SchemaEntry::Index { name, .. } => format!("index {name}"),
+            };
+            if !seen.insert(key.clone()) {
+                anyhow::bail!("duplicate {key} in the schema document");
+            }
+        }
+    }
+
+    // --- diff against the current schema ---
+    let repo = open(repo_path)?;
+    let snapshot = repo.workspace_snapshot()?;
+    let current = snapshot.schema_entries()?;
+    let describe = |entry: &SchemaEntry| -> (String, String) {
+        match entry {
+            SchemaEntry::Label { name, .. } => ("label".into(), name.clone()),
+            SchemaEntry::RelType { name, .. } => ("relationship type".into(), name.clone()),
+            SchemaEntry::Index { name, .. } => ("index".into(), name.clone()),
+        }
+    };
+    // What a `change` DROPS (blocker 2, PR #246 review): an entry in the
+    // document wholly replaces the repository's — a declarative
+    // desired-state rule that cuts the other way from the entry-level
+    // "never removes" — so the plan must say what an omission is about to
+    // strip, or `--dry-run` is no safety net.
+    fn dropped_facets(current: &SchemaEntry, desired: &SchemaEntry) -> Vec<String> {
+        use acetone_core::model::schema::PropertyType;
+        use std::collections::BTreeMap;
+        let names = |what: &str, old: &[String], new: &[String]| -> Option<String> {
+            let gone: Vec<String> = old
+                .iter()
+                .filter(|n| !new.contains(n))
+                .map(|n| format_label(n))
+                .collect();
+            (!gone.is_empty()).then(|| format!("{what} ({})", gone.join(", ")))
+        };
+        let types_gone = |old: &BTreeMap<String, PropertyType>,
+                          new: &BTreeMap<String, PropertyType>|
+         -> Option<String> {
+            let gone: Vec<String> = old
+                .keys()
+                .filter(|p| !new.contains_key(*p))
+                .map(|p| format_label(p))
+                .collect();
+            (!gone.is_empty()).then(|| format!("types ({})", gone.join(", ")))
+        };
+        match (current, desired) {
+            (SchemaEntry::Label { def: c, .. }, SchemaEntry::Label { def: d, .. }) => {
+                let mut out = Vec::new();
+                out.extend(types_gone(c.types(), d.types()));
+                out.extend(names("required", c.exists(), d.exists()));
+                out.extend(names("unique", c.unique(), d.unique()));
+                if c.is_surrogate() && !d.is_surrogate() {
+                    out.push("surrogate".to_owned());
+                }
+                out
+            }
+            (SchemaEntry::RelType { def: c, .. }, SchemaEntry::RelType { def: d, .. }) => {
+                let mut out = Vec::new();
+                if c.discriminator().is_some() && d.discriminator().is_none() {
+                    out.push("discriminator".to_owned());
+                }
+                out.extend(types_gone(c.types(), d.types()));
+                out.extend(names("required", c.exists(), d.exists()));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    let mut to_stage: Vec<&SchemaEntry> = Vec::new();
+    let mut unchanged = 0usize;
+    for entry in &desired {
+        let (kind, name) = describe(entry);
+        let existing = current
+            .iter()
+            .find(|c| describe(c) == (kind.clone(), name.clone()));
+        match existing {
+            None => {
+                outln!("{kind} {}: add", format_label(&name));
+                to_stage.push(entry);
+            }
+            Some(c) if *c == *entry => {
+                unchanged += 1;
+            }
+            Some(c) => {
+                let drops = dropped_facets(c, entry);
+                if drops.is_empty() {
+                    outln!("{kind} {}: change", format_label(&name));
+                } else {
+                    outln!(
+                        "{kind} {}: change (drops {})",
+                        format_label(&name),
+                        drops.join(", ")
+                    );
+                }
+                to_stage.push(entry);
+            }
+        }
+    }
+    let untouched = current
+        .iter()
+        .filter(|c| {
+            let key = describe(c);
+            !desired.iter().any(|d| describe(d) == key)
+        })
+        .count();
+    if unchanged > 0 {
+        outln!("{unchanged} unchanged");
+    }
+    if untouched > 0 {
+        outln!("{untouched} in the repository but not in the document: left as-is");
+    }
+
+    if dry_run {
+        outln!("(dry run — nothing applied)");
+        return Ok(());
+    }
+    if to_stage.is_empty() {
+        outln!("(nothing to apply)");
+        return Ok(());
+    }
+
+    // Blocker 1 (PR #246 review): the require/unique backfill check
+    // (acetone-9gw) is CLI-side in declare_label, NOT at the save
+    // chokepoint — apply must run it too or it is a second declaration
+    // path with the guard missing (spec §2: a declaration existing data
+    // violates is refused, merge being the only exception). Chokepoint
+    // relocation is filed separately.
+    for entry in &to_stage {
+        if let SchemaEntry::Label { name, def } = entry {
+            let violations = acetone_core::graph::constraints::check_label(&snapshot, name, def)?;
+            if !violations.is_empty() {
+                bail!(
+                    "cannot apply label {}: existing data violates the declared \
+                     constraints (nothing was applied) — {}",
+                    format_label(name),
+                    acetone_core::graph::constraints::ConstraintViolations(violations)
+                );
+            }
+        }
+    }
+
+    let mut txn = repo.begin_write()?;
+    for entry in &to_stage {
+        txn.put_schema(entry)?;
+    }
+    // One save: a declare-time refusal (type backfill, key/discriminator
+    // stability) rejects the whole document.
+    txn.save()
+        .context("applying the schema document (nothing was applied)")?;
+    outln!("applied {} schema change(s)", to_stage.len());
     Ok(())
 }
 

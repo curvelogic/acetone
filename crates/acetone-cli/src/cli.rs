@@ -307,6 +307,8 @@ pub enum Command {
     /// checking it out; with no `--at`, the current workspace's schema is
     /// shown.
     Schema {
+        #[command(subcommand)]
+        action: Option<SchemaAction>,
         /// Read the schema at a specific ref (branch, tag or commit hash)
         /// instead of the current workspace state.
         #[arg(long)]
@@ -533,5 +535,22 @@ pub enum Command {
         /// Commit message.
         #[arg(short = 'm', long)]
         message: String,
+    },
+}
+
+/// Actions on the schema beyond printing it.
+#[derive(clap::Subcommand, Debug)]
+pub enum SchemaAction {
+    /// Apply a declarative schema document (the `schema --json` shape):
+    /// diff against the current schema, stage additions and changes in one
+    /// transaction, and refuse the whole document if any change fails the
+    /// declare-time checks. Entries in the repository but absent from the
+    /// document are left untouched — `apply` never removes.
+    Apply {
+        /// Path to the JSON document (`-` reads stdin).
+        file: String,
+        /// Print the plan without applying anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
