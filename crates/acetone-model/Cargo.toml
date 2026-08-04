@@ -9,6 +9,9 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Surrogate _id minting (spec §2): ULID randomness. Already in the workspace
+# tree transitively (gitoxide -> tempfile), so no new compiled code.
+getrandom = "0.4"
 acetone-prolly.workspace = true
 thiserror.workspace = true
 

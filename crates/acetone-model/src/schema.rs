@@ -36,6 +36,39 @@ pub const KIND_INDEX: &str = "index";
 /// The property name minted for `KEY SURROGATE` labels (spec §2).
 pub const SURROGATE_KEY_PROPERTY: &str = "_id";
 
+/// Mint a surrogate `_id` value: a ULID (spec §2) — 48-bit millisecond
+/// timestamp, 80 random bits, Crockford base32, 26 characters,
+/// lexically sortable by creation time. Minting is inherently
+/// non-deterministic (like a git commit timestamp): the id becomes part
+/// of the map content, so history independence is unaffected, and the
+/// documented consequence holds — concurrent creation across branches
+/// merges as distinct nodes.
+pub fn mint_surrogate_id() -> String {
+    const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+        & ((1 << 48) - 1);
+    let mut random = [0u8; 10];
+    // Failure to gather entropy is unrecoverable for identity minting —
+    // better to refuse loudly than mint colliding ids.
+    getrandom::fill(&mut random).expect("operating system entropy is available");
+    // 128 bits: 48 timestamp + 80 random.
+    let mut bits = [0u8; 16];
+    bits[0..6].copy_from_slice(&millis.to_be_bytes()[2..8]);
+    bits[6..16].copy_from_slice(&random);
+    let value = u128::from_be_bytes(bits);
+    let mut out = [0u8; 26];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let shift = 125usize.saturating_sub(5 * i);
+        *slot = ALPHABET[((value >> shift) & 0x1f) as usize];
+    }
+    // The first character encodes bits 125..130 — only 3 real bits, so it
+    // is always in 0..8, matching the canonical ULID range.
+    String::from_utf8(out.to_vec()).expect("the alphabet is ASCII")
+}
+
 /// Errors from constructing, encoding or decoding schema entries.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SchemaError {

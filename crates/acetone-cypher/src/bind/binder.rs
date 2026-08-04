@@ -975,11 +975,17 @@ impl<'a> Binder<'a> {
             None => None,
         };
         let index_hint = self.index_hint(node);
+        let mint_surrogate = node.labels.iter().any(|l| {
+            self.catalogue
+                .label(l)
+                .is_some_and(|def| def.is_surrogate())
+        });
         Ok(BoundNodePattern {
             var,
             labels: node.labels.clone(),
             properties,
             index_hints: index_hint.into_iter().collect(),
+            mint_surrogate,
             span: node.span,
         })
     }

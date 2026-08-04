@@ -1043,6 +1043,7 @@ pub const acetone_model::schema::KIND_INDEX: &str
 pub const acetone_model::schema::KIND_LABEL: &str
 pub const acetone_model::schema::KIND_RTYPE: &str
 pub const acetone_model::schema::SURROGATE_KEY_PROPERTY: &str
+pub fn acetone_model::schema::mint_surrogate_id() -> alloc::string::String
 pub fn acetone_model::schema::schema_kind_prefix(&str) -> alloc::vec::Vec<u8>
 pub mod acetone_model::values
 pub enum acetone_model::values::ValueDecodeError

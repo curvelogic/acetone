@@ -582,10 +582,20 @@ fn resolve_or_create_node(
             }),
         };
     }
-    let props = {
+    let mut props = {
         let ctx = EvalCtx::new(&*graph, parameters, governor);
         eval_property_map(node.properties.as_ref(), row, &ctx, node.span)?
     };
+    // Surrogate identity (spec §2, acetone-yx1o.4): mint the ULID key at
+    // creation — here, not at persist, so the created row (and RETURN)
+    // carries the key the node will persist under. An explicit `_id` in
+    // the property map is respected (deterministic import).
+    if node.mint_surrogate {
+        use acetone_model::schema::SURROGATE_KEY_PROPERTY;
+        props
+            .entry(SURROGATE_KEY_PROPERTY.to_owned())
+            .or_insert_with(|| Value::String(acetone_model::schema::mint_surrogate_id()));
+    }
     let created = graph.create_node(node.labels.clone(), props);
     if let Some(var) = node.var {
         row.set(var, Value::Node(created.clone()));
