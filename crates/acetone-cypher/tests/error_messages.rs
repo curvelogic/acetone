@@ -130,6 +130,10 @@ const STRICT_DIAGNOSTICS: &[(&str, &str)] = &[
     // CLEANLY — the typo signal is a session advisory, not a bind error.
     // These entries document the absence deliberately.
     (
+        "bind/ambiguous-aggregation (acetone-1qj)",
+        "MATCH (n)--(m) RETURN n.x + count(m)",
+    ),
+    (
         "bind/undeclared-property-typo-is-not-an-error (ADR-0070)",
         "MATCH (h:Host {hstname: 'a'}) RETURN h",
     ),

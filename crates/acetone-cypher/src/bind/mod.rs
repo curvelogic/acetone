@@ -195,6 +195,20 @@ mod tests {
             "MATCH (n) RETURN n.x AS x, count(n) AS c ORDER BY x, c",
             "MATCH p = (n)-->() WITH [x IN collect(p) | x] AS ps, count(n) AS c RETURN ps, c",
             "MATCH (n) RETURN DISTINCT n.x AS x ORDER BY x",
+            // PR #244 review major 1: bound-tree matching makes
+            // parenthesisation, backticks, whitespace and formatting
+            // transparent — the TCK corpus never varies these, so these
+            // controls are the only guard for the class.
+            "MATCH (n) RETURN n.x AS x, count(n) AS c ORDER BY (n.x)",
+            "MATCH (n) RETURN (n.x) AS x, count(n) AS c ORDER BY n.x",
+            "MATCH (n) RETURN n.`x` AS x, count(n) AS c ORDER BY n.x",
+            "MATCH (n) RETURN n.x AS x, count(n) AS c ORDER BY n .x",
+            "MATCH (n) RETURN DISTINCT n.x AS x ORDER BY (n.x)",
+            "MATCH (n)\nRETURN n.x\n       + 0 AS v, count(n) AS c\nORDER BY n.x + 0",
+            // PR #244 review major 2: star items are grouping keys.
+            "MATCH (n) RETURN *, n.x + count(*)",
+            "MATCH (n) WITH *, n.x + count(*) AS z RETURN z",
+            "MATCH (n) RETURN *, count(*) ORDER BY n.x",
         ] {
             assert!(bind_lenient(query).is_ok(), "must stay valid: {query}");
         }
