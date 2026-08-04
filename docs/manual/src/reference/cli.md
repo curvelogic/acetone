@@ -212,6 +212,27 @@ type that was given a discriminator through the library would drop it, and is
 therefore **refused while relationships of that type exist** (change it with
 an explicit `migrate`).
 
+### `acetone schema apply <FILE> [--dry-run]`
+
+Apply a declarative schema document — the exact shape `acetone schema
+--json` exports, closing define/import/export with acetone's own JSON as
+the interchange format (no cross-vendor standard exists; GQL graph types
+are the future alignment target). `-` reads stdin. The document is diffed
+against the current schema and each entry reported (`add` / `change` /
+unchanged); only additions and changes are staged, **in one transaction**,
+so a change any declare-time check refuses — key or discriminator
+stability, the type backfill check against existing data — rejects the
+whole document and nothing lands. Entries in the repository but absent
+from the document are left untouched and counted: **`apply` never
+removes** (removal stays with `migrate`, keeping schema deliberate
+history). Re-applying an applied document stages nothing and leaves the
+workspace clean. Unknown fields and unknown type names are refused —
+typo protection for hand-edited documents. A label entry with
+`"surrogate": true` declares a `KEY SURROGATE` label — the first CLI
+surface for surrogate declaration.
+
+`--dry-run` prints the plan and applies nothing.
+
 ### `acetone declare-index <NAME> --label <LABEL> --property <PROPERTY>...`
 
 Declare a property index `idx/<name>`. The index is built from the current

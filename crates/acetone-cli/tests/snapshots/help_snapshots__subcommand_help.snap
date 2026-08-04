@@ -264,16 +264,20 @@ Show the declared schema — labels and keys, relationship types and indexes.
 
 Prints the repository's declared schema, grouped into labels (with their ordered key tuple and existence/unique constraints), relationship types, and property indexes. Read-only. `--at <ref>` inspects any version — a branch or tag short name, full ref name or commit hash — without checking it out; with no `--at`, the current workspace's schema is shown.
 
-Usage: acetone schema [OPTIONS]
+Usage: acetone schema [OPTIONS] [COMMAND]
+
+Commands:
+  apply  Apply a declarative schema document (the `schema --json` shape): diff against the current schema, stage additions and changes in one transaction, and refuse the whole document if any change fails the declare-time checks. Entries in the repository but absent from the document are left untouched — `apply` never removes
+  help   Print this message or the help of the given subcommand(s)
 
 Options:
-      --at <AT>
-          Read the schema at a specific ref (branch, tag or commit hash) instead of the current workspace state
-
       --repo <REPO>
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --at <AT>
+          Read the schema at a specific ref (branch, tag or commit hash) instead of the current workspace state
 
       --json
           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release

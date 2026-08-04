@@ -87,7 +87,12 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             property,
         } => declare_index(repo_path, &name, &label, &property),
         Command::Reindex => reindex(repo_path),
-        Command::Schema { at, json } => schema(repo_path, at.as_deref(), json),
+        Command::Schema { action, at, json } => match action {
+            Some(crate::cli::SchemaAction::Apply { file, dry_run }) => {
+                schema_apply(repo_path, &file, dry_run)
+            }
+            None => schema(repo_path, at.as_deref(), json),
+        },
         Command::Migrate {
             min_bytes,
             mask_bits,
@@ -905,6 +910,260 @@ fn reindex(repo_path: &Path) -> Result<()> {
     let repo = open(repo_path)?;
     repo.reindex().context("reindexing")?;
     outln!("reindexed");
+    Ok(())
+}
+
+/// `acetone schema apply` (acetone-yx1o.1): consume the `schema --json`
+/// document declaratively. Diff against the current schema; stage only
+/// additions and changes; one transaction, so a declare-time refusal
+/// (key/discriminator stability, backfill checks — all at the
+/// `Transaction` save chokepoint) rejects the whole document and nothing
+/// lands. Entries in the repository but absent from the document are left
+/// untouched: `apply` never removes (removal is `migrate` territory —
+/// schema stays deliberate history). Unchanged entries stage nothing, so
+/// re-applying a document is idempotent and leaves the workspace clean.
+pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Result<()> {
+    use acetone_core::model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
+    use std::collections::BTreeMap;
+
+    let text = if file == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("reading the schema document from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(file)
+            .with_context(|| format!("reading schema document {file:?}"))?
+    };
+    let doc: Json = serde_json::from_str(&text).context("parsing the schema document")?;
+
+    // --- strict manual decoding: unknown fields are typo traps, refused ---
+    fn obj<'j>(v: &'j Json, what: &str) -> Result<&'j serde_json::Map<String, Json>> {
+        v.as_object()
+            .with_context(|| format!("{what} must be a JSON object"))
+    }
+    fn check_keys(map: &serde_json::Map<String, Json>, allowed: &[&str], what: &str) -> Result<()> {
+        for key in map.keys() {
+            if !allowed.contains(&key.as_str()) {
+                anyhow::bail!(
+                    "unknown field {key:?} in {what} (allowed: {})",
+                    allowed.join(", ")
+                );
+            }
+        }
+        Ok(())
+    }
+    fn string_list(v: Option<&Json>, what: &str) -> Result<Vec<String>> {
+        match v {
+            None => Ok(Vec::new()),
+            Some(v) => v
+                .as_array()
+                .with_context(|| format!("{what} must be an array of strings"))?
+                .iter()
+                .map(|s| {
+                    s.as_str()
+                        .map(str::to_owned)
+                        .with_context(|| format!("{what} must contain only strings"))
+                })
+                .collect(),
+        }
+    }
+    fn required_str<'j>(
+        map: &'j serde_json::Map<String, Json>,
+        key: &str,
+        what: &str,
+    ) -> Result<&'j str> {
+        map.get(key)
+            .and_then(Json::as_str)
+            .with_context(|| format!("{what} needs a string {key:?} field"))
+    }
+    fn type_map(v: Option<&Json>, what: &str) -> Result<BTreeMap<String, PropertyType>> {
+        let mut out = BTreeMap::new();
+        if let Some(v) = v {
+            for (property, ty) in obj(v, &format!("{what}.types"))? {
+                let name = ty
+                    .as_str()
+                    .with_context(|| format!("{what}.types values must be type-name strings"))?;
+                let parsed = PropertyType::parse(name)
+                    .with_context(|| format!("{what}.types[{property:?}]"))?;
+                out.insert(property.clone(), parsed);
+            }
+        }
+        Ok(out)
+    }
+
+    let root = obj(&doc, "the schema document")?;
+    check_keys(
+        root,
+        &["labels", "relationship_types", "indexes"],
+        "the schema document",
+    )?;
+    let section = |key: &str| -> Result<Vec<&Json>> {
+        match root.get(key) {
+            None => Ok(Vec::new()),
+            Some(v) => Ok(v
+                .as_array()
+                .with_context(|| format!("{key:?} must be an array"))?
+                .iter()
+                .collect()),
+        }
+    };
+
+    let mut desired: Vec<SchemaEntry> = Vec::new();
+    for entry in section("labels")? {
+        let map = obj(entry, "a label entry")?;
+        check_keys(
+            map,
+            &["name", "key", "types", "required", "unique", "surrogate"],
+            "a label entry",
+        )?;
+        let name = required_str(map, "name", "a label entry")?;
+        let what = format!("label {name:?}");
+        let types = type_map(map.get("types"), &what)?;
+        let required = string_list(map.get("required"), &format!("{what}.required"))?;
+        let unique = string_list(map.get("unique"), &format!("{what}.unique"))?;
+        let surrogate = map
+            .get("surrogate")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        let key = string_list(map.get("key"), &format!("{what}.key"))?;
+        let def = if surrogate {
+            // The export writes the minted key property; accept it (or an
+            // omitted key), refuse anything else as a contradiction.
+            if !key.is_empty() && key != ["_id"] {
+                anyhow::bail!("{what}: a surrogate label cannot also declare key {key:?}");
+            }
+            LabelDef::surrogate(types, required, unique)
+        } else {
+            LabelDef::new(key, types, required, unique)
+        }
+        .with_context(|| what.clone())?;
+        desired.push(SchemaEntry::Label {
+            name: name.to_owned(),
+            def,
+        });
+    }
+    for entry in section("relationship_types")? {
+        let map = obj(entry, "a relationship-type entry")?;
+        check_keys(
+            map,
+            &["name", "discriminator", "types", "required"],
+            "a relationship-type entry",
+        )?;
+        let name = required_str(map, "name", "a relationship-type entry")?;
+        let what = format!("relationship type {name:?}");
+        let discriminator = match map.get("discriminator") {
+            None | Some(Json::Null) => None,
+            Some(v) => Some(
+                v.as_str()
+                    .with_context(|| format!("{what}.discriminator must be a string or null"))?
+                    .to_owned(),
+            ),
+        };
+        let types = type_map(map.get("types"), &what)?;
+        let required = string_list(map.get("required"), &format!("{what}.required"))?;
+        let def = RelTypeDef::new(discriminator, types, required).with_context(|| what.clone())?;
+        desired.push(SchemaEntry::RelType {
+            name: name.to_owned(),
+            def,
+        });
+    }
+    for entry in section("indexes")? {
+        let map = obj(entry, "an index entry")?;
+        check_keys(map, &["name", "label", "properties"], "an index entry")?;
+        let name = required_str(map, "name", "an index entry")?;
+        let what = format!("index {name:?}");
+        let label = required_str(map, "label", &what)?;
+        let properties = string_list(map.get("properties"), &format!("{what}.properties"))?;
+        let def = IndexDef::new(label, properties).with_context(|| what.clone())?;
+        desired.push(SchemaEntry::Index {
+            name: name.to_owned(),
+            def,
+        });
+    }
+
+    // Duplicate names within a section are almost certainly an editing
+    // mistake — last-wins would silently drop the earlier entry.
+    {
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in &desired {
+            let key = match entry {
+                SchemaEntry::Label { name, .. } => format!("label {name}"),
+                SchemaEntry::RelType { name, .. } => format!("relationship type {name}"),
+                SchemaEntry::Index { name, .. } => format!("index {name}"),
+            };
+            if !seen.insert(key.clone()) {
+                anyhow::bail!("duplicate {key} in the schema document");
+            }
+        }
+    }
+
+    // --- diff against the current schema ---
+    let repo = open(repo_path)?;
+    let snapshot = repo.workspace_snapshot()?;
+    let current = snapshot.schema_entries()?;
+    let describe = |entry: &SchemaEntry| -> (String, String) {
+        match entry {
+            SchemaEntry::Label { name, .. } => ("label".into(), name.clone()),
+            SchemaEntry::RelType { name, .. } => ("relationship type".into(), name.clone()),
+            SchemaEntry::Index { name, .. } => ("index".into(), name.clone()),
+        }
+    };
+    let mut to_stage: Vec<&SchemaEntry> = Vec::new();
+    let mut unchanged = 0usize;
+    for entry in &desired {
+        let (kind, name) = describe(entry);
+        let existing = current
+            .iter()
+            .find(|c| describe(c) == (kind.clone(), name.clone()));
+        match existing {
+            None => {
+                outln!("{kind} {}: add", format_label(&name));
+                to_stage.push(entry);
+            }
+            Some(c) if *c == *entry => {
+                unchanged += 1;
+            }
+            Some(_) => {
+                outln!("{kind} {}: change", format_label(&name));
+                to_stage.push(entry);
+            }
+        }
+    }
+    let untouched = current
+        .iter()
+        .filter(|c| {
+            let key = describe(c);
+            !desired.iter().any(|d| describe(d) == key)
+        })
+        .count();
+    if unchanged > 0 {
+        outln!("{unchanged} unchanged");
+    }
+    if untouched > 0 {
+        outln!("{untouched} in the repository but not in the document: left as-is");
+    }
+
+    if dry_run {
+        outln!("(dry run — nothing applied)");
+        return Ok(());
+    }
+    if to_stage.is_empty() {
+        outln!("(nothing to apply)");
+        return Ok(());
+    }
+
+    let mut txn = repo.begin_write()?;
+    for entry in &to_stage {
+        txn.put_schema(entry)?;
+    }
+    // One save: a declare-time refusal (backfill, key/discriminator
+    // stability) rejects the whole document.
+    txn.save()
+        .context("applying the schema document (nothing was applied)")?;
+    outln!("applied {} schema change(s)", to_stage.len());
     Ok(())
 }
 
