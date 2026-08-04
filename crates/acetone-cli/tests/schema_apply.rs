@@ -48,6 +48,10 @@ fn build_rich_schema(dir: &Path, repo: &Path) {
             "hostname:string",
             "--type",
             "cores:int",
+            "--require",
+            "cores",
+            "--unique",
+            "serial",
         ],
     ));
     ok(&acetone(
@@ -65,7 +69,12 @@ fn build_rich_schema(dir: &Path, repo: &Path) {
             "cores",
         ],
     ));
-    let doc = r#"{"labels": [{"name": "Note", "surrogate": true, "types": {"text": "string"}}]}"#;
+    let doc = r#"{
+        "labels": [{"name": "Note", "surrogate": true, "types": {"text": "string"}}],
+        "relationship_types": [
+            {"name": "CALLED", "discriminator": "at", "types": {"at": "int"}, "required": ["at"]}
+        ]
+    }"#;
     let doc_path = dir.join("surrogate.json");
     std::fs::write(&doc_path, doc).expect("write surrogate doc");
     let out = ok(&acetone(
@@ -117,7 +126,7 @@ fn re_apply_is_idempotent_and_leaves_the_workspace_clean() {
     assert!(out.contains("(nothing to apply)"), "{out}");
     let status = ok(&acetone(&repo, &["status"]));
     assert!(
-        status.contains("clean") || !status.contains("dirty"),
+        status.contains("clean"),
         "idempotent apply must not dirty the workspace: {status}"
     );
 }
@@ -268,4 +277,130 @@ fn stdin_apply_works() {
     );
     let schema = ok(&acetone(&repo, &["schema"]));
     assert!(schema.contains("Doc"));
+}
+
+/// The require/unique backfill check applies to `apply` exactly as it does
+/// to `declare-label` (PR #246 review blocker 1): a declaration existing
+/// data violates is refused, and nothing lands.
+#[test]
+fn apply_refuses_what_declare_label_refuses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    ok(&acetone(
+        &repo,
+        &["declare-label", "Host", "--key", "hostname"],
+    ));
+    for host in ["web1", "web2"] {
+        ok(&acetone(
+            &repo,
+            &["put-node", "Host", host, "--prop", "serial=\"S1\""],
+        ));
+    }
+
+    let doc = r#"{
+        "labels": [
+            {"name": "Host", "key": ["hostname"], "unique": ["serial"]},
+            {"name": "Rack", "key": ["id"]}
+        ]
+    }"#;
+    let doc_path = dir.path().join("schema.json");
+    std::fs::write(&doc_path, doc).expect("write doc");
+
+    // The imperative path refuses...
+    let direct = acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Host",
+            "--key",
+            "hostname",
+            "--unique",
+            "serial",
+        ],
+    );
+    assert!(!direct.status.success());
+
+    // ...and apply must refuse identically, landing nothing.
+    let out = acetone(&repo, &["schema", "apply", doc_path.to_str().unwrap()]);
+    assert!(!out.status.success(), "the unique breach must refuse");
+    assert!(
+        stderr(&out).contains("nothing was applied"),
+        "{}",
+        stderr(&out)
+    );
+    let schema = ok(&acetone(&repo, &["schema"]));
+    assert!(!schema.contains("Rack"), "nothing may land: {schema}");
+    assert!(!schema.contains("serial"), "nothing may land: {schema}");
+}
+
+/// Within an entry the document is desired state: omissions DROP facets,
+/// and the plan says exactly what (PR #246 review blocker 2) — the
+/// stripping is deliberate, announced behaviour, not an accident.
+#[test]
+fn omitting_a_facet_drops_it_and_the_plan_names_the_drop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    ok(&acetone(
+        &repo,
+        &[
+            "declare-label",
+            "Host",
+            "--key",
+            "hostname",
+            "--type",
+            "cores:int",
+            "--unique",
+            "serial",
+        ],
+    ));
+
+    let doc = r#"{"labels": [{"name": "Host", "key": ["hostname"]}]}"#;
+    let doc_path = dir.path().join("schema.json");
+    std::fs::write(&doc_path, doc).expect("write doc");
+
+    // Dry run names the drops without applying.
+    let plan = ok(&acetone(
+        &repo,
+        &["schema", "apply", "--dry-run", doc_path.to_str().unwrap()],
+    ));
+    assert!(
+        plan.contains("change (drops") && plan.contains("types") && plan.contains("unique"),
+        "the plan must name what it drops: {plan}"
+    );
+    let schema = ok(&acetone(&repo, &["schema"]));
+    assert!(
+        schema.contains("serial"),
+        "dry run must not strip: {schema}"
+    );
+
+    // The real apply strips, as the plan said it would.
+    ok(&acetone(
+        &repo,
+        &["schema", "apply", doc_path.to_str().unwrap()],
+    ));
+    let schema = ok(&acetone(&repo, &["schema"]));
+    assert!(
+        !schema.contains("serial") && !schema.contains("cores"),
+        "desired-state replacement must drop omitted facets: {schema}"
+    );
+}
+
+/// The export flags are refused before `apply` rather than silently
+/// ignored (PR #246 review minor 5).
+#[test]
+fn export_flags_are_refused_with_apply() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let doc_path = dir.path().join("schema.json");
+    std::fs::write(&doc_path, r#"{"labels": []}"#).expect("write doc");
+    for flags in [vec!["--json"], vec!["--at", "HEAD"]] {
+        let mut args = vec!["schema"];
+        args.extend(flags.iter().copied());
+        args.extend(["apply", doc_path.to_str().unwrap()]);
+        let out = acetone(&repo, &args);
+        assert!(!out.status.success(), "{args:?} must refuse");
+    }
 }

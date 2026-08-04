@@ -89,6 +89,12 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
         Command::Reindex => reindex(repo_path),
         Command::Schema { action, at, json } => match action {
             Some(crate::cli::SchemaAction::Apply { file, dry_run }) => {
+                // The export flags would otherwise be silently ignored
+                // (PR #246 review minor 5) — `--at` especially reads as
+                // "diff against that ref", which apply does not do.
+                if at.is_some() || json {
+                    bail!("--at/--json apply to `schema` (export), not `schema apply`");
+                }
                 schema_apply(repo_path, &file, dry_run)
             }
             None => schema(repo_path, at.as_deref(), json),
@@ -1024,10 +1030,12 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
         let types = type_map(map.get("types"), &what)?;
         let required = string_list(map.get("required"), &format!("{what}.required"))?;
         let unique = string_list(map.get("unique"), &format!("{what}.unique"))?;
-        let surrogate = map
-            .get("surrogate")
-            .and_then(Json::as_bool)
-            .unwrap_or(false);
+        let surrogate = match map.get("surrogate") {
+            None => false,
+            Some(v) => v
+                .as_bool()
+                .with_context(|| format!("{what}.surrogate must be true or false"))?,
+        };
         let key = string_list(map.get("key"), &format!("{what}.key"))?;
         let def = if surrogate {
             // The export writes the minted key property; accept it (or an
@@ -1111,6 +1119,56 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
             SchemaEntry::Index { name, .. } => ("index".into(), name.clone()),
         }
     };
+    // What a `change` DROPS (blocker 2, PR #246 review): an entry in the
+    // document wholly replaces the repository's — a declarative
+    // desired-state rule that cuts the other way from the entry-level
+    // "never removes" — so the plan must say what an omission is about to
+    // strip, or `--dry-run` is no safety net.
+    fn dropped_facets(current: &SchemaEntry, desired: &SchemaEntry) -> Vec<String> {
+        use acetone_core::model::schema::PropertyType;
+        use std::collections::BTreeMap;
+        let names = |what: &str, old: &[String], new: &[String]| -> Option<String> {
+            let gone: Vec<String> = old
+                .iter()
+                .filter(|n| !new.contains(n))
+                .map(|n| format_label(n))
+                .collect();
+            (!gone.is_empty()).then(|| format!("{what} ({})", gone.join(", ")))
+        };
+        let types_gone = |old: &BTreeMap<String, PropertyType>,
+                          new: &BTreeMap<String, PropertyType>|
+         -> Option<String> {
+            let gone: Vec<String> = old
+                .keys()
+                .filter(|p| !new.contains_key(*p))
+                .map(|p| format_label(p))
+                .collect();
+            (!gone.is_empty()).then(|| format!("types ({})", gone.join(", ")))
+        };
+        match (current, desired) {
+            (SchemaEntry::Label { def: c, .. }, SchemaEntry::Label { def: d, .. }) => {
+                let mut out = Vec::new();
+                out.extend(types_gone(c.types(), d.types()));
+                out.extend(names("required", c.exists(), d.exists()));
+                out.extend(names("unique", c.unique(), d.unique()));
+                if c.is_surrogate() && !d.is_surrogate() {
+                    out.push("surrogate".to_owned());
+                }
+                out
+            }
+            (SchemaEntry::RelType { def: c, .. }, SchemaEntry::RelType { def: d, .. }) => {
+                let mut out = Vec::new();
+                if c.discriminator().is_some() && d.discriminator().is_none() {
+                    out.push("discriminator".to_owned());
+                }
+                out.extend(types_gone(c.types(), d.types()));
+                out.extend(names("required", c.exists(), d.exists()));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
     let mut to_stage: Vec<&SchemaEntry> = Vec::new();
     let mut unchanged = 0usize;
     for entry in &desired {
@@ -1126,8 +1184,17 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
             Some(c) if *c == *entry => {
                 unchanged += 1;
             }
-            Some(_) => {
-                outln!("{kind} {}: change", format_label(&name));
+            Some(c) => {
+                let drops = dropped_facets(c, entry);
+                if drops.is_empty() {
+                    outln!("{kind} {}: change", format_label(&name));
+                } else {
+                    outln!(
+                        "{kind} {}: change (drops {})",
+                        format_label(&name),
+                        drops.join(", ")
+                    );
+                }
                 to_stage.push(entry);
             }
         }
@@ -1155,11 +1222,31 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
         return Ok(());
     }
 
+    // Blocker 1 (PR #246 review): the require/unique backfill check
+    // (acetone-9gw) is CLI-side in declare_label, NOT at the save
+    // chokepoint — apply must run it too or it is a second declaration
+    // path with the guard missing (spec §2: a declaration existing data
+    // violates is refused, merge being the only exception). Chokepoint
+    // relocation is filed separately.
+    for entry in &to_stage {
+        if let SchemaEntry::Label { name, def } = entry {
+            let violations = acetone_core::graph::constraints::check_label(&snapshot, name, def)?;
+            if !violations.is_empty() {
+                bail!(
+                    "cannot apply label {}: existing data violates the declared \
+                     constraints (nothing was applied) — {}",
+                    format_label(name),
+                    acetone_core::graph::constraints::ConstraintViolations(violations)
+                );
+            }
+        }
+    }
+
     let mut txn = repo.begin_write()?;
     for entry in &to_stage {
         txn.put_schema(entry)?;
     }
-    // One save: a declare-time refusal (backfill, key/discriminator
+    // One save: a declare-time refusal (type backfill, key/discriminator
     // stability) rejects the whole document.
     txn.save()
         .context("applying the schema document (nothing was applied)")?;

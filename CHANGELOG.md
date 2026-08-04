@@ -48,8 +48,10 @@ fine.)
   report per-entry outcomes, stage additions and changes in one
   transaction (a declare-time refusal rejects the whole document),
   never remove, idempotent on re-apply; `--dry-run` prints the plan.
-  Also the first CLI surface that can declare a surrogate label
-  (`"surrogate": true`).
+  Within an entry the document is desired state (omitting a facet drops
+  it — the plan says so); across entries apply never removes. Also the
+  first CLI surface that can declare a surrogate label
+  (`"surrogate": true`) — declaration-only until `_id` minting ships.
 
 ### Changed
 
