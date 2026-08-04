@@ -240,8 +240,17 @@ impl<'r> Session<'r> {
         let snapshot = self.repo.workspace_snapshot()?;
         let (base, catalogue, mode) = build_base(&snapshot)?;
         let bound = crate::bind::bind_with(cypher, parsed, &catalogue, mode, self.autodeclare)?;
+        // A conflicted schema entry is ABSENT from the merged schema map,
+        // so mid-merge the binder would see the type as unknown and coin
+        // it — and a staged schema write silently resolves the conflict
+        // by-write with the empty definition, discarding the other
+        // branch's declaration (PR #245 review). Declaration stays
+        // deliberate (ADR-0060): refuse until the merge completes.
+        if !bound.autodeclared_rel_types.is_empty() && snapshot.merge_in_progress() {
+            return Err(acetone_graph::GraphError::MergeInProgress.into());
+        }
         // ADR-0060: coined types join the schema in this same transaction,
-        // before the data that uses them — one commit carries both.
+        // before the data that uses them — one workspace save carries both.
         for name in &bound.autodeclared_rel_types {
             let def = acetone_model::schema::RelTypeDef::new(None, Default::default(), [])
                 .expect("the empty relationship-type definition is always valid");

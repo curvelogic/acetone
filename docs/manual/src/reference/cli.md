@@ -287,11 +287,14 @@ a CLI-surface backstop (ADR-0069).
 (ADR-0060, off by default): a write may use a relationship type the schema
 does not declare in `CREATE`/`MERGE` position, and the type is appended to
 the schema — an empty definition: no discriminator, no property types — in
-the **same commit as the data**, announced by an advisory. Reads never coin
+the **same transaction as the data**, announced by an advisory. Reads never coin
 a type: an unknown type in a match position stays an error, flag or no
-flag, so a typo'd `MATCH` cannot silently mutate the schema. Declaration
-stays deliberate by default; this is the sanctioned fast path for
-experimentation and open-vocabulary ingestion.
+flag, so a typo'd `MATCH` cannot silently mutate the schema. While a
+merge is unresolved a coining write is refused outright — a conflicted
+schema entry is absent from the merged schema, so coinage would silently
+resolve the conflict with the empty definition; resolve the merge first.
+Declaration stays deliberate by default; this is the sanctioned fast path
+for experimentation and open-vocabulary ingestion.
 
 ### `acetone shell [--timeout <SECONDS>]`
 
@@ -302,7 +305,8 @@ workspace (commit separately with `acetone commit`). Conveniences:
 `:param <name> <literal>` (bind `$name` for later statements; bare `:param`
 lists, `:param-clear` drops), `:autodeclare on|off` (let writes coin
 relationship types for the rest of the session — ADR-0060, off by default;
-bare `:autodeclare` shows the state), `:quit`. Each statement runs under the same
+bare `:autodeclare` shows the state; the toggle is session-scoped and
+survives `:checkout`), `:quit`. Each statement runs under the same
 default 60-second wall-clock budget as `acetone query`; start the shell with
 `--timeout <SECONDS>` to change it (`0` disables).
 

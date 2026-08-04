@@ -59,3 +59,9 @@ key, and identity is never invented silently.
 - The rel-type half can ship alone; the node-label half is blocked on the
   key-inference rule *and* the schema-conflict surfacing, in that order.
 - The decision bead acetone-auz closes against this ADR.
+- *Amended 2026-08-04 (acetone-nc91):* the rel-type half shipped with the
+  **per-invocation** opt-in surface — `acetone query --autodeclare`, the
+  shell's `:autodeclare on|off`, and `Session::autodeclare(bool)`; no
+  per-repository scratch setting (which can layer on later without
+  breaking). Coinage is refused while a merge is unresolved, so an
+  implicit schema write can never resolve a schema conflict by-write.

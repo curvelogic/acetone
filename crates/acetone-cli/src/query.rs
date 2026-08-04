@@ -142,7 +142,21 @@ fn render_outcome(outcome: &QueryOutcome, format: Format, max_rows: Option<usize
         render(outcome.result(), format, max_rows);
     }
     if outcome.is_write() {
-        render_write_summary(&outcome.result().stats);
+        // A coining write may mutate the schema while writing no data
+        // (bind-time coinage, e.g. a CREATE whose MATCH found nothing) —
+        // "(no changes)" would be false then. The advisory prefix is the
+        // session's coinage announcement (kept in step with
+        // `Session::run_write`).
+        let coined = outcome
+            .result()
+            .advisories
+            .iter()
+            .any(|a| a.starts_with("autodeclared relationship type"));
+        if outcome.result().stats.is_empty() && coined {
+            outln!("(no data changes; schema changed)");
+        } else {
+            render_write_summary(&outcome.result().stats);
+        }
     }
     // Non-error advisories (e.g. a schema-free MATCH on an undeclared label that
     // matched nothing, acetone-7bn.5) go to stderr, so they never pollute the

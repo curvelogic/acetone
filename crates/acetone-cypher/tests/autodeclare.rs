@@ -207,3 +207,77 @@ fn convergent_coinage_across_branches_merges_cleanly() {
         "identical coined definitions must not conflict: {merged:?}"
     );
 }
+
+/// A coining write is refused while a merge is unresolved: a conflicted
+/// schema entry is absent from the merged schema map, so coinage would
+/// silently resolve the conflict by-write with the empty definition,
+/// discarding the other branch's declaration (PR #245 review major).
+#[test]
+fn coinage_is_refused_while_a_merge_is_unresolved() {
+    use acetone_model::schema::{PropertyType, RelTypeDef};
+
+    let (_d, repo) = repo();
+    seed(&repo);
+    let base = repo
+        .begin_write()
+        .expect("begin")
+        .commit("base", &[], None)
+        .expect("commit")
+        .to_hex();
+    repo.create_branch("left", Some(&base))
+        .expect("branch left");
+    repo.create_branch("right", Some(&base))
+        .expect("branch right");
+
+    // Left coins :T empty; right declares :T with a property type.
+    repo.checkout_branch("left").expect("checkout left");
+    Session::new(&repo)
+        .autodeclare(true)
+        .run(
+            "MATCH (a:Entity {id: 1}), (b:Entity {id: 2}) \
+             CREATE (a)-[:T]->(b)",
+        )
+        .expect("coin on left");
+    repo.begin_write()
+        .expect("begin")
+        .commit("coin", &[], None)
+        .expect("commit");
+
+    repo.checkout_branch("right").expect("checkout right");
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::RelType {
+        name: "T".into(),
+        def: RelTypeDef::new(
+            None,
+            BTreeMap::from([("since".to_owned(), PropertyType::Int)]),
+            [],
+        )
+        .expect("def"),
+    })
+    .expect("declare");
+    txn.save().expect("save");
+    repo.begin_write()
+        .expect("begin")
+        .commit("declare", &[], None)
+        .expect("commit");
+
+    repo.checkout_branch("left").expect("back to left");
+    let merged = repo.merge("right", "merge right").expect("merge run");
+    assert!(
+        matches!(merged, acetone_graph::merge::MergeOutcome::Conflicts(_)),
+        "divergent definitions must conflict: {merged:?}"
+    );
+
+    // Mid-merge, the coining write must refuse — not resolve the conflict.
+    let err = Session::new(&repo)
+        .autodeclare(true)
+        .run(
+            "MATCH (a:Entity {id: 1}), (b:Entity {id: 2}) \
+             MERGE (a)-[:T]->(b)",
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("merge"),
+        "the refusal must name the merge: {err}"
+    );
+}

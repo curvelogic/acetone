@@ -38,7 +38,7 @@ fine.)
   `:autodeclare on|off`, and the library's `Session::autodeclare(bool)`
   let a write coin an unknown relationship type in `CREATE`/`MERGE`
   position — a deterministic empty definition appended to the schema in
-  the same commit as the data, announced by an advisory. Off by default;
+  the same transaction as the data, announced by an advisory. Off by default;
   reads never coin a type. Convergent coinage of the same type on two
   branches merges cleanly.
 
