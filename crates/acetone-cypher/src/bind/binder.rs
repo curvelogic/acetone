@@ -1752,16 +1752,25 @@ fn collect_range_bounds(expr: &BoundExpr, out: &mut RangeBounds) {
 /// bound trees are already free of parenthesisation, backtick and
 /// whitespace variance, and `VarId` equality is meaningful because
 /// projection items bind in the pre-scope the ORDER BY union shares.
-/// Conservative on iteration constructs and patterns (locally-declared
-/// ids differ per binding site, so structurally identical comprehensions
-/// compare unequal) — safe, because the validation walk then recurses
-/// into the expression and accepts its locals directly.
+/// Iteration constructs compare via a local-correspondence stack — their
+/// locally-declared `VarId`s differ per binding site, so two ids are also
+/// equal when they are a corresponding local pair (PR #244 re-review:
+/// without this, `ORDER BY` repeating a projected comprehension that
+/// captures a free outer variable was rejected). Patterns remain
+/// conservatively unequal — safe, because the validation walk then
+/// recurses into the expression and accepts pattern variables as locals.
 fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
+    same_bound_in(a, b, &mut Vec::new())
+}
+
+fn same_bound_in(a: &BoundExpr, b: &BoundExpr, pairs: &mut Vec<(u32, u32)>) -> bool {
     use BoundExpr as E;
     match (a, b) {
         (E::Literal { value: a, .. }, E::Literal { value: b, .. }) => a == b,
         (E::Parameter { name: a, .. }, E::Parameter { name: b, .. }) => a == b,
-        (E::Variable { id: a, .. }, E::Variable { id: b, .. }) => a == b,
+        (E::Variable { id: a, .. }, E::Variable { id: b, .. }) => {
+            a == b || pairs.iter().rev().any(|(x, y)| (x, y) == (&a.0, &b.0))
+        }
         (
             E::Property {
                 base: ab, key: ak, ..
@@ -1769,7 +1778,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
             E::Property {
                 base: bb, key: bk, ..
             },
-        ) => ak == bk && same_bound(ab, bb),
+        ) => ak == bk && same_bound_in(ab, bb, pairs),
         (
             E::Unary {
                 op: ao,
@@ -1781,7 +1790,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 operand: ba,
                 ..
             },
-        ) => ao == bo && same_bound(aa, ba),
+        ) => ao == bo && same_bound_in(aa, ba, pairs),
         (
             E::Binary {
                 op: ao,
@@ -1795,7 +1804,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 rhs: br,
                 ..
             },
-        ) => ao == bo && same_bound(al, bl) && same_bound(ar, br),
+        ) => ao == bo && same_bound_in(al, bl, pairs) && same_bound_in(ar, br, pairs),
         (
             E::IsNull {
                 operand: aa,
@@ -1807,7 +1816,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 negated: bn,
                 ..
             },
-        ) => an == bn && same_bound(aa, ba),
+        ) => an == bn && same_bound_in(aa, ba, pairs),
         (
             E::HasLabels {
                 subject: aa,
@@ -1819,7 +1828,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 labels: bl,
                 ..
             },
-        ) => al == bl && same_bound(aa, ba),
+        ) => al == bl && same_bound_in(aa, ba, pairs),
         (
             E::Function {
                 def: ad, args: aa, ..
@@ -1830,7 +1839,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
         ) => {
             ad.name == bd.name
                 && aa.len() == ba.len()
-                && aa.iter().zip(ba).all(|(x, y)| same_bound(x, y))
+                && aa.iter().zip(ba).all(|(x, y)| same_bound_in(x, y, pairs))
         }
         (
             E::Aggregate {
@@ -1850,7 +1859,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 && adi == bdi
                 && match (aa, ba) {
                     (None, None) => true,
-                    (Some(x), Some(y)) => same_bound(x, y),
+                    (Some(x), Some(y)) => same_bound_in(x, y, pairs),
                     _ => false,
                 }
         }
@@ -1868,28 +1877,29 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 ..
             },
         ) => {
-            let opt = |x: &Option<Box<BoundExpr>>, y: &Option<Box<BoundExpr>>| match (x, y) {
+            let opt = |x: &Option<Box<BoundExpr>>,
+                       y: &Option<Box<BoundExpr>>,
+                       pairs: &mut Vec<(u32, u32)>| match (x, y) {
                 (None, None) => true,
-                (Some(x), Some(y)) => same_bound(x, y),
+                (Some(x), Some(y)) => same_bound_in(x, y, pairs),
                 _ => false,
             };
-            opt(ao, bo)
-                && opt(ae, be)
+            opt(ao, bo, pairs)
+                && opt(ae, be, pairs)
                 && aw.len() == bw.len()
-                && aw
-                    .iter()
-                    .zip(bw)
-                    .all(|((ac, av), (bc, bv))| same_bound(ac, bc) && same_bound(av, bv))
+                && aw.iter().zip(bw).all(|((ac, av), (bc, bv))| {
+                    same_bound_in(ac, bc, pairs) && same_bound_in(av, bv, pairs)
+                })
         }
         (E::ListLiteral { items: aa, .. }, E::ListLiteral { items: ba, .. }) => {
-            aa.len() == ba.len() && aa.iter().zip(ba).all(|(x, y)| same_bound(x, y))
+            aa.len() == ba.len() && aa.iter().zip(ba).all(|(x, y)| same_bound_in(x, y, pairs))
         }
         (E::MapLiteral { entries: aa, .. }, E::MapLiteral { entries: ba, .. }) => {
             aa.len() == ba.len()
                 && aa
                     .iter()
                     .zip(ba)
-                    .all(|((ak, av), (bk, bv))| ak == bk && same_bound(av, bv))
+                    .all(|((ak, av), (bk, bv))| ak == bk && same_bound_in(av, bv, pairs))
         }
         (
             E::Index {
@@ -1902,7 +1912,7 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 index: bi,
                 ..
             },
-        ) => same_bound(ab, bb) && same_bound(ai, bi),
+        ) => same_bound_in(ab, bb, pairs) && same_bound_in(ai, bi, pairs),
         (
             E::Slice {
                 base: ab,
@@ -1917,16 +1927,99 @@ fn same_bound(a: &BoundExpr, b: &BoundExpr) -> bool {
                 ..
             },
         ) => {
-            let opt = |x: &Option<Box<BoundExpr>>, y: &Option<Box<BoundExpr>>| match (x, y) {
+            let opt = |x: &Option<Box<BoundExpr>>,
+                       y: &Option<Box<BoundExpr>>,
+                       pairs: &mut Vec<(u32, u32)>| match (x, y) {
                 (None, None) => true,
-                (Some(x), Some(y)) => same_bound(x, y),
+                (Some(x), Some(y)) => same_bound_in(x, y, pairs),
                 _ => false,
             };
-            same_bound(ab, bb) && opt(af, bf) && opt(at, bt)
+            same_bound_in(ab, bb, pairs) && opt(af, bf, pairs) && opt(at, bt, pairs)
         }
-        // Iteration constructs and patterns: conservatively unequal (their
-        // locally-declared VarIds differ per binding site) — see the doc
-        // comment.
+        (
+            E::ListComprehension {
+                variable: av,
+                list: al,
+                where_clause: aw,
+                map: am,
+                ..
+            },
+            E::ListComprehension {
+                variable: bv,
+                list: bl,
+                where_clause: bw,
+                map: bm,
+                ..
+            },
+        ) => {
+            if !same_bound_in(al, bl, pairs) {
+                return false;
+            }
+            pairs.push((av.0, bv.0));
+            let opt = |x: &Option<Box<BoundExpr>>,
+                       y: &Option<Box<BoundExpr>>,
+                       pairs: &mut Vec<(u32, u32)>| match (x, y) {
+                (None, None) => true,
+                (Some(x), Some(y)) => same_bound_in(x, y, pairs),
+                _ => false,
+            };
+            let eq = opt(aw, bw, pairs) && opt(am, bm, pairs);
+            pairs.pop();
+            eq
+        }
+        (
+            E::Quantifier {
+                kind: ak,
+                variable: av,
+                list: al,
+                predicate: ap,
+                ..
+            },
+            E::Quantifier {
+                kind: bk,
+                variable: bv,
+                list: bl,
+                predicate: bp,
+                ..
+            },
+        ) => {
+            if ak != bk || !same_bound_in(al, bl, pairs) {
+                return false;
+            }
+            pairs.push((av.0, bv.0));
+            let eq = same_bound_in(ap, bp, pairs);
+            pairs.pop();
+            eq
+        }
+        (
+            E::Reduce {
+                accumulator: aa,
+                init: ai,
+                variable: av,
+                list: al,
+                expr: ae,
+                ..
+            },
+            E::Reduce {
+                accumulator: ba,
+                init: bi,
+                variable: bv,
+                list: bl,
+                expr: be,
+                ..
+            },
+        ) => {
+            if !same_bound_in(ai, bi, pairs) || !same_bound_in(al, bl, pairs) {
+                return false;
+            }
+            pairs.push((aa.0, ba.0));
+            pairs.push((av.0, bv.0));
+            let eq = same_bound_in(ae, be, pairs);
+            pairs.pop();
+            pairs.pop();
+            eq
+        }
+        // Patterns: conservatively unequal — see the doc comment.
         _ => false,
     }
 }

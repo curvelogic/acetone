@@ -209,6 +209,18 @@ mod tests {
             "MATCH (n) RETURN *, n.x + count(*)",
             "MATCH (n) WITH *, n.x + count(*) AS z RETURN z",
             "MATCH (n) RETURN *, count(*) ORDER BY n.x",
+            // PR #244 re-review: iteration constructs whole-match via the
+            // comparator's local-correspondence stack, so ORDER BY may
+            // repeat a projected comprehension capturing a free outer
+            // variable verbatim.
+            "MATCH (n) RETURN DISTINCT [q IN [1,2] | q * n.x] AS l \
+             ORDER BY [q IN [1,2] | q * n.x]",
+            "MATCH (n) RETURN [q IN [1,2] | q * n.x] AS l, count(*) AS c \
+             ORDER BY [q IN [1,2] | q * n.x]",
+            "MATCH (n) RETURN DISTINCT reduce(a = 0, q IN [1,2] | a + n.x) AS r \
+             ORDER BY reduce(a = 0, q IN [1,2] | a + n.x)",
+            "MATCH (n) RETURN DISTINCT all(q IN [1,2] WHERE q > n.x) AS b \
+             ORDER BY all(q IN [1,2] WHERE q > n.x)",
         ] {
             assert!(bind_lenient(query).is_ok(), "must stay valid: {query}");
         }

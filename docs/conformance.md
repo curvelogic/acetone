@@ -8,10 +8,10 @@ statement records the pass rate, how it is measured, what the measurement does
 > Measured against TCK commit `677cbafabb8c3c5eed458fd3b1ec0daec8d67d23`. The
 > live number is produced by the CI job "openCypher TCK conformance report"
 > (`cargo run --release -p acetone-tck --bin tck_runner`); this document is
-> refreshed at each release. Last refreshed 2026-08-04 (Phase 10, acetone-1qj — runner re-run on `main` and the branch,
-> post-reopening) by running the runner on `main`; every figure was
-> re-verified identical after the criterion-3 remediation PRs (#224–#230),
-> which touched no TCK-visible behaviour.
+> refreshed at each release. Last refreshed 2026-08-04 (Phase 10,
+> acetone-1qj) by running the runner on `main` and on the branch that
+> enforces the ORDER BY/aggregation grouping-key rules; the branch
+> figures below were additionally reproduced by an independent reviewer.
 
 ## Pass rate
 
