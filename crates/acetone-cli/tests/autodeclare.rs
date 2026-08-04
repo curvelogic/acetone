@@ -91,6 +91,29 @@ fn the_flag_coins_the_type_and_it_round_trips() {
     assert!(stdout(&read).contains('2'), "{}", stdout(&read));
 }
 
+/// A coining write that stages no data must say so honestly — the
+/// summary string is coupled to the session's advisory prefix (PR #245
+/// review), and this assertion is what keeps the two in step.
+#[test]
+fn a_coining_no_op_write_reports_the_schema_change() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "--autodeclare",
+            "MATCH (a:Entity {id: 999}) CREATE (a)-[:GHOST]->(a)",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("(no data changes; schema changed)"),
+        "the summary must not claim '(no changes)': {}",
+        stdout(&out)
+    );
+}
+
 #[test]
 fn the_flag_never_coins_on_a_read() {
     let dir = tempfile::tempdir().expect("tempdir");

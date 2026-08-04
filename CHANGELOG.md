@@ -39,8 +39,9 @@ fine.)
   let a write coin an unknown relationship type in `CREATE`/`MERGE`
   position — a deterministic empty definition appended to the schema in
   the same transaction as the data, announced by an advisory. Off by default;
-  reads never coin a type. Convergent coinage of the same type on two
-  branches merges cleanly.
+  reads never coin a type; while a merge is unresolved a coining write is
+  refused (it would otherwise silently resolve a schema conflict by-write).
+  Convergent coinage of the same type on two branches merges cleanly.
 
 ### Changed
 
