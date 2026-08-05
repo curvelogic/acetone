@@ -64,8 +64,21 @@ fn phrase_names_survive_declare_create_match_and_fsck() {
         ok(&acetone(&repo, &["query", &create]));
         let read = format!("MATCH (:Entity {{id: 1}})-[:`{phrase}`]->(b) RETURN b.id");
         let out = ok(&acetone(&repo, &["query", &read]));
-        assert!(out.contains('2'), "{phrase}: {out}");
+        // "1 row" pins that the TYPE filter matched exactly this edge —
+        // every phrase connects the same pair, so a filter-ignoring
+        // implementation would return more (PR #248 review minor 4).
+        assert!(
+            out.contains('2') && out.contains("1 row"),
+            "{phrase}: {out}"
+        );
     }
+    // Negative control: a declared-but-never-created phrase matches nothing.
+    ok(&acetone(&repo, &["declare-rel-type", "never used"]));
+    let out = ok(&acetone(
+        &repo,
+        &["query", "MATCH ()-[:`never used`]->(b) RETURN b.id"],
+    ));
+    assert!(out.contains("0 rows"), "negative control: {out}");
     let schema = ok(&acetone(&repo, &["schema"]));
     for phrase in PHRASES {
         assert!(
@@ -96,6 +109,11 @@ fn phrase_names_coin_under_autodeclare() {
 fn phrase_names_round_trip_through_schema_apply() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source = seeded_repo(&dir);
+    // Every phrase shape — spaces, unicode, punctuation — not just the
+    // ASCII one (PR #248 review minor 5).
+    for phrase in PHRASES {
+        ok(&acetone(&source, &["declare-rel-type", phrase]));
+    }
     ok(&acetone(
         &source,
         &["declare-rel-type", "was influenced by"],
