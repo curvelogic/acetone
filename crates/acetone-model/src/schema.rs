@@ -36,6 +36,46 @@ pub const KIND_INDEX: &str = "index";
 /// The property name minted for `KEY SURROGATE` labels (spec §2).
 pub const SURROGATE_KEY_PROPERTY: &str = "_id";
 
+/// Mint a surrogate `_id` value: a ULID (spec §2) — 48-bit millisecond
+/// timestamp, 80 random bits, Crockford base32, 26 characters,
+/// lexically sortable by creation time to millisecond granularity (no
+/// same-millisecond monotonic counter — ids minted within one
+/// millisecond order randomly among themselves). Minting is inherently
+/// non-deterministic (like a git commit timestamp): the id becomes part
+/// of the map content, so history independence is unaffected, and the
+/// documented consequence holds — concurrent creation across branches
+/// merges as distinct nodes.
+pub fn mint_surrogate_id() -> String {
+    const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+        & ((1 << 48) - 1);
+    let mut random = [0u8; 10];
+    // Failure to gather entropy is unrecoverable for identity minting —
+    // better to refuse loudly than mint colliding ids. Recorded decision
+    // (PR #247 review minor 3): a panic, not a Result — the condition is
+    // effectively unreachable post-boot on supported targets, and no
+    // caller could do anything safer with an Err than abort the write.
+    getrandom::fill(&mut random).expect("operating system entropy is available");
+    // 128 bits: 48 timestamp + 80 random.
+    let mut bits = [0u8; 16];
+    bits[0..6].copy_from_slice(&millis.to_be_bytes()[2..8]);
+    bits[6..16].copy_from_slice(&random);
+    let value = u128::from_be_bytes(bits);
+    let mut out = [0u8; 26];
+    for (i, slot) in out.iter_mut().enumerate() {
+        // 130 encoded bits carry 128: the first character holds only the
+        // top 3, so shifts run 125, 120, …, 0 (i < 26 keeps this in range).
+        let shift = 125 - 5 * i;
+        *slot = ALPHABET[((value >> shift) & 0x1f) as usize];
+    }
+    // The first character encodes bits 125..130 — only 3 real bits, so it
+    // is always in 0..8, matching the canonical ULID range.
+    String::from_utf8(out.to_vec()).expect("the alphabet is ASCII")
+}
+
 /// Errors from constructing, encoding or decoding schema entries.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SchemaError {
@@ -251,10 +291,22 @@ impl LabelDef {
     /// Declare a `KEY SURROGATE` label: acetone mints a ULID `_id` key
     /// property at creation (spec §2).
     pub fn surrogate(
-        types: BTreeMap<String, PropertyType>,
+        mut types: BTreeMap<String, PropertyType>,
         exists: impl IntoIterator<Item = String>,
         unique: impl IntoIterator<Item = String>,
     ) -> Result<Self, SchemaError> {
+        // The minted key is a ULID string by construction (spec §2), and an
+        // undeclared string key declines the exact-seek pin — a point
+        // lookup by `_id` would scan the whole label (the acetone-2ck.17
+        // regression, PR #247 review). Declare it; refuse a contradiction.
+        match types.insert(SURROGATE_KEY_PROPERTY.to_owned(), PropertyType::String) {
+            None | Some(PropertyType::String) => {}
+            Some(_) => {
+                return Err(SchemaError::InvalidKey(
+                    "a surrogate _id is a ULID string; it cannot be declared another type",
+                ));
+            }
+        }
         Self::build(
             vec![SURROGATE_KEY_PROPERTY.to_owned()],
             true,
@@ -712,6 +764,24 @@ fn read_types(reader: &mut Reader) -> Result<BTreeMap<String, PropertyType>, Sch
 mod tests {
     use super::*;
     use crate::{Date, DateTime, Duration, Time};
+
+    #[test]
+    fn surrogate_declares_its_own_key_type() {
+        // Load-bearing for seek soundness (PR #247 review): the
+        // constructor is the sole enforcement point.
+        let def = LabelDef::surrogate(BTreeMap::new(), [], []).expect("surrogate");
+        assert_eq!(
+            def.types().get(SURROGATE_KEY_PROPERTY),
+            Some(&PropertyType::String)
+        );
+        let err = LabelDef::surrogate(
+            BTreeMap::from([(SURROGATE_KEY_PROPERTY.to_owned(), PropertyType::Int)]),
+            [],
+            [],
+        )
+        .unwrap_err();
+        assert!(matches!(err, SchemaError::InvalidKey(_)), "{err}");
+    }
 
     fn label_entry() -> SchemaEntry {
         SchemaEntry::Label {

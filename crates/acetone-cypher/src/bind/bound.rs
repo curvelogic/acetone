@@ -214,6 +214,11 @@ pub struct BoundNodePattern {
     pub var: Option<VarId>,
     pub labels: Vec<String>,
     pub properties: Option<BoundExpr>,
+    /// A label here is declared `KEY SURROGATE` (spec §2): when this
+    /// pattern CREATEs and the property map supplies no `_id`, the
+    /// executor mints a ULID at creation so the row (and any RETURN)
+    /// sees the key the node persists under. Match positions ignore it.
+    pub mint_surrogate: bool,
     /// Planner hint: an equality the primary key map can seek on
     /// (`label` key-prefix property equated to a literal/parameter in the
     /// pattern's property map), or a declared secondary index.

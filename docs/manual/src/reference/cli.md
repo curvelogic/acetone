@@ -231,10 +231,13 @@ typo protection for hand-edited documents (note: a *duplicated JSON
 field* within one object is last-wins, per JSON parsing convention —
 only duplicate entry names are detected). A label entry with
 `"surrogate": true` declares a `KEY SURROGATE` label — the first CLI
-surface for surrogate declaration — but surrogate labels are
-**declaration-only for now**: nothing yet mints the `_id` key at
-`CREATE`, so nodes of a surrogate label cannot be created through
-Cypher until minting ships (tracked as a bead).
+surface for surrogate declaration. Creating a node of a surrogate label
+through Cypher mints its `_id` — a ULID (spec §2): time-ordered to
+millisecond granularity, 26 characters — visible to the creating
+query's own `RETURN`; an explicit
+`_id` in the property map is respected. Minting is non-deterministic by
+design (like a commit timestamp), so concurrent creation on two
+branches merges as distinct nodes.
 
 **Within an entry the document is desired state**: an entry named in
 the document *wholly replaces* the repository's definition, so omitting

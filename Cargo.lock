@@ -77,6 +77,7 @@ version = "0.4.0"
 dependencies = [
  "acetone-prolly",
  "acetone-store",
+ "getrandom 0.4.3",
  "gix",
  "proptest",
  "thiserror 2.0.18",

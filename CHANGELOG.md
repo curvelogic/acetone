@@ -51,7 +51,11 @@ fine.)
   Within an entry the document is desired state (omitting a facet drops
   it — the plan says so); across entries apply never removes. Also the
   first CLI surface that can declare a surrogate label
-  (`"surrogate": true`) — declaration-only until `_id` minting ships.
+  (`"surrogate": true`).
+- **Surrogate `_id` minting** (spec §2, acetone-yx1o.4): `CREATE` on a
+  `KEY SURROGATE` label mints a ULID `_id` at creation, visible to the
+  creating query's rows; an explicit `_id` is respected; `MERGE`
+  matches before minting again. Natural-key labels are untouched.
 
 ### Changed
 
