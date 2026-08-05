@@ -38,8 +38,11 @@ nothing in this surface.
 - **The CLI.** `acetone`'s command surface and output formats (including
   `--json`) are a **separate** product surface (spec §7) and are not covered by
   this document. The `--json` shape is explicitly **unstable pre-1.0**: it may
-  change at any minor release, with the change noted in the CHANGELOG. Pin
-  your acetone version if you script against exact field names or nesting.
+  change at any minor release. **What is promised** (ADR-0073): every breaking
+  change to the `--json` shape is CHANGELOG'd in the release that makes it — a
+  commitment, not a courtesy. Pin your acetone version if you script against
+  exact field names or nesting; the daemon (`acetone serve`, Phase 11) is the
+  planned stable machine interface.
 - **The on-disk format.** That is frozen separately at `format_version 1`
   (Gate D, ADR-0024) and guarded by the prolly/model golden pins.
 
