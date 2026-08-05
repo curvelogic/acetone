@@ -103,7 +103,7 @@ fine.)
 
 - **Item-wise Cypher edits on discriminated (parallel) edges targeted the
   wrong edge** (acetone-z093.4, the o8r hazard, live since `import --disc`
-  in 0.2): `MATCH` binds an edge by its full key — including the
+  in 0.1): `MATCH` binds an edge by its full key — including the
   discriminator — but `SET`/`DELETE` recomputed identity with a `Null`
   discriminator. Shipped symptoms in 0.4.0: `DELETE` reported deletions
   that did not happen; `SET` silently minted phantom `Null`-key edges
