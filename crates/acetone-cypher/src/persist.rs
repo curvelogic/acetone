@@ -741,8 +741,6 @@ fn convert_value_at(value: &Value, depth: usize) -> Result<ModelValue, PersistEr
 #[cfg(test)]
 mod tests {
 
-    use proptest::prelude::*;
-
     proptest! {
         /// The bead's spec'd key-fidelity property (acetone-z093.4): for
         /// ANY stored edge key — any discriminator included — the
@@ -756,7 +754,7 @@ mod tests {
             disc in prop_oneof![
                 Just(acetone_model::Value::Null),
                 (0i64..1000).prop_map(acetone_model::Value::Int),
-                "[a-z0-9 ]{0,24}".prop_map(|s| acetone_model::Value::String(s.into())),
+                "[a-z0-9 ]{0,24}".prop_map(acetone_model::Value::String),
             ],
         ) {
             use acetone_model::graph_keys::{EdgeKey, NodeKey};
