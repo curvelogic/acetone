@@ -765,6 +765,24 @@ mod tests {
     use super::*;
     use crate::{Date, DateTime, Duration, Time};
 
+    #[test]
+    fn surrogate_declares_its_own_key_type() {
+        // Load-bearing for seek soundness (PR #247 review): the
+        // constructor is the sole enforcement point.
+        let def = LabelDef::surrogate(BTreeMap::new(), [], []).expect("surrogate");
+        assert_eq!(
+            def.types().get(SURROGATE_KEY_PROPERTY),
+            Some(&PropertyType::String)
+        );
+        let err = LabelDef::surrogate(
+            BTreeMap::from([(SURROGATE_KEY_PROPERTY.to_owned(), PropertyType::Int)]),
+            [],
+            [],
+        )
+        .unwrap_err();
+        assert!(matches!(err, SchemaError::InvalidKey(_)), "{err}");
+    }
+
     fn label_entry() -> SchemaEntry {
         SchemaEntry::Label {
             name: "Host".into(),
