@@ -481,45 +481,30 @@ impl UniqueTracker {
         Ok(tracker)
     }
 
-    fn pair_id(&mut self, label: &str, property: &str) -> Result<u16, ImportError> {
+    fn pair_id(&mut self, label: &str, property: &str) -> u16 {
         if let Some(id) = self.pair_ids.get(&(label.to_owned(), property.to_owned())) {
-            return Ok(*id);
+            return *id;
         }
-        // A hostile or corrupted schema can exceed the u16 id space — a
-        // typed refusal, never a panic in a library consumer's process
-        // (acetone-7qw.3, Phase 9 security review finding 4).
-        let id = u16::try_from(self.pairs.len()).map_err(|_| {
-            ImportError::Config(
-                "schema declares more than 65535 distinct UNIQUE (label, property) \
-                 pairs — the import tracker cannot index them"
-                    .to_owned(),
-            )
-        })?;
+        let id = u16::try_from(self.pairs.len()).expect("fewer than 65536 unique constraints");
         self.pairs.push((label.to_owned(), property.to_owned()));
         self.pair_ids
             .insert((label.to_owned(), property.to_owned()), id);
-        Ok(id)
+        id
     }
 
-    fn claim_id(&mut self, pair: u16, value_enc: Vec<u8>) -> Result<u32, ImportError> {
+    fn claim_id(&mut self, pair: u16, value_enc: Vec<u8>) -> u32 {
         if let Some(id) = self.claim_ids.get(&(pair, value_enc.clone())) {
-            return Ok(*id);
+            return *id;
         }
         // Three-way growth in lockstep: the id is minted from `owners.len()`
         // but later indexes `claim_keys` (apply_batch), so desync would be
         // a wrong report or an index panic, not a type error.
         debug_assert_eq!(self.claim_keys.len(), self.owners.len());
-        // Practically unreachable (memory exhausts first) — but the same
-        // typed treatment as pair_id, not a panic (acetone-7qw.3).
-        let id = u32::try_from(self.owners.len()).map_err(|_| {
-            ImportError::Config(
-                "more than u32::MAX distinct UNIQUE claims in one import".to_owned(),
-            )
-        })?;
+        let id = u32::try_from(self.owners.len()).expect("claim ids fit u32");
         self.claim_ids.insert((pair, value_enc.clone()), id);
         self.claim_keys.push((pair, value_enc));
         self.owners.push(BTreeMap::new());
-        Ok(id)
+        id
     }
 
     /// Register `(key, record)`'s unique-property claims, unclaiming
@@ -551,8 +536,8 @@ impl UniqueTracker {
             if let Some(value) = record.properties().get(property) {
                 let value_enc = acetone_model::values::encode_value(value)
                     .map_err(acetone_model::records::RecordEncodeError::from)?;
-                let pair = self.pair_id(key.label(), property)?;
-                let claim = self.claim_id(pair, value_enc)?;
+                let pair = self.pair_id(key.label(), property);
+                let claim = self.claim_id(pair, value_enc);
                 self.owners[claim as usize].insert(encoded.clone(), imported);
                 touched.push(claim);
                 held.push(claim);
