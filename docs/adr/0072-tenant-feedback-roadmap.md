@@ -8,8 +8,9 @@ review as a governing-doc change) · Date: 2026-08-05 · Bead: acetone-tznd*
 > **Superseded in part by ADR-0073** (2026-08-05, same day): the daemon
 > (decision 1), rel-type rename/merge (decision 2) and multi-graph
 > co-tenancy (decision 3b) moved from the unscheduled list into Phase
-> 11, and Cypher-reachable parallel edges joined Phase 10's scope, on
-> Greg's explicit further direction. Decision 1's *timing condition*
+> 11 on Greg's explicit further direction; Cypher-reachable parallel
+> edges joined Phase 10's scope on ADR-0073's proposal, flagged for
+> boundary ratification. Decision 1's *timing condition*
 > ("not before the post-0.5 phases, sequenced at a boundary by Greg")
 > is satisfied, not contradicted, by Phase 11. Decisions 3a, 4, 5 and 6
 > stand unchanged.
