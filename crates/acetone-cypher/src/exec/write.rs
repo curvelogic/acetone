@@ -25,7 +25,7 @@ use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 /// Reserved first byte for synthesised overlay identities. Chosen to sit
 /// above the memcomparable key encoder's whole type-tag space (0x00..=0x0c),
 /// so an overlay id can never equal a storage-derived key (acetone-j5m).
-const OVERLAY_ID_TAG: u8 = 0xFF;
+pub(crate) const OVERLAY_ID_TAG: u8 = 0xFF;
 
 /// One graph change, recorded in application order. The variants beyond
 /// create arrive with the SET/REMOVE (acetone-eah) and DELETE
