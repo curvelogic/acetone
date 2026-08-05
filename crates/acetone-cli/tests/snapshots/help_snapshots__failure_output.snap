@@ -25,7 +25,7 @@ For more information, try '--help'.
 ### missing-colon-label
 argv:   acetone query CREATE (Topic {name: 'First'});
 status: 1
-stderr: error: cannot persist node: this node has no labels — in Cypher a label is written with a colon, e.g. `(:Topic {…})`; a bare name like `(Topic {…})` is a variable, not a label
+stderr: error: cannot persist: this node has no labels — in Cypher a label is written with a colon, e.g. `(:Topic {…})`; a bare name like `(Topic {…})` is a variable, not a label
 
 ### schema-not-declared
 argv:   acetone query CREATE (:Widget {sku: 'a'});
@@ -95,4 +95,4 @@ stderr: error: line 1, column 32: invalid argument: SKIP/LIMIT needs a non-negat
 ### labelled-no-key
 argv:   acetone query CREATE (:Solo {x: 1});
 status: 1
-stderr: error: cannot persist node: none of the labels ["Solo"] declares a key, so this node has no identity (Invariant #3) — declare one first, e.g. `acetone declare-label "Solo" --key <property>`
+stderr: error: cannot persist: none of the labels ["Solo"] declares a key, so this node has no identity (Invariant #3) — declare one first, e.g. `acetone declare-label "Solo" --key <property>`

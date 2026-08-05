@@ -43,7 +43,7 @@ use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PersistError {
-    #[error("cannot persist node: {0}")]
+    #[error("cannot persist: {0}")]
     Identity(String),
     #[error(
         "a node with labels {labels:?} bears more than one label declaring a key ({first:?}, {second:?}); node identity is ambiguous"
@@ -68,8 +68,10 @@ pub enum PersistError {
     DuplicateKeyInStatement { label: String, key: String },
     #[error(
         "cannot add the {rtype} relationship {src} -> {dst}: it conflicts with an existing relationship \
-         and acetone v0.1 has no parallel-edge discriminator (ADR-0030) — modify the existing relationship \
-         with SET, or delete it first"
+         with the same identity (source, type, target, discriminator — spec §2) — modify the \
+         existing relationship with SET, delete it first, or give this one a different \
+         discriminator value (a type without a declared discriminator property can declare one \
+         to permit parallel relationships)"
     )]
     DuplicateEdge {
         /// The relationship type.
@@ -271,7 +273,7 @@ pub fn persist_changes(
             }
         }
         for rel in &changes.created_rels {
-            let edge = edge_key(rel, &entity_to_key)?;
+            let edge = created_edge_key(rel, &entity_to_key, catalogue)?;
             if !existing.insert(edge.encode_fwd()?) {
                 return Err(PersistError::DuplicateEdge {
                     rtype: edge.rtype().to_string(),
@@ -279,14 +281,46 @@ pub fn persist_changes(
                     dst: format_node_identity(edge.dst().label(), edge.dst().key()),
                 });
             }
-            let record = EdgeRecord::new(convert_map(&rel.properties)?);
+            let record = EdgeRecord::new(record_without_disc(
+                convert_map(&rel.properties)?,
+                edge.rtype(),
+                catalogue,
+            ));
             check_rel_types(catalogue, &edge, &record)?;
             txn.put_edge(&edge, &record)?;
         }
     }
     for rel in &changes.modified_rels {
         let edge = bound_edge_key(rel, &entity_to_key)?;
-        let record = EdgeRecord::new(convert_map(&rel.properties)?);
+        let mut properties = convert_map(&rel.properties)?;
+        // The discriminator is identity (spec §2): a SET that changes it
+        // is refused exactly as a node-key SET is, compared against the
+        // BOUND KEY's value — never the record's (acetone-z093.5; the
+        // PR #251 F4 window). An unchanged value is fine (the read side
+        // re-exposes it, so it rides along in the property map) and is
+        // stripped back out: the discriminator is key-only storage.
+        if let Some(def) = catalogue.rel_type(edge.rtype())
+            && let Some(name) = def.discriminator()
+        {
+            // Absence is a refusal too (PR #252 review major 4): the read
+            // side always re-exposes the key's value, so a missing entry
+            // means REMOVE or a whole-map SET dropped it — the node-key
+            // rule refuses both, and reporting success for a write that
+            // cannot happen is worse than refusing it.
+            match properties.remove(name) {
+                Some(value) if &value == edge.disc() => {}
+                Some(_) | None => {
+                    return Err(PersistError::Identity(format!(
+                        "cannot modify or remove discriminator property \
+                         {name:?} of a {rtype:?} relationship \
+                         (relationship identity is immutable — delete and \
+                         re-create it instead)",
+                        rtype = edge.rtype(),
+                    )));
+                }
+            }
+        }
+        let record = EdgeRecord::new(properties);
         check_rel_types(catalogue, &edge, &record)?;
         txn.put_edge(&edge, &record)?;
     }
@@ -666,6 +700,82 @@ fn edge_key(
         dst,
         ModelValue::Null,
     )?)
+}
+
+/// The key for a CREATED relationship (acetone-z093.5): when the type
+/// declares discriminator property `P`, the value of `P` in the property
+/// map becomes the key's discriminator — two creates with different values
+/// coexist as parallel edges; a declared discriminator absent from the map
+/// is refused (explicit identity, the node-key rule). Undeclared types
+/// keep the `Null` discriminator as always.
+fn created_edge_key(
+    rel: &RelValue,
+    entity_to_key: &HashMap<EntityId, NodeKey>,
+    catalogue: &Catalogue,
+) -> Result<EdgeKey, PersistError> {
+    let base = edge_key(rel, entity_to_key)?;
+    let Some(name) = catalogue
+        .rel_type(base.rtype())
+        .and_then(|def| def.discriminator())
+    else {
+        return Ok(base);
+    };
+    let Some(value) = rel.properties.get(name) else {
+        return Err(PersistError::Identity(format!(
+            "relationship type {rtype:?} declares discriminator property \
+             {name:?}: a created relationship must supply it",
+            rtype = base.rtype(),
+        )));
+    };
+    let disc = convert_value(value)?;
+    // A null VALUE walks the same path as an absent property — the
+    // parameterised-ingest case ($disc unset) must hit the explicit
+    // refusal, not silently mint the ambiguous Null-keyed edge
+    // (PR #252 review major 3; NodeKey::new refuses Null likewise).
+    if matches!(disc, ModelValue::Null) {
+        return Err(PersistError::Identity(format!(
+            "relationship type {rtype:?} declares discriminator property \
+             {name:?}: a created relationship must supply a non-null value",
+            rtype = base.rtype(),
+        )));
+    }
+    // The deferred types must not form identity, exactly as for node keys
+    // (acetone-7vw; PR #252 review major 2): a Stored-carrier
+    // discriminator would compare renderings while the key stays typed.
+    // Relationship-flavoured wording — KeyValueType renders node text
+    // (PR #252 re-review N1).
+    if let Some(type_name) = deferred_type_name(&disc) {
+        return Err(PersistError::Identity(format!(
+            "discriminator property {name:?} of relationship type {rtype:?} \
+             has a {type_name} value, which cannot form relationship \
+             identity: discriminators must be boolean, integer, float or \
+             string",
+            rtype = base.rtype(),
+        )));
+    }
+    Ok(EdgeKey::new(
+        base.src().clone(),
+        base.rtype().to_string(),
+        base.dst().clone(),
+        disc,
+    )?)
+}
+
+/// Strip a declared discriminator property from a record map: the value
+/// lives in the key (key-only storage, the node-key rule); the read side
+/// re-exposes it (`adapter::rel_value`).
+fn record_without_disc(
+    mut properties: BTreeMap<String, ModelValue>,
+    rtype: &str,
+    catalogue: &Catalogue,
+) -> BTreeMap<String, ModelValue> {
+    if let Some(name) = catalogue
+        .rel_type(rtype)
+        .and_then(|def| def.discriminator())
+    {
+        properties.remove(name);
+    }
+    properties
 }
 
 fn convert_map(

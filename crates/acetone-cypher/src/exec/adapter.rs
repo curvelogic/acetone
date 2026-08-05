@@ -69,7 +69,7 @@ impl GraphSnapshot {
     /// stored graph with a declared schema, use
     /// [`Self::from_records_with_schema`] so key values become queryable.
     pub fn from_records(nodes: &[(NodeKey, NodeRecord)], edges: &[(EdgeKey, EdgeRecord)]) -> Self {
-        Self::build(nodes, edges, &HashMap::new(), &[])
+        Self::build(nodes, edges, &HashMap::new(), &HashMap::new(), &[])
     }
 
     /// Build with the schema's key-property names, so a node's key values
@@ -83,6 +83,7 @@ impl GraphSnapshot {
         schema: &[SchemaEntry],
     ) -> Self {
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
+        let mut disc_names: HashMap<String, String> = HashMap::new();
         // Every declared index drives the in-memory seek — composite
         // indexes included (ADR-0027, acetone-0c7): the map keys are the
         // concatenated per-component encodings, which the self-delimiting
@@ -100,16 +101,21 @@ impl GraphSnapshot {
                         def.properties().to_vec(),
                     ));
                 }
-                SchemaEntry::RelType { .. } => {}
+                SchemaEntry::RelType { name, def } => {
+                    if let Some(disc) = def.discriminator() {
+                        disc_names.insert(name.clone(), disc.to_owned());
+                    }
+                }
             }
         }
-        Self::build(nodes, edges, &key_names, &index_defs)
+        Self::build(nodes, edges, &key_names, &disc_names, &index_defs)
     }
 
     fn build(
         nodes: &[(NodeKey, NodeRecord)],
         edges: &[(EdgeKey, EdgeRecord)],
         key_names: &HashMap<String, Vec<String>>,
+        disc_names: &HashMap<String, String>,
         index_defs: &[(String, String, Vec<String>)],
     ) -> Self {
         let node_values: Vec<NodeValue> = nodes
@@ -118,7 +124,7 @@ impl GraphSnapshot {
             .collect();
         let rel_values: Vec<RelValue> = edges
             .iter()
-            .map(|(key, record)| rel_value(key, record))
+            .map(|(key, record)| rel_value(key, record, disc_names))
             .collect();
 
         let mut by_id = HashMap::with_capacity(node_values.len());
@@ -328,13 +334,31 @@ fn rel_entity_id(key: &EdgeKey) -> EntityId {
     )
 }
 
-pub(crate) fn rel_value(key: &EdgeKey, record: &EdgeRecord) -> RelValue {
+pub(crate) fn rel_value(
+    key: &EdgeKey,
+    record: &EdgeRecord,
+    disc_names: &HashMap<String, String>,
+) -> RelValue {
+    let mut properties = convert_map(record.properties());
+    // Re-expose the key's discriminator under its schema-declared property
+    // name (acetone-z093.5): filterable and returnable, and the reason
+    // `r.<disc>` works on record-empty `import --disc` edges. THE KEY
+    // WINS a name collision — unlike node keys (where every write strips
+    // key names, so a divergent record is unreachable), a legacy edge can
+    // carry a stale record value under the declared name (e.g. written
+    // pre-declaration on a branch and merged in); the key is the
+    // identity, exposing it keeps the SET guard comparing like for like,
+    // and the modify-path strip self-heals the record on the next write
+    // (PR #252 review blocker 1).
+    if let Some(name) = disc_names.get(key.rtype()) {
+        properties.insert(name.clone(), convert_value(key.disc()));
+    }
     RelValue {
         id: rel_entity_id(key),
         rel_type: key.rtype().to_string(),
         start: node_entity_id(key.src()),
         end: node_entity_id(key.dst()),
-        properties: convert_map(record.properties()),
+        properties,
     }
 }
 

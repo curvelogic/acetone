@@ -247,9 +247,20 @@ so a `--dry-run` shows it before anything lands. The entry-level rule
 is the opposite: entries absent from the document are never touched.
 
 `schema apply` can also express what the imperative commands cannot: a
-relationship type **with a discriminator**. Redeclaring such a type
-with `declare-rel-type` would drop the discriminator, and is refused
-while relationships of the type exist.
+relationship type **with a discriminator**, which enables **parallel
+relationships** end-to-end: `CREATE`/`MERGE` resolve the declared
+discriminator property's value into the relationship's identity (two
+creates with different values coexist; a declared discriminator absent
+from a `CREATE` map is refused), the value is readable back under its
+declared name — including on `import --disc` edges, whose records are
+empty — and `SET`/`REMOVE` of it are refused as identity changes. Note
+one data-dependent shape: a `MERGE` naming the type but **omitting** the
+discriminator matches any existing relationship of the type, yet errors
+on the create side when nothing matches (the create must supply the
+discriminator) — supply it in the `MERGE` map when create is a possible
+outcome. Redeclaring
+such a type with `declare-rel-type` would drop the discriminator, and is
+refused while relationships of the type exist.
 
 `--dry-run` prints the plan and applies nothing. It diffs only — the
 declare-time data checks (type backfill, require/unique violations) run

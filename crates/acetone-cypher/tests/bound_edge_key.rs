@@ -14,14 +14,13 @@ use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_model::schema::{LabelDef, RelTypeDef, SchemaEntry};
 
 /// Two `Doc` nodes joined by TWO parallel `CITES` edges discriminated by
-/// `run`. NOTE the fixture deliberately differs from `import --disc` in
-/// one respect: import puts the discriminator value ONLY in the key and
-/// leaves the record empty, which makes the edges indistinguishable to a
-/// `WHERE` until z093.5 re-exposes the discriminator as a readable
-/// property — so this fixture ALSO stores `run` in the record, purely so
-/// the tests can select one parallel edge. The genuinely-imported shape
-/// is covered by the DETACH DELETE and delete-all tests below, which need
-/// no selection.
+/// `run` in the KEY while the type declares NO discriminator — the
+/// legacy/mixed shape `import --disc` can produce (import never required
+/// a declaration). This is the shape the bound-key fix must serve
+/// without any schema help: no read-side re-exposure applies (that needs
+/// a declaration, z093.5), so the fixture stores `run` in the record
+/// purely so tests can select one parallel edge. Declared-discriminator
+/// behaviour lives in `parallel_edges.rs`.
 fn repo_with_parallel_edges() -> (tempfile::TempDir, Repository) {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo =
@@ -34,7 +33,7 @@ fn repo_with_parallel_edges() -> (tempfile::TempDir, Repository) {
     .expect("schema");
     txn.put_schema(&SchemaEntry::RelType {
         name: "CITES".into(),
-        def: RelTypeDef::new(Some("run".into()), Default::default(), []).expect("rel"),
+        def: RelTypeDef::new(None, Default::default(), []).expect("rel"),
     })
     .expect("rel schema");
     let a = NodeKey::new("Doc", vec![MV::Int(1)]).expect("key");

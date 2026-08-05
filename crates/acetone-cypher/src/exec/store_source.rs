@@ -104,6 +104,9 @@ pub struct StoreBackedSource<'s> {
     snapshot: &'s Snapshot<'s>,
     /// label → key property names (to re-expose key values as properties).
     key_names: HashMap<String, Vec<String>>,
+    /// Relationship type -> its declared discriminator property name, for
+    /// re-exposing the key's discriminator on read (acetone-z093.5).
+    disc_names: HashMap<String, String>,
     /// label → each key property's declared type, **by key position**, so a
     /// key pin can be guarded exactly as an index pin is (`acetone-2ck.17`).
     /// A missing label, or a position the schema does not cover, reads as
@@ -155,9 +158,15 @@ impl<'s> StoreBackedSource<'s> {
         // how to RESOLVE, and a short answer there is worse than a slow one.
         let trust_declarations = !snapshot.merge_in_progress();
         let mut key_names: HashMap<String, Vec<String>> = HashMap::new();
+        let mut disc_names: HashMap<String, String> = HashMap::new();
         let mut key_types: HashMap<String, Vec<Option<PropertyType>>> = HashMap::new();
         let mut label_types: HashMap<String, BTreeMap<String, PropertyType>> = HashMap::new();
         for entry in schema {
+            if let SchemaEntry::RelType { name, def } = entry
+                && let Some(disc) = def.discriminator()
+            {
+                disc_names.insert(name.clone(), disc.to_owned());
+            }
             if let SchemaEntry::Label { name, def } = entry {
                 key_names.insert(name.clone(), def.key().to_vec());
                 key_types.insert(
@@ -202,6 +211,7 @@ impl<'s> StoreBackedSource<'s> {
         StoreBackedSource {
             snapshot,
             key_names,
+            disc_names,
             key_types,
             indexes,
             error: Cell::new(None),
@@ -494,7 +504,7 @@ impl GraphSource for StoreBackedSource<'_> {
                             continue;
                         }
                         if let Some(neighbour) = self.node_from_key(edge.dst()) {
-                            out.push((rel_value(&edge, &record), neighbour));
+                            out.push((rel_value(&edge, &record, &self.disc_names), neighbour));
                         }
                     }
                 }
@@ -514,7 +524,7 @@ impl GraphSource for StoreBackedSource<'_> {
                             continue;
                         }
                         if let Some(neighbour) = self.node_from_key(edge.src()) {
-                            out.push((rel_value(&edge, &record), neighbour));
+                            out.push((rel_value(&edge, &record, &self.disc_names), neighbour));
                         }
                     }
                 }
