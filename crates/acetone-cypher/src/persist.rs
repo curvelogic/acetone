@@ -238,7 +238,7 @@ pub fn persist_changes(
     // key (the rekey path) nets to the create rather than the delete
     // clobbering it: staged ops apply in order per map.
     for rel in &changes.deleted_rels {
-        let edge = edge_key(rel, &entity_to_key)?;
+        let edge = bound_edge_key(rel, &entity_to_key)?;
         txn.delete_edge(&edge)?;
     }
     for id in &changes.deleted_nodes {
@@ -258,7 +258,7 @@ pub fn persist_changes(
     if !changes.created_rels.is_empty() {
         let mut deleted_edge_keys: HashSet<Vec<u8>> = HashSet::new();
         for rel in &changes.deleted_rels {
-            deleted_edge_keys.insert(edge_key(rel, &entity_to_key)?.encode_fwd()?);
+            deleted_edge_keys.insert(bound_edge_key(rel, &entity_to_key)?.encode_fwd()?);
         }
         // `existing` starts as the base edge keys (minus those freed by a delete
         // this statement) and grows with each created edge, so a collision with
@@ -285,7 +285,7 @@ pub fn persist_changes(
         }
     }
     for rel in &changes.modified_rels {
-        let edge = edge_key(rel, &entity_to_key)?;
+        let edge = bound_edge_key(rel, &entity_to_key)?;
         let record = EdgeRecord::new(convert_map(&rel.properties)?);
         check_rel_types(catalogue, &edge, &record)?;
         txn.put_edge(&edge, &record)?;
@@ -622,10 +622,32 @@ impl<'a> UniqueChecker<'a> {
     }
 }
 
+/// The exact identity of a relationship the query BOUND (acetone-z093.4):
+/// a base edge's `id` IS its encoded forward key (`adapter::rel_entity_id`)
+/// and carries the true discriminator, so `SET`/`DELETE` reuse it verbatim.
+/// A created edge (overlay id, `OVERLAY_ID_TAG`) has no stored key yet and
+/// is rebuilt from its endpoints. Recomputing a bound edge's key was the
+/// o8r wrong-key hazard: `edge_key` defaults the discriminator to `Null`,
+/// so item-wise edits on an `import --disc` edge deleted nothing and SET
+/// minted a phantom edge at the `Null` key.
+fn bound_edge_key(
+    rel: &RelValue,
+    entity_to_key: &HashMap<EntityId, NodeKey>,
+) -> Result<EdgeKey, PersistError> {
+    if rel.id.0.first() != Some(&crate::exec::write::OVERLAY_ID_TAG)
+        && let Ok(key) = EdgeKey::decode_fwd(rel.id.0.as_ref())
+    {
+        return Ok(key);
+    }
+    // Overlay ids (and, defensively, an undecodable id from the adapter's
+    // Debug fallback) rebuild from the endpoints as before.
+    edge_key(rel, entity_to_key)
+}
+
 /// Build an edge key from a relationship, resolving its endpoints to node
 /// keys — a created node through `entity_to_key`, a base node by decoding
 /// its storage-derived id. The discriminator defaults to null (parallel
-/// edges need a schema discriminator, out of scope here).
+/// edges need a schema discriminator; the create side is acetone-z093.5).
 fn edge_key(
     rel: &RelValue,
     entity_to_key: &HashMap<EntityId, NodeKey>,
@@ -718,6 +740,38 @@ fn convert_value_at(value: &Value, depth: usize) -> Result<ModelValue, PersistEr
 
 #[cfg(test)]
 mod tests {
+
+    proptest! {
+        /// The bead's spec'd key-fidelity property (acetone-z093.4): for
+        /// ANY stored edge key — any discriminator included — the
+        /// RelValue the adapter would bind decodes back to exactly that
+        /// key. Reuse, never recompute.
+        #[test]
+        fn bound_edge_key_reuses_the_exact_bound_identity(
+            src_id in 0i64..1000,
+            dst_id in 0i64..1000,
+            rtype in "[A-Z]{1,12}",
+            disc in prop_oneof![
+                Just(acetone_model::Value::Null),
+                (0i64..1000).prop_map(acetone_model::Value::Int),
+                "[a-z0-9 ]{0,24}".prop_map(acetone_model::Value::String),
+            ],
+        ) {
+            use acetone_model::graph_keys::{EdgeKey, NodeKey};
+            let src = NodeKey::new("N", vec![acetone_model::Value::Int(src_id)]).unwrap();
+            let dst = NodeKey::new("N", vec![acetone_model::Value::Int(dst_id)]).unwrap();
+            let key = EdgeKey::new(src, rtype, dst, disc).unwrap();
+            let rel = crate::exec::value::RelValue {
+                id: crate::exec::value::EntityId::from_bytes(key.encode_fwd().unwrap()),
+                rel_type: key.rtype().to_string(),
+                start: crate::exec::value::EntityId::from_bytes(vec![0]),
+                end: crate::exec::value::EntityId::from_bytes(vec![0]),
+                properties: Default::default(),
+            };
+            let resolved = super::bound_edge_key(&rel, &Default::default()).unwrap();
+            prop_assert_eq!(resolved, key);
+        }
+    }
     use super::*;
     use acetone_model::DateTime;
     use acetone_model::schema::{LabelDef, SchemaEntry};

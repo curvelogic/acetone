@@ -101,6 +101,19 @@ fine.)
 
 ### Fixed
 
+- **Item-wise Cypher edits on discriminated (parallel) edges targeted the
+  wrong edge** (acetone-z093.4, the o8r hazard, live since `import --disc`
+  in 0.1): `MATCH` binds an edge by its full key — including the
+  discriminator — but `SET`/`DELETE` recomputed identity with a `Null`
+  discriminator. Shipped symptoms in 0.4.0: `DELETE` reported deletions
+  that did not happen; `SET` silently minted phantom `Null`-key edges
+  (`fsck`-clean corruption); `DETACH DELETE` of a node with discriminated
+  edges failed outright with a dangling-relationship error; and a
+  delete-plus-create in one statement could silently overwrite an
+  unrelated edge's record. All four now use the bound edge's exact key.
+  Cypher `CREATE` still writes a `Null` discriminator — the create side
+  is acetone-z093.5.
+
 - With several usable index hints on one pattern, the planner now sizes
   every alternative (candidate counts only — no point reads) and
   materialises the smallest, instead of taking the first that fits its
