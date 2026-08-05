@@ -18,6 +18,18 @@ fine.)
 
 ### Added
 
+- **Cypher-created parallel edges** (acetone-z093.5, ADR-0073,
+  completing ADR-0030's reserved slot): when a relationship type
+  declares a discriminator property, `CREATE`/`MERGE` resolve that
+  property's value into the edge key — two creates with different
+  values coexist; the same value is the usual duplicate refusal; MERGE
+  matches per value. The discriminator is stored key-only and
+  **re-exposed on read under its declared name** (so `r.<disc>` now
+  also works on record-empty `import --disc` edges), and `SET` of it is
+  refused as an identity change, compared against the key. A declared
+  discriminator absent from a `CREATE` map is refused — explicit
+  identity, the node-key rule.
+
 - **Relationship property types are now real** (acetone-7qw.12):
   `declare-rel-type` takes repeatable `--type <property>:<type>` flags,
   `acetone schema` renders them (JSON note: `relationship_types` entries
