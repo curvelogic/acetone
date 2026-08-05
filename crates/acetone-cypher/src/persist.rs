@@ -742,12 +742,16 @@ fn created_edge_key(
     // The deferred types must not form identity, exactly as for node keys
     // (acetone-7vw; PR #252 review major 2): a Stored-carrier
     // discriminator would compare renderings while the key stays typed.
+    // Relationship-flavoured wording — KeyValueType renders node text
+    // (PR #252 re-review N1).
     if let Some(type_name) = deferred_type_name(&disc) {
-        return Err(PersistError::KeyValueType {
-            label: base.rtype().to_string(),
-            property: name.to_string(),
-            type_name,
-        });
+        return Err(PersistError::Identity(format!(
+            "discriminator property {name:?} of relationship type {rtype:?} \
+             has a {type_name} value, which cannot form relationship \
+             identity: discriminators must be boolean, integer, float or \
+             string",
+            rtype = base.rtype(),
+        )));
     }
     Ok(EdgeKey::new(
         base.src().clone(),
