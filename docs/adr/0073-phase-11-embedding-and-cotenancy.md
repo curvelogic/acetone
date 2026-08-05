@@ -1,8 +1,11 @@
 # ADR-0073: Phase 11 — embedding and co-tenancy; parallel edges complete Phase 10
 
-*Status: accepted — direction set explicitly by Greg in discussion,
-2026-08-05, superseding ADR-0072's placements where they differ · Date:
-2026-08-05 · Bead: acetone-j1hq*
+*Status: accepted — decisions 2 and 3 execute directions Greg gave
+explicitly in discussion (quoted below); decision 1's placement is an
+agent conclusion from that discussion which Greg saw proposed and did
+not object to — flagged, like the rest, for Phase 10 boundary
+ratification. Supersedes ADR-0072's placements where they differ ·
+Date: 2026-08-05 · Bead: acetone-j1hq*
 
 ## Context
 
@@ -22,10 +25,15 @@ followed:
 - **Rel-type rename/merge "is going to cause us problems unless we
   prioritise, so let's bring that forward too."**
 
-Separately, discussion of the parallel-edges state (declarable and
-import-writable but not query-reachable; the o8r wrong-key hazard now
-known to be live) concluded the feature is crippled for a tenant whose
-curation flow asserts facts item-wise through Cypher.
+Separately, Greg asked to understand Cypher creation of parallel edges,
+observing they "seem crippled without it" — correct: declarable and
+import-writable but not query-reachable, with the o8r wrong-key hazard
+now known to be live. The **placement** of the completion work in Phase
+10 (rather than 11) is the agent's proposal from that discussion —
+argued from "not delivered until reachable" and from closing the o8r
+hazard rather than carrying it as an open risk — which Greg saw and did
+not object to; it is direction-adjacent, not quoted direction, and the
+boundary ratifies it.
 
 ## Decision
 
@@ -38,13 +46,25 @@ curation flow asserts facts item-wise through Cypher.
    discriminator; `SET` of `P` is refused as an identity change; a
    declared discriminator absent from a `CREATE` map is **refused**
    (explicit identity, the node-key precedent), with the design detail
-   settled in the unit's ADR if it deviates. No format change: the key
-   has carried the slot since ADR-0030 and import has written values
-   since Phase 5. The phase's **ratified exit criteria are unchanged** —
-   this is scope beyond the minimum, added with Greg's direction while
-   the phase is parked; implementation resumes when Greg un-parks it.
-2. **Phase 11 is defined: "Embedding and co-tenancy" (size L,
-   target 0.6)**, carrying in rough order:
+   settled in the unit's ADR if it deviates. **On read, the
+   discriminator is re-exposed under its declared property name**,
+   exactly as node key properties are — without this the sketch would
+   deliver a write-only discriminator (`RETURN r.P` null, MERGE with
+   nothing to match on, the SET guard with no value to compare); note
+   the per-edge SET refusal is NEW work on the node-key precedent —
+   PR #243 delivered type checks and schema-level discriminator
+   stability, not a per-edge value guard. No format change: the key has
+   carried the slot since ADR-0030 and import has written values since
+   Phase 5. The phase's **ratified exit criteria are unchanged** — this
+   is scope beyond the minimum, added while the phase is parked (the
+   park is recorded on `acetone-z093`); implementation resumes when
+   Greg un-parks. If these units have not landed when the boundary
+   closes, ADR-0054 applies in full: named in the phase report with the
+   reason, re-homed to an owning epic (Phase 11 is the natural home).
+2. **Phase 11 is defined: "Embedding and co-tenancy" (size L)** —
+   its target version is assigned when its exit criteria are drafted at
+   phase opening (the one-phase-per-minor convention suggests 0.6, but
+   that is inference, not direction) — carrying in rough order:
    - **Daemon mode** (`acetone serve`, `acetone-pz0k`): the ADR-0072
      owns-nothing shape — one process per repository on a unix socket or
      loopback; host owns auth, tenancy, repo pools, credentials and
