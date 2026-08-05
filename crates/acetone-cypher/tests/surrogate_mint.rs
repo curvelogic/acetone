@@ -133,3 +133,65 @@ fn natural_key_labels_are_untouched() {
         "natural keys stay mandatory: {err}"
     );
 }
+
+#[test]
+fn a_bare_merge_matches_existing_notes_without_minting() {
+    let (_d, repo) = repo_with_note();
+    let session = Session::new(&repo);
+    session.run("CREATE (:Note {text: 'a'})").expect("seed");
+    // MERGE (n:Note) matches ANY existing Note — no re-mint.
+    session.run("MERGE (n:Note)").expect("bare merge");
+    let outcome = session
+        .run("MATCH (n:Note) RETURN count(n)")
+        .expect("count");
+    let result = match outcome {
+        Outcome::Read(r) => r,
+        _ => panic!("read expected"),
+    };
+    assert!(
+        matches!(result.rows[0][0], RtValue::Int(1)),
+        "bare MERGE must match, not mint: {:?}",
+        result.rows[0][0]
+    );
+}
+
+#[test]
+fn merge_by_explicit_id_is_idempotent() {
+    let (_d, repo) = repo_with_note();
+    let session = Session::new(&repo);
+    session
+        .run("MERGE (n:Note {_id: 'X', text: 'x'})")
+        .expect("first: creates with the explicit id");
+    session
+        .run("MERGE (n:Note {_id: 'X', text: 'x'})")
+        .expect("second: matches by id");
+    let outcome = session
+        .run("MATCH (n:Note) RETURN count(n)")
+        .expect("count");
+    let result = match outcome {
+        Outcome::Read(r) => r,
+        _ => panic!("read expected"),
+    };
+    assert!(matches!(result.rows[0][0], RtValue::Int(1)));
+}
+
+/// The Invariant #3 guard: a surrogate label cannot combine with a
+/// natural-keyed one — the mint can never displace a natural key.
+#[test]
+fn surrogate_plus_natural_label_is_refused() {
+    let (_d, repo) = repo_with_note();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&SchemaEntry::Label {
+        name: "Host".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+    })
+    .expect("schema");
+    txn.save().expect("save");
+    let err = Session::new(&repo)
+        .run("CREATE (n:Note:Host {text: 'x', id: 'h1'})")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("more than one label"),
+        "ambiguous identity must refuse: {err}"
+    );
+}
