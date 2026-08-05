@@ -43,7 +43,7 @@ use crate::exec::value::{EntityId, NodeValue, RelValue, Value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PersistError {
-    #[error("cannot persist node: {0}")]
+    #[error("cannot persist: {0}")]
     Identity(String),
     #[error(
         "a node with labels {labels:?} bears more than one label declaring a key ({first:?}, {second:?}); node identity is ambiguous"
@@ -68,9 +68,10 @@ pub enum PersistError {
     DuplicateKeyInStatement { label: String, key: String },
     #[error(
         "cannot add the {rtype} relationship {src} -> {dst}: it conflicts with an existing relationship \
-         shares its identity (source, type, target, discriminator — spec §2; declare a \
-         discriminator property on the type for parallel relationships) — modify the existing relationship \
-         with SET, or delete it first"
+         with the same identity (source, type, target, discriminator — spec §2) — modify the \
+         existing relationship with SET, delete it first, or give this one a different \
+         discriminator value (a type without a declared discriminator property can declare one \
+         to permit parallel relationships)"
     )]
     DuplicateEdge {
         /// The relationship type.
@@ -300,15 +301,24 @@ pub fn persist_changes(
         // stripped back out: the discriminator is key-only storage.
         if let Some(def) = catalogue.rel_type(edge.rtype())
             && let Some(name) = def.discriminator()
-            && let Some(value) = properties.remove(name)
-            && &value != edge.disc()
         {
-            return Err(PersistError::Identity(format!(
-                "cannot modify discriminator property {name:?} of a \
-                 {rtype:?} relationship (relationship identity is \
-                 immutable — delete and re-create it instead)",
-                rtype = edge.rtype(),
-            )));
+            // Absence is a refusal too (PR #252 review major 4): the read
+            // side always re-exposes the key's value, so a missing entry
+            // means REMOVE or a whole-map SET dropped it — the node-key
+            // rule refuses both, and reporting success for a write that
+            // cannot happen is worse than refusing it.
+            match properties.remove(name) {
+                Some(value) if &value == edge.disc() => {}
+                Some(_) | None => {
+                    return Err(PersistError::Identity(format!(
+                        "cannot modify or remove discriminator property \
+                         {name:?} of a {rtype:?} relationship \
+                         (relationship identity is immutable — delete and \
+                         re-create it instead)",
+                        rtype = edge.rtype(),
+                    )));
+                }
+            }
         }
         let record = EdgeRecord::new(properties);
         check_rel_types(catalogue, &edge, &record)?;
@@ -718,6 +728,27 @@ fn created_edge_key(
         )));
     };
     let disc = convert_value(value)?;
+    // A null VALUE walks the same path as an absent property — the
+    // parameterised-ingest case ($disc unset) must hit the explicit
+    // refusal, not silently mint the ambiguous Null-keyed edge
+    // (PR #252 review major 3; NodeKey::new refuses Null likewise).
+    if matches!(disc, ModelValue::Null) {
+        return Err(PersistError::Identity(format!(
+            "relationship type {rtype:?} declares discriminator property \
+             {name:?}: a created relationship must supply a non-null value",
+            rtype = base.rtype(),
+        )));
+    }
+    // The deferred types must not form identity, exactly as for node keys
+    // (acetone-7vw; PR #252 review major 2): a Stored-carrier
+    // discriminator would compare renderings while the key stays typed.
+    if let Some(type_name) = deferred_type_name(&disc) {
+        return Err(PersistError::KeyValueType {
+            label: base.rtype().to_string(),
+            property: name.to_string(),
+            type_name,
+        });
+    }
     Ok(EdgeKey::new(
         base.src().clone(),
         base.rtype().to_string(),

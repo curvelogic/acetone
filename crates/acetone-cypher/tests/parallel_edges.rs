@@ -163,7 +163,8 @@ fn set_of_the_discriminator_is_refused_and_unchanged_value_is_fine() {
         .run("MATCH ()-[r:CITES]->() SET r.run = 'r2'")
         .unwrap_err();
     assert!(
-        err.to_string().contains("cannot modify discriminator"),
+        err.to_string()
+            .contains("cannot modify or remove discriminator"),
         "identity is immutable: {err}"
     );
     // Same value: allowed, no-op on the key, other properties land.
@@ -203,4 +204,136 @@ fn merge_matches_per_discriminator_value() {
         2,
         "MERGE is idempotent per value and creates per new value"
     );
+}
+
+/// PR #252 review blocker 1: a legacy edge whose record carries a STALE
+/// value under the declared name (written pre-declaration on a branch and
+/// merged in) must stay editable — the key wins the read collision, the
+/// SET guard compares like for like, and the modify-path strip self-heals
+/// the record.
+#[test]
+fn a_divergent_legacy_edge_stays_editable_and_self_heals() {
+    let (_d, repo) = repo_with_disc_type();
+    let mut txn = repo.begin_write().expect("begin");
+    let a = NodeKey::new("Doc", vec![MV::Int(1)]).expect("key");
+    let b = NodeKey::new("Doc", vec![MV::Int(2)]).expect("key");
+    let edge = EdgeKey::new(a, "CITES".to_string(), b, MV::String("r1".into())).expect("edge");
+    txn.put_edge(
+        &edge,
+        &EdgeRecord::new(BTreeMap::from([
+            ("run".to_owned(), MV::String("r2".into())),
+            ("note".to_owned(), MV::String("keep".into())),
+        ])),
+    )
+    .expect("edge");
+    txn.save().expect("save");
+
+    let session = Session::new(&repo);
+    // The key wins the read: r.run is the identity, not the stale record.
+    let outcome = session
+        .run("MATCH ()-[r:CITES]->() RETURN r.run")
+        .expect("read");
+    let Outcome::Read(result) = outcome else {
+        panic!("read expected");
+    };
+    assert!(
+        matches!(&result.rows[0][0], RtValue::String(s) if s == "r1"),
+        "the key must win the collision: {:?}",
+        result.rows[0][0]
+    );
+    // An unrelated SET succeeds — the edge is editable.
+    session
+        .run("MATCH ()-[r:CITES]->() SET r.other = 1")
+        .expect("divergent edge must stay editable");
+    assert_eq!(count_edges(&repo), 1);
+    // And the stale record value is healed away: only the key speaks now.
+    let outcome = session
+        .run("MATCH ()-[r:CITES]->() RETURN r.run, r.note")
+        .expect("read back");
+    let Outcome::Read(result) = outcome else {
+        panic!("read expected");
+    };
+    assert!(matches!(&result.rows[0][0], RtValue::String(s) if s == "r1"));
+    assert!(matches!(&result.rows[0][1], RtValue::String(s) if s == "keep"));
+}
+
+/// PR #252 review major 3: a null-VALUED discriminator is the
+/// parameterised-ingest trap and must hit the explicit refusal.
+#[test]
+fn a_null_discriminator_value_is_refused() {
+    let (_d, repo) = repo_with_disc_type();
+    let err = Session::new(&repo)
+        .run(
+            "MATCH (a:Doc {id: 1}), (b:Doc {id: 2}) \
+             CREATE (a)-[:CITES {run: null, note: 'oops'}]->(b)",
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("non-null"),
+        "null must not mint the ambiguous edge: {err}"
+    );
+    assert_eq!(count_edges(&repo), 0);
+}
+
+/// PR #252 review major 4: REMOVE of the discriminator, and a whole-map
+/// SET that drops it, are refused — never a silent no-op.
+#[test]
+fn remove_and_whole_map_set_cannot_drop_the_discriminator() {
+    let (_d, repo) = repo_with_disc_type();
+    let session = Session::new(&repo);
+    session
+        .run(
+            "MATCH (a:Doc {id: 1}), (b:Doc {id: 2}) \
+             CREATE (a)-[:CITES {run: 'r1', note: 'n'}]->(b)",
+        )
+        .expect("create");
+    let err = session
+        .run("MATCH ()-[r:CITES]->() REMOVE r.run")
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("cannot modify or remove discriminator"),
+        "REMOVE must refuse: {err}"
+    );
+    let err = session
+        .run("MATCH ()-[r:CITES]->() SET r = {note: 'z'}")
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("cannot modify or remove discriminator"),
+        "whole-map SET must refuse: {err}"
+    );
+    // Nothing changed.
+    let outcome = session
+        .run("MATCH ()-[r:CITES]->() RETURN r.run, r.note")
+        .expect("intact");
+    let Outcome::Read(result) = outcome else {
+        panic!("read expected");
+    };
+    assert!(matches!(&result.rows[0][0], RtValue::String(s) if s == "r1"));
+    assert!(matches!(&result.rows[0][1], RtValue::String(s) if s == "n"));
+}
+
+/// Delete-one-of-a-pair and DETACH DELETE under a DECLARED discriminator
+/// (PR #252 review minor 6): the configuration this unit ships.
+#[test]
+fn declared_type_delete_and_detach_delete() {
+    let (_d, repo) = repo_with_disc_type();
+    let session = Session::new(&repo);
+    for run in ["r1", "r2"] {
+        session
+            .run(&format!(
+                "MATCH (a:Doc {{id: 1}}), (b:Doc {{id: 2}}) \
+                 CREATE (a)-[:CITES {{run: '{run}'}}]->(b)"
+            ))
+            .expect("create");
+    }
+    session
+        .run("MATCH ()-[r:CITES]->() WHERE r.run = 'r1' DELETE r")
+        .expect("delete one");
+    assert_eq!(count_edges(&repo), 1, "exactly the bound edge");
+    session
+        .run("MATCH (a:Doc {id: 1}) DETACH DELETE a")
+        .expect("detach delete");
+    assert_eq!(count_edges(&repo), 0);
 }

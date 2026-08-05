@@ -341,14 +341,17 @@ pub(crate) fn rel_value(
 ) -> RelValue {
     let mut properties = convert_map(record.properties());
     // Re-expose the key's discriminator under its schema-declared property
-    // name, exactly as node key values are (acetone-z093.5): filterable
-    // and returnable, with the record winning a name collision — the same
-    // rule as nodes, and the reason `r.<disc>` works on record-empty
-    // `import --disc` edges.
+    // name (acetone-z093.5): filterable and returnable, and the reason
+    // `r.<disc>` works on record-empty `import --disc` edges. THE KEY
+    // WINS a name collision — unlike node keys (where every write strips
+    // key names, so a divergent record is unreachable), a legacy edge can
+    // carry a stale record value under the declared name (e.g. written
+    // pre-declaration on a branch and merged in); the key is the
+    // identity, exposing it keeps the SET guard comparing like for like,
+    // and the modify-path strip self-heals the record on the next write
+    // (PR #252 review blocker 1).
     if let Some(name) = disc_names.get(key.rtype()) {
-        properties
-            .entry(name.clone())
-            .or_insert_with(|| convert_value(key.disc()));
+        properties.insert(name.clone(), convert_value(key.disc()));
     }
     RelValue {
         id: rel_entity_id(key),

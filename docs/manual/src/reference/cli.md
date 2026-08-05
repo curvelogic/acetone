@@ -253,7 +253,12 @@ discriminator property's value into the relationship's identity (two
 creates with different values coexist; a declared discriminator absent
 from a `CREATE` map is refused), the value is readable back under its
 declared name — including on `import --disc` edges, whose records are
-empty — and `SET` of it is refused as an identity change. Redeclaring
+empty — and `SET`/`REMOVE` of it are refused as identity changes. Note
+one data-dependent shape: a `MERGE` naming the type but **omitting** the
+discriminator matches any existing relationship of the type, yet errors
+on the create side when nothing matches (the create must supply the
+discriminator) — supply it in the `MERGE` map when create is a possible
+outcome. Redeclaring
 such a type with `declare-rel-type` would drop the discriminator, and is
 refused while relationships of the type exist.
 
