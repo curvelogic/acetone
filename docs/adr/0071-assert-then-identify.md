@@ -36,7 +36,7 @@ governing ADR must not reserve a taken name.)
    autodeclarable under ADR-0060, typed qualifiers per ADR-0066 for
    confidence/provenance). It merges as data under the cell rules, carries
    history, and is reversible by ordinary edit. Nothing in acetone treats
-   it specially: queries that want pre-resolution views traverse it
+   it specially: queries that want pre-identification views traverse it
    explicitly.
 2. **The collapse is an explicit `identify` operation** — a deliberate,
    named act, never a side effect: rewrite the surrogate node into the
@@ -59,7 +59,7 @@ governing ADR must not reserve a taken name.)
    identities. This is the ingest-as-branch workflow's normal case (two
    curators independently identifying one mention), so **detection is a
    stated requirement on the `identify` design, not a property inherited
-   for free** — e.g. a resolution marker written at the surrogate's own
+   for free** — e.g. an identification marker written at the surrogate's own
    key, so divergent identifications collide there and conflict.
 
 **Scope of this ADR: the decision, not the implementation.** The
@@ -76,7 +76,7 @@ divergent-identification detection requirement above.
   provenance, on a working branch — curation reviews the claim like any
   fact, and the claim is cheap to retract.
 - The graph does *not* converge until an identify runs: consumers that
-  want resolved views before then must traverse equivalence edges
+  want collapsed views before then must traverse equivalence edges
   themselves. This is deliberate — convergence is a curated act, not an
   inference.
 - `identify` inherits hard edges to spec later: property-merge policy,

@@ -114,10 +114,6 @@ fn phrase_names_round_trip_through_schema_apply() {
     for phrase in PHRASES {
         ok(&acetone(&source, &["declare-rel-type", phrase]));
     }
-    ok(&acetone(
-        &source,
-        &["declare-rel-type", "was influenced by"],
-    ));
     let doc = ok(&acetone(&source, &["schema", "--json"]));
     assert!(doc.contains("was influenced by"), "{doc}");
 
