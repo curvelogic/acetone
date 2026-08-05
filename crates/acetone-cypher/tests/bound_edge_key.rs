@@ -14,8 +14,14 @@ use acetone_model::records::{EdgeRecord, NodeRecord};
 use acetone_model::schema::{LabelDef, RelTypeDef, SchemaEntry};
 
 /// Two `Doc` nodes joined by TWO parallel `CITES` edges discriminated by
-/// `run` — written through the graph layer exactly as `import --disc`
-/// writes them.
+/// `run`. NOTE the fixture deliberately differs from `import --disc` in
+/// one respect: import puts the discriminator value ONLY in the key and
+/// leaves the record empty, which makes the edges indistinguishable to a
+/// `WHERE` until z093.5 re-exposes the discriminator as a readable
+/// property — so this fixture ALSO stores `run` in the record, purely so
+/// the tests can select one parallel edge. The genuinely-imported shape
+/// is covered by the DETACH DELETE and delete-all tests below, which need
+/// no selection.
 fn repo_with_parallel_edges() -> (tempfile::TempDir, Repository) {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo =
@@ -163,4 +169,74 @@ fn undiscriminated_edges_are_unaffected() {
         panic!("read expected");
     };
     assert!(matches!(result.rows[0][0], RtValue::Int(0)));
+}
+
+/// The `deleted_edge_keys` site is load-bearing (PR #251 review F2): with
+/// the pre-fix Null recompute, a DELETE of a discriminated edge put a
+/// SPURIOUS Null key into the freed set, which let a CREATE in the same
+/// statement silently overwrite a real, unrelated Null-keyed edge's
+/// record while the edge told to die survived. Post-fix the create is
+/// correctly refused as a duplicate.
+#[test]
+fn delete_plus_create_cannot_clobber_an_unrelated_null_edge() {
+    let (_d, repo) = repo_with_parallel_edges();
+    // Add a genuine Null-discriminated edge alongside the parallel pair.
+    let mut txn = repo.begin_write().expect("begin");
+    let a = NodeKey::new("Doc", vec![MV::Int(1)]).expect("key");
+    let b = NodeKey::new("Doc", vec![MV::Int(2)]).expect("key");
+    let plain = EdgeKey::new(a, "CITES".to_string(), b, MV::Null).expect("edge key");
+    txn.put_edge(
+        &plain,
+        &EdgeRecord::new(BTreeMap::from([(
+            "via".to_owned(),
+            MV::String("original".into()),
+        )])),
+    )
+    .expect("edge");
+    txn.save().expect("save");
+    assert_eq!(count_edges(&repo), 3);
+
+    let err = Session::new(&repo)
+        .run(
+            "MATCH (a:Doc {id: 1})-[r:CITES]->(b:Doc {id: 2}) \
+             WHERE r.run = 'r1' \
+             DELETE r CREATE (a)-[:CITES {via: 'new'}]->(b)",
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("conflicts with an existing relationship"),
+        "the Null slot is occupied, so the create must refuse: {err}"
+    );
+    // Nothing landed: still three edges, the original record intact.
+    assert_eq!(count_edges(&repo), 3);
+    let outcome = Session::new(&repo)
+        .run("MATCH ()-[r:CITES]->() WHERE r.via = 'original' RETURN count(r)")
+        .expect("original intact");
+    let Outcome::Read(result) = outcome else {
+        panic!("read expected");
+    };
+    assert!(matches!(result.rows[0][0], RtValue::Int(1)));
+}
+
+/// DETACH DELETE cascades through `deleted_rels` and inherits the fix —
+/// pre-fix it hard-errored with a dangling-relationship refusal because
+/// the cascade "deleted" keys that did not exist (PR #251 review F2).
+#[test]
+fn detach_delete_removes_a_node_with_discriminated_edges() {
+    let (_d, repo) = repo_with_parallel_edges();
+    Session::new(&repo)
+        .run("MATCH (a:Doc {id: 1}) DETACH DELETE a")
+        .expect("detach delete must succeed over discriminated edges");
+    assert_eq!(count_edges(&repo), 0, "the cascade must remove both edges");
+    let outcome = Session::new(&repo)
+        .run("MATCH (n:Doc) RETURN count(n)")
+        .expect("count nodes");
+    let Outcome::Read(result) = outcome else {
+        panic!("read expected");
+    };
+    assert!(
+        matches!(result.rows[0][0], RtValue::Int(1)),
+        "only Doc 2 remains"
+    );
 }

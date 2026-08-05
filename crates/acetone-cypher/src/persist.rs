@@ -740,6 +740,40 @@ fn convert_value_at(value: &Value, depth: usize) -> Result<ModelValue, PersistEr
 
 #[cfg(test)]
 mod tests {
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// The bead's spec'd key-fidelity property (acetone-z093.4): for
+        /// ANY stored edge key — any discriminator included — the
+        /// RelValue the adapter would bind decodes back to exactly that
+        /// key. Reuse, never recompute.
+        #[test]
+        fn bound_edge_key_reuses_the_exact_bound_identity(
+            src_id in 0i64..1000,
+            dst_id in 0i64..1000,
+            rtype in "[A-Z]{1,12}",
+            disc in prop_oneof![
+                Just(acetone_model::Value::Null),
+                (0i64..1000).prop_map(acetone_model::Value::Int),
+                "[a-z0-9 ]{0,24}".prop_map(|s| acetone_model::Value::String(s.into())),
+            ],
+        ) {
+            use acetone_model::graph_keys::{EdgeKey, NodeKey};
+            let src = NodeKey::new("N", vec![acetone_model::Value::Int(src_id)]).unwrap();
+            let dst = NodeKey::new("N", vec![acetone_model::Value::Int(dst_id)]).unwrap();
+            let key = EdgeKey::new(src, rtype, dst, disc).unwrap();
+            let rel = crate::exec::value::RelValue {
+                id: crate::exec::value::EntityId::from_bytes(key.encode_fwd().unwrap()),
+                rel_type: key.rtype().to_string(),
+                start: crate::exec::value::EntityId::from_bytes(vec![0]),
+                end: crate::exec::value::EntityId::from_bytes(vec![0]),
+                properties: Default::default(),
+            };
+            let resolved = super::bound_edge_key(&rel, &Default::default()).unwrap();
+            prop_assert_eq!(resolved, key);
+        }
+    }
     use super::*;
     use acetone_model::DateTime;
     use acetone_model::schema::{LabelDef, SchemaEntry};
