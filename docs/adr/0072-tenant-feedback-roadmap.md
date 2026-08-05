@@ -13,12 +13,19 @@ consolidated its friction and requests into a tiered document
 (deliberately framed so that every ask is something a *second* tenant
 would also want), and asked four cheap verification questions. The
 verifications were answered from the code with no work needed — reader
-concurrency is already a documented MVCC guarantee; parallel edges
-already ship as relationship-type discriminators; one graph per
-repository is a hard limit as shipped; and pushing workspace refs for
-cross-machine resume is *designed against*, which corrected a plan the
-tenant had considered settled (the supported shape is commit to a scratch
-branch and push that).
+concurrency is already a documented MVCC guarantee; parallel edges are a
+**three-way split** (a relationship type's discriminator is *declarable*
+via `schema apply`, and `import --disc` has *written* discriminated edges
+since Phase 5, but the *query surface* is unchanged — `CREATE` cannot
+make a parallel edge and `persist::edge_key` hardcodes `Null`, tracked as
+`acetone-o8r`, whose wrong-key `SET`/`DELETE` path import-created edges
+make reachable today); one graph per repository is a hard limit as
+shipped; and pushing workspace refs for cross-machine resume is
+*designed against*, which corrected a plan the tenant had considered
+settled (the supported shape is commit to a scratch branch and push
+that). The parallel-edges answer as first relayed to the tenant
+overstated the query surface; the corrected three-way answer supersedes
+it and has been re-relayed.
 
 That left the genuine roadmap questions: which asks change the plan, and
 how.
@@ -67,12 +74,15 @@ how.
    and the operational constraint that proxies reject custom ref
    namespaces; it is declined unless a tenant demonstrates a need that
    commit-and-push cannot meet.
-6. **No roadmap change for the already-shipped or already-guaranteed**:
-   reader concurrency (documented MVCC), parallel edges (rel-type
-   discriminators; `schema apply` declares them — the imperative CLI
-   deliberately cannot), typed edge qualifiers, wasm and watch/reactive
-   queries (the tenant itself asked these stay unscheduled; watch was
-   already listed).
+6. **No roadmap change needed for the rest.** Already shipped or
+   guaranteed: reader concurrency (documented MVCC), typed edge
+   qualifiers, and the *storage and declaration* halves of parallel
+   edges (`schema apply` declares a discriminator — the imperative CLI
+   deliberately cannot; `import --disc` writes one). The query-surface
+   half remains open as `acetone-o8r`, re-priced by this review because
+   import-created discriminated edges make its wrong-key `SET`/`DELETE`
+   path reachable today. Kept unscheduled at the tenant's own request:
+   wasm and watch/reactive queries (watch was already listed).
 
 ## Consequences
 
