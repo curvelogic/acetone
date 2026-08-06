@@ -79,13 +79,76 @@ struct FileExtractor {
     state: ExtractorState,
 }
 
+/// The per-record/per-line resident-memory bound (acetone-7qw.4): ADR-0062
+/// promises bounded memory under `--batch-size`, which a single pathological
+/// record — a 10 GB NDJSON line with no newline, one huge quoted CSV field —
+/// previously broke. Generous for any real record; a cap breach is a typed
+/// refusal naming the bound.
+const MAX_RECORD_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A `Read` wrapper enforcing `MAX_RECORD_BYTES` between checkpoints — the
+/// csv crate has no record-size limit of its own, but a record cannot span
+/// more input bytes than were read since the last yielded record, so the
+/// record loop checkpoints after each yield and this wrapper errors when a
+/// single record's span exceeds the cap. Bounds allocation without touching
+/// the csv crate's quoting logic.
+struct CappedRead<R> {
+    inner: R,
+    since_checkpoint: std::rc::Rc<std::cell::Cell<u64>>,
+}
+
+impl<R: Read> Read for CappedRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.since_checkpoint.get() > MAX_RECORD_BYTES {
+            return Err(std::io::Error::other(format!(
+                "a single record exceeds the {} MiB bound — split the record \
+                 or re-shape the source; the bound is not configurable",
+                MAX_RECORD_BYTES / (1024 * 1024)
+            )));
+        }
+        let n = self.inner.read(buf)?;
+        self.since_checkpoint
+            .set(self.since_checkpoint.get() + n as u64);
+        Ok(n)
+    }
+}
+
+/// Read one newline-terminated line, refusing past `MAX_RECORD_BYTES` —
+/// `BufReader::lines()` with a bound (acetone-7qw.4). `Ok(None)` is EOF.
+fn bounded_line(reader: &mut BufReader<File>) -> std::io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    let n = reader
+        .by_ref()
+        .take(MAX_RECORD_BYTES + 1)
+        .read_until(b'\n', &mut buf)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    while buf.last() == Some(&b'\n') || buf.last() == Some(&b'\r') {
+        buf.pop();
+    }
+    // Judge the CONTENT length, post-trim — a line of exactly the bound
+    // plus its newline is within bounds (PR #253 review minor 1).
+    if buf.len() as u64 > MAX_RECORD_BYTES {
+        return Err(std::io::Error::other(format!(
+            "a single line exceeds the {} MiB bound — split the record or \
+             re-shape the source; the bound is not configurable",
+            MAX_RECORD_BYTES / (1024 * 1024)
+        )));
+    }
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
 enum ExtractorState {
     Csv {
         headers: csv::StringRecord,
-        records: csv::StringRecordsIntoIter<BufReader<File>>,
+        records: csv::StringRecordsIntoIter<BufReader<CappedRead<File>>>,
+        record_span: std::rc::Rc<std::cell::Cell<u64>>,
     },
     Ndjson {
-        lines: std::io::Lines<BufReader<File>>,
+        reader: BufReader<File>,
         line_no: usize,
     },
     Json {
@@ -104,28 +167,34 @@ impl FileExtractor {
         source: &Path,
         mapping: Mapping,
     ) -> Result<FileExtractor> {
-        let reader = BufReader::new(file);
         let state = match format {
             Format::Csv => {
+                let record_span = std::rc::Rc::new(std::cell::Cell::new(0u64));
+                let capped = CappedRead {
+                    inner: file,
+                    since_checkpoint: std::rc::Rc::clone(&record_span),
+                };
                 let mut reader = csv::ReaderBuilder::new()
                     .has_headers(true)
-                    .from_reader(reader);
+                    .from_reader(BufReader::new(capped));
                 let headers = reader
                     .headers()
                     .map_err(|e| anyhow::anyhow!("reading CSV header: {e}"))?
                     .clone();
+                record_span.set(0);
                 ExtractorState::Csv {
                     headers,
                     records: reader.into_records(),
+                    record_span,
                 }
             }
             Format::Ndjson => ExtractorState::Ndjson {
-                lines: reader.lines(),
+                reader: BufReader::new(file),
                 line_no: 0,
             },
             Format::Json => {
                 let mut bytes = Vec::new();
-                let mut reader = reader;
+                let mut reader = BufReader::new(file);
                 reader
                     .read_to_end(&mut bytes)
                     .with_context(|| format!("reading import source {}", source.display()))?;
@@ -176,11 +245,17 @@ impl SourceExtractor for FileExtractor {
 
     fn next_record(&mut self) -> Result<Option<ImportRecord>, ImportError> {
         let row = match &mut self.state {
-            ExtractorState::Csv { headers, records } => match records.next() {
+            ExtractorState::Csv {
+                headers,
+                records,
+                record_span,
+            } => match records.next() {
                 None => return Ok(None),
                 Some(record) => {
+                    // Checkpoint the byte-span guard: one record consumed.
                     let record = record
                         .map_err(|e| ImportError::Extract(format!("reading CSV row: {e}")))?;
+                    record_span.set(0);
                     let mut row = Row::new();
                     for (name, value) in headers.iter().zip(record.iter()) {
                         row.insert(name.to_owned(), Value::String(value.to_owned()));
@@ -188,14 +263,14 @@ impl SourceExtractor for FileExtractor {
                     row
                 }
             },
-            ExtractorState::Ndjson { lines, line_no } => loop {
-                let Some(line) = lines.next() else {
-                    return Ok(None);
-                };
+            ExtractorState::Ndjson { reader, line_no } => loop {
                 *line_no += 1;
-                let line = line.map_err(|e| {
+                let line = bounded_line(reader).map_err(|e| {
                     ImportError::Extract(format!("reading NDJSON line {line_no}: {e}"))
                 })?;
+                let Some(line) = line else {
+                    return Ok(None);
+                };
                 if line.trim().is_empty() {
                     continue;
                 }

@@ -40,7 +40,10 @@ pub enum ImportError {
     #[error("import mapping: {0}")]
     Mapping(String),
     /// The import was invoked in a way that cannot proceed (e.g. `--branch`
-    /// naming the current branch).
+    /// naming the current branch), or hit a hard limit of the import
+    /// machinery (id-space exhaustion). One variant for both because
+    /// `ImportError` is public and not `#[non_exhaustive]` — a new variant
+    /// would break downstream exhaustive matches (PR #253 review).
     #[error("import: {0}")]
     Config(String),
     /// The imported data violates declared schema constraints (existence or
@@ -481,30 +484,45 @@ impl UniqueTracker {
         Ok(tracker)
     }
 
-    fn pair_id(&mut self, label: &str, property: &str) -> u16 {
+    fn pair_id(&mut self, label: &str, property: &str) -> Result<u16, ImportError> {
         if let Some(id) = self.pair_ids.get(&(label.to_owned(), property.to_owned())) {
-            return *id;
+            return Ok(*id);
         }
-        let id = u16::try_from(self.pairs.len()).expect("fewer than 65536 unique constraints");
+        // A hostile or corrupted schema can exceed the u16 id space — a
+        // typed refusal, never a panic in a library consumer's process
+        // (acetone-7qw.3, Phase 9 security review finding 4).
+        let id = u16::try_from(self.pairs.len()).map_err(|_| {
+            ImportError::Config(
+                "schema declares more than 65536 distinct UNIQUE (label, property) \
+                 pairs — the import tracker cannot index them"
+                    .to_owned(),
+            )
+        })?;
         self.pairs.push((label.to_owned(), property.to_owned()));
         self.pair_ids
             .insert((label.to_owned(), property.to_owned()), id);
-        id
+        Ok(id)
     }
 
-    fn claim_id(&mut self, pair: u16, value_enc: Vec<u8>) -> u32 {
+    fn claim_id(&mut self, pair: u16, value_enc: Vec<u8>) -> Result<u32, ImportError> {
         if let Some(id) = self.claim_ids.get(&(pair, value_enc.clone())) {
-            return *id;
+            return Ok(*id);
         }
         // Three-way growth in lockstep: the id is minted from `owners.len()`
         // but later indexes `claim_keys` (apply_batch), so desync would be
         // a wrong report or an index panic, not a type error.
         debug_assert_eq!(self.claim_keys.len(), self.owners.len());
-        let id = u32::try_from(self.owners.len()).expect("claim ids fit u32");
+        // Practically unreachable (memory exhausts first) — but the same
+        // typed treatment as pair_id, not a panic (acetone-7qw.3).
+        let id = u32::try_from(self.owners.len()).map_err(|_| {
+            ImportError::Config(
+                "more than u32::MAX distinct UNIQUE claims in one import".to_owned(),
+            )
+        })?;
         self.claim_ids.insert((pair, value_enc.clone()), id);
         self.claim_keys.push((pair, value_enc));
         self.owners.push(BTreeMap::new());
-        id
+        Ok(id)
     }
 
     /// Register `(key, record)`'s unique-property claims, unclaiming
@@ -536,8 +554,8 @@ impl UniqueTracker {
             if let Some(value) = record.properties().get(property) {
                 let value_enc = acetone_model::values::encode_value(value)
                     .map_err(acetone_model::records::RecordEncodeError::from)?;
-                let pair = self.pair_id(key.label(), property);
-                let claim = self.claim_id(pair, value_enc);
+                let pair = self.pair_id(key.label(), property)?;
+                let claim = self.claim_id(pair, value_enc)?;
                 self.owners[claim as usize].insert(encoded.clone(), imported);
                 touched.push(claim);
                 held.push(claim);
@@ -807,6 +825,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_65537th_unique_pair_is_a_typed_error_not_a_panic() {
+        // acetone-7qw.3 (Phase 9 security review finding 4): a hostile or
+        // corrupted schema exceeding the u16 pair-id space must refuse,
+        // never panic a library consumer's process.
+        let mut tracker = UniqueTracker {
+            pairs: Vec::new(),
+            pair_ids: BTreeMap::new(),
+            claim_ids: BTreeMap::new(),
+            claim_keys: Vec::new(),
+            owners: Vec::new(),
+            by_key: BTreeMap::new(),
+            active: true,
+        };
+        for i in 0..65536u32 {
+            tracker
+                .pair_id(&format!("L{}", i / 256), &format!("p{}", i % 256))
+                .expect("within the id space");
+        }
+        let err = tracker.pair_id("Overflow", "p").unwrap_err();
+        assert!(
+            err.to_string().contains("65536"),
+            "typed refusal naming the bound: {err}"
+        );
+    }
+
+    #[test]
     fn claim_keys_stays_congruent_with_claim_ids() {
         // The O(1) violation reconstruction (acetone-7qw.2) indexes
         // `claim_keys` by claim id; this pins the two structures growing in
@@ -821,16 +865,16 @@ mod tests {
             by_key: BTreeMap::new(),
             active: true,
         };
-        let pair_a = tracker.pair_id("Host", "serial");
-        let pair_b = tracker.pair_id("Cert", "fingerprint");
+        let pair_a = tracker.pair_id("Host", "serial").expect("pair");
+        let pair_b = tracker.pair_id("Cert", "fingerprint").expect("pair");
         // Intern claims across both pairs, re-interning every other one.
         // `i / 2` puts the SAME value under both pairs, so the pair
         // component of the key is load-bearing: the two claims must get
         // distinct ids and distinct inverse entries (review minor 3).
         for i in 0..100u8 {
             let pair = if i % 2 == 0 { pair_a } else { pair_b };
-            let id = tracker.claim_id(pair, vec![i / 2]);
-            let again = tracker.claim_id(pair, vec![i / 2]);
+            let id = tracker.claim_id(pair, vec![i / 2]).expect("claim");
+            let again = tracker.claim_id(pair, vec![i / 2]).expect("claim");
             assert_eq!(id, again, "re-interning must return the same id");
         }
         assert_eq!(tracker.claim_ids.len(), tracker.claim_keys.len());

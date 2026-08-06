@@ -11,6 +11,17 @@ in-memory `NodeSet` of the *entire* workspace for the constraint check
 limitation). Phase 9's exit criteria require a source larger than memory
 to import in bounded resident memory.
 
+> *Amended 2026-08-06 (acetone-7qw.4), qualifying Decision point 6:* the
+> bound now holds for a pathological **single record** too — a 64 MiB
+> per-record/per-line cap on CSV and NDJSON, breached as a typed refusal.
+> Previously a single newline-less NDJSON file or one huge quoted CSV
+> field allocated its whole size despite this ADR's promise (Phase 9
+> security review finding 5). The cap is an **input-byte** bound, not an
+> allocation ceiling — a record's bytes are copied a small constant
+> number of times while parsed — and it is deliberately **not
+> configurable** (a flag can layer later if a real record class needs
+> it). `--format json` still whole-parses, as this ADR already records.
+
 ## Decision
 
 1. **Pull-based extraction.** `SourceExtractor::extract() -> Vec<_>`

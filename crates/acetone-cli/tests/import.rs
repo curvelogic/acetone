@@ -375,3 +375,73 @@ fn constraint_violating_import_fails_atomically_for_csv_and_json() {
     );
     assert!(out.status.success(), "fixed import: {}", stderr(&out));
 }
+
+/// acetone-7qw.4: a single pathological record must hit the typed bound,
+/// not allocate unboundedly (ADR-0062's bounded-memory promise).
+#[test]
+fn a_giant_ndjson_line_is_refused_at_the_bound() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    declare_and_commit_label(&repo, "Doc", "id");
+
+    // One 65 MiB line with no terminating newline.
+    let path = dir.path().join("giant.ndjson");
+    let mut line = String::with_capacity(65 * 1024 * 1024 + 32);
+    line.push_str("{\"id\": \"");
+    line.push_str(&"x".repeat(65 * 1024 * 1024));
+    line.push_str("\"}");
+    fs::write(&path, line).expect("write");
+
+    let out = acetone(
+        &repo,
+        &[
+            "import",
+            "--format",
+            "ndjson",
+            path.to_str().unwrap(),
+            "--label",
+            "Doc",
+        ],
+    );
+    assert!(!out.status.success(), "must refuse, not allocate");
+    assert!(
+        stderr(&out).contains("MiB bound"),
+        "typed refusal naming the bound: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_giant_csv_field_is_refused_at_the_bound() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    declare_and_commit_label(&repo, "Doc", "id");
+
+    let path = dir.path().join("giant.csv");
+    let mut content = String::with_capacity(65 * 1024 * 1024 + 64);
+    content.push_str("id,body\n");
+    content.push_str("d1,\"");
+    content.push_str(&"y".repeat(65 * 1024 * 1024));
+    content.push_str("\"\n");
+    fs::write(&path, content).expect("write");
+
+    let out = acetone(
+        &repo,
+        &[
+            "import",
+            "--format",
+            "csv",
+            path.to_str().unwrap(),
+            "--label",
+            "Doc",
+        ],
+    );
+    assert!(!out.status.success(), "must refuse, not allocate");
+    assert!(
+        stderr(&out).contains("MiB bound"),
+        "typed refusal naming the bound: {}",
+        stderr(&out)
+    );
+}
