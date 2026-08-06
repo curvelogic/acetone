@@ -18,204 +18,45 @@ fine.)
 
 ## [0.5.0] - 2026-08-06
 
-Acetone 0.5.0 is the "used in anger" release: the workbench acquired its
-first real embedding application, and this release ships what that use
-pulled — an **open vocabulary** (opt-in relationship-type autodeclare,
-declarative `schema apply`, surrogate `_id` minting, phrase-shaped type
-names) and **parallel relationships completed end-to-end** (declarable,
-importable, and now creatable and editable from Cypher), alongside the
-0.4.x quality tier: stricter openCypher scoping (conformance 56.07% →
-56.92%, still zero failures), bounded-and-cheap refusal of pathological
-queries, and per-record import memory bounds.
+Acetone 0.5.0 is the "used in anger" release: the first project to build on acetone has begun doing so, and this release ships what that early use pulled — an **open vocabulary** (opt-in relationship-type autodeclare, declarative `schema apply`, surrogate `_id` minting, phrase-shaped type names) and **parallel relationships completed end-to-end** (declarable, importable, and now creatable and editable from Cypher), alongside the 0.4.x quality tier: stricter openCypher scoping (conformance 56.07% → 56.92%, still zero failures), bounded-and-cheap refusal of pathological queries, and per-record import memory bounds.
 
-**Compatibility**: `format_version` stays **1** — repositories written by
-0.1–0.4.x binaries are read and written unchanged. One data note: edges
-imported with `--disc` by earlier binaries may carry a stale record value
-under a property name that a schema later declares as the discriminator;
-reads now shadow such values (the key is the identity) and the next write
-heals them.
+**Compatibility**: `format_version` stays **1** — repositories written by 0.1–0.4.x binaries are read and written unchanged. One data note: edges imported with `--disc` by earlier binaries may carry a stale record value under a property name that a schema later declares as the discriminator; reads now shadow such values (the key is the identity) and the next write heals them.
 
-**Behaviour changes to note when upgrading**: the `schema --json`
-`relationship_types` shape changed from name strings to objects (the
-shape is explicitly unstable pre-1.0; every breaking change is
-CHANGELOG'd — now a recorded commitment in STABILITY.md); a typo'd
-property in Strict-mode `MATCH` now binds and returns 0 rows with a
-did-you-mean advisory instead of erroring (ADR-0070's open shape);
-`SET`/`DELETE` on discriminated edges now target the matched edge
-exactly (previously the wrong key — see Fixed); and library consumers:
-`BindError::UnknownProperty` is removed and `EvalCtx` is no longer
-struct-literal constructible.
+**Behaviour changes to note when upgrading**: the `schema --json` `relationship_types` shape changed from name strings to objects (the shape is explicitly unstable pre-1.0; every breaking change is CHANGELOG'd — now a recorded commitment in STABILITY.md); a typo'd property in Strict-mode `MATCH` now binds and returns 0 rows with a did-you-mean advisory instead of erroring (ADR-0070's open shape); `SET`/`DELETE` on discriminated edges now target the matched edge exactly (previously the wrong key — see Fixed); and library consumers: `BindError::UnknownProperty` is removed and `EvalCtx` is no longer struct-literal constructible.
 
 ### Added
 
-- **Cypher-created parallel edges** (acetone-z093.5, ADR-0073,
-  completing ADR-0030's reserved slot): when a relationship type
-  declares a discriminator property, `CREATE`/`MERGE` resolve that
-  property's value into the edge key — two creates with different
-  values coexist; the same value is the usual duplicate refusal; MERGE
-  matches per value. The discriminator is stored key-only and
-  **re-exposed on read under its declared name, with the key winning any
-  collision with a stale record value** (which the next write drops) —
-  so `r.<disc>` also works on record-empty `import --disc` edges.
-  `SET`, `REMOVE` and a whole-map `SET` that drop or change it are
-  refused as identity changes, compared against the key; a declared
-  discriminator absent from a `CREATE` map — or supplied as null, the
-  unset-parameter trap — is refused: explicit identity, the node-key
-  rule. Deferred-typed values (bytes, temporals) are refused from
-  discriminators exactly as from node keys.
+- **Cypher-created parallel edges** (acetone-z093.5, ADR-0073, completing ADR-0030's reserved slot): when a relationship type declares a discriminator property, `CREATE`/`MERGE` resolve that property's value into the edge key — two creates with different values coexist; the same value is the usual duplicate refusal; MERGE matches per value. The discriminator is stored key-only and **re-exposed on read under its declared name, with the key winning any collision with a stale record value** (which the next write drops) — so `r.<disc>` also works on record-empty `import --disc` edges. `SET`, `REMOVE` and a whole-map `SET` that drop or change it are refused as identity changes, compared against the key; a declared discriminator absent from a `CREATE` map — or supplied as null, the unset-parameter trap — is refused: explicit identity, the node-key rule. Deferred-typed values (bytes, temporals) are refused from discriminators exactly as from node keys.
 
-- **Relationship property types are now real** (acetone-7qw.12):
-  `declare-rel-type` takes repeatable `--type <property>:<type>` flags,
-  `acetone schema` renders them (JSON note: `relationship_types` entries
-  are now objects `{name, discriminator, types, required}` rather than
-  bare name strings — the `--json` shape is unstable pre-1.0), and
-  declared types are enforced exactly as node ones are — on write, at
-  declare time against existing relationships, re-validated at merge (a
-  new `rel-wrong-type` conflict row kind in `CALL acetone.conflicts()`,
-  with the relationship type in the `label` column), and checked by
-  `fsck` as an advisory. Previously a relationship property type was
-  declarable through the library, stored, and silently meaningless.
-  A discriminator-named property is judged in both stored positions.
+- **Relationship property types are now real** (acetone-7qw.12): `declare-rel-type` takes repeatable `--type <property>:<type>` flags, `acetone schema` renders them (JSON note: `relationship_types` entries are now objects `{name, discriminator, types, required}` rather than bare name strings — the `--json` shape is unstable pre-1.0), and declared types are enforced exactly as node ones are — on write, at declare time against existing relationships, re-validated at merge (a new `rel-wrong-type` conflict row kind in `CALL acetone.conflicts()`, with the relationship type in the `label` column), and checked by `fsck` as an advisory. Previously a relationship property type was declarable through the library, stored, and silently meaningless. A discriminator-named property is judged in both stored positions.
 
-- **Relationship-type autodeclare, strictly opt-in** (ADR-0060,
-  acetone-nc91): `acetone query --autodeclare`, the shell's
-  `:autodeclare on|off`, and the library's `Session::autodeclare(bool)`
-  let a write coin an unknown relationship type in `CREATE`/`MERGE`
-  position — a deterministic empty definition appended to the schema in
-  the same transaction as the data, announced by an advisory. Off by default;
-  reads never coin a type; while a merge is unresolved a coining write is
-  refused (it would otherwise silently resolve a schema conflict by-write).
-  Convergent coinage of the same type on two branches merges cleanly.
+- **Relationship-type autodeclare, strictly opt-in** (ADR-0060, acetone-nc91): `acetone query --autodeclare`, the shell's `:autodeclare on|off`, and the library's `Session::autodeclare(bool)` let a write coin an unknown relationship type in `CREATE`/`MERGE` position — a deterministic empty definition appended to the schema in the same transaction as the data, announced by an advisory. Off by default; reads never coin a type; while a merge is unresolved a coining write is refused (it would otherwise silently resolve a schema conflict by-write). Convergent coinage of the same type on two branches merges cleanly.
 
-- **`acetone schema apply`** (acetone-yx1o.1): consume the `schema
-  --json` document declaratively — diff against the current schema,
-  report per-entry outcomes, stage additions and changes in one
-  transaction (a declare-time refusal rejects the whole document),
-  never remove, idempotent on re-apply; `--dry-run` prints the plan.
-  Within an entry the document is desired state (omitting a facet drops
-  it — the plan says so); across entries apply never removes. Also the
-  first CLI surface that can declare a surrogate label
-  (`"surrogate": true`). Hand-edited documents are guarded: unknown
-  fields, unknown type names, and duplicate JSON keys within one object
-  are refused, and `apply` refuses outright while a merge is unresolved
-  (it would otherwise silently resolve conflicted schema entries).
-- **Surrogate `_id` minting** (spec §2, acetone-yx1o.4): `CREATE` on a
-  `KEY SURROGATE` label mints a ULID `_id` at creation, visible to the
-  creating query's rows; an explicit `_id` is respected; `MERGE`
-  matches before minting again. Natural-key labels are untouched.
+- **`acetone schema apply`** (acetone-yx1o.1): consume the `schema --json` document declaratively — diff against the current schema, report per-entry outcomes, stage additions and changes in one transaction (a declare-time refusal rejects the whole document), never remove, idempotent on re-apply; `--dry-run` prints the plan. Within an entry the document is desired state (omitting a facet drops it — the plan says so); across entries apply never removes. Also the first CLI surface that can declare a surrogate label (`"surrogate": true`). Hand-edited documents are guarded: unknown fields, unknown type names, and duplicate JSON keys within one object are refused, and `apply` refuses outright while a merge is unresolved (it would otherwise silently resolve conflicted schema entries).
+- **Surrogate `_id` minting** (spec §2, acetone-yx1o.4): `CREATE` on a `KEY SURROGATE` label mints a ULID `_id` at creation, visible to the creating query's rows; an explicit `_id` is respected; `MERGE` matches before minting again. Natural-key labels are untouched.
 
 ### Changed
 
-- **ORDER BY and aggregation scoping now enforce the openCypher
-  grouping-key rules** (acetone-1qj): an aggregate in ORDER BY after a
-  non-aggregating projection, an ORDER BY reference that does not reduce
-  to projected grouping keys/aliases after DISTINCT or aggregation, and a
-  projection item mixing an aggregate with anything but simple projected
-  grouping keys are now compile-time errors (`InvalidAggregation`,
-  `UndefinedVariable`, `AmbiguousAggregationExpression`) instead of
-  over-accepted. Published TCK pass rate rises 2185 → 2218 of 3897
-  (56.07% → 56.92%), still with zero failures.
-- **Changing a relationship type's discriminator while relationships of
-  that type exist is now refused** (`GraphError::RelDiscriminatorChanged`)
-  — including the silent wipe a definition-replacing redeclare performed:
-  a library caller that redeclared a discriminated relationship type over
-  live relationships previously succeeded and dropped the discriminator;
-  it now errors and requires an explicit `migrate`.
-- **Declared property types no longer close a label's shape** (ADR-0070).
-  Previously, declaring any property type made node-pattern map literals
-  reject undeclared property names (`CREATE (:Host {…, ip: …})` failed
-  `unknown property`) while `SET` accepted them. Now undeclared properties
-  are legal on every path, symmetrically; on a typed label they produce a
-  stderr typo advisory (with did-you-mean) instead of an error. Note the
-  flip side: a Strict-mode `MATCH (h:Host {typo_prop: v})` that previously
-  errored now binds, matches nothing, and advises — check stderr when a
-  query unexpectedly returns 0 rows. Type *enforcement* on declared
-  properties (ADR-0066) is unchanged.
+- **ORDER BY and aggregation scoping now enforce the openCypher grouping-key rules** (acetone-1qj): an aggregate in ORDER BY after a non-aggregating projection, an ORDER BY reference that does not reduce to projected grouping keys/aliases after DISTINCT or aggregation, and a projection item mixing an aggregate with anything but simple projected grouping keys are now compile-time errors (`InvalidAggregation`, `UndefinedVariable`, `AmbiguousAggregationExpression`) instead of over-accepted. Published TCK pass rate rises 2185 → 2218 of 3897 (56.07% → 56.92%), still with zero failures.
+- **Changing a relationship type's discriminator while relationships of that type exist is now refused** (`GraphError::RelDiscriminatorChanged`) — including the silent wipe a definition-replacing redeclare performed: a library caller that redeclared a discriminated relationship type over live relationships previously succeeded and dropped the discriminator; it now errors and requires an explicit `migrate`.
+- **Declared property types no longer close a label's shape** (ADR-0070). Previously, declaring any property type made node-pattern map literals reject undeclared property names (`CREATE (:Host {…, ip: …})` failed `unknown property`) while `SET` accepted them. Now undeclared properties are legal on every path, symmetrically; on a typed label they produce a stderr typo advisory (with did-you-mean) instead of an error. Note the flip side: a Strict-mode `MATCH (h:Host {typo_prop: v})` that previously errored now binds, matches nothing, and advises — check stderr when a query unexpectedly returns 0 rows. Type *enforcement* on declared properties (ADR-0066) is unchanged.
 
-- `acetone query` and `acetone shell` now arm a **60-second wall-clock
-  budget by default** (each takes `--timeout <seconds>` to change it, `0`
-  to disable; a cut-off query fails with a typed error naming the flag).
-  The deterministic work caps are unchanged and still apply; the timeout
-  bounds how long they may take to be reached on a store-backed graph
-  (ADR-0069). The library's `QueryLimits::default()` is untouched —
-  embeddings stay deterministic unless they opt in.
-- Deep-access API: `acetone-cypher`'s `EvalCtx` gained a private cache
-  field, so it can no longer be constructed by struct literal outside the
-  crate (use `EvalCtx::new`); `BindError::UnknownProperty` is removed (no
-  longer produced — ADR-0070) and `BoundQuery` gained the public
-  `undeclared_shape_properties` field. The curated `acetone-core` surface
-  is unaffected.
+- `acetone query` and `acetone shell` now arm a **60-second wall-clock budget by default** (each takes `--timeout <seconds>` to change it, `0` to disable; a cut-off query fails with a typed error naming the flag). The deterministic work caps are unchanged and still apply; the timeout bounds how long they may take to be reached on a store-backed graph (ADR-0069). The library's `QueryLimits::default()` is untouched — embeddings stay deterministic unless they opt in.
+- Deep-access API: `acetone-cypher`'s `EvalCtx` gained a private cache field, so it can no longer be constructed by struct literal outside the crate (use `EvalCtx::new`); `BindError::UnknownProperty` is removed (no longer produced — ADR-0070) and `BoundQuery` gained the public `undeclared_shape_properties` field. The curated `acetone-core` surface is unaffected.
 
 ### Fixed
 
-- **The import UNIQUE-violation path is no longer quadratic**
-  (acetone-7qw.2, Phase 9 security review): violation reporting
-  re-scanned every interned unique value per violation; an inverse
-  claim-key index makes reconstruction O(1) per violation (measured
-  6.10 s → 0.72 s at 400k workspace values).
-- **CSV/NDJSON import memory is now bounded per record**
-  (acetone-7qw.4, Phase 9 security review): a single pathological
-  record — a newline-less multi-gigabyte NDJSON file, one huge quoted
-  CSV field — previously allocated its whole size despite ADR-0062's
-  bounded-memory promise. A 64 MiB per-record cap now refuses with a
-  typed error (`--format json` still whole-parses, per the ADR's
-  recorded residual). And a schema declaring more than 65536 distinct
-  UNIQUE (label, property) pairs now yields a typed import error
-  instead of panicking the process (acetone-7qw.3).
+- **The import UNIQUE-violation path is no longer quadratic** (acetone-7qw.2, Phase 9 security review): violation reporting re-scanned every interned unique value per violation; an inverse claim-key index makes reconstruction O(1) per violation (measured 6.10 s → 0.72 s at 400k workspace values).
+- **CSV/NDJSON import memory is now bounded per record** (acetone-7qw.4, Phase 9 security review): a single pathological record — a newline-less multi-gigabyte NDJSON file, one huge quoted CSV field — previously allocated its whole size despite ADR-0062's bounded-memory promise. A 64 MiB per-record cap now refuses with a typed error (`--format json` still whole-parses, per the ADR's recorded residual). And a schema declaring more than 65536 distinct UNIQUE (label, property) pairs now yields a typed import error instead of panicking the process (acetone-7qw.3).
 
-- **Item-wise Cypher edits on discriminated (parallel) edges targeted the
-  wrong edge** (acetone-z093.4, the o8r hazard, live since `import --disc`
-  in 0.1): `MATCH` binds an edge by its full key — including the
-  discriminator — but `SET`/`DELETE` recomputed identity with a `Null`
-  discriminator. Shipped symptoms in 0.4.0: `DELETE` reported deletions
-  that did not happen; `SET` silently minted phantom `Null`-key edges
-  (`fsck`-clean corruption); `DETACH DELETE` of a node with discriminated
-  edges failed outright with a dangling-relationship error; and a
-  delete-plus-create in one statement could silently overwrite an
-  unrelated edge's record. All four now use the bound edge's exact key.
-  Cypher `CREATE` still writes a `Null` discriminator — the create side
-  is acetone-z093.5.
+- **Item-wise Cypher edits on discriminated (parallel) edges targeted the wrong edge** (acetone-z093.4, the o8r hazard, live since `import --disc` in 0.1): `MATCH` binds an edge by its full key — including the discriminator — but `SET`/`DELETE` recomputed identity with a `Null` discriminator. Shipped symptoms in 0.4.0: `DELETE` reported deletions that did not happen; `SET` silently minted phantom `Null`-key edges (`fsck`-clean corruption); `DETACH DELETE` of a node with discriminated edges failed outright with a dangling-relationship error; and a delete-plus-create in one statement could silently overwrite an unrelated edge's record. All four now use the bound edge's exact key. Cypher `CREATE` still writes a `Null` discriminator — the create side is acetone-z093.5.
 
-- With several usable index hints on one pattern, the planner now sizes
-  every alternative (candidate counts only — no point reads) and
-  materialises the smallest, instead of taking the first that fits its
-  budget: an under-cap unselective equality no longer beats a far more
-  selective range on the same pattern (previously measured 65× off the
-  best available plan). Sources that cannot size keep the previous
-  serve-order behaviour. Two knock-ons worth knowing: sizing is unmetered
-  enumeration work (bounded per probe by the cost model's candidate cap),
-  and a store read error on a *losing* probe's index can now surface on a
-  query that previously never touched that index — stricter, not looser.
-- The chained-comparison expansion budget now counts string payload bytes
-  as well as expression nodes, so a long string literal duplicated by a
-  comparison chain is refused up front rather than admitted at ~1/780th of
-  its real allocation weight (a 4 MB query could transiently allocate
-  3.1 GB inside the old cap). Long strings outside chains are unaffected.
-- The governed scan pathology (a fresh anchor in a pattern comprehension or
-  pattern predicate, re-evaluated per row) is now refused in seconds rather
-  than minutes: label-scan materialisations and expansion probes are
-  memoised per evaluation context, while the governor's deterministic
-  charges stay byte-identical — limits trip at exactly the same point as
-  before (measured on the shipped CLI against a 20k-node store-backed
-  repository: 702.9 s → 9.9 s to the typed refusal). Both memos' retention
-  is capped (1M cached tuples for expansion probes, 1M nodes for label
-  scans — the latter added by the phase's milestone security review, which
-  measured 2.36 GB retained from a 2.5 KB query before the cap); past a
-  cap, scans and probes still run and still charge, they just stop being
-  retained.
-- The ORDER BY/aggregation grouping-key validation runs in linear time on
-  large queries (a structural-digest index replaces a probe that measured
-  quadratic — 32.8 s of bind time at 408 KB of query text; found by the
-  milestone security review, which also noted binding runs before the
-  wall-clock governor and so was otherwise uncovered).
+- With several usable index hints on one pattern, the planner now sizes every alternative (candidate counts only — no point reads) and materialises the smallest, instead of taking the first that fits its budget: an under-cap unselective equality no longer beats a far more selective range on the same pattern (previously measured 65× off the best available plan). Sources that cannot size keep the previous serve-order behaviour. Two knock-ons worth knowing: sizing is unmetered enumeration work (bounded per probe by the cost model's candidate cap), and a store read error on a *losing* probe's index can now surface on a query that previously never touched that index — stricter, not looser.
+- The chained-comparison expansion budget now counts string payload bytes as well as expression nodes, so a long string literal duplicated by a comparison chain is refused up front rather than admitted at ~1/780th of its real allocation weight (a 4 MB query could transiently allocate 3.1 GB inside the old cap). Long strings outside chains are unaffected.
+- The governed scan pathology (a fresh anchor in a pattern comprehension or pattern predicate, re-evaluated per row) is now refused in seconds rather than minutes: label-scan materialisations and expansion probes are memoised per evaluation context, while the governor's deterministic charges stay byte-identical — limits trip at exactly the same point as before (measured on the shipped CLI against a 20k-node store-backed repository: 702.9 s → 9.9 s to the typed refusal). Both memos' retention is capped (1M cached tuples for expansion probes, 1M nodes for label scans — the latter added by the phase's milestone security review, which measured 2.36 GB retained from a 2.5 KB query before the cap); past a cap, scans and probes still run and still charge, they just stop being retained.
+- The ORDER BY/aggregation grouping-key validation runs in linear time on large queries (a structural-digest index replaces a probe that measured quadratic — 32.8 s of bind time at 408 KB of query text; found by the milestone security review, which also noted binding runs before the wall-clock governor and so was otherwise uncovered).
 
-- The public-API freeze gate now signature-tracks the library crates behind
-  the façade (`acetone-graph`, `acetone-model`, `acetone-store` and
-  `acetone-prolly` join `acetone-cypher` as full-signature snapshots,
-  alongside `acetone-core`'s re-export list), closing the blind spot the
-  0.4.0 notes described: a shape, attribute or method change to a
-  re-exported type now fails CI in the crate that hosts it, wherever it
-  lives. See STABILITY.md.
+- The public-API freeze gate now signature-tracks the library crates behind the façade (`acetone-graph`, `acetone-model`, `acetone-store` and `acetone-prolly` join `acetone-cypher` as full-signature snapshots, alongside `acetone-core`'s re-export list), closing the blind spot the 0.4.0 notes described: a shape, attribute or method change to a re-exported type now fails CI in the crate that hosts it, wherever it lives. See STABILITY.md.
 
 ## [0.4.0] - 2026-08-01
 
