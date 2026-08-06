@@ -1,0 +1,224 @@
+<title>Phase 10 — Used in Anger · Boundary Review</title>
+<style>
+  :root {
+    --paper: #fafbfa; --ink: #1a1f1d; --muted: #5c6763;
+    --accent: #2e7d6b; --accent-soft: #e3efeb;
+    --warn: #b0731f; --warn-soft: #f6ecdc;
+    --rule: #d8dedb; --card: #ffffff;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --paper: #101413; --ink: #e4e9e7; --muted: #93a09b;
+      --accent: #5fb39e; --accent-soft: #1b2a26;
+      --warn: #d99a45; --warn-soft: #2c2418;
+      --rule: #2a332f; --card: #171c1a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #101413; --ink: #e4e9e7; --muted: #93a09b;
+    --accent: #5fb39e; --accent-soft: #1b2a26;
+    --warn: #d99a45; --warn-soft: #2c2418;
+    --rule: #2a332f; --card: #171c1a;
+  }
+  :root[data-theme="light"] {
+    --paper: #fafbfa; --ink: #1a1f1d; --muted: #5c6763;
+    --accent: #2e7d6b; --accent-soft: #e3efeb;
+    --warn: #b0731f; --warn-soft: #f6ecdc;
+    --rule: #d8dedb; --card: #ffffff;
+  }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--serif); font-size: 17px; line-height: 1.55;
+    margin: 0; padding: 0 1.5rem;
+  }
+  .slide {
+    max-width: 52rem; margin: 0 auto; min-height: 88vh;
+    padding: 4rem 0 3rem; border-bottom: 1px solid var(--rule);
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem;
+  }
+  h1 { font-size: 2.4rem; line-height: 1.15; margin: 0 0 1rem; text-wrap: balance; }
+  h2 { font-size: 1.7rem; line-height: 1.2; margin: 0 0 1.2rem; text-wrap: balance; }
+  p { margin: 0.5rem 0; max-width: 44rem; }
+  .lede { font-size: 1.1rem; color: var(--muted); }
+  code { font-family: var(--mono); font-size: 0.84em; background: var(--accent-soft); padding: 0.08em 0.35em; border-radius: 3px; }
+  .big-numbers { display: flex; flex-wrap: wrap; gap: 1.2rem; margin: 1.6rem 0; }
+  .num {
+    background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+    padding: 1rem 1.4rem; min-width: 11rem; flex: 1;
+  }
+  .num .v { font-family: var(--mono); font-size: 1.7rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .num .l { font-size: 0.82rem; color: var(--muted); margin-top: 0.2rem; }
+  ul { padding-left: 1.3rem; margin: 0.8rem 0; max-width: 44rem; }
+  li { margin: 0.45rem 0; }
+  li::marker { color: var(--accent); }
+  .tablewrap { overflow-x: auto; margin: 1.2rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+  th { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase;
+       color: var(--muted); text-align: left; padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--ink); }
+  td { padding: 0.5em 0.9em 0.5em 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td:first-child { font-family: var(--mono); font-size: 0.78rem; white-space: nowrap; }
+  .callout { background: var(--warn-soft); border-left: 3px solid var(--warn); padding: 0.8rem 1.1rem; margin: 1.2rem 0; border-radius: 0 4px 4px 0; max-width: 44rem; }
+  .good { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 0.8rem 1.1rem; margin: 1.2rem 0; border-radius: 0 4px 4px 0; max-width: 44rem; }
+  .footer-note { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); margin-top: 2rem; }
+</style>
+
+<section class="slide">
+  <div class="eyebrow">Phase 10 boundary review · 2026-08-06</div>
+  <h1>Used in anger</h1>
+  <p class="lede">Acetone's first real tenant, an open vocabulary for it to write
+  with, the quality debt paid down, and a feature completed that had been
+  deferred since v0.1 — through sixteen adversarially-reviewed PRs in which
+  no review round came back empty.</p>
+  <div class="big-numbers">
+    <div class="num"><div class="v">56.92%</div><div class="l">TCK conformance (2218/3897, zero failures) — up from 56.07%</div></div>
+    <div class="num"><div class="v">16 + 2</div><div class="l">reviewed PRs: 16 working + the security-fix and report PRs</div></div>
+    <div class="num"><div class="v">6</div><div class="l">crates under the public-API freeze gate (was 2)</div></div>
+  </div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Context</div>
+  <h2>Where the phase started, and what pulled it</h2>
+  <p>Phase 9 left acetone measurably correct at size. Phase 10's premise
+  (ADR-0068): capabilities are <em>use-pulled, not roadmap-pushed</em>. The
+  pull arrived on schedule — a private external application chose acetone as
+  its fact store: facts with an open predicate vocabulary, ingested onto
+  scratch branches, three-way merged into a curated ref, co-tenant in a
+  repository the user owns.</p>
+  <ul>
+    <li><strong>Strand 1 — quality debt</strong>: the <code>7qw</code> P2 tier: freeze-gate
+    blind spots, scan-budget under-counts, memoisation, costed seeks, typed
+    relationship properties, binder scoping.</li>
+    <li><strong>Strand 2 — open vocabulary</strong>: autodeclare, declarative schema,
+    surrogate identity, phrase predicates, an aliasing decision.</li>
+    <li><strong>Convergence</strong>: the tenant's consolidated feedback, which
+    reshaped the roadmap mid-phase (with Greg's direction) and pulled a
+    deferred feature into scope.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">What was done · 1 of 3</div>
+  <h2>Quality: the workbench stopped trusting itself politely</h2>
+  <ul>
+    <li><strong>Freeze gate whole-surface</strong> — six per-crate snapshots; seven
+    subsequent PRs re-blessed for real public changes, two in newly
+    covered crates.</li>
+    <li><strong>Pathologies refuse cheaply</strong> — scan memoisation + costed seek
+    choice + byte-weighted budgets + a 60 s CLI wall clock: the query that
+    burned 703 s of real work before its typed refusal now refuses in
+    bounded time.</li>
+    <li><strong>Typed relationship properties</strong> — enforced at write, declare
+    (streamed backfill), and merge; discriminators checked in both stored
+    positions.</li>
+    <li><strong>Binder honesty</strong> — the four ORDER BY/aggregation error families
+    conceded at PR #33 are now enforced via structural matching over bound
+    trees. Getting the rule right meant discarding a text-based approach that
+    over-rejected 22 TCK scenarios; conformance <em>rose</em> 33 scenarios
+    while becoming stricter.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">What was done · 2 of 3</div>
+  <h2>Open vocabulary: coin it, declare it, resolve it later</h2>
+  <ul>
+    <li><strong>Autodeclare</strong> (opt-in, three surfaces) — a write may coin a
+    relationship type; reads never coin; a coining write mid-merge is
+    refused (review found it would have silently resolved schema
+    conflicts).</li>
+    <li><strong><code>schema apply</code></strong> — declarative bootstrap from the exported
+    JSON document: transactional, idempotent, never removes entries,
+    announces what a change drops; the first CLI surface for surrogate and
+    discriminated declarations.</li>
+    <li><strong>Surrogate identity works</strong> — spec §2's ULID promise was
+    unimplemented; now minted at CREATE, visible to the creating query,
+    with the declared string key that keeps point-lookups seeking.</li>
+    <li><strong>ADR-0071: assert-then-identify</strong> — equivalence as an ordinary
+    edge now; convergence as a deliberate future <code>identify</code>. The review
+    <em>disproved the draft's merge claim by running it</em>: divergent
+    identifications merge cleanly and silently duplicate — detection is
+    now a stated design requirement, not an assumed property.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">What was done · 3 of 3</div>
+  <h2>Parallel edges: from reserved slot to full surface</h2>
+  <p>Tenant discussion exposed that parallel edges were <em>crippled</em>:
+  declarable and import-writable, but Cypher couldn't create one — and
+  item-wise <code>SET</code>/<code>DELETE</code> on imported ones targeted the
+  <em>wrong edge</em>, a hazard live in every release since 0.1
+  (<code>DETACH DELETE</code> failed outright; a delete-plus-create could
+  silently clobber an unrelated edge).</p>
+  <div class="good">
+    <strong>Now:</strong> bound edges keep their exact identity; a declared
+    discriminator property resolves into the key at CREATE/MERGE; the value
+    reads back under its declared name (even on record-empty imported
+    edges); identity is immutable under SET/REMOVE. Declarable, importable,
+    creatable, matchable, curatable.
+  </div>
+  <p class="footer-note">Scope added mid-phase by ADR-0073 with Greg's
+  confirmation; the ratified exit criteria were unchanged.</p>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Problems &amp; decisions · the review gate earned its keep</div>
+  <h2>Every review round found something real</h2>
+  <div class="tablewrap">
+  <table>
+    <tr><th>Where</th><th>What review caught</th></tr>
+    <tr><td>PR #244</td><td>Text-based grouping-key matching over-rejected 13 valid query shapes; forced the structural redesign</td></tr>
+    <tr><td>PR #245</td><td>A coining write mid-merge silently resolved schema conflicts with the emptiest winner</td></tr>
+    <tr><td>PR #246</td><td><code>schema apply</code> bypassed the require/unique backfill check; silent constraint-stripping via omission</td></tr>
+    <tr><td>PR #247</td><td>Undeclared <code>_id</code> type made every surrogate point-lookup a full label scan</td></tr>
+    <tr><td>PR #248</td><td>The ADR's divergent-resolve merge claim was backwards — proven by running it</td></tr>
+    <tr><td>PR #249/#250</td><td>The roadmap edit itself overstated what shipped; attribution of direction vs proposal tightened</td></tr>
+    <tr><td>PR #251/#252</td><td>The o8r fix verified site-by-site; the create-side round found divergent legacy edges made uneditable — flipped the read rule</td></tr>
+    <tr><td>Security review</td><td>Two phase-introduced resource regressions (2.36 GB memo retention; quadratic bind outside the wall clock) — fixed in-phase, re-verified by harness at 68 MB and 0.13 s</td></tr>
+  </table>
+  </div>
+  <p>All findings fixed or rebutted with citations. <strong>No unresolved
+  disagreements; no decision beads needed for review disputes.</strong></p>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Problems &amp; decisions · for ratification</div>
+  <h2>The boundary agenda</h2>
+  <ul>
+    <li><strong>ADR-0071</strong> — assert-then-identify (aliasing for surrogate
+    entities), with the corrected merge premise.</li>
+    <li><strong>ADR-0072 + ADR-0073</strong> — tenant feedback into the roadmap;
+    Phase 11 "Embedding and co-tenancy" (daemon · multi-graph co-tenancy ·
+    rel-type rename/merge); parallel edges into Phase 10; the
+    <code>--json</code> changelog commitment.</li>
+    <li><strong>Criterion 4's disposition</strong> — the dogfood bead was removed on
+    Greg's ruling (the tenant's ongoing build <em>is</em> the exercise);
+    formal treatment is Greg's at the gate.</li>
+    <li><strong>Crossing follow-ups</strong> — each named in the report with its
+    reason; the quality backlog stays homed under <code>7qw</code>.</li>
+    <li><strong>Gate close</strong> — <code>z093.1</code> is Greg's act; Phase 11 opens
+    only when Greg opens it.</li>
+  </ul>
+  <div class="callout"><strong>Owned tension</strong>: the entropy-failure panic in
+  surrogate minting points the opposite way from the phase's own
+  panic-to-typed-error rule; the distinction (data-reachable vs OS-state)
+  is recorded, and the call is Greg's to revisit.</div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Where we are</div>
+  <h2>Ready for the live demo</h2>
+  <p class="lede">Step-by-step, one step per turn: coin a vocabulary under
+  autodeclare · bootstrap a second repo with <code>schema apply</code> · mint
+  surrogate entities · create parallel provenance edges from Cypher · break
+  things and watch the typed refusals · the full merge-and-curate loop.</p>
+  <p class="footer-note">Report: docs/reports/phase-10.md · Conformance:
+  docs/conformance.md · This deck: docs/demos/phase-10-deck.html</p>
+</section>
