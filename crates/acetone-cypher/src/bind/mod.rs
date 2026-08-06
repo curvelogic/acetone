@@ -202,6 +202,18 @@ mod tests {
             matches!(err, BindError::AmbiguousAggregation { .. }),
             "{err}"
         );
+        // PR #254 re-review optional control: the reject direction for
+        // free captures inside PATTERN bodies (the accept direction is
+        // pinned by the four valid-shape controls above).
+        let err = bind_lenient(
+            "MATCH (n)-[:R]->(m) RETURN n.n AS z, \
+             size([(n)-[:R]->(b) | m.n]) + count(*) AS c",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, BindError::AmbiguousAggregation { .. }),
+            "{err}"
+        );
         // (d) piecewise reference to a COMPLEX projected expression is
         // still ambiguous (With6 [9]).
         let err = bind_lenient(
