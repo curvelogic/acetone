@@ -222,6 +222,20 @@ mod tests {
             "MATCH (n) RETURN n.x AS x, count(n) AS c ORDER BY x, c",
             "MATCH p = (n)-->() WITH [x IN collect(p) | x] AS ps, count(n) AS c RETURN ps, c",
             "MATCH (n) RETURN DISTINCT n.x AS x ORDER BY x",
+            // PR #254 review blocker: free captures inside PATTERN bodies
+            // must keep whole-matching their grouping keys — the digest
+            // pass must cover pattern innards (both node kinds, both
+            // error modes).
+            "MATCH (n)-[:R]->(m) RETURN DISTINCT m.n AS z, \
+             [(n)-[:R]->(b) WHERE b.n = m.n | 1] AS l \
+             ORDER BY [(n)-[:R]->(b) WHERE b.n = m.n | 1]",
+            "MATCH (n)-[:R]->(m) RETURN DISTINCT m.n AS z, \
+             [(n)-[:R]->(b {n: m.n}) | 1] AS l \
+             ORDER BY [(n)-[:R]->(b {n: m.n}) | 1]",
+            "MATCH (n)-[:R]->(m) RETURN m.n AS z, \
+             size([(n)-[:R]->(b) | m.n]) + count(*) AS c",
+            "MATCH (n)-[:R]->(m) RETURN DISTINCT m.n AS z \
+             ORDER BY CASE WHEN (n)-[:R]->({n: m.n}) THEN 1 ELSE 0 END",
             // PR #244 review major 1: bound-tree matching makes
             // parenthesisation, backticks, whitespace and formatting
             // transparent — the TCK corpus never varies these, so these

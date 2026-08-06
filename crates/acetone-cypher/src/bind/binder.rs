@@ -1821,7 +1821,15 @@ fn digest_tree(expr: &BoundExpr, locals: &mut Vec<u32>, out: &mut HashMap<usize,
     match expr {
         BoundExpr::Literal { value, .. } => {
             1u8.hash(&mut h);
-            format!("{value:?}").hash(&mut h);
+            // Debug distinguishes 0.0 from -0.0 while same_bound's `==`
+            // does not — normalise so the digest relation stays a
+            // refinement of equality (PR #254 review nit).
+            match value {
+                crate::ast::Literal::Float(f) if *f == 0.0 => {
+                    "Float(0.0)".hash(&mut h);
+                }
+                other => format!("{other:?}").hash(&mut h),
+            }
         }
         BoundExpr::Parameter { name, .. } => {
             2u8.hash(&mut h);
@@ -1983,14 +1991,59 @@ fn digest_tree(expr: &BoundExpr, locals: &mut Vec<u32>, out: &mut HashMap<usize,
             locals.pop();
             locals.pop();
         }
-        BoundExpr::PatternComprehension { .. } | BoundExpr::PatternPredicate { .. } => {
-            // Conservatively unique — mirrors same_bound's always-unequal
-            // arm for patterns (two pattern nodes never digest-match, so
-            // they never whole-match, exactly as before). Children still
-            // need digests for the walk, but the walk's own recursion
-            // handles pattern innards via locals, never via whole-match.
+        BoundExpr::PatternComprehension {
+            pattern,
+            where_clause,
+            map,
+            ..
+        } => {
+            // The pattern NODE digests by address — conservatively unique,
+            // mirroring same_bound's always-unequal arm (two pattern nodes
+            // never whole-match). But its CHILDREN must still be digested,
+            // under exactly the locals discipline validate_grouping_refs
+            // uses, because the walk recurses into them and runs
+            // whole_match at every node — a missing digest is a false
+            // NEGATIVE that silently narrows what binds (PR #254 review
+            // blocker: free captures inside pattern bodies stopped
+            // whole-matching their grouping keys).
             20u8.hash(&mut h);
             addr.hash(&mut h);
+            let depth = locals.len();
+            locals.extend(pattern.start.var.iter().map(|v| v.0));
+            for (rel, node) in &pattern.steps {
+                locals.extend(rel.var.iter().map(|v| v.0));
+                locals.extend(node.var.iter().map(|v| v.0));
+            }
+            for e in
+                pattern
+                    .start
+                    .properties
+                    .iter()
+                    .chain(pattern.steps.iter().flat_map(|(rel, node)| {
+                        rel.properties.iter().chain(node.properties.iter())
+                    }))
+                    .chain(where_clause.as_deref())
+                    .chain(std::iter::once(&**map))
+            {
+                digest_tree(e, locals, out);
+            }
+            locals.truncate(depth);
+        }
+        BoundExpr::PatternPredicate { pattern, .. } => {
+            // Same shape; property maps only, mirroring
+            // push_bound_children (pattern predicates introduce no
+            // variables — binder-enforced — so property maps reference the
+            // row and digest under the OUTER locals).
+            21u8.hash(&mut h);
+            addr.hash(&mut h);
+            for e in pattern.start.properties.iter().chain(
+                pattern
+                    .steps
+                    .iter()
+                    .flat_map(|(rel, node)| rel.properties.iter().chain(node.properties.iter())),
+            ) {
+                digest_tree(e, locals, out);
+            }
         }
     }
     let digest = h.finish();
