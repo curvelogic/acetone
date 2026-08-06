@@ -18,7 +18,7 @@ fine.)
 
 ## [0.5.0] - 2026-08-06
 
-Acetone 0.5.0 is the "used in anger" release: the workbench acquired its first real embedding application, and this release ships what that use pulled — an **open vocabulary** (opt-in relationship-type autodeclare, declarative `schema apply`, surrogate `_id` minting, phrase-shaped type names) and **parallel relationships completed end-to-end** (declarable, importable, and now creatable and editable from Cypher), alongside the 0.4.x quality tier: stricter openCypher scoping (conformance 56.07% → 56.92%, still zero failures), bounded-and-cheap refusal of pathological queries, and per-record import memory bounds.
+Acetone 0.5.0 is the "used in anger" release: the first project to build on acetone has begun doing so, and this release ships what that early use pulled — an **open vocabulary** (opt-in relationship-type autodeclare, declarative `schema apply`, surrogate `_id` minting, phrase-shaped type names) and **parallel relationships completed end-to-end** (declarable, importable, and now creatable and editable from Cypher), alongside the 0.4.x quality tier: stricter openCypher scoping (conformance 56.07% → 56.92%, still zero failures), bounded-and-cheap refusal of pathological queries, and per-record import memory bounds.
 
 **Compatibility**: `format_version` stays **1** — repositories written by 0.1–0.4.x binaries are read and written unchanged. One data note: edges imported with `--disc` by earlier binaries may carry a stale record value under a property name that a schema later declares as the discriminator; reads now shadow such values (the key is the identity) and the next write heals them.
 
