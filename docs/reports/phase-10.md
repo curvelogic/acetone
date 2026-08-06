@@ -1,6 +1,6 @@
 # Phase 10 report — used in anger
 
-*Epic `acetone-z093` · base `main @ f7e1267` (0.4.0) · this report covers PRs #238–#253*
+*Epic `acetone-z093` · base `main @ f7e1267` (0.4.0) · this report covers the sixteen working PRs #238–#253, plus the in-phase security-fix PR #254 and the report PR itself*
 
 Phase 10 is the phase where acetone acquired its first real tenant. The
 phase's two working strands — paying the `7qw` quality debt and building the
@@ -88,10 +88,12 @@ The ratified criteria live in gate bead `acetone-z093.1`; their disposition
 is Greg's at the gate.
 
 1. **Freeze gate whole-surface** — ✅ six per-crate snapshots enforced in
-   CI (PR #238), proven live during the phase: three separate PRs' public
-   changes were caught by the gate and re-blessed in-commit.
+   CI (PR #238), proven live during the phase: seven subsequent PRs
+   re-blessed snapshots for real public changes, two of them in crates
+   the gate newly covers (`acetone-graph` in #243, `acetone-model` in
+   #247; the rest in the already-snapshotted `acetone-cypher`).
 2. **Governed scan pathology refused in bounded wall-clock/memory through
-   the shipped CLI** — ✅ measured in PR #240's evidence table: the
+   the shipped CLI** — ✅ measured in PR #239's evidence table: the
    pathology that ran 703 s now refuses within the 60 s CLI default
    (ADR-0069), with the deterministic caps intact; byte-weighted budgets
    close the memory half.
@@ -116,7 +118,12 @@ is Greg's at the gate.
 ## Governing-document changes (full adversarial review; listed per protocol)
 
 Two governing-doc changes shipped mid-phase, both on Greg's explicit
-in-session instruction, both through the full adversarial gate:
+in-session instruction, both through the full adversarial gate. (The
+phase-gating machinery was visibly exercised around them: Greg **parked**
+the phase on 2026-08-05 for the tenant discussion — implementation
+stopped, the park recorded on `z093` — and un-parked it after ruling;
+the ADR-0073 scope addition happened while parked, with claimability
+guards on its beads.)
 
 - **ADR-0072 + roadmap amendment (PR #249)**: incorporation of the
   tenant's requests — the owns-nothing daemon shape adopted as the
@@ -226,11 +233,11 @@ pair). Crossing, with reasons recorded on `z093.3` and in each bead:
 - `7qw.16` (P2, legacy declared-type trust) — parked behind the
   `format_version 2` gate (`qjzy`) **by the ratified roadmap**; explicitly
   out of Phase 10 scope.
-- The merge-time discriminator-declaration gap (new, PR #252 follow-up) —
-  needs design against the conflict machinery; same family as `7qw.23`
-  (inert rel-type `exists()`), which stays with it.
-- The `7qw` P3 quality backlog (`2ck.12`, `.11`, `.13`, `.15`, `.18`,
-  `.19`, `.22`, `.24`, `.25`) — each bead states why its fix does not fit
+- The merge-time discriminator-declaration gap (`7qw.26`, PR #252
+  follow-up) — needs design against the conflict machinery.
+- The `7qw` P3 quality backlog (`2ck.12`, `7qw.11`, `7qw.13`, `7qw.15`,
+  `7qw.18`, `7qw.19`, `7qw.22`, `7qw.23` — a natural companion to
+  `7qw.26` — `7qw.24`, `7qw.25`) — each bead states why its fix does not fit
   the boundary (design-needed, performance-not-correctness, or
   refactor-scale); none is justified by "only P3". All remain homed under
   `7qw`, which survives as the standing quality epic.

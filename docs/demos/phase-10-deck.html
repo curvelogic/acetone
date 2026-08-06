@@ -78,7 +78,7 @@
   <div class="big-numbers">
     <div class="num"><div class="v">56.92%</div><div class="l">TCK conformance (2218/3897, zero failures) — up from 56.07%</div></div>
     <div class="num"><div class="v">16 + 2</div><div class="l">reviewed PRs: 16 working + the security-fix and report PRs</div></div>
-    <div class="num"><div class="v">6</div><div class="l">crates under the public-API freeze gate (was 1)</div></div>
+    <div class="num"><div class="v">6</div><div class="l">crates under the public-API freeze gate (was 2)</div></div>
   </div>
 </section>
 
@@ -118,9 +118,9 @@
     positions.</li>
     <li><strong>Binder honesty</strong> — the four ORDER BY/aggregation error families
     conceded at PR #33 are now enforced via structural matching over bound
-    trees. Getting the rule right took three full-TCK calibration rounds
-    and two review rounds; conformance <em>rose</em> 33 scenarios while
-    becoming stricter.</li>
+    trees. Getting the rule right meant discarding a text-based approach that
+    over-rejected 22 TCK scenarios; conformance <em>rose</em> 33 scenarios
+    while becoming stricter.</li>
   </ul>
 </section>
 
