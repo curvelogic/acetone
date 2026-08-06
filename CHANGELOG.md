@@ -16,6 +16,36 @@ fine.)
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-06
+
+Acetone 0.5.0 is the "used in anger" release: the workbench acquired its
+first real embedding application, and this release ships what that use
+pulled — an **open vocabulary** (opt-in relationship-type autodeclare,
+declarative `schema apply`, surrogate `_id` minting, phrase-shaped type
+names) and **parallel relationships completed end-to-end** (declarable,
+importable, and now creatable and editable from Cypher), alongside the
+0.4.x quality tier: stricter openCypher scoping (conformance 56.07% →
+56.92%, still zero failures), bounded-and-cheap refusal of pathological
+queries, and per-record import memory bounds.
+
+**Compatibility**: `format_version` stays **1** — repositories written by
+0.1–0.4.x binaries are read and written unchanged. One data note: edges
+imported with `--disc` by earlier binaries may carry a stale record value
+under a property name that a schema later declares as the discriminator;
+reads now shadow such values (the key is the identity) and the next write
+heals them.
+
+**Behaviour changes to note when upgrading**: the `schema --json`
+`relationship_types` shape changed from name strings to objects (the
+shape is explicitly unstable pre-1.0; every breaking change is
+CHANGELOG'd — now a recorded commitment in STABILITY.md); a typo'd
+property in Strict-mode `MATCH` now binds and returns 0 rows with a
+did-you-mean advisory instead of erroring (ADR-0070's open shape);
+`SET`/`DELETE` on discriminated edges now target the matched edge
+exactly (previously the wrong key — see Fixed); and library consumers:
+`BindError::UnknownProperty` is removed and `EvalCtx` is no longer
+struct-literal constructible.
+
 ### Added
 
 - **Cypher-created parallel edges** (acetone-z093.5, ADR-0073,
@@ -47,8 +77,6 @@ fine.)
   declarable through the library, stored, and silently meaningless.
   A discriminator-named property is judged in both stored positions.
 
-### Added
-
 - **Relationship-type autodeclare, strictly opt-in** (ADR-0060,
   acetone-nc91): `acetone query --autodeclare`, the shell's
   `:autodeclare on|off`, and the library's `Session::autodeclare(bool)`
@@ -67,7 +95,10 @@ fine.)
   Within an entry the document is desired state (omitting a facet drops
   it — the plan says so); across entries apply never removes. Also the
   first CLI surface that can declare a surrogate label
-  (`"surrogate": true`).
+  (`"surrogate": true`). Hand-edited documents are guarded: unknown
+  fields, unknown type names, and duplicate JSON keys within one object
+  are refused, and `apply` refuses outright while a merge is unresolved
+  (it would otherwise silently resolve conflicted schema entries).
 - **Surrogate `_id` minting** (spec §2, acetone-yx1o.4): `CREATE` on a
   `KEY SURROGATE` label mints a ULID `_id` at creation, visible to the
   creating query's rows; an explicit `_id` is respected; `MERGE`
@@ -117,6 +148,11 @@ fine.)
 
 ### Fixed
 
+- **The import UNIQUE-violation path is no longer quadratic**
+  (acetone-7qw.2, Phase 9 security review): violation reporting
+  re-scanned every interned unique value per violation; an inverse
+  claim-key index makes reconstruction O(1) per violation (measured
+  6.10 s → 0.72 s at 400k workspace values).
 - **CSV/NDJSON import memory is now bounded per record**
   (acetone-7qw.4, Phase 9 security review): a single pathological
   record — a newline-less multi-gigabyte NDJSON file, one huge quoted
@@ -161,9 +197,17 @@ fine.)
   memoised per evaluation context, while the governor's deterministic
   charges stay byte-identical — limits trip at exactly the same point as
   before (measured on the shipped CLI against a 20k-node store-backed
-  repository: 702.9 s → 9.9 s to the typed refusal). The expansion memo's
-  retention is capped (1M cached tuples per context); past the cap probes
-  still run and still charge, they just stop being retained.
+  repository: 702.9 s → 9.9 s to the typed refusal). Both memos' retention
+  is capped (1M cached tuples for expansion probes, 1M nodes for label
+  scans — the latter added by the phase's milestone security review, which
+  measured 2.36 GB retained from a 2.5 KB query before the cap); past a
+  cap, scans and probes still run and still charge, they just stop being
+  retained.
+- The ORDER BY/aggregation grouping-key validation runs in linear time on
+  large queries (a structural-digest index replaces a probe that measured
+  quadratic — 32.8 s of bind time at 408 KB of query text; found by the
+  milestone security review, which also noted binding runs before the
+  wall-clock governor and so was otherwise uncovered).
 
 - The public-API freeze gate now signature-tracks the library crates behind
   the façade (`acetone-graph`, `acetone-model`, `acetone-store` and
@@ -626,7 +670,8 @@ diffs become change reports, and any git remote is backup and transport.
 The authoritative design record — data model, storage, encodings, query
 language, diff/merge, and the phased roadmap — lives in `docs/`.
 
-[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/curvelogic/acetone/releases/tag/v0.5.0
 [0.4.0]: https://github.com/curvelogic/acetone/releases/tag/v0.4.0
 [0.3.1]: https://github.com/curvelogic/acetone/releases/tag/v0.3.1
 [0.3.0]: https://github.com/curvelogic/acetone/releases/tag/v0.3.0

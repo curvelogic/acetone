@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acetone-bench"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-prolly",
  "acetone-store",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-core",
  "anyhow",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-cypher",
  "acetone-graph",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-cypher"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-graph",
  "acetone-model",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-graph"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-model",
  "acetone-prolly",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-lab"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-cypher",
  "acetone-graph",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-model"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-prolly",
  "acetone-store",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-prolly"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-store",
  "gix",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "acetone-tck"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "acetone-cypher",
  "gherkin",
