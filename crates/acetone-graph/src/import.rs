@@ -40,7 +40,10 @@ pub enum ImportError {
     #[error("import mapping: {0}")]
     Mapping(String),
     /// The import was invoked in a way that cannot proceed (e.g. `--branch`
-    /// naming the current branch).
+    /// naming the current branch), or hit a hard limit of the import
+    /// machinery (id-space exhaustion). One variant for both because
+    /// `ImportError` is public and not `#[non_exhaustive]` — a new variant
+    /// would break downstream exhaustive matches (PR #253 review).
     #[error("import: {0}")]
     Config(String),
     /// The imported data violates declared schema constraints (existence or
@@ -490,7 +493,7 @@ impl UniqueTracker {
         // (acetone-7qw.3, Phase 9 security review finding 4).
         let id = u16::try_from(self.pairs.len()).map_err(|_| {
             ImportError::Config(
-                "schema declares more than 65535 distinct UNIQUE (label, property) \
+                "schema declares more than 65536 distinct UNIQUE (label, property) \
                  pairs — the import tracker cannot index them"
                     .to_owned(),
             )
@@ -822,7 +825,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_65536th_unique_pair_is_a_typed_error_not_a_panic() {
+    fn the_65537th_unique_pair_is_a_typed_error_not_a_panic() {
         // acetone-7qw.3 (Phase 9 security review finding 4): a hostile or
         // corrupted schema exceeding the u16 pair-id space must refuse,
         // never panic a library consumer's process.
@@ -842,7 +845,7 @@ mod tests {
         }
         let err = tracker.pair_id("Overflow", "p").unwrap_err();
         assert!(
-            err.to_string().contains("65535"),
+            err.to_string().contains("65536"),
             "typed refusal naming the bound: {err}"
         );
     }

@@ -101,8 +101,8 @@ impl<R: Read> Read for CappedRead<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.since_checkpoint.get() > MAX_RECORD_BYTES {
             return Err(std::io::Error::other(format!(
-                "a single record exceeds the {} MiB bound (acetone refuses \
-                 unbounded records to keep import memory bounded, ADR-0062)",
+                "a single record exceeds the {} MiB bound — split the record \
+                 or re-shape the source; the bound is not configurable",
                 MAX_RECORD_BYTES / (1024 * 1024)
             )));
         }
@@ -124,15 +124,17 @@ fn bounded_line(reader: &mut BufReader<File>) -> std::io::Result<Option<String>>
     if n == 0 {
         return Ok(None);
     }
-    if buf.len() as u64 > MAX_RECORD_BYTES {
-        return Err(std::io::Error::other(format!(
-            "a single line exceeds the {} MiB bound (acetone refuses \
-             unbounded records to keep import memory bounded, ADR-0062)",
-            MAX_RECORD_BYTES / (1024 * 1024)
-        )));
-    }
     while buf.last() == Some(&b'\n') || buf.last() == Some(&b'\r') {
         buf.pop();
+    }
+    // Judge the CONTENT length, post-trim — a line of exactly the bound
+    // plus its newline is within bounds (PR #253 review minor 1).
+    if buf.len() as u64 > MAX_RECORD_BYTES {
+        return Err(std::io::Error::other(format!(
+            "a single line exceeds the {} MiB bound — split the record or \
+             re-shape the source; the bound is not configurable",
+            MAX_RECORD_BYTES / (1024 * 1024)
+        )));
     }
     String::from_utf8(buf)
         .map(Some)

@@ -117,14 +117,15 @@ fine.)
 
 ### Fixed
 
-- **Import memory is now bounded per record** (acetone-7qw.4, Phase 9
-  security review): a single pathological record — a newline-less
-  multi-gigabyte NDJSON file, one huge quoted CSV field — previously
-  allocated its whole size despite ADR-0062's bounded-memory promise.
-  A 64 MiB per-record cap now refuses with a typed error naming the
-  bound. And a schema declaring more than 65535 distinct UNIQUE
-  (label, property) pairs now yields a typed import error instead of
-  panicking the process (acetone-7qw.3).
+- **CSV/NDJSON import memory is now bounded per record**
+  (acetone-7qw.4, Phase 9 security review): a single pathological
+  record — a newline-less multi-gigabyte NDJSON file, one huge quoted
+  CSV field — previously allocated its whole size despite ADR-0062's
+  bounded-memory promise. A 64 MiB per-record cap now refuses with a
+  typed error (`--format json` still whole-parses, per the ADR's
+  recorded residual). And a schema declaring more than 65536 distinct
+  UNIQUE (label, property) pairs now yields a typed import error
+  instead of panicking the process (acetone-7qw.3).
 
 - **Item-wise Cypher edits on discriminated (parallel) edges targeted the
   wrong edge** (acetone-z093.4, the o8r hazard, live since `import --disc`
