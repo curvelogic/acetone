@@ -17,8 +17,9 @@ review as a governing-doc change) · Date: 2026-08-05 · Bead: acetone-tznd*
 
 ## Context
 
-Phase 10's criterion 4 gives acetone its first real tenant: a private
-external application embedding acetone as its fact store. The tenant
+Phase 10's criterion 4 gives acetone its first prospective tenant: a
+private external project beginning to build on acetone as its fact
+store. The tenant
 consolidated its friction and requests into a tiered document
 (deliberately framed so that every ask is something a *second* tenant
 would also want), and asked four cheap verification questions. The

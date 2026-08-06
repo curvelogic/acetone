@@ -2,10 +2,10 @@
 
 *Epic `acetone-z093` · base `main @ f7e1267` (0.4.0) · this report covers the sixteen working PRs #238–#253, plus the in-phase security-fix PR #254 and the report PR itself*
 
-Phase 10 is the phase where acetone acquired its first real tenant. The
+Phase 10 is the phase where the first project began building on acetone. The
 phase's two working strands — paying the `7qw` quality debt and building the
-open-vocabulary schema UX — converged on **first real use**: a private
-external application embedding acetone as its fact store, whose consolidated
+open-vocabulary schema UX — converged on **first use**: a private
+external project beginning to build on acetone as its fact store, whose consolidated
 feedback then reshaped the roadmap mid-phase with Greg's direction. The
 phase also completed a feature it only set out to *declare*: by its end,
 **parallel edges work end-to-end through the shipped interface**, closing a
