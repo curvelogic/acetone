@@ -35,6 +35,10 @@ clap = { version = "4", features = ["derive"] }
 # source-hash provenance (ADR-0021). Confined to the thin client so the core
 # crates carry no format-parsing dependencies.
 csv.workspace = true
+# serde (no derive): the duplicate-key-refusing JSON visitor for `schema
+# apply` (Phase 10 security review minor 3) — already in the tree via
+# serde_json, so no new compiled code.
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 # rustyline: line editing, history and arrow-key recall for the interactive

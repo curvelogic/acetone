@@ -81,6 +81,7 @@ csv = "1"
 # serde_json: the de-facto JSON parser, for the built-in JSON/NDJSON import
 # extractor (ADR-0021). MIT/Apache-2.0, confined to acetone-cli. Used with its
 # own value model only (no serde derives), so no `serde` derive dependency.
+serde = "1"
 serde_json = "1"
 # sha2: RustCrypto SHA-256, for the git-object-format-independent
 # `Acetone-Source-Hash` import provenance (ADR-0021). MIT/Apache-2.0, confined

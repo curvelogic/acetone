@@ -156,6 +156,33 @@ mod tests {
     }
 
     #[test]
+    fn grouping_key_validation_stays_linear_on_large_queries() {
+        // Phase 10 security review MAJOR 2: the whole-match probe measured
+        // quadratic in query size (32.8 s at 408 KB), outside the wall
+        // clock. The digest index linearises it; this guards the bound
+        // with a generous margin — the pre-fix cost at this size was
+        // seconds, the post-fix cost milliseconds.
+        let mut items = Vec::new();
+        let mut orders = Vec::new();
+        for i in 0..200 {
+            items.push(format!("n.a{i} + n.b{i} + n.c{i} + n.d{i} AS k{i}"));
+            orders.push(format!("n.a{i} + n.b{i} + n.c{i} + n.d{i}"));
+        }
+        let query = format!(
+            "MATCH (n) RETURN DISTINCT {} ORDER BY {}",
+            items.join(", "),
+            orders.join(", ")
+        );
+        let started = std::time::Instant::now();
+        bind_lenient(&query).expect("valid");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "bind took {:?} — the digest index must keep validation linear",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn order_by_and_aggregation_scoping_families() {
         // acetone-1qj: the four TCK-pinned compile-time error families.
         // (a) aggregate in ORDER BY after a non-aggregating projection.
@@ -195,6 +222,20 @@ mod tests {
             "MATCH (n) RETURN n.x AS x, count(n) AS c ORDER BY x, c",
             "MATCH p = (n)-->() WITH [x IN collect(p) | x] AS ps, count(n) AS c RETURN ps, c",
             "MATCH (n) RETURN DISTINCT n.x AS x ORDER BY x",
+            // PR #254 review blocker: free captures inside PATTERN bodies
+            // must keep whole-matching their grouping keys — the digest
+            // pass must cover pattern innards (both node kinds, both
+            // error modes).
+            "MATCH (n)-[:R]->(m) RETURN DISTINCT m.n AS z, \
+             [(n)-[:R]->(b) WHERE b.n = m.n | 1] AS l \
+             ORDER BY [(n)-[:R]->(b) WHERE b.n = m.n | 1]",
+            "MATCH (n)-[:R]->(m) RETURN DISTINCT m.n AS z, \
+             [(n)-[:R]->(b {n: m.n}) | 1] AS l \
+             ORDER BY [(n)-[:R]->(b {n: m.n}) | 1]",
+            "MATCH (n)-[:R]->(m) RETURN m.n AS z, \
+             size([(n)-[:R]->(b) | m.n]) + count(*) AS c",
+            "MATCH (n)-[:R]->(m) RETURN DISTINCT m.n AS z \
+             ORDER BY CASE WHEN (n)-[:R]->({n: m.n}) THEN 1 ELSE 0 END",
             // PR #244 review major 1: bound-tree matching makes
             // parenthesisation, backticks, whitespace and formatting
             // transparent — the TCK corpus never varies these, so these
