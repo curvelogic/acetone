@@ -16,6 +16,8 @@ fine.)
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-06
+
 ### Added
 
 - **Cypher-created parallel edges** (acetone-z093.5, ADR-0073,
