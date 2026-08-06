@@ -156,6 +156,33 @@ mod tests {
     }
 
     #[test]
+    fn grouping_key_validation_stays_linear_on_large_queries() {
+        // Phase 10 security review MAJOR 2: the whole-match probe measured
+        // quadratic in query size (32.8 s at 408 KB), outside the wall
+        // clock. The digest index linearises it; this guards the bound
+        // with a generous margin — the pre-fix cost at this size was
+        // seconds, the post-fix cost milliseconds.
+        let mut items = Vec::new();
+        let mut orders = Vec::new();
+        for i in 0..200 {
+            items.push(format!("n.a{i} + n.b{i} + n.c{i} + n.d{i} AS k{i}"));
+            orders.push(format!("n.a{i} + n.b{i} + n.c{i} + n.d{i}"));
+        }
+        let query = format!(
+            "MATCH (n) RETURN DISTINCT {} ORDER BY {}",
+            items.join(", "),
+            orders.join(", ")
+        );
+        let started = std::time::Instant::now();
+        bind_lenient(&query).expect("valid");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "bind took {:?} — the digest index must keep validation linear",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn order_by_and_aggregation_scoping_families() {
         // acetone-1qj: the four TCK-pinned compile-time error families.
         // (a) aggregate in ORDER BY after a non-aggregating projection.

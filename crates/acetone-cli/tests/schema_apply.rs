@@ -404,3 +404,62 @@ fn export_flags_are_refused_with_apply() {
         assert!(!out.status.success(), "{args:?} must refuse");
     }
 }
+
+/// Phase 10 security review minor 3: duplicate keys within one object are
+/// refused, not silently last-wins.
+#[test]
+fn duplicate_json_keys_within_an_entry_are_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let doc_path = dir.path().join("schema.json");
+    std::fs::write(
+        &doc_path,
+        r#"{"labels":[{"name":"Host","key":["hostname"],"name":"Evil","key":["other"]}]}"#,
+    )
+    .expect("write");
+    let out = acetone(&repo, &["schema", "apply", doc_path.to_str().unwrap()]);
+    assert!(!out.status.success(), "duplicate keys must refuse");
+    assert!(stderr(&out).contains("duplicate key"), "{}", stderr(&out));
+    let schema = ok(&acetone(&repo, &["schema"]));
+    assert!(!schema.contains("Evil"), "nothing may land: {schema}");
+}
+
+/// Phase 10 security review minor 4: mid-merge, `apply` refuses outright —
+/// a conflicted schema entry is absent from the merged map, so the diff
+/// would report it as `add` and silently bulk-resolve conflicts by-write.
+#[test]
+fn apply_refuses_while_a_merge_is_unresolved() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    ok(&acetone(&repo, &["declare-label", "Doc", "--key", "id"]));
+    ok(&acetone(&repo, &["commit", "-m", "base"]));
+    ok(&acetone(&repo, &["branch", "side"]));
+
+    // Divergent declarations of the same rel type on the two branches.
+    ok(&acetone(
+        &repo,
+        &["declare-rel-type", "R", "--type", "a:int"],
+    ));
+    ok(&acetone(&repo, &["commit", "-m", "main R"]));
+    ok(&acetone(&repo, &["checkout", "side"]));
+    ok(&acetone(
+        &repo,
+        &["declare-rel-type", "R", "--type", "a:string"],
+    ));
+    ok(&acetone(&repo, &["commit", "-m", "side R"]));
+    ok(&acetone(&repo, &["checkout", "main"]));
+    let merge = acetone(&repo, &["merge", "side", "-m", "merge side"]);
+    assert!(!merge.status.success(), "must conflict: {}", stdout(&merge));
+
+    let doc_path = dir.path().join("schema.json");
+    std::fs::write(&doc_path, r#"{"relationship_types":[{"name":"R"}]}"#).expect("write");
+    let out = acetone(&repo, &["schema", "apply", doc_path.to_str().unwrap()]);
+    assert!(!out.status.success(), "apply must refuse mid-merge");
+    assert!(
+        stderr(&out).contains("merge"),
+        "the refusal must name the merge: {}",
+        stderr(&out)
+    );
+}

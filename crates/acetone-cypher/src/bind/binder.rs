@@ -734,11 +734,17 @@ impl<'a> Binder<'a> {
                 .filter(|(expr, _, _)| !contains_aggregate(expr))
                 .map(|(expr, _, _)| expr)
                 .collect();
+            let probes: Vec<&BoundExpr> = bound_items
+                .iter()
+                .filter(|(expr, _, _)| contains_aggregate(expr))
+                .map(|(expr, _, _)| expr)
+                .collect();
+            let index = KeyIndex::build(&keys, &probes);
             for (expr, _, span) in &bound_items {
                 if contains_aggregate(expr) {
                     validate_grouping_refs(
                         expr,
-                        &keys,
+                        &index,
                         &[],
                         RefErrorMode::Ambiguous,
                         *span,
@@ -838,11 +844,13 @@ impl<'a> Binder<'a> {
                 .filter(|item| !aggregating || !contains_aggregate(&item.expr))
                 .map(|item| &item.expr)
                 .collect();
+            let probes: Vec<&BoundExpr> = order_by.iter().map(|(bound, _)| bound).collect();
+            let index = KeyIndex::build(&keys, &probes);
             let output_ids: Vec<u32> = new_scope.values().map(|v| v.0).collect();
             for (bound, _) in &order_by {
                 validate_grouping_refs(
                     bound,
-                    &keys,
+                    &index,
                     &output_ids,
                     RefErrorMode::Undefined,
                     p.span,
@@ -1790,6 +1798,206 @@ fn collect_range_bounds(expr: &BoundExpr, out: &mut RangeBounds) {
     }
 }
 
+/// A span-insensitive structural digest matching [`same_bound`]'s
+/// equality classes (Phase 10 security review MAJOR 2): equal-by-
+/// `same_bound` trees get equal digests — including alpha-equivalent
+/// iteration constructs, whose locals hash by stack position exactly as
+/// the correspondence stack pairs them — and spans never contribute.
+/// Patterns digest by node address (conservatively unique), mirroring
+/// `same_bound`'s conservative-unequal arm. Hashing is `DefaultHasher`
+/// (SipHash, randomly keyed per process), so bucket collisions are not
+/// craftable; a digest match is always CONFIRMED with `same_bound`.
+///
+/// One post-order pass digests every node of a tree in O(size) —
+/// `digest_tree` records per-node digests keyed by node address — so the
+/// grouping-key whole-match probe is an O(1) average lookup instead of a
+/// structural comparison against every key at every node (which measured
+/// quadratic in query size, outside the wall clock: binding runs before
+/// the Governor exists).
+fn digest_tree(expr: &BoundExpr, locals: &mut Vec<u32>, out: &mut HashMap<usize, u64>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let addr = expr as *const BoundExpr as usize;
+    match expr {
+        BoundExpr::Literal { value, .. } => {
+            1u8.hash(&mut h);
+            format!("{value:?}").hash(&mut h);
+        }
+        BoundExpr::Parameter { name, .. } => {
+            2u8.hash(&mut h);
+            name.hash(&mut h);
+        }
+        BoundExpr::Variable { id, .. } => {
+            // A locally-bound variable hashes by its stack position (the
+            // alpha-equivalence class); a free one by its VarId.
+            match locals.iter().rev().position(|l| *l == id.0) {
+                Some(depth) => {
+                    3u8.hash(&mut h);
+                    depth.hash(&mut h);
+                }
+                None => {
+                    4u8.hash(&mut h);
+                    id.0.hash(&mut h);
+                }
+            }
+        }
+        BoundExpr::Property { base, key, .. } => {
+            5u8.hash(&mut h);
+            key.hash(&mut h);
+            digest_tree(base, locals, out).hash(&mut h);
+        }
+        BoundExpr::Unary { op, operand, .. } => {
+            6u8.hash(&mut h);
+            format!("{op:?}").hash(&mut h);
+            digest_tree(operand, locals, out).hash(&mut h);
+        }
+        BoundExpr::Binary { op, lhs, rhs, .. } => {
+            7u8.hash(&mut h);
+            format!("{op:?}").hash(&mut h);
+            digest_tree(lhs, locals, out).hash(&mut h);
+            digest_tree(rhs, locals, out).hash(&mut h);
+        }
+        BoundExpr::IsNull {
+            operand, negated, ..
+        } => {
+            8u8.hash(&mut h);
+            negated.hash(&mut h);
+            digest_tree(operand, locals, out).hash(&mut h);
+        }
+        BoundExpr::HasLabels {
+            subject, labels, ..
+        } => {
+            9u8.hash(&mut h);
+            labels.hash(&mut h);
+            digest_tree(subject, locals, out).hash(&mut h);
+        }
+        BoundExpr::Function { def, args, .. } => {
+            10u8.hash(&mut h);
+            def.name.hash(&mut h);
+            for arg in args {
+                digest_tree(arg, locals, out).hash(&mut h);
+            }
+        }
+        BoundExpr::Aggregate {
+            def, distinct, arg, ..
+        } => {
+            11u8.hash(&mut h);
+            def.name.hash(&mut h);
+            distinct.hash(&mut h);
+            if let Some(arg) = arg {
+                digest_tree(arg, locals, out).hash(&mut h);
+            }
+        }
+        BoundExpr::Case {
+            operand,
+            whens,
+            else_expr,
+            ..
+        } => {
+            12u8.hash(&mut h);
+            if let Some(operand) = operand {
+                digest_tree(operand, locals, out).hash(&mut h);
+            }
+            for (condition, value) in whens {
+                digest_tree(condition, locals, out).hash(&mut h);
+                digest_tree(value, locals, out).hash(&mut h);
+            }
+            if let Some(else_expr) = else_expr {
+                digest_tree(else_expr, locals, out).hash(&mut h);
+            }
+        }
+        BoundExpr::ListLiteral { items, .. } => {
+            13u8.hash(&mut h);
+            for item in items {
+                digest_tree(item, locals, out).hash(&mut h);
+            }
+        }
+        BoundExpr::MapLiteral { entries, .. } => {
+            14u8.hash(&mut h);
+            for (key, value) in entries {
+                key.hash(&mut h);
+                digest_tree(value, locals, out).hash(&mut h);
+            }
+        }
+        BoundExpr::Index { base, index, .. } => {
+            15u8.hash(&mut h);
+            digest_tree(base, locals, out).hash(&mut h);
+            digest_tree(index, locals, out).hash(&mut h);
+        }
+        BoundExpr::Slice { base, from, to, .. } => {
+            16u8.hash(&mut h);
+            digest_tree(base, locals, out).hash(&mut h);
+            if let Some(from) = from {
+                digest_tree(from, locals, out).hash(&mut h);
+            }
+            if let Some(to) = to {
+                digest_tree(to, locals, out).hash(&mut h);
+            }
+        }
+        BoundExpr::ListComprehension {
+            variable,
+            list,
+            where_clause,
+            map,
+            ..
+        } => {
+            17u8.hash(&mut h);
+            digest_tree(list, locals, out).hash(&mut h);
+            locals.push(variable.0);
+            if let Some(where_clause) = where_clause {
+                digest_tree(where_clause, locals, out).hash(&mut h);
+            }
+            if let Some(map) = map {
+                digest_tree(map, locals, out).hash(&mut h);
+            }
+            locals.pop();
+        }
+        BoundExpr::Quantifier {
+            kind,
+            variable,
+            list,
+            predicate,
+            ..
+        } => {
+            18u8.hash(&mut h);
+            format!("{kind:?}").hash(&mut h);
+            digest_tree(list, locals, out).hash(&mut h);
+            locals.push(variable.0);
+            digest_tree(predicate, locals, out).hash(&mut h);
+            locals.pop();
+        }
+        BoundExpr::Reduce {
+            accumulator,
+            init,
+            variable,
+            list,
+            expr: body,
+            ..
+        } => {
+            19u8.hash(&mut h);
+            digest_tree(init, locals, out).hash(&mut h);
+            digest_tree(list, locals, out).hash(&mut h);
+            locals.push(accumulator.0);
+            locals.push(variable.0);
+            digest_tree(body, locals, out).hash(&mut h);
+            locals.pop();
+            locals.pop();
+        }
+        BoundExpr::PatternComprehension { .. } | BoundExpr::PatternPredicate { .. } => {
+            // Conservatively unique — mirrors same_bound's always-unequal
+            // arm for patterns (two pattern nodes never digest-match, so
+            // they never whole-match, exactly as before). Children still
+            // need digests for the walk, but the walk's own recursion
+            // handles pattern innards via locals, never via whole-match.
+            20u8.hash(&mut h);
+            addr.hash(&mut h);
+        }
+    }
+    let digest = h.finish();
+    out.insert(addr, digest);
+    digest
+}
+
 /// Span-insensitive structural equality over bound expressions — the
 /// grouping-key match relation (acetone-1qj, PR #244 review major 1):
 /// bound trees are already free of parenthesisation, backtick and
@@ -2167,10 +2375,45 @@ fn push_bound_children<'e>(expr: &'e BoundExpr, out: &mut Vec<&'e BoundExpr>) {
 /// output alias (`output_ids`) or an iteration-local; anything else that
 /// reaches a `Variable` errors per `mode`. `variables` supplies the name
 /// for the `UndefinedVariable` rendering.
+/// The pre-indexed grouping keys: digest -> keys in that bucket, plus the
+/// per-node digests of the expression under validation. Probing is an
+/// O(1) average lookup confirmed by `same_bound` (Phase 10 security
+/// review MAJOR 2 — the linear scan measured quadratic in query size).
+struct KeyIndex<'k> {
+    buckets: HashMap<u64, Vec<&'k BoundExpr>>,
+    digests: HashMap<usize, u64>,
+}
+
+impl<'k> KeyIndex<'k> {
+    fn build(keys: &[&'k BoundExpr], probes: &[&BoundExpr]) -> Self {
+        let mut buckets: HashMap<u64, Vec<&'k BoundExpr>> = HashMap::new();
+        let mut scratch = HashMap::new();
+        for key in keys {
+            let digest = digest_tree(key, &mut Vec::new(), &mut scratch);
+            buckets.entry(digest).or_default().push(*key);
+        }
+        let mut digests = HashMap::new();
+        for probe in probes {
+            digest_tree(probe, &mut Vec::new(), &mut digests);
+        }
+        KeyIndex { buckets, digests }
+    }
+
+    fn whole_match(&self, expr: &BoundExpr) -> bool {
+        let addr = expr as *const BoundExpr as usize;
+        let Some(digest) = self.digests.get(&addr) else {
+            return false;
+        };
+        self.buckets
+            .get(digest)
+            .is_some_and(|bucket| bucket.iter().any(|key| same_bound(key, expr)))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn validate_grouping_refs(
     expr: &BoundExpr,
-    keys: &[&BoundExpr],
+    keys: &KeyIndex,
     output_ids: &[u32],
     mode: RefErrorMode,
     item_span: Span,
@@ -2185,7 +2428,7 @@ fn validate_grouping_refs(
         RefErrorMode::Ambiguous => simple,
         RefErrorMode::Undefined => true,
     };
-    if whole_match_ok && keys.iter().any(|key| same_bound(key, expr)) {
+    if whole_match_ok && keys.whole_match(expr) {
         return Ok(());
     }
     match expr {

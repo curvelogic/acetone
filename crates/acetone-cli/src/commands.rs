@@ -928,6 +928,70 @@ fn reindex(repo_path: &Path) -> Result<()> {
 /// untouched: `apply` never removes (removal is `migrate` territory —
 /// schema stays deliberate history). Unchanged entries stage nothing, so
 /// re-applying a document is idempotent and leaves the workspace clean.
+/// Parse JSON refusing duplicate keys within any one object —
+/// `serde_json`'s `Map` silently last-wins them, which is inconsistent
+/// with this decoder's strict posture (unknown fields and duplicate entry
+/// names are refused; Phase 10 security review minor 3).
+fn parse_refusing_duplicate_keys(text: &str) -> Result<Json> {
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = Json;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a JSON value")
+        }
+        fn visit_bool<E>(self, v: bool) -> Result<Json, E> {
+            Ok(Json::Bool(v))
+        }
+        fn visit_i64<E>(self, v: i64) -> Result<Json, E> {
+            Ok(Json::Number(v.into()))
+        }
+        fn visit_u64<E>(self, v: u64) -> Result<Json, E> {
+            Ok(Json::Number(v.into()))
+        }
+        fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Json, E> {
+            serde_json::Number::from_f64(v)
+                .map(Json::Number)
+                .ok_or_else(|| E::custom("non-finite number"))
+        }
+        fn visit_str<E>(self, v: &str) -> Result<Json, E> {
+            Ok(Json::String(v.to_owned()))
+        }
+        fn visit_unit<E>(self) -> Result<Json, E> {
+            Ok(Json::Null)
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Json, A::Error> {
+            let mut out = Vec::new();
+            while let Some(v) = seq.next_element_seed(D)? {
+                out.push(v);
+            }
+            Ok(Json::Array(out))
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Json, A::Error> {
+            let mut out = serde_json::Map::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let value = map.next_value_seed(D)?;
+                if out.insert(key.clone(), value).is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate key {key:?} within one object"
+                    )));
+                }
+            }
+            Ok(Json::Object(out))
+        }
+    }
+    struct D;
+    impl<'de> serde::de::DeserializeSeed<'de> for D {
+        type Value = Json;
+        fn deserialize<Dz: serde::Deserializer<'de>>(self, d: Dz) -> Result<Json, Dz::Error> {
+            d.deserialize_any(V)
+        }
+    }
+    let mut de = serde_json::Deserializer::from_str(text);
+    let value = serde::de::DeserializeSeed::deserialize(D, &mut de)?;
+    de.end()?;
+    Ok(value)
+}
+
 pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Result<()> {
     use acetone_core::model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
     use std::collections::BTreeMap;
@@ -943,7 +1007,7 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
         std::fs::read_to_string(file)
             .with_context(|| format!("reading schema document {file:?}"))?
     };
-    let doc: Json = serde_json::from_str(&text).context("parsing the schema document")?;
+    let doc: Json = parse_refusing_duplicate_keys(&text).context("parsing the schema document")?;
 
     // --- strict manual decoding: unknown fields are typo traps, refused ---
     fn obj<'j>(v: &'j Json, what: &str) -> Result<&'j serde_json::Map<String, Json>> {
@@ -1111,6 +1175,18 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
     // --- diff against the current schema ---
     let repo = open(repo_path)?;
     let snapshot = repo.workspace_snapshot()?;
+    // Mid-merge, a conflicted schema entry is absent from the merged map:
+    // the diff would report it as `add` and the apply would silently
+    // bulk-resolve schema conflicts by-write (Phase 10 security review
+    // minor 4). Autodeclare refuses here for the same reason (PR #245) —
+    // declaration stays deliberate.
+    if snapshot.merge_in_progress() {
+        bail!(
+            "workspace is in a merge; resolve and complete it first — \
+             `schema apply` would silently resolve conflicted schema \
+             entries by rewriting them"
+        );
+    }
     let current = snapshot.schema_entries()?;
     let describe = |entry: &SchemaEntry| -> (String, String) {
         match entry {

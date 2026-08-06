@@ -163,12 +163,23 @@ type ExpandEntry = std::rc::Rc<Vec<(crate::exec::value::RelValue, NodeValue)>>;
 /// results — is reproducible.
 const EXPAND_MEMO_TUPLE_CAP: usize = 1_000_000;
 
+/// Retention cap for the label-scan memo, in nodes (Phase 10 security
+/// review MAJOR 1) — same shape and rationale as
+/// [`EXPAND_MEMO_TUPLE_CAP`]: past the cap, scans still run and charge;
+/// their results just stop being retained.
+const SCAN_MEMO_NODE_CAP: usize = 1_000_000;
+
 /// Whether a probe result of `len` tuples may be retained when `retained`
 /// tuples are already held. Extracted so the boundary is unit-testable —
 /// the cap is the mitigation for unbounded memo retention (PR #239 review
 /// major 3), and nothing else exercises the branch on small fixtures.
 fn retention_fits(retained: usize, len: usize) -> bool {
     retained.saturating_add(len) <= EXPAND_MEMO_TUPLE_CAP
+}
+
+/// As [`retention_fits`], for the label-scan memo's node cap.
+fn retention_fits_scan(retained: usize, len: usize) -> bool {
+    retained.saturating_add(len) <= SCAN_MEMO_NODE_CAP
 }
 
 /// Memoises full label-scan materialisations for the lifetime of one
@@ -197,6 +208,12 @@ fn retention_fits(retained: usize, len: usize) -> bool {
 #[derive(Default)]
 pub(crate) struct ScanCache {
     by_labels: std::cell::RefCell<HashMap<Vec<String>, std::rc::Rc<Vec<NodeValue>>>>,
+    /// Total nodes retained in `by_labels`, against
+    /// [`SCAN_MEMO_NODE_CAP`] — the label memo's counterpart of
+    /// `expand_tuples` (Phase 10 security review MAJOR 1: without a cap,
+    /// distinct label keys each retain a full materialisation for one
+    /// scan charge apiece — 2.4 GB measured from a 2.5 KB query).
+    label_nodes: std::cell::Cell<usize>,
     /// Expansion probes, keyed by (node, direction, types). Measurement
     /// showed these — not the anchor materialisation — dominate the shipped
     /// path: every anchor candidate costs one `expand()` store read per
@@ -215,13 +232,23 @@ impl ScanCache {
         graph: &dyn GraphSource,
         labels: &[String],
     ) -> std::rc::Rc<Vec<NodeValue>> {
-        if let Some(hit) = self.by_labels.borrow().get(labels) {
+        // Normalised key: `:L:L` and `:L` denote the same candidate set,
+        // and the raw vector let repeated tokens mint distinct keys each
+        // retaining a full copy (security review MAJOR 1). Sorting also
+        // makes `:A:B` and `:B:A` share one entry.
+        let mut key: Vec<String> = labels.to_vec();
+        key.sort();
+        key.dedup();
+        if let Some(hit) = self.by_labels.borrow().get(&key) {
             return std::rc::Rc::clone(hit);
         }
         let nodes = std::rc::Rc::new(graph.nodes_by_labels(labels));
-        self.by_labels
-            .borrow_mut()
-            .insert(labels.to_vec(), std::rc::Rc::clone(&nodes));
+        if retention_fits_scan(self.label_nodes.get(), nodes.len()) {
+            self.label_nodes.set(self.label_nodes.get() + nodes.len());
+            self.by_labels
+                .borrow_mut()
+                .insert(key, std::rc::Rc::clone(&nodes));
+        }
         nodes
     }
 
