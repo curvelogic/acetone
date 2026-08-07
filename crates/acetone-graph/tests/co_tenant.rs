@@ -925,3 +925,119 @@ fn fsck_of_a_co_tenant_graph_ignores_the_users_own_branches() {
         report.findings
     );
 }
+
+/// Read the raw value of a ref via git plumbing, or `None` if it is absent.
+fn ref_value(project: &Path, refname: &str) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["rev-parse", "--verify", "--quiet", refname])
+        .output()
+        .expect("rev-parse");
+    if out.status.success() {
+        Some(
+            String::from_utf8(out.stdout)
+                .expect("utf8")
+                .trim()
+                .to_owned(),
+        )
+    } else {
+        None
+    }
+}
+
+/// acetone-j6ui — the load-bearing upgrade guard. A co-tenant graph written
+/// before the per-graph workspace-ref split keeps its uncommitted workspace
+/// under the shared global `refs/worktree/acetone/workspace`. After upgrade,
+/// that workspace must NOT be lost: reads find it via the legacy fallback,
+/// and the first write migrates it to the per-graph ref (no CAS desync,
+/// because `begin_write` sources the CAS `expected` from the per-graph ref —
+/// absent, so a create — while reading the base content via the fallback).
+#[test]
+fn a_pre_split_co_tenant_workspace_survives_the_upgrade_and_migrates_on_write() {
+    let (project, _dir, _code_commit, _code_blob) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 3);
+
+    // Stage an UNCOMMITTED write, so the workspace ref diverges from the
+    // branch tip — this is the state that would be lost if the fallback or
+    // migration were wrong (a committed state would survive via the branch
+    // regardless).
+    let mut tx = graph.begin_write().expect("begin");
+    tx.put_node(
+        &node(99),
+        &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(99))])),
+    )
+    .expect("node");
+    tx.save().expect("save uncommitted");
+    drop(graph);
+
+    // Simulate the pre-split on-disk state: move the workspace from the
+    // per-graph ref to the shared global name an old binary wrote it under.
+    let per_graph = "refs/worktree/acetone/g/workspace";
+    let shared = "refs/worktree/acetone/workspace";
+    let workspace_value = ref_value(&project, per_graph).expect("per-graph workspace present");
+    git(&project, &["update-ref", shared, &workspace_value]);
+    git(&project, &["update-ref", "-d", per_graph]);
+    assert!(
+        ref_value(&project, per_graph).is_none(),
+        "precondition: per-graph ref is absent (pre-split state)"
+    );
+
+    // (1) Reads find the uncommitted workspace via the legacy fallback.
+    let reopened = Repository::open(&project).expect("reopen after pre-split rewrite");
+    assert!(
+        reopened
+            .workspace_snapshot()
+            .expect("snapshot")
+            .get_node(&node(99))
+            .expect("get")
+            .is_some(),
+        "the uncommitted node must be readable via the legacy shared ref"
+    );
+
+    // (2) The first write migrates the workspace to the per-graph ref
+    //     without losing the pre-existing uncommitted node.
+    let mut tx = reopened.begin_write().expect("begin after upgrade");
+    tx.put_node(
+        &node(100),
+        &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(100))])),
+    )
+    .expect("node");
+    tx.save().expect("save migrates to per-graph");
+
+    assert!(
+        ref_value(&project, per_graph).is_some(),
+        "the first write must materialise the per-graph workspace ref"
+    );
+
+    // (3) A completely fresh handle now reads BOTH the pre-split uncommitted
+    //     node and the post-upgrade one from the per-graph ref (which wins
+    //     the fallback order even though the stale shared ref still exists).
+    let fresh = Repository::open(&project).expect("fresh open");
+    let snap = fresh.workspace_snapshot().expect("snapshot");
+    assert!(
+        snap.get_node(&node(99)).expect("get").is_some(),
+        "the pre-split uncommitted node must survive the migration"
+    );
+    assert!(
+        snap.get_node(&node(100)).expect("get").is_some(),
+        "the post-upgrade node must be present"
+    );
+
+    // (4) The crash-window invariant: even with BOTH refs present (a
+    //     migration that wrote per-graph but a stale shared lingers), the
+    //     per-graph ref wins, so no stale content is ever read.
+    assert!(
+        ref_value(&project, shared).is_some(),
+        "this build leaves the stale shared ref (its cleanup is unit 3's, \
+         where a second graph makes it matter); the per-graph-first order \
+         makes it harmless"
+    );
+    assert_eq!(
+        ref_value(&project, per_graph).expect("per-graph present"),
+        ref_value(&project, "refs/worktree/acetone/g/workspace").expect("same"),
+        "the per-graph ref is authoritative"
+    );
+}

@@ -174,7 +174,7 @@ impl Repository {
         store_options.object_format = options.object_format;
         let store = GitStore::create_with(path, store_options)?;
 
-        provision_empty_workspace(&store, options.chunk_params)?;
+        provision_empty_workspace(&store, options.chunk_params, WORKTREE_WORKSPACE_REF)?;
         let namespace = GraphRefNamespace::standalone();
         store.set_head(namespace.head_ref(), &namespace.branch_ref(DEFAULT_BRANCH))?;
         Ok(Repository {
@@ -248,9 +248,12 @@ impl Repository {
         let marker = format!("{GRAPHS_REF_PREFIX}{graph}");
         store.write_ref(&marker, None, &filler)?;
 
-        provision_empty_workspace(&store, options.chunk_params)?;
-
         let namespace = GraphRefNamespace::co_tenant(graph);
+        // Seed this graph's OWN per-worktree workspace ref (acetone-j6ui),
+        // not the shared global one — so a second co-tenant graph does not
+        // find an existing workspace on the global ref and refuse.
+        provision_empty_workspace(&store, options.chunk_params, namespace.workspace_ref())?;
+
         // The graph's own current-branch pointer; the code's git HEAD is not
         // touched.
         store.set_head(namespace.head_ref(), &namespace.branch_ref(DEFAULT_BRANCH))?;
@@ -321,25 +324,40 @@ impl Repository {
         &self.workspace
     }
 
-    /// The current value of the per-worktree workspace ref, if present.
-    /// This is a workspace *tree* (huo) — or, for a workspace last written
-    /// before huo, the manifest blob directly.
+    /// The current value of this graph's per-worktree workspace ref, if
+    /// present (acetone-j6ui: per-graph for co-tenant, the global name for
+    /// standalone). This is a workspace *tree* (huo) — or, for a workspace
+    /// last written before huo, the manifest blob directly. This is the ref
+    /// the CAS on save targets, so it is the *only* one used for the
+    /// transaction's `expected` value — the fallbacks below supply
+    /// *content* to read, never the CAS baseline, which is why a
+    /// fallback read cannot desync the CAS (`begin_write`).
     fn workspace_ref_value(&self) -> Result<Option<Hash>, GraphError> {
-        Ok(self.store.read_ref(WORKTREE_WORKSPACE_REF)?)
+        Ok(self.store.read_ref(self.namespace.workspace_ref())?)
     }
 
-    /// The current value of the legacy shared workspace ref (pre-ADR-0014
-    /// migration fallback), if present.
+    /// The value of a pre-split shared workspace ref this graph may still
+    /// find its workspace under, in fallback order (acetone-j6ui): the
+    /// shared global `refs/worktree/acetone/workspace` a co-tenant graph
+    /// written before the per-graph split used, then the pre-ADR-0014
+    /// shared `refs/acetone/workspaces/<name>`. Read only — never CAS'd.
     fn legacy_ref_value(&self) -> Result<Option<Hash>, GraphError> {
+        if let Some(shared) = self.namespace.legacy_workspace_ref()
+            && let Some(hash) = self.store.read_ref(shared)?
+        {
+            return Ok(Some(hash));
+        }
         Ok(self.store.read_ref(&workspace_ref(&self.workspace))?)
     }
 
-    /// The effective workspace-ref target: the per-worktree ref, or — for a
-    /// repository created before ADR-0014 — the legacy shared ref. `None`
+    /// The effective workspace-ref target: this graph's per-worktree ref,
+    /// or — for a repository written before a workspace-ref split — a
+    /// pre-split shared ref (per-graph split, then pre-ADR-0014). `None`
     /// means the workspace is **virtual** (acetone-ayq): it reads as the
     /// checked-out commit's manifest and no ref is materialised. `migrate`
     /// uses this to know whether the workspace needs a journalled ref swing
-    /// at all.
+    /// at all. The per-graph ref always wins, so once the first write has
+    /// materialised it a stale shared ref is never read.
     pub(crate) fn workspace_ref_target(&self) -> Result<Option<Hash>, GraphError> {
         if let Some(hash) = self.workspace_ref_value()? {
             return Ok(Some(hash));
@@ -384,6 +402,7 @@ impl Repository {
         Ok(Snapshot {
             store: &self.store,
             manifest: self.workspace_manifest()?,
+            merge_head_ref: self.namespace.merge_head_ref().to_owned(),
         })
     }
 
@@ -707,6 +726,7 @@ impl Repository {
         Ok(Snapshot {
             store: &self.store,
             manifest: read_manifest_chunk(&self.store, &manifest_hash)?,
+            merge_head_ref: self.namespace.merge_head_ref().to_owned(),
         })
     }
 
@@ -832,13 +852,14 @@ impl Repository {
                 let expected = self.workspace_ref_value()?;
                 self.cas_workspace(expected.as_ref(), &tree)?;
                 // Record the other side for `commit` to complete the merge.
+                let merge_head = self.namespace.merge_head_ref();
                 self.store
-                    .write_ref(WORKTREE_MERGE_HEAD_REF, None, &theirs)
+                    .write_ref(merge_head, None, &theirs)
                     .or_else(|e| match e {
                         // A stale MERGE_HEAD from an abandoned merge: overwrite.
                         StoreError::CasFailed { .. } => {
-                            self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
-                            self.store.write_ref(WORKTREE_MERGE_HEAD_REF, None, &theirs)
+                            self.store.delete_ref(merge_head)?;
+                            self.store.write_ref(merge_head, None, &theirs)
                         }
                         other => Err(other),
                     })?;
@@ -860,9 +881,7 @@ impl Repository {
                         // stale one (e.g. a prior completion whose delete failed,
                         // acetone-mws) so a later ordinary commit is not turned
                         // into a spurious merge commit.
-                        if self.merge_head()?.is_some() {
-                            self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
-                        }
+                        self.delete_merge_head()?;
                         Ok(MergeOutcome::Merged(commit))
                     }
                     Err(StoreError::CasFailed { .. }) => Err(GraphError::BranchConflict {
@@ -907,9 +926,7 @@ impl Repository {
         // delete here leaves MERGE_HEAD set with the workspace already at the
         // branch tip; re-running `merge --abort` recovers it (and the commit
         // path's stale-MERGE_HEAD guard covers the post-completion analogue).
-        if self.merge_head()?.is_some() {
-            self.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
-        }
+        self.delete_merge_head()?;
         Ok(())
     }
 
@@ -1030,9 +1047,38 @@ impl Repository {
     }
 
     /// The `theirs` commit of a merge in progress (`MERGE_HEAD`), or `None`
-    /// when no merge is in progress.
+    /// when no merge is in progress. Reads this graph's per-worktree
+    /// merge-head, falling back to the pre-split shared ref a co-tenant
+    /// repo mid-merge at upgrade may still hold it under (acetone-j6ui) —
+    /// the per-graph ref wins once written.
     pub fn merge_head(&self) -> Result<Option<Hash>, GraphError> {
-        Ok(self.store.read_ref(WORKTREE_MERGE_HEAD_REF)?)
+        if let Some(hash) = self.store.read_ref(self.namespace.merge_head_ref())? {
+            return Ok(Some(hash));
+        }
+        if let Some(legacy) = self.namespace.legacy_merge_head_ref() {
+            return Ok(self.store.read_ref(legacy)?);
+        }
+        Ok(None)
+    }
+
+    /// Clear the merge-in-progress head. Deletes this graph's per-worktree
+    /// ref and, for a co-tenant graph, any pre-split shared ref a merge
+    /// begun before the split left — so a delete after upgrade is complete
+    /// and idempotent whichever ref holds it (acetone-j6ui).
+    fn delete_merge_head(&self) -> Result<(), GraphError> {
+        if self
+            .store
+            .read_ref(self.namespace.merge_head_ref())?
+            .is_some()
+        {
+            self.store.delete_ref(self.namespace.merge_head_ref())?;
+        }
+        if let Some(legacy) = self.namespace.legacy_merge_head_ref()
+            && self.store.read_ref(legacy)?.is_some()
+        {
+            self.store.delete_ref(legacy)?;
+        }
+        Ok(())
     }
 
     /// The conflicts of a merge in progress, or an empty vec when none remain
@@ -1565,7 +1611,10 @@ impl Repository {
     /// The anchor merely follows the workspace tree, so it is force-written; a
     /// failure to anchor fails the save (durability is the whole point).
     fn cas_workspace(&self, expected: Option<&Hash>, new: &Hash) -> Result<(), GraphError> {
-        match self.store.write_ref(WORKTREE_WORKSPACE_REF, expected, new) {
+        match self
+            .store
+            .write_ref(self.namespace.workspace_ref(), expected, new)
+        {
             Ok(()) => {}
             Err(StoreError::CasFailed { .. }) => {
                 return Err(GraphError::WorkspaceConflict {
@@ -1999,13 +2048,16 @@ fn is_blank(store: &GitStore, manifest: &Manifest) -> Result<bool, GraphError> {
 }
 
 /// Write the empty-graph workspace: build the empty manifest under
-/// `chunk_params`, anchor its chunk set in a workspace tree, and point the
-/// per-worktree workspace ref at it. Shared by [`Repository::init`] (standalone)
-/// and [`Repository::init_co_tenant`]; the two differ only in the ref layout
+/// `chunk_params`, anchor its chunk set in a workspace tree, and point
+/// `workspace_ref` at it. Shared by [`Repository::init`] (standalone, the
+/// global ref) and [`Repository::init_co_tenant`] (the graph's per-graph
+/// ref, so a second co-tenant graph does not collide on the global one —
+/// acetone-j6ui); the two differ only in the ref they seed and the layout
 /// they then set up, not in the empty graph they start from.
 fn provision_empty_workspace(
     store: &GitStore,
     chunk_params: ChunkParams,
+    workspace_ref: &str,
 ) -> Result<(), GraphError> {
     let empty = acetone_prolly::empty(store, chunk_params)?;
     let manifest = Manifest {
@@ -2022,7 +2074,7 @@ fn provision_empty_workspace(
     // empty graph that is just the empty prolly root.
     let anchors = manifest_chunk_set(store, &manifest)?;
     let tree = store.write_workspace_tree(&manifest.encode(), &anchors)?;
-    store.write_ref(WORKTREE_WORKSPACE_REF, None, &tree)?;
+    store.write_ref(workspace_ref, None, &tree)?;
     Ok(())
 }
 
@@ -2703,7 +2755,7 @@ impl<'r> Transaction<'r> {
         // every conflict is resolved. Apply staged writes first, so a write
         // that resolves the last conflict in this same transaction is seen
         // (14c.4c) before the unresolved-conflicts check.
-        let merge_head = repo.store.read_ref(WORKTREE_MERGE_HEAD_REF)?;
+        let merge_head = repo.merge_head()?;
         self.save_in_place()?;
 
         let parent = repo.store.read_ref(&branch)?;
@@ -2714,7 +2766,7 @@ impl<'r> Transaction<'r> {
         // single-parent commit.
         let merge_head = match (merge_head, parent) {
             (Some(theirs), Some(tip)) if repo.is_ancestor(&theirs, &tip)? => {
-                repo.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+                repo.delete_merge_head()?;
                 None
             }
             (mh, _) => mh,
@@ -2818,7 +2870,7 @@ impl<'r> Transaction<'r> {
                 // The merge is complete: clear MERGE_HEAD so the next commit
                 // is an ordinary single-parent one.
                 if merge_head.is_some() {
-                    repo.store.delete_ref(WORKTREE_MERGE_HEAD_REF)?;
+                    repo.delete_merge_head()?;
                 }
                 Ok(commit_id)
             }
@@ -3054,6 +3106,9 @@ pub(crate) fn summarise(store: &GitStore, manifest: &Manifest) -> Result<String,
     let snapshot = Snapshot {
         store,
         manifest: manifest.clone(),
+        // `summarise` never calls `merge_in_progress`; the global name is
+        // an unused placeholder here.
+        merge_head_ref: WORKTREE_MERGE_HEAD_REF.to_owned(),
     };
     let nodes = snapshot.count(&manifest.nodes)?;
     let edges = snapshot.count(&manifest.edges_fwd)?;
@@ -3071,6 +3126,14 @@ pub(crate) fn summarise(store: &GitStore, manifest: &Manifest) -> Result<String,
 pub struct Snapshot<'s> {
     store: &'s GitStore,
     manifest: Manifest,
+    /// This graph's per-worktree merge-head ref (acetone-j6ui) — the
+    /// backstop clause of [`Self::merge_in_progress`] reads it. The
+    /// primary signal there is `manifest.conflicts`, which is
+    /// namespace-independent and set for every real in-progress merge, so
+    /// this only needs the graph's own name (no legacy fallback): the
+    /// repo-less constructors that never call `merge_in_progress`
+    /// (`summarise`, fsck's `new`) pass the standalone global name.
+    merge_head_ref: String,
 }
 
 impl<'s> Snapshot<'s> {
@@ -3078,7 +3141,14 @@ impl<'s> Snapshot<'s> {
     /// [`crate::fsck`], which verifies historical and workspace manifests
     /// that are not the current workspace snapshot.
     pub(crate) fn new(store: &'s GitStore, manifest: Manifest) -> Self {
-        Snapshot { store, manifest }
+        // fsck verifies manifests repo-less and never calls
+        // `merge_in_progress`; the standalone global name matches fsck's
+        // documented use of the standalone prefix constants.
+        Snapshot {
+            store,
+            manifest,
+            merge_head_ref: WORKTREE_MERGE_HEAD_REF.to_owned(),
+        }
     }
 
     /// The manifest this snapshot is pinned to.
@@ -3122,7 +3192,7 @@ impl<'s> Snapshot<'s> {
         self.manifest.conflicts.is_some()
             || self
                 .store
-                .read_ref(WORKTREE_MERGE_HEAD_REF)
+                .read_ref(&self.merge_head_ref)
                 .map(|head| head.is_some())
                 .unwrap_or(true)
     }

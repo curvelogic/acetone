@@ -27,8 +27,19 @@ fine.)
   `--max-concurrent` bound (default 4) on their sum, a separate
   connection cap, read/write idle timeouts against slow/stalled peers,
   typed error kinds with span-aware rendering, and stale-socket reclaim
-  so a host restart after a crash rebinds cleanly. Read-only in this
-  build: writes are refused before execution with a typed error.
+  so a host restart after a crash rebinds cleanly.
+
+### Changed
+
+- **A co-tenant graph's uncommitted workspace now lives on a per-graph
+  ref** (acetone-j6ui): `refs/worktree/acetone/<graph>/workspace` and
+  `.../<graph>/merge-head`, rather than the shared
+  `refs/worktree/acetone/workspace`, so two graphs in one worktree no
+  longer race a single workspace ref. Disposable per-worktree state, so
+  no format bump: a graph written before this reads its workspace
+  through a fallback to the old shared name, and the first write moves
+  it to the per-graph ref (the pre-ADR-0014 migration path, extended).
+  Standalone repositories are unchanged — they keep the global names.
 
 ### Fixed
 
