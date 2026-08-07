@@ -2038,7 +2038,7 @@ fn provision_empty_workspace(
 /// the namespace) could otherwise smuggle in an arbitrary layout. A marker
 /// that fails validation is [`GraphError::InvalidGraphName`] — a loud refusal
 /// to open, never a silently odd namespace.
-fn detect_namespace(store: &GitStore) -> Result<GraphRefNamespace, GraphError> {
+pub(crate) fn detect_namespace(store: &GitStore) -> Result<GraphRefNamespace, GraphError> {
     let markers = store.list_refs(GRAPHS_REF_PREFIX)?;
     match markers.as_slice() {
         [] => Ok(GraphRefNamespace::standalone()),

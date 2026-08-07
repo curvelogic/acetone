@@ -16,6 +16,17 @@ fine.)
 
 ## [Unreleased]
 
+### Fixed
+
+- **fsck of a co-tenant graph now scopes to that graph's namespace**
+  (acetone-j6ui): it walked `refs/heads/*`/`refs/tags/*`
+  unconditionally, so in a repository shared with the user's own code
+  (Phase 8 co-tenancy) it reported their non-acetone branch commits as
+  findings. It now walks only the opened graph's
+  `refs/heads/acetone/<graph>/` and tag namespace; `check_path`
+  (the damaged-workspace entry) resolves the namespace the same way,
+  falling back to standalone scope on an ambiguous marker.
+
 ## [0.5.0] - 2026-08-06
 
 Acetone 0.5.0 is the "used in anger" release: the first project to build on acetone has begun doing so, and this release ships what that early use pulled — an **open vocabulary** (opt-in relationship-type autodeclare, declarative `schema apply`, surrogate `_id` minting, phrase-shaped type names) and **parallel relationships completed end-to-end** (declarable, importable, and now creatable and editable from Cypher), alongside the 0.4.x quality tier: stricter openCypher scoping (conformance 56.07% → 56.92%, still zero failures), bounded-and-cheap refusal of pathological queries, and per-record import memory bounds.

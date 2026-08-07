@@ -886,3 +886,42 @@ fn migrate_recovery_refuses_a_journal_naming_worktree_merge_state() {
         "the refused journal is kept"
     );
 }
+
+/// fsck of a co-tenant graph scopes to that graph's namespace: the user's
+/// own code branches sharing the repository must NOT be walked, so a
+/// non-acetone commit on `main` is never reported as a Commit finding
+/// (acetone-j6ui). Before the scoping, `check_store` walked
+/// `refs/heads/*` unconditionally and flagged the user's `main`.
+#[test]
+fn fsck_of_a_co_tenant_graph_ignores_the_users_own_branches() {
+    let (project, _dir, _code_commit, _code_blob) = code_repo();
+    // The project's `main` carries a plain git commit — not an acetone
+    // commit. A namespace-blind fsck reads it as a branch tip and reports
+    // it; a scoped fsck under refs/heads/acetone/g/ never sees it.
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 10);
+
+    let report = acetone_graph::fsck::check(&graph).expect("fsck");
+    // The user's main is a non-acetone commit; if it were walked it would
+    // surface as a Commit finding. Scoped, the report is clean of it.
+    assert!(
+        report
+            .findings
+            .iter()
+            .all(|f| { !matches!(f.kind, acetone_graph::fsck::FindingKind::Commit) }),
+        "co-tenant fsck must not walk the user's code branches: {:?}",
+        report.findings
+    );
+
+    // And check_path (the damaged-workspace entry) scopes the same way.
+    let report = acetone_graph::fsck::check_path(&project).expect("fsck_path");
+    assert!(
+        report
+            .findings
+            .iter()
+            .all(|f| { !matches!(f.kind, acetone_graph::fsck::FindingKind::Commit) }),
+        "check_path must scope too: {:?}",
+        report.findings
+    );
+}

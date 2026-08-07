@@ -52,8 +52,7 @@ use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore, StoreErro
 
 use crate::error::GraphError;
 use crate::repo::{
-    BRANCH_REF_PREFIX, Repository, Snapshot, TAG_REF_PREFIX, WORKSPACE_REF_PREFIX,
-    WORKTREE_ANCHOR_PREFIX, WORKTREE_WORKSPACE_REF,
+    Repository, Snapshot, WORKSPACE_REF_PREFIX, WORKTREE_ANCHOR_PREFIX, WORKTREE_WORKSPACE_REF,
 };
 use acetone_store::WorkspaceAnchors;
 
@@ -350,7 +349,12 @@ struct Verified {
 /// docs for the finding taxonomy and totality guarantees. A clean
 /// repository returns an [`FsckReport`] with no findings.
 pub fn check(repo: &Repository) -> Result<FsckReport, GraphError> {
-    check_store(repo.store())
+    // Scope to the opened graph's namespace (acetone-j6ui): a co-tenant
+    // graph must fsck only its OWN branches and tags, never the user's
+    // code branches sharing the repository — reporting those as findings
+    // is a bug even for a single co-tenant graph today.
+    let ns = repo.namespace();
+    check_store(repo.store(), ns.branch_prefix(), ns.tag_prefix())
 }
 
 /// Verify the repository at `path` without first constructing a
@@ -362,18 +366,30 @@ pub fn check(repo: &Repository) -> Result<FsckReport, GraphError> {
 /// [`Finding`]s rather than erroring at open.
 pub fn check_path(path: &std::path::Path) -> Result<FsckReport, GraphError> {
     let store = GitStore::open_discovering(path)?;
-    check_store(&store)
+    // Resolve the namespace the way `open` does, so a damaged-workspace
+    // fsck of a co-tenant graph still scopes to that graph (acetone-j6ui).
+    // A repository with a damaged marker or multiple graphs falls back to
+    // the standalone prefixes — fsck must run even then, and the wider
+    // scope is the safe direction for a diagnostic.
+    let ns = crate::repo::detect_namespace(&store)
+        .unwrap_or_else(|_| crate::refns::GraphRefNamespace::standalone());
+    check_store(&store, ns.branch_prefix(), ns.tag_prefix())
 }
 
 /// The store-level fsck used by both [`check`] and [`check_path`]. It needs only
 /// the chunk/ref/commit store — never a decoded workspace manifest — so it is
-/// robust to a damaged workspace.
-fn check_store(store: &GitStore) -> Result<FsckReport, GraphError> {
+/// robust to a damaged workspace. `branch_prefix`/`tag_prefix` scope the
+/// commit-tip walk to one graph's namespace (acetone-j6ui).
+fn check_store(
+    store: &GitStore,
+    branch_prefix: &str,
+    tag_prefix: &str,
+) -> Result<FsckReport, GraphError> {
     let mut report = FsckReport::default();
     let mut verified = Verified::default();
     check_workspaces(store, &mut verified, &mut report)?;
-    check_commit_tips(store, BRANCH_REF_PREFIX, false, &mut verified, &mut report)?;
-    check_commit_tips(store, TAG_REF_PREFIX, true, &mut verified, &mut report)?;
+    check_commit_tips(store, branch_prefix, false, &mut verified, &mut report)?;
+    check_commit_tips(store, tag_prefix, true, &mut verified, &mut report)?;
     Ok(report)
 }
 
