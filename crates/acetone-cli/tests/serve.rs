@@ -146,22 +146,23 @@ fn hello_then_streamed_read_query() {
 }
 
 #[test]
-fn writes_are_refused_typed_and_two_connections_read_concurrently() {
+fn concurrent_connections_and_unknown_verb_and_over_cap_request() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = seeded_repo(&dir);
     let socket = dir.path().join("acetone.sock");
     let _daemon = start_daemon(&repo, &socket);
 
-    // Write refusal (unit 1 is read-only).
+    // A write is served (no longer refused) — a second connection then
+    // sees it, proving the workspace advanced.
     let mut s = hello(&socket);
     write_frame(
         &mut s,
         &serde_json::json!({"id": 7, "verb": "query", "params": {
-            "cypher": "CREATE (:Doc {id: 'nope'})"
+            "cypher": "CREATE (:Doc {id: 'w7'})"
         }}),
     );
     let frame = read_frame(&mut s);
-    assert_eq!(frame["error"]["kind"], "read-only", "{frame}");
+    assert_eq!(frame["ok"]["write"]["nodes_created"], 1, "{frame}");
 
     // A second connection works while the first stays open.
     let mut s2 = hello(&socket);
@@ -172,7 +173,8 @@ fn writes_are_refused_typed_and_two_connections_read_concurrently() {
         }}),
     );
     let row = read_frame(&mut s2);
-    assert_eq!(row["row"]["values"][0], 2, "{row}");
+    // 2 seeded + the w7 node just created above.
+    assert_eq!(row["row"]["values"][0], 3, "{row}");
     let done = read_frame(&mut s2);
     assert_eq!(done["ok"]["rows"], 1);
 
@@ -345,5 +347,149 @@ fn a_slow_reader_does_not_starve_the_query_permits() {
         start.elapsed() < std::time::Duration::from_secs(10),
         "the permit must release on the write timeout, not be held forever: {:?}",
         start.elapsed()
+    );
+}
+
+#[test]
+fn a_write_query_advances_the_workspace_and_reports_its_summary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    // A write over the socket: create a node, RETURN nothing.
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query",
+            "params": {"cypher": "CREATE (:Doc {id: 'new1'})"}}),
+    );
+    let ok = read_frame(&mut s);
+    assert_eq!(ok["ok"]["write"]["nodes_created"], 1, "write summary: {ok}");
+
+    // A fresh connection sees the committed workspace advance (MVCC +
+    // the write path advanced the workspace ref).
+    let mut s2 = hello(&socket);
+    write_frame(
+        &mut s2,
+        &serde_json::json!({"id": 2, "verb": "query",
+            "params": {"cypher": "MATCH (d:Doc {id: 'new1'}) RETURN d.id"}}),
+    );
+    let row = read_frame(&mut s2);
+    assert_eq!(
+        row["row"]["values"][0], "new1",
+        "the write is visible: {row}"
+    );
+    let done = read_frame(&mut s2);
+    assert_eq!(done["ok"]["rows"], 1);
+}
+
+#[test]
+fn a_write_that_returns_rows_streams_them_then_the_write_summary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query",
+            "params": {"cypher": "CREATE (d:Doc {id: 'r1'}) RETURN d.id"}}),
+    );
+    let row = read_frame(&mut s);
+    assert_eq!(row["row"]["values"][0], "r1", "the RETURN row: {row}");
+    let ok = read_frame(&mut s);
+    assert_eq!(
+        ok["ok"]["write"]["nodes_created"], 1,
+        "then the summary: {ok}"
+    );
+}
+
+/// Concurrent writes do not deadlock and do not both win (PR #261 review):
+/// the query permit is always acquired before the fail-fast writer lock,
+/// so no hold-and-wait cycle forms — one write commits, the other returns
+/// a typed `graph` (locked) error, both terminate.
+#[test]
+fn concurrent_writes_do_not_deadlock() {
+    use std::sync::mpsc;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    // Two permits so both handlers run at once and genuinely contend the
+    // lock (with one permit they'd serialise at the permit instead).
+    let _daemon = start_daemon_args(&repo, &socket, &["--max-concurrent", "2"]);
+
+    let (tx, rx) = mpsc::channel();
+    let mut handles = Vec::new();
+    for i in 0..2 {
+        let socket = socket.clone();
+        let tx = tx.clone();
+        handles.push(std::thread::spawn(move || {
+            let mut s = hello(&socket);
+            write_frame(
+                &mut s,
+                &serde_json::json!({"id": i, "verb": "query",
+                    "params": {"cypher": format!("CREATE (:Doc {{id: 'c{i}'}})")}}),
+            );
+            tx.send(read_frame(&mut s)).expect("send");
+        }));
+    }
+    drop(tx);
+    let frames: Vec<serde_json::Value> = rx.iter().collect();
+    for h in handles {
+        h.join().expect("join");
+    }
+    // Both terminated (no hang). Exactly the losers, if any, are typed
+    // `graph` (locked) errors; at least one succeeded.
+    assert_eq!(frames.len(), 2, "both writes must terminate");
+    let wins = frames.iter().filter(|f| f.get("ok").is_some()).count();
+    let locked = frames
+        .iter()
+        .filter(|f| f["error"]["kind"] == "graph")
+        .count();
+    assert!(wins >= 1, "at least one write commits: {frames:?}");
+    assert_eq!(
+        wins + locked,
+        2,
+        "losers are typed graph errors: {frames:?}"
+    );
+}
+
+/// A stale writer lock (a SIGKILLed writer's leftover) is a typed `graph`
+/// error with a manual-recovery hint, not a hang — and the daemon keeps
+/// serving reads (PR #261 review: this became load-bearing when writes
+/// shipped without the ADR-0074 §8 recovery).
+#[test]
+fn a_stale_writer_lock_is_a_typed_error_not_a_hang() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    // Plant a stale lock in the repo's git dir, as a SIGKILLed writer
+    // would leave. The repo dir is the git dir for a bare init.
+    let lock = repo.join("acetone-writer.lock");
+    std::fs::write(&lock, "pid=999999 unix-time=1\n").expect("plant lock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query",
+            "params": {"cypher": "CREATE (:Doc {id: 'x'})"}}),
+    );
+    let frame = read_frame(&mut s);
+    assert_eq!(
+        frame["error"]["kind"], "graph",
+        "typed locked error: {frame}"
+    );
+
+    // The daemon survives — a read on the same connection still works.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {"cypher": "RETURN 1 AS n"}}),
+    );
+    let row = read_frame(&mut s);
+    assert_eq!(
+        row["row"]["values"][0], 1,
+        "daemon still serves reads: {row}"
     );
 }
