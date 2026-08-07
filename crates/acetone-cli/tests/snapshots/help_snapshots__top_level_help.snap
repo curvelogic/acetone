@@ -25,6 +25,7 @@ Commands:
   import            Import a source file into the graph
   export            Export a graph version as per-label and per-type tables
   query             Run an openCypher read query against the graph [aliases: cypher]
+  serve             Serve this repository over a local unix socket (ADR-0074): the per-repository daemon. Unit-1 build: versioned hello + read queries with streamed rows; the socket is created mode 0600 and the kernel's ACL is the authentication
   shell             Start an interactive Cypher shell (readline REPL)
   fsck              Verify repository integrity
   gc                Consolidate the object store into a packfile

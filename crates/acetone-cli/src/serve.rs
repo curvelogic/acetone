@@ -1,0 +1,489 @@
+//! `acetone serve` — the per-repository daemon (ADR-0074, `acetone-pz0k`).
+//!
+//! Unit 1 walking skeleton: a `0600` unix domain socket speaking the
+//! length-prefixed JSON frame protocol — versioned hello, then the read
+//! `query` verb with streamed rows, the advisory channel, and typed
+//! terminal frames — under exactly the CLI's per-query budgets, bounded
+//! by `--max-concurrent`. Write verbs, streamed payloads and the
+//! stale-lock recovery of ADR-0074 §8 land in later units against this
+//! protocol unchanged.
+//!
+//! Security model (ADR-0074 §1): the socket IS the authentication — the
+//! kernel enforces `0600`; the daemon holds no auth code and trusts every
+//! connected peer, treating only their *data* as untrusted.
+
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result, bail};
+use serde_json::{Value as Json, json};
+
+use acetone_core::cypher::session::{Outcome, QueryError, Session};
+use acetone_core::graph::repo::Repository;
+
+/// Frames above this are refused at the framing layer, before any parse
+/// (ADR-0074 §2 — the import-bound precedent applied to the wire).
+const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
+
+/// The protocol major this build speaks (changes only by ADR).
+const PROTOCOL: u64 = 1;
+
+/// Cap on simultaneously-open connections (ADR-0074 §6, PR #259 review
+/// major 3): thread-per-connection with no cap let a peer exhaust threads
+/// and memory by opening sockets that send nothing. The host owns
+/// admission above this.
+const MAX_CONNECTIONS: usize = 256;
+
+/// Idle/stall IO timeout, in seconds, for both read and write on a
+/// connection: a peer that opens a socket and does not speak (no hello,
+/// a truncated frame) or that sends a query and stops READING its result
+/// (starving a query permit) must not park a thread forever (PR #259
+/// review majors 2/4 + M2). Overridable via `ACETONE_SERVE_IO_TIMEOUT_SECS`
+/// so tests can exercise the release deterministically without waiting the
+/// production default.
+fn io_timeout() -> std::time::Duration {
+    let secs = std::env::var("ACETONE_SERVE_IO_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(30);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Per-query result-row ceiling for the daemon — well below the library
+/// default (1,000,000) because the daemon materialises the whole result
+/// and its peak is summed across `--max-concurrent` (ADR-0074 §6).
+const DAEMON_MAX_RESULT_ROWS: u64 = 100_000;
+
+pub fn serve(
+    repo_path: &Path,
+    socket: &Path,
+    max_concurrent: usize,
+    timeout_secs: u64,
+) -> Result<()> {
+    if max_concurrent == 0 {
+        bail!("--max-concurrent must be at least 1");
+    }
+    // Validate the repository before binding, so a bad --repo fails
+    // fast. Each connection then opens its OWN Repository handle —
+    // gitoxide's internals are not Send, and per-connection handles are
+    // the honest model anyway: concurrent connections behave exactly
+    // like concurrent CLI processes (unlimited MVCC readers, one writer
+    // via the existing lock).
+    drop(Repository::open(repo_path).context("opening repository")?);
+    let repo_path = repo_path.to_path_buf();
+
+    // Reclaim a stale socket: if the path exists but nothing accepts on
+    // it (a crashed daemon's leftover — the ADR §8 crash-loop, arriving
+    // via §7), unlink and rebind. A LIVE daemon is refused, so two never
+    // serve one path (PR #259 review major 5). The host owns the socket
+    // path (ADR-0074 §7), so a *non-socket* file there is the host's
+    // mistake to make; reclaim still refuses to remove one that another
+    // process is serving, and only unlinks a genuinely dead endpoint.
+    if socket.exists() {
+        match UnixStream::connect(socket) {
+            Ok(_) => bail!(
+                "socket path {} is already served by a live daemon",
+                socket.display()
+            ),
+            Err(_) => std::fs::remove_file(socket)
+                .with_context(|| format!("removing the stale socket {}", socket.display()))?,
+        }
+    }
+
+    // Bind inside a private 0700 staging directory, then atomically
+    // rename the socket into place — so the socket is NEVER
+    // world-connectable, closing the bind→chmod TOCTOU in which the
+    // kernel ACL (the daemon's ONLY authentication, ADR-0074 §1) does not
+    // yet hold, INCLUDING on the staging path (PR #259 review major 1 and
+    // its residual): the staging dir's 0700 makes the socket unreachable
+    // from the instant of bind, whatever the umask, with no FFI.
+    // `rename` within a filesystem is atomic, and the daemon has not
+    // begun accepting, so no peer can connect to the temp path either.
+    let staging_dir = socket.with_extension(format!("staging.{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    std::fs::create_dir(&staging_dir)
+        .with_context(|| format!("creating the staging dir {}", staging_dir.display()))?;
+    std::fs::set_permissions(&staging_dir, std::fs::Permissions::from_mode(0o700))
+        .context("restricting the staging dir to 0700")?;
+    let staging = staging_dir.join("s");
+    let listener =
+        UnixListener::bind(&staging).with_context(|| format!("binding {}", staging.display()))?;
+    // Belt-and-braces on the socket itself, before it leaves the 0700 dir.
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600))
+        .context("restricting the socket to 0600")?;
+    let published = std::fs::rename(&staging, socket);
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    published.with_context(|| format!("publishing the socket at {}", socket.display()))?;
+    let _guard = SocketGuard(socket.to_path_buf());
+
+    // Readiness handshake: exactly one line on stdout (ADR-0074 §7).
+    println!(
+        "{}",
+        json!({"ready": true, "pid": std::process::id(), "protocol": PROTOCOL})
+    );
+    std::io::stdout().flush().ok();
+
+    // `--max-concurrent` bounds simultaneous query EXECUTION (summed
+    // per-query budgets in one address space, ADR-0074 §6);
+    // `MAX_CONNECTIONS` separately bounds open connections so an idle
+    // peer cannot exhaust threads (PR #259 review majors 2/3).
+    let query_permits = Arc::new(Semaphore::new(max_concurrent));
+    let conn_permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(s) => s,
+            // EMFILE and friends: at the fd limit. Back off rather than
+            // spin, and never die on a transient accept error.
+            Err(e) => {
+                eprintln!("accept error: {e}");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
+        };
+        // Refuse politely at the connection cap rather than spawning an
+        // unbounded thread; the permit lives for the whole handler.
+        let Some(conn_permit) = conn_permits.try_acquire() else {
+            let _ = write_frame(
+                &mut stream,
+                &json!({"error": {
+                    "kind": "busy",
+                    "message": "the daemon is at its connection limit; retry",
+                }}),
+            );
+            continue;
+        };
+        let query_permits = Arc::clone(&query_permits);
+        let repo_path = repo_path.clone();
+        // A spawn failure must not unwind the accept loop: drop the
+        // permit (by not moving it in) and keep serving.
+        let spawned = std::thread::Builder::new().spawn(move || {
+            let _conn_permit = conn_permit; // released when the handler ends
+            // A peer that never speaks — or that sends a query and then
+            // stops READING its large result — must not park this thread,
+            // and with it a query permit, forever (PR #259 review M2 +
+            // re-review): symmetric read AND write timeouts. The write
+            // timeout is the half that stops the slow-reader permit
+            // starvation, since result frames go out under the query
+            // permit.
+            let timeout = io_timeout();
+            let deadlines = stream
+                .set_read_timeout(Some(timeout))
+                .and(stream.set_write_timeout(Some(timeout)));
+            if deadlines.is_err() {
+                let _ = write_frame(
+                    &mut stream,
+                    &json!({"error": {"kind": "internal", "message": "socket setup failed"}}),
+                );
+                return;
+            }
+            let repo = match Repository::open(&repo_path) {
+                Ok(r) => r,
+                Err(e) => {
+                    // Answer with a frame, never a bare EOF.
+                    let _ = write_frame(
+                        &mut stream,
+                        &json!({"error": {
+                            "kind": "internal",
+                            "message": format!("could not open repository: {e}"),
+                        }}),
+                    );
+                    return;
+                }
+            };
+            if let Err(e) = connection(stream, &repo, &query_permits, timeout_secs) {
+                // A broken/idle peer is routine, not a daemon error.
+                eprintln!("connection ended: {e:#}");
+            }
+        });
+        if spawned.is_err() {
+            eprintln!("could not spawn a connection handler; backing off");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    Ok(())
+}
+
+/// Best-effort unlink on shutdown paths that drop the listener.
+struct SocketGuard(PathBuf);
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn connection(
+    mut stream: UnixStream,
+    repo: &Repository,
+    permits: &Semaphore,
+    timeout_secs: u64,
+) -> Result<()> {
+    // Hello, both ways (ADR-0074 §3). The daemon speaks first so a
+    // client can fail fast on a protocol mismatch without composing one.
+    write_frame(
+        &mut stream,
+        &json!({"acetone": {"protocol": PROTOCOL, "version": env!("CARGO_PKG_VERSION")}}),
+    )?;
+    let hello = read_frame(&mut stream)?.context("peer closed before hello")?;
+    let peer_protocol = hello
+        .pointer("/acetone/protocol")
+        .and_then(Json::as_u64)
+        .unwrap_or(0);
+    if peer_protocol != PROTOCOL {
+        write_frame(
+            &mut stream,
+            &json!({"error": {
+                "kind": "protocol-mismatch",
+                "message": format!("this daemon speaks protocol {PROTOCOL}"),
+            }}),
+        )?;
+        return Ok(());
+    }
+
+    // Request loop: one request at a time per connection (a client wanting
+    // parallelism opens connections; admission is the host's business).
+    while let Some(request) = read_frame(&mut stream)? {
+        let id = request.get("id").cloned().unwrap_or(Json::Null);
+        let verb = request.get("verb").and_then(Json::as_str).unwrap_or("");
+        match verb {
+            "query" => {
+                let _permit = permits.acquire();
+                run_query(&mut stream, repo, &request, &id, timeout_secs)?;
+            }
+            // When the payload verbs land here (`import`, `schema-apply`,
+            // `export`), their bytes travel as `chunk` frames — NO PATHS
+            // OVER THE WIRE (ADR-0074 §4): a path param would let any
+            // socket peer read anything the daemon's uid can.
+            other => {
+                write_frame(
+                    &mut stream,
+                    &json!({"id": id, "error": {
+                        "kind": "unknown-verb",
+                        "message": format!(
+                            "verb {other:?} is not served (unit 1 serves \"query\")"
+                        ),
+                    }}),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_query(
+    stream: &mut UnixStream,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+    timeout_secs: u64,
+) -> Result<()> {
+    let Some(cypher) = request.pointer("/params/cypher").and_then(Json::as_str) else {
+        return write_frame(
+            stream,
+            &json!({"id": id, "error": {
+                "kind": "bad-request",
+                "message": "query needs params.cypher (a string)",
+            }}),
+        );
+    };
+    // Unit 1 is read-only: refuse writes BEFORE execution — parse and
+    // inspect, never run-then-apologise (write verbs are a later unit,
+    // with the ADR-0074 §8 lock-recovery work they need).
+    match acetone_core::cypher::parse(cypher) {
+        Ok(parsed) if parsed.clauses.iter().any(|c| c.is_write()) => {
+            return write_frame(
+                stream,
+                &json!({"id": id, "error": {
+                    "kind": "read-only",
+                    "message": "this daemon build serves read queries only \
+                                (write verbs arrive in a later unit)",
+                }}),
+            );
+        }
+        _ => {} // parse errors surface identically through the session below
+    }
+    let session = Session::new(repo);
+    // A daemon materialises the whole result before streaming it, and a
+    // long-lived process does not hand back the peak the way
+    // process-per-command does; at `--max-concurrent` the worst case is
+    // that peak SUMMED. So the daemon caps result rows well below the
+    // library default (1,000,000) — the honest per-query memory ceiling
+    // named in ADR-0074 §6 (PR #259 review, final note).
+    let limits =
+        crate::query::cli_limits(timeout_secs).with_max_result_rows(DAEMON_MAX_RESULT_ROWS);
+    let outcome = session.run_with(cypher, &BTreeMap::new(), &limits);
+    match outcome {
+        Ok(Outcome::Write(_)) => write_frame(
+            stream,
+            // Unreachable given the pre-check; kept as a backstop.
+            &json!({"id": id, "error": {
+                "kind": "read-only",
+                "message": "write outcomes are not served",
+            }}),
+        ),
+        Ok(Outcome::Read(result)) => {
+            for row in &result.rows {
+                let values: Vec<Json> = row
+                    .iter()
+                    .map(|v| {
+                        serde_json::from_str(&crate::query::json_value(v)).unwrap_or(Json::Null)
+                    })
+                    .collect();
+                // An over-cap RESULT frame must not leave the client on a
+                // bare EOF (PR #259 review major 7): convert the framing
+                // refusal into a typed terminal error so the contract's
+                // "exactly one ok/error" holds.
+                let frame = json!({"id": id, "row": {
+                    "columns": result.columns, "values": values,
+                }});
+                if let Err(e) = write_frame(stream, &frame) {
+                    return write_frame(
+                        stream,
+                        &json!({"id": id, "error": {
+                            "kind": "result-too-large",
+                            "message": format!("a result row exceeds the wire frame cap: {e}"),
+                        }}),
+                    );
+                }
+            }
+            for advisory in &result.advisories {
+                write_frame(stream, &json!({"id": id, "advisory": advisory}))?;
+            }
+            write_frame(
+                stream,
+                &json!({"id": id, "ok": {"rows": result.rows.len()}}),
+            )
+        }
+        // Typed error kinds mapped from the QueryError variant, with the
+        // CLI's span-aware rendering (PR #259 review major 6) — the daemon
+        // is the interface that succeeds `--json`, so a client must be
+        // able to distinguish a syntax error from a resource refusal.
+        Err(e) => {
+            let kind = match &e {
+                QueryError::Parse(_) => "parse",
+                QueryError::Bind(_) => "bind",
+                QueryError::Exec(_) => "exec",
+                QueryError::Persist(_) => "persist",
+                QueryError::Graph(_) => "graph",
+                QueryError::WriteAtVersion => "write-at-version",
+            };
+            write_frame(
+                stream,
+                &json!({"id": id, "error": {
+                    "kind": kind,
+                    "message": e.render(cypher),
+                }}),
+            )
+        }
+    }
+}
+
+// --- framing (ADR-0074 §2) --------------------------------------------------
+
+fn write_frame(stream: &mut UnixStream, value: &Json) -> Result<()> {
+    let bytes = serde_json::to_vec(value)?;
+    let len = u32::try_from(bytes.len())
+        .ok()
+        .filter(|l| *l <= MAX_FRAME_BYTES);
+    let Some(len) = len else {
+        bail!("refusing to send a frame over the {MAX_FRAME_BYTES}-byte cap");
+    };
+    stream.write_all(&len.to_be_bytes())?;
+    stream.write_all(&bytes)?;
+    Ok(())
+}
+
+/// `Ok(None)` is a clean EOF between frames.
+fn read_frame(stream: &mut UnixStream) -> Result<Option<Json>> {
+    let mut len_bytes = [0u8; 4];
+    match stream.read_exact(&mut len_bytes) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
+    let len = u32::from_be_bytes(len_bytes);
+    if len > MAX_FRAME_BYTES {
+        // Refused BEFORE allocating or parsing (ADR-0074 §2): a 4-byte
+        // header cannot commit up to 16 MiB (review major 4).
+        bail!("peer sent a frame of {len} bytes, over the {MAX_FRAME_BYTES}-byte cap");
+    }
+    let mut buf = vec![0u8; len as usize];
+    // A read timeout fires as WouldBlock/TimedOut: a truncated or
+    // slow-loris body ends the connection rather than parking the thread
+    // (review majors 2/4).
+    stream.read_exact(&mut buf)?;
+    Ok(Some(
+        serde_json::from_slice(&buf).context("parsing frame JSON")?,
+    ))
+}
+
+// --- a minimal counting semaphore over std ----------------------------------
+//
+// Poison-robust: the guarded state is one integer, so a panic while it is
+// held cannot leave it inconsistent; recover the guard rather than
+// `.expect()`-ing, which under an unwinding `Drop` would double-panic to an
+// abort (PR #259 review minor).
+
+fn lock_count(m: &std::sync::Mutex<usize>) -> std::sync::MutexGuard<'_, usize> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+struct Semaphore {
+    count: std::sync::Mutex<usize>,
+    cv: std::sync::Condvar,
+}
+
+impl Semaphore {
+    fn new(permits: usize) -> Self {
+        Semaphore {
+            count: std::sync::Mutex::new(permits.max(1)),
+            cv: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Block for a permit borrowed for the caller's scope (the query
+    /// semaphore, used within one connection).
+    fn acquire(&self) -> Permit<'_> {
+        let mut count = lock_count(&self.count);
+        while *count == 0 {
+            count = self.cv.wait(count).unwrap_or_else(|e| e.into_inner());
+        }
+        *count -= 1;
+        Permit(self)
+    }
+
+    /// Non-blocking, `'static`-owned permit (the connection semaphore,
+    /// moved into a handler thread). `None` at the cap.
+    fn try_acquire(self: &Arc<Self>) -> Option<OwnedPermit> {
+        let mut count = lock_count(&self.count);
+        if *count == 0 {
+            return None;
+        }
+        *count -= 1;
+        Some(OwnedPermit(Arc::clone(self)))
+    }
+
+    fn release(&self) {
+        *lock_count(&self.count) += 1;
+        self.cv.notify_one();
+    }
+}
+
+struct Permit<'s>(&'s Semaphore);
+impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+struct OwnedPermit(Arc<Semaphore>);
+impl Drop for OwnedPermit {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}

@@ -46,7 +46,7 @@ impl Format {
 /// store-backed graph reaching one can take minutes of real time — the CLI is
 /// an interactive product surface, not a deterministic embedding, so it arms
 /// a time bound too. `0` disables it.
-fn cli_limits(timeout_secs: u64) -> QueryLimits {
+pub(crate) fn cli_limits(timeout_secs: u64) -> QueryLimits {
     QueryLimits::default()
         .with_wall_clock((timeout_secs > 0).then(|| std::time::Duration::from_secs(timeout_secs)))
 }
@@ -527,7 +527,7 @@ fn render_rel(rel: &RelValue) -> String {
 /// JSON rendering (a minimal, dependency-free serialiser). Nesting past
 /// [`MAX_RENDER_DEPTH`] is elided as the JSON string `"…"`, like the
 /// table/CSV renderer.
-fn json_value(value: &Value) -> String {
+pub(crate) fn json_value(value: &Value) -> String {
     json_value_at(value, 0)
 }
 

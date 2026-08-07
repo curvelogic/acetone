@@ -420,6 +420,22 @@ pub enum Command {
         #[arg(long)]
         autodeclare: bool,
     },
+    /// Serve this repository over a local unix socket (ADR-0074): the
+    /// per-repository daemon. Unit-1 build: versioned hello + read
+    /// queries with streamed rows; the socket is created mode 0600 and
+    /// the kernel's ACL is the authentication.
+    Serve {
+        /// Socket path to create (refused if it already exists).
+        #[arg(long)]
+        socket: PathBuf,
+        /// Maximum concurrently executing queries (per-query budgets
+        /// still apply to each; this bounds their sum).
+        #[arg(long, default_value_t = 4)]
+        max_concurrent: usize,
+        /// Per-query wall-clock budget in seconds (0 disables).
+        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        timeout: u64,
+    },
     /// Start an interactive Cypher shell (readline REPL).
     ///
     /// Enter queries — read or write — to run them against the current

@@ -154,6 +154,11 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
                 autodeclare,
             )
         }
+        Command::Serve {
+            socket,
+            max_concurrent,
+            timeout,
+        } => crate::serve::serve(repo_path, &socket, max_concurrent, timeout),
         Command::Shell { timeout } => crate::query::shell(repo_path, timeout),
         Command::Fsck => fsck(repo_path),
         Command::Gc => gc(repo_path),
