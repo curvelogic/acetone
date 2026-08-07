@@ -1,12 +1,14 @@
 //! `acetone serve` — the per-repository daemon (ADR-0074, `acetone-pz0k`).
 //!
-//! Unit 1 walking skeleton: a `0600` unix domain socket speaking the
-//! length-prefixed JSON frame protocol — versioned hello, then the read
-//! `query` verb with streamed rows, the advisory channel, and typed
-//! terminal frames — under exactly the CLI's per-query budgets, bounded
-//! by `--max-concurrent`. Write verbs, streamed payloads and the
-//! stale-lock recovery of ADR-0074 §8 land in later units against this
-//! protocol unchanged.
+//! A `0600` unix domain socket speaking the length-prefixed JSON frame
+//! protocol (ADR-0074) — versioned hello, then the `query` verb (read
+//! AND write) with streamed rows, the advisory channel, and typed
+//! terminal frames (a write's terminal `ok` carries its summary counts)
+//! — under exactly the CLI's per-query budgets, bounded by
+//! `--max-concurrent`. Writes serialise on the existing single-writer
+//! lock, as concurrent CLI processes do. Streamed payload verbs
+//! (`import`/`schema-apply`/`export`) and the stale-writer-lock recovery
+//! of ADR-0074 §8 land in later units against this protocol unchanged.
 //!
 //! Security model (ADR-0074 §1): the socket IS the authentication — the
 //! kernel enforces `0600`; the daemon holds no auth code and trusts every
@@ -265,7 +267,8 @@ fn connection(
                     &json!({"id": id, "error": {
                         "kind": "unknown-verb",
                         "message": format!(
-                            "verb {other:?} is not served (unit 1 serves \"query\")"
+                            "verb {other:?} is not served (this build serves \"query\", \
+                             read and write)"
                         ),
                     }}),
                 )?;
@@ -291,22 +294,14 @@ fn run_query(
             }}),
         );
     };
-    // Unit 1 is read-only: refuse writes BEFORE execution — parse and
-    // inspect, never run-then-apologise (write verbs are a later unit,
-    // with the ADR-0074 §8 lock-recovery work they need).
-    match acetone_core::cypher::parse(cypher) {
-        Ok(parsed) if parsed.clauses.iter().any(|c| c.is_write()) => {
-            return write_frame(
-                stream,
-                &json!({"id": id, "error": {
-                    "kind": "read-only",
-                    "message": "this daemon build serves read queries only \
-                                (write verbs arrive in a later unit)",
-                }}),
-            );
-        }
-        _ => {} // parse errors surface identically through the session below
-    }
+    // Writes are served (acetone-pz0k.2): `run_with` dispatches read vs
+    // write and a write serialises on the existing single-writer lock —
+    // concurrent daemon connections behave exactly like concurrent CLI
+    // processes. The one still-deferred hazard is a SIGKILLed daemon
+    // leaving a held lock; that is the pre-existing manual-recovery
+    // situation the CLI already has, and its automatic recovery is
+    // ADR-0074 §8's own later unit, not a prerequisite for serving
+    // writes here.
     let session = Session::new(repo);
     // A daemon materialises the whole result before streaming it, and a
     // long-lived process does not hand back the peak the way
@@ -318,15 +313,12 @@ fn run_query(
         crate::query::cli_limits(timeout_secs).with_max_result_rows(DAEMON_MAX_RESULT_ROWS);
     let outcome = session.run_with(cypher, &BTreeMap::new(), &limits);
     match outcome {
-        Ok(Outcome::Write(_)) => write_frame(
-            stream,
-            // Unreachable given the pre-check; kept as a backstop.
-            &json!({"id": id, "error": {
-                "kind": "read-only",
-                "message": "write outcomes are not served",
-            }}),
-        ),
-        Ok(Outcome::Read(result)) => {
+        // Both outcomes stream rows the same way (a write may RETURN);
+        // the terminal `ok` frame carries the write-summary counts for a
+        // write and just the row count for a read.
+        Ok(outcome) => {
+            let is_write = outcome.is_write();
+            let (Outcome::Read(result) | Outcome::Write(result)) = outcome;
             for row in &result.rows {
                 let values: Vec<Json> = row
                     .iter()
@@ -354,10 +346,20 @@ fn run_query(
             for advisory in &result.advisories {
                 write_frame(stream, &json!({"id": id, "advisory": advisory}))?;
             }
-            write_frame(
-                stream,
-                &json!({"id": id, "ok": {"rows": result.rows.len()}}),
-            )
+            let mut ok = json!({"rows": result.rows.len()});
+            if is_write {
+                let s = &result.stats;
+                ok["write"] = json!({
+                    "nodes_created": s.nodes_created,
+                    "relationships_created": s.relationships_created,
+                    "properties_set": s.properties_set,
+                    "labels_added": s.labels_added,
+                    "labels_removed": s.labels_removed,
+                    "nodes_deleted": s.nodes_deleted,
+                    "relationships_deleted": s.relationships_deleted,
+                });
+            }
+            write_frame(stream, &json!({"id": id, "ok": ok}))
         }
         // Typed error kinds mapped from the QueryError variant, with the
         // CLI's span-aware rendering (PR #259 review major 6) — the daemon

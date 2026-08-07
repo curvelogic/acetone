@@ -18,10 +18,12 @@ fine.)
 
 ### Added
 
-- **`acetone serve` (unit 1)** — the per-repository daemon over a local
-  `0600` unix domain socket (ADR-0074): versioned hello, length-prefixed
-  JSON frames with a 16 MiB cap, the read `query` verb with streamed
-  rows and the advisory channel, per-query budgets unchanged, and a
+- **`acetone serve`** — the per-repository daemon over a local `0600`
+  unix domain socket (ADR-0074): versioned hello, length-prefixed JSON
+  frames with a 16 MiB cap, the `query` verb (read and write — a
+  write's terminal frame carries its summary counts) with streamed
+  rows and the advisory channel, writes serialising on the existing
+  single-writer lock, per-query budgets unchanged, and a
   `--max-concurrent` bound (default 4) on their sum, a separate
   connection cap, read/write idle timeouts against slow/stalled peers,
   typed error kinds with span-aware rendering, and stale-socket reclaim
