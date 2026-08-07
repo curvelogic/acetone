@@ -5,8 +5,9 @@
 //! AND write) with streamed rows, the advisory channel, and typed
 //! terminal frames (a write's terminal `ok` carries its summary counts)
 //! — under exactly the CLI's per-query budgets, bounded by
-//! `--max-concurrent`. Writes serialise on the existing single-writer
-//! lock, as concurrent CLI processes do. Streamed payload verbs
+//! `--max-concurrent`. One writer wins the single-writer lock; a
+//! concurrent write returns a typed `graph` (locked) error to retry,
+//! exactly as two concurrent CLI processes would. Streamed payload verbs
 //! (`import`/`schema-apply`/`export`) and the stale-writer-lock recovery
 //! of ADR-0074 §8 land in later units against this protocol unchanged.
 //!
@@ -295,9 +296,10 @@ fn run_query(
         );
     };
     // Writes are served (acetone-pz0k.2): `run_with` dispatches read vs
-    // write and a write serialises on the existing single-writer lock —
-    // concurrent daemon connections behave exactly like concurrent CLI
-    // processes. The one still-deferred hazard is a SIGKILLed daemon
+    // write. The single-writer lock is fail-fast (O_EXCL, never blocks),
+    // so a concurrent write does NOT queue — one wins, the other returns
+    // a typed `graph` (locked) error to retry, exactly as two concurrent
+    // CLI processes would. The one still-deferred hazard is a SIGKILLed daemon
     // leaving a held lock; that is the pre-existing manual-recovery
     // situation the CLI already has, and its automatic recovery is
     // ADR-0074 §8's own later unit, not a prerequisite for serving
