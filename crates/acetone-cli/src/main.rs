@@ -9,6 +9,7 @@ mod import;
 mod json;
 mod output;
 mod query;
+mod serve;
 mod value;
 
 use clap::Parser;

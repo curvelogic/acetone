@@ -16,6 +16,18 @@ fine.)
 
 ## [Unreleased]
 
+### Added
+
+- **`acetone serve` (unit 1)** — the per-repository daemon over a local
+  `0600` unix domain socket (ADR-0074): versioned hello, length-prefixed
+  JSON frames with a 16 MiB cap, the read `query` verb with streamed
+  rows and the advisory channel, per-query budgets unchanged, and a
+  `--max-concurrent` bound (default 4) on their sum, a separate
+  connection cap, read/write idle timeouts against slow/stalled peers,
+  typed error kinds with span-aware rendering, and stale-socket reclaim
+  so a host restart after a crash rebinds cleanly. Read-only in this
+  build: writes are refused before execution with a typed error.
+
 ### Fixed
 
 - **fsck of a co-tenant graph now scopes to that graph's namespace**
