@@ -403,6 +403,7 @@ impl Repository {
             store: &self.store,
             manifest: self.workspace_manifest()?,
             merge_head_ref: self.namespace.merge_head_ref().to_owned(),
+            legacy_merge_head_ref: self.namespace.legacy_merge_head_ref().map(str::to_owned),
         })
     }
 
@@ -727,6 +728,7 @@ impl Repository {
             store: &self.store,
             manifest: read_manifest_chunk(&self.store, &manifest_hash)?,
             merge_head_ref: self.namespace.merge_head_ref().to_owned(),
+            legacy_merge_head_ref: self.namespace.legacy_merge_head_ref().map(str::to_owned),
         })
     }
 
@@ -3106,9 +3108,10 @@ pub(crate) fn summarise(store: &GitStore, manifest: &Manifest) -> Result<String,
     let snapshot = Snapshot {
         store,
         manifest: manifest.clone(),
-        // `summarise` never calls `merge_in_progress`; the global name is
-        // an unused placeholder here.
+        // `summarise` never calls `merge_in_progress`; these are unused
+        // placeholders here.
         merge_head_ref: WORKTREE_MERGE_HEAD_REF.to_owned(),
+        legacy_merge_head_ref: None,
     };
     let nodes = snapshot.count(&manifest.nodes)?;
     let edges = snapshot.count(&manifest.edges_fwd)?;
@@ -3126,14 +3129,20 @@ pub(crate) fn summarise(store: &GitStore, manifest: &Manifest) -> Result<String,
 pub struct Snapshot<'s> {
     store: &'s GitStore,
     manifest: Manifest,
-    /// This graph's per-worktree merge-head ref (acetone-j6ui) — the
-    /// backstop clause of [`Self::merge_in_progress`] reads it. The
-    /// primary signal there is `manifest.conflicts`, which is
-    /// namespace-independent and set for every real in-progress merge, so
-    /// this only needs the graph's own name (no legacy fallback): the
-    /// repo-less constructors that never call `merge_in_progress`
-    /// (`summarise`, fsck's `new`) pass the standalone global name.
+    /// This graph's per-worktree merge-head ref, and — for a co-tenant
+    /// graph whose merge began before the per-graph split — the pre-split
+    /// shared name it may still be under (acetone-j6ui).
+    /// [`Self::merge_in_progress`] must read BOTH: `manifest.conflicts`
+    /// alone is NOT a sufficient signal, because resolving the last
+    /// conflict clears the map to `None` while the merge stays in progress
+    /// until the completion commit (`conflicts::clear_written`; the
+    /// soundness contract in `exec::store_source`, PR #228 blocker 1). So
+    /// the merge-head read is load-bearing, and it must fall back exactly
+    /// as [`Repository::merge_head`] does. The repo-less constructors that
+    /// never call `merge_in_progress` (`summarise`, fsck's `new`) pass the
+    /// standalone global name and `None`.
     merge_head_ref: String,
+    legacy_merge_head_ref: Option<String>,
 }
 
 impl<'s> Snapshot<'s> {
@@ -3148,6 +3157,7 @@ impl<'s> Snapshot<'s> {
             store,
             manifest,
             merge_head_ref: WORKTREE_MERGE_HEAD_REF.to_owned(),
+            legacy_merge_head_ref: None,
         }
     }
 
@@ -3189,12 +3199,24 @@ impl<'s> Snapshot<'s> {
     /// itself, so the state self-heals and costs only speed meanwhile. And it
     /// does not cache — one ref read per call, which is once per query today.
     pub fn merge_in_progress(&self) -> bool {
-        self.manifest.conflicts.is_some()
-            || self
-                .store
-                .read_ref(&self.merge_head_ref)
+        // `manifest.conflicts` is NOT sufficient alone: resolving the last
+        // conflict clears it to `None` while the merge stays in progress
+        // until the completion commit (PR #228 blocker 1). So read the
+        // merge-head — this graph's per-worktree ref, then the pre-split
+        // shared fallback a co-tenant merge begun before the split is
+        // still under (acetone-j6ui), exactly as `Repository::merge_head`.
+        let merge_head_set = |name: &str| {
+            self.store
+                .read_ref(name)
                 .map(|head| head.is_some())
                 .unwrap_or(true)
+        };
+        self.manifest.conflicts.is_some()
+            || merge_head_set(&self.merge_head_ref)
+            || self
+                .legacy_merge_head_ref
+                .as_deref()
+                .is_some_and(merge_head_set)
     }
 
     fn root(&self, map_root: &MapRoot) -> Result<Root, GraphError> {

@@ -51,9 +51,7 @@ use acetone_prolly::{BatchOp, ChunkFaultKind, apply_batch, empty, scan, verify_r
 use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore, StoreError};
 
 use crate::error::GraphError;
-use crate::repo::{
-    Repository, Snapshot, WORKSPACE_REF_PREFIX, WORKTREE_ANCHOR_PREFIX, WORKTREE_WORKSPACE_REF,
-};
+use crate::repo::{Repository, Snapshot, WORKSPACE_REF_PREFIX, WORKTREE_ANCHOR_PREFIX};
 use acetone_store::WorkspaceAnchors;
 
 /// How serious a [`Finding`] is.
@@ -354,7 +352,13 @@ pub fn check(repo: &Repository) -> Result<FsckReport, GraphError> {
     // code branches sharing the repository — reporting those as findings
     // is a bug even for a single co-tenant graph today.
     let ns = repo.namespace();
-    check_store(repo.store(), ns.branch_prefix(), ns.tag_prefix())
+    check_store(
+        repo.store(),
+        ns.branch_prefix(),
+        ns.tag_prefix(),
+        ns.workspace_ref(),
+        ns.legacy_workspace_ref(),
+    )
 }
 
 /// Verify the repository at `path` without first constructing a
@@ -373,7 +377,13 @@ pub fn check_path(path: &std::path::Path) -> Result<FsckReport, GraphError> {
     // scope is the safe direction for a diagnostic.
     let ns = crate::repo::detect_namespace(&store)
         .unwrap_or_else(|_| crate::refns::GraphRefNamespace::standalone());
-    check_store(&store, ns.branch_prefix(), ns.tag_prefix())
+    check_store(
+        &store,
+        ns.branch_prefix(),
+        ns.tag_prefix(),
+        ns.workspace_ref(),
+        ns.legacy_workspace_ref(),
+    )
 }
 
 /// The store-level fsck used by both [`check`] and [`check_path`]. It needs only
@@ -384,10 +394,18 @@ fn check_store(
     store: &GitStore,
     branch_prefix: &str,
     tag_prefix: &str,
+    workspace_ref: &str,
+    legacy_workspace_ref: Option<&str>,
 ) -> Result<FsckReport, GraphError> {
     let mut report = FsckReport::default();
     let mut verified = Verified::default();
-    check_workspaces(store, &mut verified, &mut report)?;
+    check_workspaces(
+        store,
+        workspace_ref,
+        legacy_workspace_ref,
+        &mut verified,
+        &mut report,
+    )?;
     check_commit_tips(store, branch_prefix, false, &mut verified, &mut report)?;
     check_commit_tips(store, tag_prefix, true, &mut verified, &mut report)?;
     Ok(report)
@@ -398,11 +416,18 @@ fn check_store(
 /// manifest directly.
 ///
 /// Post-ADR-0014 the current worktree's workspace is a single per-worktree
-/// ref (`refs/worktree/acetone/workspace`), checked by name; any legacy
-/// shared `refs/acetone/workspaces/*` refs (a not-yet-migrated repository)
-/// are still enumerated and checked.
+/// ref, checked by name — `workspace_ref` is the opened graph's own
+/// (`refs/worktree/acetone/workspace` standalone, or
+/// `refs/worktree/acetone/<graph>/workspace` co-tenant, acetone-j6ui).
+/// `legacy_workspace_ref` is the pre-split shared name a co-tenant graph
+/// may still hold uncommitted state under (`None` standalone); it is
+/// checked too, so a not-yet-migrated co-tenant workspace is verified.
+/// Any legacy shared `refs/acetone/workspaces/*` refs (a pre-ADR-0014
+/// repository) are still enumerated and checked.
 fn check_workspaces(
     store: &GitStore,
+    workspace_ref: &str,
+    legacy_workspace_ref: Option<&str>,
     verified: &mut Verified,
     report: &mut FsckReport,
 ) -> Result<(), GraphError> {
@@ -420,20 +445,26 @@ fn check_workspaces(
             report,
         );
     }
-    match store.read_ref(WORKTREE_WORKSPACE_REF) {
-        Ok(Some(hash)) => refs.push((WORKTREE_WORKSPACE_REF.to_owned(), hash)),
-        Ok(None) => {}
-        // A foreign tool can make even the per-worktree workspace ref
-        // symbolic; before acetone-5lo this aborted the whole fsck run.
-        Err(StoreError::SymbolicRef { .. }) => push_resolved_symref(
-            store,
-            WORKTREE_WORKSPACE_REF.to_owned(),
-            "(symbolic)",
-            FindingKind::Manifest,
-            &mut refs,
-            report,
-        ),
-        Err(err) => return Err(err.into()),
+    // The opened graph's own per-worktree workspace ref, and any pre-split
+    // shared ref a co-tenant graph still holds uncommitted state under
+    // (acetone-j6ui) — both must be verified, or a corrupt uncommitted
+    // co-tenant workspace goes unreported.
+    for name in std::iter::once(workspace_ref).chain(legacy_workspace_ref) {
+        match store.read_ref(name) {
+            Ok(Some(hash)) => refs.push((name.to_owned(), hash)),
+            Ok(None) => {}
+            // A foreign tool can make even the per-worktree workspace ref
+            // symbolic; before acetone-5lo this aborted the whole fsck run.
+            Err(StoreError::SymbolicRef { .. }) => push_resolved_symref(
+                store,
+                name.to_owned(),
+                "(symbolic)",
+                FindingKind::Manifest,
+                &mut refs,
+                report,
+            ),
+            Err(err) => return Err(err.into()),
+        }
     }
     // ADR-0044 durability anchors are workspace trees too, and they are
     // the only common-dir-visible record of OTHER worktrees' workspaces —
@@ -477,7 +508,7 @@ fn check_workspaces(
         let worktrees_dir = store.common_dir().join("worktrees");
         let live_sources = refs
             .iter()
-            .filter(|(reference, _)| reference == WORKTREE_WORKSPACE_REF)
+            .filter(|(reference, _)| reference == workspace_ref)
             .chain(anchor_refs.iter().filter(|(reference, _)| {
                 let id = reference
                     .strip_prefix(WORKTREE_ANCHOR_PREFIX)

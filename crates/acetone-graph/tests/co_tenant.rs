@@ -1041,3 +1041,107 @@ fn a_pre_split_co_tenant_workspace_survives_the_upgrade_and_migrates_on_write() 
         "the per-graph ref is authoritative"
     );
 }
+
+/// acetone-j6ui / PR #262 review Blocker 1. `merge_in_progress()` must see a
+/// merge-head left on the pre-split SHARED ref by a co-tenant merge begun
+/// before the per-graph split — `manifest.conflicts` alone is not a
+/// sufficient signal, because resolving the last conflict clears the map to
+/// `None` while the merge stays in progress until the completion commit
+/// (PR #228 blocker 1). Missing this silently re-trusts a declaration index
+/// mid-merge and can return short results.
+#[test]
+fn merge_in_progress_sees_a_legacy_shared_merge_head() {
+    let (project, _dir, _c, _b) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 2);
+    drop(graph);
+
+    // A merge begun before the split leaves MERGE_HEAD on the shared global
+    // ref; the workspace carries no conflicts map (all resolved, not yet
+    // committed — the exact window the bug hides in).
+    let head = git(&project, &["rev-parse", "refs/heads/acetone/g/main"]);
+    git(
+        &project,
+        &["update-ref", "refs/worktree/acetone/merge-head", &head],
+    );
+    // The per-graph merge-head is absent — so a namespace-only read misses it.
+    assert!(
+        ref_value(&project, "refs/worktree/acetone/g/merge-head").is_none(),
+        "precondition: no per-graph merge-head"
+    );
+
+    let reopened = Repository::open(&project).expect("reopen");
+    assert!(
+        reopened
+            .workspace_snapshot()
+            .expect("snapshot")
+            .merge_in_progress(),
+        "merge_in_progress must see the legacy shared merge-head"
+    );
+    // And the Repository-level reader agrees (it already had the fallback).
+    assert!(
+        reopened.merge_head().expect("merge_head").is_some(),
+        "merge_head must also find the legacy shared ref"
+    );
+}
+
+/// acetone-j6ui / PR #262 review Major 2. fsck must VERIFY a co-tenant
+/// graph's per-graph workspace ref — this PR moves the uncommitted
+/// workspace there, and the main-worktree case writes no durability anchor,
+/// so the per-graph ref is the workspace's only record. A corrupt
+/// uncommitted workspace must be reported, not skipped.
+#[test]
+fn fsck_verifies_the_per_graph_workspace_ref() {
+    use acetone_graph::fsck::{self, FindingKind};
+    let (project, _dir, _c, code_blob) = code_repo();
+    let graph =
+        Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init_co_tenant");
+    seed_graph(&graph, 2);
+    // Stage an UNCOMMITTED write so the per-graph workspace ref holds live
+    // uncommitted state.
+    let mut tx = graph.begin_write().expect("begin");
+    tx.put_node(
+        &node(42),
+        &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(42))])),
+    )
+    .expect("node");
+    tx.save().expect("save uncommitted");
+
+    // Sanity: a healthy per-graph workspace fscks clean of Manifest findings.
+    let clean = fsck::check(&graph).expect("fsck");
+    assert!(
+        !clean
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::Manifest),
+        "healthy per-graph workspace: no Manifest finding, got {:?}",
+        clean.findings
+    );
+
+    // Corrupt the per-graph workspace ref: point it at a blob that is not a
+    // workspace tree (the code blob). fsck must now report it.
+    git(
+        &project,
+        &[
+            "update-ref",
+            "refs/worktree/acetone/g/workspace",
+            &code_blob,
+        ],
+    );
+    let reopened = Repository::open(&project);
+    // `open` may itself fail to decode the corrupt workspace; fsck::check_path
+    // is the damaged-workspace entry, so drive fsck the way the runbook does.
+    let report = match &reopened {
+        Ok(repo) => fsck::check(repo).expect("fsck"),
+        Err(_) => fsck::check_path(&project).expect("fsck_path"),
+    };
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::Manifest),
+        "fsck must report the corrupt per-graph workspace ref, got {:?}",
+        report.findings
+    );
+}
