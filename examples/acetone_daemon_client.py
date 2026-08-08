@@ -47,13 +47,25 @@ class AcetoneClient:
         self._send_frame({"acetone": {"protocol": PROTOCOL}})
         self._next_id = 0
 
-    def query(self, cypher):
+    def query(self, cypher, autodeclare=False):
         """Run one openCypher query (read or write). Returns (columns, rows,
         summary): rows is a list of value-lists, summary is the terminal `ok`
-        payload (with a `write` object for a write). Raises on a typed error."""
+        payload (with a `write` object for a write). `autodeclare=True` opts a
+        write into relationship-type coinage. Raises on a typed error."""
+        params = {"cypher": cypher}
+        if autodeclare:
+            params["autodeclare"] = True
+        return self._request({"verb": "query", "params": params})
+
+    def status(self):
+        """The workspace state (branch, head, dirty, node/edge counts)."""
+        _, _, summary = self._request({"verb": "status"})
+        return summary
+
+    def _request(self, body):
         self._next_id += 1
         req_id = self._next_id
-        self._send_frame({"id": req_id, "verb": "query", "params": {"cypher": cypher}})
+        self._send_frame({"id": req_id, **body})
         columns, rows = None, []
         while True:
             frame = self._read_frame()
@@ -105,6 +117,18 @@ def main():
         # A read: the write is visible on the same live workspace.
         columns, rows, _ = client.query("MATCH (d:Demo) RETURN d.id")
         print("read:", columns, "->", rows)
+
+        # Coin: a CREATE naming an undeclared relationship type, with
+        # autodeclare, mints the type as it writes.
+        _, _, summary = client.query(
+            "MATCH (a:Demo {id: 'from-python'}) "
+            "CREATE (a)-[:`relates to`]->(:Demo {id: 'sibling'})",
+            autodeclare=True,
+        )
+        print("coined+wrote:", summary.get("write"))
+
+        # Inspect the workspace state.
+        print("status:", client.status())
     finally:
         client.close()
 
