@@ -1,6 +1,8 @@
-//! `acetone serve` unit-1 integration: a raw-socket client (no acetone
-//! client library — deliberately, per the phase criterion's non-Rust-
-//! client spirit) drives hello + read queries against a live daemon.
+//! `acetone serve` integration: a raw-socket client (no acetone client
+//! library — deliberately, per the phase criterion's non-Rust-client
+//! spirit) drives the daemon over a live socket — hello, read and write
+//! `query` (with autodeclare coinage), and the `status` verb — plus the
+//! shipped Python example as a genuine non-Rust client.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -546,9 +548,93 @@ fn a_non_rust_python_client_drives_a_full_session() {
         out.status.success(),
         "the non-Rust client failed:\nstdout: {stdout}\nstderr: {stderr}"
     );
-    // It wrote a node (the mutation counts came back) and read it back.
+    // It wrote a node, read it back, coined a relationship type, and read
+    // the workspace status — a query/coin/status session from outside Rust.
     assert!(
         stdout.contains("nodes_created") && stdout.contains("from-python"),
         "the client must write then read on the live workspace: {stdout}"
+    );
+    assert!(
+        stdout.contains("coined+wrote") && stdout.contains("relationships_created"),
+        "the client must coin a relationship type: {stdout}"
+    );
+    assert!(
+        stdout.contains("status:"),
+        "the client must read status: {stdout}"
+    );
+}
+
+#[test]
+fn the_status_verb_reports_workspace_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir); // 2 Doc nodes committed
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(&mut s, &serde_json::json!({"id": 1, "verb": "status"}));
+    let ok = read_frame(&mut s);
+    assert_eq!(ok["ok"]["nodes"], 2, "status reports node count: {ok}");
+    assert_eq!(ok["ok"]["edges"], 0, "{ok}");
+    assert!(ok["ok"]["branch"].is_string(), "branch present: {ok}");
+    // seeded_repo stages the nodes without committing, so the workspace is
+    // dirty and there is no head yet — status reports that faithfully.
+    assert_eq!(
+        ok["ok"]["dirty"], true,
+        "uncommitted workspace is dirty: {ok}"
+    );
+    assert!(ok["ok"]["head"].is_null(), "no commit yet: {ok}");
+
+    // After a write over the socket, a fresh status reflects the new count.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "CREATE (:Doc {id: 'd3'})"
+        }}),
+    );
+    let _ = read_frame(&mut s); // the write's terminal ok
+    write_frame(&mut s, &serde_json::json!({"id": 3, "verb": "status"}));
+    let ok = read_frame(&mut s);
+    assert_eq!(ok["ok"]["nodes"], 3, "status sees the socket write: {ok}");
+}
+
+#[test]
+fn a_write_coins_a_rel_type_only_with_autodeclare() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    // Without autodeclare, a CREATE naming an undeclared rel-type is refused.
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query", "params": {
+            "cypher": "MATCH (a:Doc {id:'d1'}),(b:Doc {id:'d2'}) CREATE (a)-[:`relates to`]->(b)"
+        }}),
+    );
+    let refused = read_frame(&mut s);
+    assert!(
+        refused.get("error").is_some(),
+        "undeclared rel-type must refuse: {refused}"
+    );
+
+    // With autodeclare, the same write coins the type and succeeds.
+    let mut s2 = hello(&socket);
+    write_frame(
+        &mut s2,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "MATCH (a:Doc {id:'d1'}),(b:Doc {id:'d2'}) CREATE (a)-[:`relates to`]->(b)",
+            "autodeclare": true
+        }}),
+    );
+    // Drain rows/advisories to the terminal frame.
+    let mut terminal = read_frame(&mut s2);
+    while terminal.get("ok").is_none() && terminal.get("error").is_none() {
+        terminal = read_frame(&mut s2);
+    }
+    assert_eq!(
+        terminal["ok"]["write"]["relationships_created"], 1,
+        "autodeclare coins and creates the edge: {terminal}"
     );
 }

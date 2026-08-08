@@ -21,15 +21,18 @@ fine.)
 - **`acetone serve`** — the per-repository daemon over a local `0600`
   unix domain socket (ADR-0074): versioned hello, length-prefixed JSON
   frames with a 16 MiB cap, the `query` verb (read and write — a
-  write's terminal frame carries its summary counts) with streamed
-  rows and the advisory channel, writes serialising on the existing
+  write's terminal frame carries its summary counts, and a write may
+  opt into relationship-type coinage with `params.autodeclare`) with
+  streamed rows and the advisory channel, a read-only `status` verb, and
+  the `CALL acetone.log/conflicts/diff/blame` procedures reachable
+  through `query`, writes serialising on the existing
   single-writer lock, per-query budgets unchanged, and a
   `--max-concurrent` bound (default 4) on their sum, a separate
   connection cap, read/write idle timeouts against slow/stalled peers,
   typed error kinds with span-aware rendering, and stale-socket reclaim
   so a host restart after a crash rebinds cleanly. A worked **non-Rust
   client** — `examples/acetone_daemon_client.py`, stdlib-only Python —
-  drives a full read/write session over the documented frame protocol,
+  drives a query/coin/status session over the documented frame protocol,
   showing the daemon needs no acetone library to embed.
 - **Multiple co-tenant graphs in one repository** (acetone-j6ui): a
   repository can now host several acetone graphs alongside its code,

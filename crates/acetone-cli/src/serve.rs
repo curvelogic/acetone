@@ -3,8 +3,10 @@
 //! A `0600` unix domain socket speaking the length-prefixed JSON frame
 //! protocol (ADR-0074) — versioned hello, then the `query` verb (read
 //! AND write) with streamed rows, the advisory channel, and typed
-//! terminal frames (a write's terminal `ok` carries its summary counts)
-//! — under exactly the CLI's per-query budgets, bounded by
+//! terminal frames (a write's terminal `ok` carries its summary counts;
+//! a write may opt into relationship-type coinage via
+//! `params.autodeclare`), plus a read-only `status` verb — under exactly
+//! the CLI's per-query budgets, bounded by
 //! `--max-concurrent`. One writer wins the single-writer lock; a
 //! concurrent write returns a typed `graph` (locked) error to retry,
 //! exactly as two concurrent CLI processes would. Streamed payload verbs
@@ -258,6 +260,14 @@ fn connection(
                 let _permit = permits.acquire();
                 run_query(&mut stream, repo, &request, &id, timeout_secs)?;
             }
+            // A read-only snapshot of the workspace state (branch, head,
+            // dirty, counts) — the socket equivalent of `acetone status`
+            // (acetone-pz0k.4). Cheap; still takes a query permit so a burst
+            // of `status` cannot bypass the concurrency bound.
+            "status" => {
+                let _permit = permits.acquire();
+                run_status(&mut stream, repo, &id)?;
+            }
             // When the payload verbs land here (`import`, `schema-apply`,
             // `export`), their bytes travel as `chunk` frames — NO PATHS
             // OVER THE WIRE (ADR-0074 §4): a path param would let any
@@ -268,8 +278,8 @@ fn connection(
                     &json!({"id": id, "error": {
                         "kind": "unknown-verb",
                         "message": format!(
-                            "verb {other:?} is not served (this build serves \"query\", \
-                             read and write)"
+                            "verb {other:?} is not served (this build serves \"query\" \
+                             (read and write) and \"status\")"
                         ),
                     }}),
                 )?;
@@ -304,7 +314,15 @@ fn run_query(
     // situation the CLI already has, and its automatic recovery is
     // ADR-0074 §8's own later unit, not a prerequisite for serving
     // writes here.
-    let session = Session::new(repo);
+    // `params.autodeclare` (default false) opts a write into relationship-type
+    // coinage (ADR-0060), exactly as the CLI's `query --autodeclare` — so a
+    // non-Rust client can coin over the socket. It only affects writes; a read
+    // never coins.
+    let autodeclare = request
+        .pointer("/params/autodeclare")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    let session = Session::new(repo).autodeclare(autodeclare);
     // A daemon materialises the whole result before streaming it, and a
     // long-lived process does not hand back the peak the way
     // process-per-command does; at `--max-concurrent` the worst case is
@@ -384,6 +402,33 @@ fn run_query(
                 }}),
             )
         }
+    }
+}
+
+/// Serve the `status` verb: a read-only snapshot of the workspace state, as
+/// one terminal `ok` frame (acetone-pz0k.4). Read-only — takes no write lock.
+fn run_status(stream: &mut UnixStream, repo: &Repository, id: &Json) -> Result<()> {
+    let status = (|| -> Result<Json, acetone_core::graph::GraphError> {
+        let branch = repo.current_branch()?;
+        let head = repo.head_commit()?.map(|h| h.to_hex());
+        let dirty = repo.is_dirty()?;
+        let snapshot = repo.workspace_snapshot()?;
+        Ok(json!({
+            "branch": branch,
+            "head": head,
+            "dirty": dirty,
+            "nodes": snapshot.node_count()?,
+            "edges": snapshot.edge_count()?,
+        }))
+    })();
+    match status {
+        Ok(ok) => write_frame(stream, &json!({"id": id, "ok": ok})),
+        // A damaged/absent workspace is reported as a typed error, mirroring
+        // how the `query` verb maps engine errors.
+        Err(e) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "graph", "message": e.to_string()}}),
+        ),
     }
 }
 
