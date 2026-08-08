@@ -137,6 +137,12 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             new_key,
             message,
         } => rekey(repo_path, graph, &label, &old_key, &new_key, &message),
+        Command::RenameRelType {
+            old,
+            new,
+            merge,
+            message,
+        } => rename_rel_type(repo_path, graph, &old, &new, merge, &message),
         Command::Diff { from, to, json } => diff(repo_path, graph, &from, &to, json),
         Command::GetNode { label, key, json } => get_node(repo_path, graph, &label, &key, json),
         Command::PutEdge {
@@ -1662,6 +1668,33 @@ fn rekey(
         "rekeyed {} -> {} in {}",
         format_node_key(&old),
         format_node_key(&new),
+        commit.to_hex()
+    );
+    Ok(())
+}
+
+fn rename_rel_type(
+    repo_path: &Path,
+    graph: Option<&str>,
+    old: &str,
+    new: &str,
+    merge: bool,
+    message: &str,
+) -> Result<()> {
+    use acetone_core::graph::repo::RenamePolicy;
+    let repo = open(repo_path, graph)?;
+    let policy = if merge {
+        RenamePolicy::Merge
+    } else {
+        RenamePolicy::Refuse
+    };
+    let commit = repo
+        .rename_rel_type(old, new, policy, message)
+        .with_context(|| format!("renaming relationship type {old:?} to {new:?}"))?;
+    outln!(
+        "renamed relationship type {} -> {} in {}",
+        sanitise_identifier(old),
+        sanitise_identifier(new),
         commit.to_hex()
     );
     Ok(())

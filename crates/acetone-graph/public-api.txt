@@ -454,6 +454,8 @@ pub acetone_graph::error::GraphError::NoSuchGraph::name: alloc::string::String
 pub acetone_graph::error::GraphError::NoSuchNode
 pub acetone_graph::error::GraphError::NoSuchNode::key: alloc::string::String
 pub acetone_graph::error::GraphError::NoSuchNode::label: alloc::string::String
+pub acetone_graph::error::GraphError::NoSuchRelType
+pub acetone_graph::error::GraphError::NoSuchRelType::name: alloc::string::String
 pub acetone_graph::error::GraphError::NoSuchTag
 pub acetone_graph::error::GraphError::NoSuchTag::name: alloc::string::String
 pub acetone_graph::error::GraphError::NoWorkspace
@@ -474,6 +476,8 @@ pub acetone_graph::error::GraphError::RekeyConflict::key: alloc::string::String
 pub acetone_graph::error::GraphError::RekeyConflict::label: alloc::string::String
 pub acetone_graph::error::GraphError::RelDiscriminatorChanged
 pub acetone_graph::error::GraphError::RelDiscriminatorChanged::rtype: alloc::string::String
+pub acetone_graph::error::GraphError::RelTypeRenameConflict
+pub acetone_graph::error::GraphError::RelTypeRenameConflict::reason: alloc::string::String
 pub acetone_graph::error::GraphError::Schema(acetone_model::schema::SchemaError)
 pub acetone_graph::error::GraphError::Store(acetone_store::error::StoreError)
 pub acetone_graph::error::GraphError::TagExists
@@ -1715,6 +1719,53 @@ pub fn acetone_graph::refns::GraphRefNamespace::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_graph::refns::GraphRefNamespace
 pub type acetone_graph::refns::GraphRefNamespace::Output = T
 pub mod acetone_graph::repo
+pub enum acetone_graph::repo::RenamePolicy
+pub acetone_graph::repo::RenamePolicy::Merge
+pub acetone_graph::repo::RenamePolicy::Refuse
+impl core::clone::Clone for acetone_graph::repo::RenamePolicy
+pub fn acetone_graph::repo::RenamePolicy::clone(&self) -> acetone_graph::repo::RenamePolicy
+impl core::cmp::Eq for acetone_graph::repo::RenamePolicy
+impl core::cmp::PartialEq for acetone_graph::repo::RenamePolicy
+pub fn acetone_graph::repo::RenamePolicy::eq(&self, &acetone_graph::repo::RenamePolicy) -> bool
+impl core::fmt::Debug for acetone_graph::repo::RenamePolicy
+pub fn acetone_graph::repo::RenamePolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for acetone_graph::repo::RenamePolicy
+impl core::marker::StructuralPartialEq for acetone_graph::repo::RenamePolicy
+impl core::marker::Freeze for acetone_graph::repo::RenamePolicy
+impl core::marker::Send for acetone_graph::repo::RenamePolicy
+impl core::marker::Sync for acetone_graph::repo::RenamePolicy
+impl core::marker::Unpin for acetone_graph::repo::RenamePolicy
+impl core::marker::UnsafeUnpin for acetone_graph::repo::RenamePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_graph::repo::RenamePolicy
+impl core::panic::unwind_safe::UnwindSafe for acetone_graph::repo::RenamePolicy
+impl<Q, K> equivalent::Equivalent<K> for acetone_graph::repo::RenamePolicy where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_graph::repo::RenamePolicy::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_graph::repo::RenamePolicy where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_graph::repo::RenamePolicy::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_graph::repo::RenamePolicy where U: core::convert::From<T>
+pub fn acetone_graph::repo::RenamePolicy::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_graph::repo::RenamePolicy where U: core::convert::Into<T>
+pub type acetone_graph::repo::RenamePolicy::Error = core::convert::Infallible
+pub fn acetone_graph::repo::RenamePolicy::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_graph::repo::RenamePolicy where U: core::convert::TryFrom<T>
+pub type acetone_graph::repo::RenamePolicy::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_graph::repo::RenamePolicy::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_graph::repo::RenamePolicy where T: core::clone::Clone
+pub type acetone_graph::repo::RenamePolicy::Owned = T
+pub fn acetone_graph::repo::RenamePolicy::clone_into(&self, &mut T)
+pub fn acetone_graph::repo::RenamePolicy::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_graph::repo::RenamePolicy where T: 'static + ?core::marker::Sized
+pub fn acetone_graph::repo::RenamePolicy::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_graph::repo::RenamePolicy where T: ?core::marker::Sized
+pub fn acetone_graph::repo::RenamePolicy::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_graph::repo::RenamePolicy where T: ?core::marker::Sized
+pub fn acetone_graph::repo::RenamePolicy::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_graph::repo::RenamePolicy where T: core::clone::Clone
+pub unsafe fn acetone_graph::repo::RenamePolicy::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_graph::repo::RenamePolicy
+pub fn acetone_graph::repo::RenamePolicy::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_graph::repo::RenamePolicy
+pub type acetone_graph::repo::RenamePolicy::Output = T
 pub enum acetone_graph::repo::ResolveSide
 pub acetone_graph::repo::ResolveSide::Ours
 pub acetone_graph::repo::ResolveSide::Theirs
@@ -1872,6 +1923,7 @@ pub fn acetone_graph::repo::Repository::open(&std::path::Path) -> core::result::
 pub fn acetone_graph::repo::Repository::open_graph(&std::path::Path, &str) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reindex(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::rekey(&self, &acetone_model::graph_keys::NodeKey, &acetone_model::graph_keys::NodeKey, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::rename_rel_type(&self, &str, &str, acetone_graph::repo::RenamePolicy, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reset_workspace_to_head(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::resolve_all(&self, acetone_graph::repo::ResolveSide) -> core::result::Result<usize, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::resolve_commit(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
@@ -2124,6 +2176,8 @@ pub acetone_graph::GraphError::NoSuchGraph::name: alloc::string::String
 pub acetone_graph::GraphError::NoSuchNode
 pub acetone_graph::GraphError::NoSuchNode::key: alloc::string::String
 pub acetone_graph::GraphError::NoSuchNode::label: alloc::string::String
+pub acetone_graph::GraphError::NoSuchRelType
+pub acetone_graph::GraphError::NoSuchRelType::name: alloc::string::String
 pub acetone_graph::GraphError::NoSuchTag
 pub acetone_graph::GraphError::NoSuchTag::name: alloc::string::String
 pub acetone_graph::GraphError::NoWorkspace
@@ -2144,6 +2198,8 @@ pub acetone_graph::GraphError::RekeyConflict::key: alloc::string::String
 pub acetone_graph::GraphError::RekeyConflict::label: alloc::string::String
 pub acetone_graph::GraphError::RelDiscriminatorChanged
 pub acetone_graph::GraphError::RelDiscriminatorChanged::rtype: alloc::string::String
+pub acetone_graph::GraphError::RelTypeRenameConflict
+pub acetone_graph::GraphError::RelTypeRenameConflict::reason: alloc::string::String
 pub acetone_graph::GraphError::Schema(acetone_model::schema::SchemaError)
 pub acetone_graph::GraphError::Store(acetone_store::error::StoreError)
 pub acetone_graph::GraphError::TagExists
@@ -3015,6 +3071,7 @@ pub fn acetone_graph::repo::Repository::open(&std::path::Path) -> core::result::
 pub fn acetone_graph::repo::Repository::open_graph(&std::path::Path, &str) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reindex(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::rekey(&self, &acetone_model::graph_keys::NodeKey, &acetone_model::graph_keys::NodeKey, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::rename_rel_type(&self, &str, &str, acetone_graph::repo::RenamePolicy, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reset_workspace_to_head(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::resolve_all(&self, acetone_graph::repo::ResolveSide) -> core::result::Result<usize, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::resolve_commit(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>

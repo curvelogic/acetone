@@ -131,3 +131,78 @@ fn phrase_names_round_trip_through_schema_apply() {
         "phrase names must round-trip byte-identically"
     );
 }
+
+/// acetone-lwv2: `acetone rename-rel-type` heals the autodeclare ratchet
+/// through the shipped CLI — a phrase predicate is renamed, and a merge
+/// into an existing type is refused then merged.
+#[test]
+fn rename_rel_type_heals_a_phrase_predicate_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    // Create a phrase-predicate edge between two fresh string-keyed nodes.
+    ok(&acetone(
+        &repo,
+        &[
+            "query",
+            "--autodeclare",
+            "CREATE (:Entity {id:'x'})-[:`was influenced by`]->(:Entity {id:'y'})",
+        ],
+    ));
+    // Rename it to the canonical form.
+    let out = ok(&acetone(
+        &repo,
+        &[
+            "rename-rel-type",
+            "was influenced by",
+            "influenced by",
+            "-m",
+            "heal",
+        ],
+    ));
+    assert!(out.contains("renamed relationship type"), "{out}");
+
+    // The edge now carries the new type; the old one is gone.
+    let types = ok(&acetone(
+        &repo,
+        &[
+            "query",
+            "--format",
+            "csv",
+            "MATCH ()-[r]->() RETURN type(r) AS t",
+        ],
+    ));
+    assert!(types.contains("influenced by"), "{types}");
+    assert!(!types.contains("was influenced by"), "{types}");
+    // fsck stays clean (edges_rev symmetry preserved).
+    ok(&acetone(&repo, &["fsck"]));
+
+    // A second predicate onto the same pair, then a colliding rename:
+    // refused by default, merged with --merge.
+    ok(&acetone(
+        &repo,
+        &[
+            "query",
+            "--autodeclare",
+            "MATCH (a:Entity {id:'x'}),(b:Entity {id:'y'}) CREATE (a)-[:shaped {w: 1}]->(b)",
+        ],
+    ));
+    let refused = acetone(&repo, &["rename-rel-type", "shaped", "influenced by"]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("collapse") && stderr(&refused).contains("--merge"),
+        "collision must be refused with a hint: {}",
+        stderr(&refused)
+    );
+    ok(&acetone(
+        &repo,
+        &[
+            "rename-rel-type",
+            "shaped",
+            "influenced by",
+            "--merge",
+            "-m",
+            "merge",
+        ],
+    ));
+    ok(&acetone(&repo, &["fsck"]));
+}

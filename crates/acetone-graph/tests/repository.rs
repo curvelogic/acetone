@@ -1343,3 +1343,232 @@ fn delete_branch_reports_a_missing_branch() {
         other => panic!("expected NoSuchBranch, got {other:?}"),
     }
 }
+
+// --- Relationship-type rename/merge (acetone-lwv2) ---------------------------
+
+use acetone_graph::repo::RenamePolicy;
+use acetone_model::schema::RelTypeDef;
+
+fn typed_edge(src: &NodeKey, rtype: &str, dst: &NodeKey, disc: Value) -> EdgeKey {
+    EdgeKey::new(src.clone(), rtype, dst.clone(), disc).expect("valid")
+}
+
+/// Count edges of a given type in the workspace.
+fn count_type(repo: &Repository, rtype: &str) -> usize {
+    repo.workspace_snapshot()
+        .expect("snap")
+        .edges()
+        .expect("edges")
+        .iter()
+        .filter(|(e, _)| e.rtype() == rtype)
+        .count()
+}
+
+#[test]
+fn rename_rel_type_moves_edges_and_schema_in_one_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let a = node("N", "a");
+    let b = node("N", "b");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[])).expect("node");
+    tx.put_node(&b, &record(&[])).expect("node");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "was influenced by".into(),
+        def: RelTypeDef::new(None, BTreeMap::new(), []).expect("def"),
+    })
+    .expect("schema");
+    tx.put_edge(&edge(&a, "was influenced by", &b), &EdgeRecord::default())
+        .expect("edge");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let commit = repo
+        .rename_rel_type(
+            "was influenced by",
+            "influenced by",
+            RenamePolicy::Refuse,
+            "heal",
+        )
+        .expect("rename");
+    assert_eq!(repo.head_commit().expect("head"), Some(commit));
+
+    // Edges and schema moved to the new name; the old name is gone.
+    assert_eq!(count_type(&repo, "was influenced by"), 0);
+    assert_eq!(count_type(&repo, "influenced by"), 1);
+    let schema = repo
+        .workspace_snapshot()
+        .expect("s")
+        .schema_entries()
+        .expect("se");
+    assert!(
+        schema
+            .iter()
+            .any(|e| matches!(e, SchemaEntry::RelType { name, .. } if name == "influenced by"))
+    );
+    assert!(
+        !schema
+            .iter()
+            .any(|e| matches!(e, SchemaEntry::RelType { name, .. } if name == "was influenced by"))
+    );
+
+    // edges_rev stays consistent (Invariant #5): fsck clean.
+    let report = acetone_graph::fsck::check(&repo).expect("fsck");
+    assert!(report.is_clean(), "fsck: {report:?}");
+}
+
+#[test]
+fn rename_into_existing_type_refuses_a_collision_then_merges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let a = node("N", "a");
+    let b = node("N", "b");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[])).expect("node");
+    tx.put_node(&b, &record(&[])).expect("node");
+    // a colliding pair: OLD a->b and NEW a->b (same endpoints, default disc).
+    tx.put_edge(
+        &edge(&a, "OLD", &b),
+        &EdgeRecord::new(BTreeMap::from([("w".to_owned(), Value::Int(1))])),
+    )
+    .expect("edge");
+    tx.put_edge(&edge(&a, "NEW", &b), &EdgeRecord::default())
+        .expect("edge");
+    tx.commit("seed", &[], None).expect("commit");
+
+    // Default (Refuse) reports the collision and mutates nothing.
+    let err = repo
+        .rename_rel_type("OLD", "NEW", RenamePolicy::Refuse, "x")
+        .unwrap_err();
+    assert!(
+        matches!(err, GraphError::RelTypeRenameConflict { .. }),
+        "expected collision refusal, got {err:?}"
+    );
+    assert_eq!(count_type(&repo, "OLD"), 1, "refusal must not mutate");
+
+    // --merge unions the records onto the single NEW key.
+    repo.rename_rel_type("OLD", "NEW", RenamePolicy::Merge, "merge")
+        .expect("merge");
+    assert_eq!(count_type(&repo, "OLD"), 0);
+    assert_eq!(count_type(&repo, "NEW"), 1, "collapsed onto one key");
+    let edges = repo.workspace_snapshot().expect("s").edges().expect("e");
+    assert_eq!(
+        edges[0].1.properties().get("w"),
+        Some(&Value::Int(1)),
+        "the merged record carries OLD's property"
+    );
+    assert!(acetone_graph::fsck::check(&repo).expect("fsck").is_clean());
+}
+
+#[test]
+fn merge_refuses_conflicting_property_and_discriminator_mismatch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let a = node("N", "a");
+    let b = node("N", "b");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[])).expect("node");
+    tx.put_node(&b, &record(&[])).expect("node");
+    tx.put_edge(
+        &edge(&a, "OLD", &b),
+        &EdgeRecord::new(BTreeMap::from([("w".to_owned(), Value::Int(1))])),
+    )
+    .expect("edge");
+    tx.put_edge(
+        &edge(&a, "NEW", &b),
+        &EdgeRecord::new(BTreeMap::from([("w".to_owned(), Value::Int(2))])),
+    )
+    .expect("edge");
+    tx.commit("seed", &[], None).expect("commit");
+
+    // --merge with a disagreeing shared property is refused, not last-wins.
+    let err = repo
+        .rename_rel_type("OLD", "NEW", RenamePolicy::Merge, "x")
+        .unwrap_err();
+    assert!(
+        matches!(err, GraphError::RelTypeRenameConflict { .. }),
+        "{err:?}"
+    );
+    assert_eq!(count_type(&repo, "OLD"), 1, "refusal must not mutate");
+}
+
+#[test]
+fn rename_refuses_discriminator_regime_mismatch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "OLD".into(),
+        def: RelTypeDef::new(Some("seq".into()), BTreeMap::new(), []).expect("def"),
+    })
+    .expect("schema");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "NEW".into(),
+        def: RelTypeDef::new(None, BTreeMap::new(), []).expect("def"),
+    })
+    .expect("schema");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let err = repo
+        .rename_rel_type("OLD", "NEW", RenamePolicy::Refuse, "x")
+        .unwrap_err();
+    assert!(
+        matches!(err, GraphError::RelTypeRenameConflict { .. }),
+        "discriminator mismatch must refuse: {err:?}"
+    );
+}
+
+#[test]
+fn rename_of_a_parallel_edge_type_preserves_distinct_discriminators() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let a = node("N", "a");
+    let b = node("N", "b");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[])).expect("node");
+    tx.put_node(&b, &record(&[])).expect("node");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "OLD".into(),
+        def: RelTypeDef::new(Some("seq".into()), BTreeMap::new(), []).expect("def"),
+    })
+    .expect("schema");
+    // Two parallel OLD edges a->b distinguished by discriminator.
+    tx.put_edge(
+        &typed_edge(&a, "OLD", &b, Value::Int(1)),
+        &EdgeRecord::default(),
+    )
+    .expect("e1");
+    tx.put_edge(
+        &typed_edge(&a, "OLD", &b, Value::Int(2)),
+        &EdgeRecord::default(),
+    )
+    .expect("e2");
+    tx.commit("seed", &[], None).expect("commit");
+
+    repo.rename_rel_type("OLD", "NEW", RenamePolicy::Refuse, "rename")
+        .expect("rename");
+    // Both parallel edges survived under NEW with their distinct discs.
+    assert_eq!(count_type(&repo, "NEW"), 2);
+    let discs: Vec<Value> = repo
+        .workspace_snapshot()
+        .expect("s")
+        .edges()
+        .expect("e")
+        .iter()
+        .map(|(e, _)| e.disc().clone())
+        .collect();
+    assert!(
+        discs.contains(&Value::Int(1)) && discs.contains(&Value::Int(2)),
+        "{discs:?}"
+    );
+    assert!(acetone_graph::fsck::check(&repo).expect("fsck").is_clean());
+}
+
+#[test]
+fn rename_of_an_absent_type_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let err = repo
+        .rename_rel_type("GHOST", "OTHER", RenamePolicy::Refuse, "x")
+        .unwrap_err();
+    assert!(matches!(err, GraphError::NoSuchRelType { .. }), "{err:?}");
+}

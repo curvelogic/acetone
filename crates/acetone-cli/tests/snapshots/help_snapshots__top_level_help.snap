@@ -36,6 +36,7 @@ Commands:
   put-edge          Insert or replace an edge (plumbing; no properties, no discriminator)
   list-nodes        List nodes, in key order
   rekey             Change a node's key (single-column keys)
+  rename-rel-type   Rename a relationship type, healing near-duplicate predicates that autodeclare accumulates (acetone-lwv2). Rewrites every edge of OLD to NEW in one commit and moves its schema declaration. If NEW already exists, edges that would collide onto an identical key are refused unless `--merge` is given (which unions their properties, still refusing a property the two edges disagree on)
   help              Print this message or the help of the given subcommand(s)
 
 Options:
