@@ -493,3 +493,62 @@ fn a_stale_writer_lock_is_a_typed_error_not_a_hang() {
         "daemon still serves reads: {row}"
     );
 }
+
+/// acetone-pz0k / Phase 11 gate criterion 1: a NON-Rust client drives a full
+/// session (hello → write → read) against a live `acetone serve`, using only
+/// the documented JSON frame protocol and no acetone library. The worked
+/// example under `examples/acetone_daemon_client.py` IS that client; this
+/// test runs it. Skipped where python3 is unavailable.
+#[test]
+fn a_non_rust_python_client_drives_a_full_session() {
+    let has_python = Command::new("python3")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_python {
+        eprintln!("skipping a_non_rust_python_client_drives_a_full_session: python3 not found");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    assert!(
+        Command::new(bin)
+            .args(["init", repo.to_str().unwrap()])
+            .output()
+            .expect("init")
+            .status
+            .success()
+    );
+    // The example writes a `Demo {id}` node, so declare that label first.
+    assert!(
+        acetone(&repo, &["declare-label", "Demo", "--key", "id"])
+            .status
+            .success()
+    );
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/acetone_daemon_client.py"
+    );
+    let out = Command::new("python3")
+        .arg(script)
+        .arg(&socket)
+        .output()
+        .expect("run python client");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "the non-Rust client failed:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    // It wrote a node (the mutation counts came back) and read it back.
+    assert!(
+        stdout.contains("nodes_created") && stdout.contains("from-python"),
+        "the client must write then read on the live workspace: {stdout}"
+    );
+}

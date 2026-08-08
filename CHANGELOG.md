@@ -27,7 +27,10 @@ fine.)
   `--max-concurrent` bound (default 4) on their sum, a separate
   connection cap, read/write idle timeouts against slow/stalled peers,
   typed error kinds with span-aware rendering, and stale-socket reclaim
-  so a host restart after a crash rebinds cleanly.
+  so a host restart after a crash rebinds cleanly. A worked **non-Rust
+  client** — `examples/acetone_daemon_client.py`, stdlib-only Python —
+  drives a full read/write session over the documented frame protocol,
+  showing the daemon needs no acetone library to embed.
 - **Multiple co-tenant graphs in one repository** (acetone-j6ui): a
   repository can now host several acetone graphs alongside its code,
   each on its own ref namespace and its own per-graph workspace, so
