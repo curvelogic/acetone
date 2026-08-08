@@ -18,7 +18,10 @@
 //! constructs a different `GraphRefNamespace` at `open`. The ref-handling code
 //! does not branch on mode; only this value differs (ADR-0049).
 
-use crate::repo::{BRANCH_REF_PREFIX, GRAPHS_REF_PREFIX, TAG_REF_PREFIX, WORKTREE_ANCHOR_PREFIX};
+use crate::repo::{
+    BRANCH_REF_PREFIX, GRAPHS_REF_PREFIX, TAG_REF_PREFIX, WORKTREE_ANCHOR_PREFIX,
+    WORKTREE_MERGE_HEAD_REF, WORKTREE_WORKSPACE_REF,
+};
 
 /// The physical ref layout of one graph: where its branches and tags live and
 /// which ref is its current-branch pointer.
@@ -54,6 +57,24 @@ pub struct GraphRefNamespace {
     /// migration's ref swing is in flight, so its existence is the "migration
     /// interrupted" marker.
     migrate_journal_ref: String,
+    /// This graph's per-worktree uncommitted-workspace ref (acetone-j6ui):
+    /// standalone keeps the global `refs/worktree/acetone/workspace`;
+    /// co-tenant is `refs/worktree/acetone/<graph>/workspace`, so two
+    /// co-tenant graphs in one worktree no longer race one shared
+    /// workspace. Disposable per-worktree state, so the split needs no
+    /// format bump — reads fall back to the pre-split shared name
+    /// ([`Self::legacy_workspace_ref`]), and the first write moves the
+    /// workspace to the per-graph name (exactly as the pre-ADR-0014
+    /// migration already does).
+    workspace_ref: String,
+    /// This graph's per-worktree merge-in-progress head, split from the
+    /// global `refs/worktree/acetone/merge-head` for the same reason.
+    merge_head_ref: String,
+    /// The pre-split shared workspace/merge-head names a co-tenant graph
+    /// may still find its state under (a repo written before the split):
+    /// `Some((workspace, merge_head))` for co-tenant, `None` for
+    /// standalone (whose names never changed).
+    legacy_worktree_refs: Option<(String, String)>,
 }
 
 impl GraphRefNamespace {
@@ -71,6 +92,9 @@ impl GraphRefNamespace {
             private_prefixes: Vec::new(),
             private_refs: Vec::new(),
             migrate_journal_ref: "refs/acetone/migrate-journal".to_owned(),
+            workspace_ref: WORKTREE_WORKSPACE_REF.to_owned(),
+            merge_head_ref: WORKTREE_MERGE_HEAD_REF.to_owned(),
+            legacy_worktree_refs: None,
         }
     }
 
@@ -121,6 +145,18 @@ impl GraphRefNamespace {
             // Inside the graph's private prefix, so ownership classification
             // (gc) covers it without a separate rule.
             migrate_journal_ref: format!("refs/acetone/{graph}/migrate-journal"),
+            // Per-graph, still under the owned `refs/worktree/acetone/`
+            // prefix so gc/ownership is unchanged (acetone-j6ui). The
+            // legacy pair is the shared global names a single-graph
+            // co-tenant repo written before the split still has its state
+            // under — read as a fallback, superseded by the first
+            // per-graph write.
+            workspace_ref: format!("refs/worktree/acetone/{graph}/workspace"),
+            merge_head_ref: format!("refs/worktree/acetone/{graph}/merge-head"),
+            legacy_worktree_refs: Some((
+                WORKTREE_WORKSPACE_REF.to_owned(),
+                WORKTREE_MERGE_HEAD_REF.to_owned(),
+            )),
         }
     }
 
@@ -178,6 +214,31 @@ impl GraphRefNamespace {
     /// `refs/acetone/<graph>/` namespace. Local-only; never pushed.
     pub fn migrate_journal_ref(&self) -> &str {
         &self.migrate_journal_ref
+    }
+
+    /// This graph's per-worktree uncommitted-workspace ref (acetone-j6ui):
+    /// the global name for standalone, a per-graph name for co-tenant. The
+    /// write path CAS-targets this; the read path additionally falls back
+    /// to [`Self::legacy_workspace_ref`].
+    pub fn workspace_ref(&self) -> &str {
+        &self.workspace_ref
+    }
+
+    /// This graph's per-worktree merge-in-progress head ref.
+    pub fn merge_head_ref(&self) -> &str {
+        &self.merge_head_ref
+    }
+
+    /// The pre-split shared workspace ref a co-tenant graph may still find
+    /// its workspace under (`None` for standalone). Read only as a
+    /// fallback when [`Self::workspace_ref`] is absent.
+    pub fn legacy_workspace_ref(&self) -> Option<&str> {
+        self.legacy_worktree_refs.as_ref().map(|(w, _)| w.as_str())
+    }
+
+    /// The pre-split shared merge-head ref (`None` for standalone).
+    pub fn legacy_merge_head_ref(&self) -> Option<&str> {
+        self.legacy_worktree_refs.as_ref().map(|(_, m)| m.as_str())
     }
 
     /// Whether the ref `full` (a full name, e.g. `refs/heads/main`) belongs to

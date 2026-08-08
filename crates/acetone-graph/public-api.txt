@@ -1657,12 +1657,16 @@ pub fn acetone_graph::refns::GraphRefNamespace::branch_prefix(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::branch_ref(&self, &str) -> alloc::string::String
 pub fn acetone_graph::refns::GraphRefNamespace::co_tenant(&str) -> Self
 pub fn acetone_graph::refns::GraphRefNamespace::head_ref(&self) -> &str
+pub fn acetone_graph::refns::GraphRefNamespace::legacy_merge_head_ref(&self) -> core::option::Option<&str>
+pub fn acetone_graph::refns::GraphRefNamespace::legacy_workspace_ref(&self) -> core::option::Option<&str>
+pub fn acetone_graph::refns::GraphRefNamespace::merge_head_ref(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::migrate_journal_ref(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::owns_ref(&self, &str) -> bool
 pub fn acetone_graph::refns::GraphRefNamespace::standalone() -> Self
 pub fn acetone_graph::refns::GraphRefNamespace::tag_name<'r>(&self, &'r str) -> core::option::Option<&'r str>
 pub fn acetone_graph::refns::GraphRefNamespace::tag_prefix(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::tag_ref(&self, &str) -> alloc::string::String
+pub fn acetone_graph::refns::GraphRefNamespace::workspace_ref(&self) -> &str
 impl core::clone::Clone for acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::refns::GraphRefNamespace::clone(&self) -> acetone_graph::refns::GraphRefNamespace
 impl core::cmp::Eq for acetone_graph::refns::GraphRefNamespace
@@ -2633,12 +2637,16 @@ pub fn acetone_graph::refns::GraphRefNamespace::branch_prefix(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::branch_ref(&self, &str) -> alloc::string::String
 pub fn acetone_graph::refns::GraphRefNamespace::co_tenant(&str) -> Self
 pub fn acetone_graph::refns::GraphRefNamespace::head_ref(&self) -> &str
+pub fn acetone_graph::refns::GraphRefNamespace::legacy_merge_head_ref(&self) -> core::option::Option<&str>
+pub fn acetone_graph::refns::GraphRefNamespace::legacy_workspace_ref(&self) -> core::option::Option<&str>
+pub fn acetone_graph::refns::GraphRefNamespace::merge_head_ref(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::migrate_journal_ref(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::owns_ref(&self, &str) -> bool
 pub fn acetone_graph::refns::GraphRefNamespace::standalone() -> Self
 pub fn acetone_graph::refns::GraphRefNamespace::tag_name<'r>(&self, &'r str) -> core::option::Option<&'r str>
 pub fn acetone_graph::refns::GraphRefNamespace::tag_prefix(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::tag_ref(&self, &str) -> alloc::string::String
+pub fn acetone_graph::refns::GraphRefNamespace::workspace_ref(&self) -> &str
 impl core::clone::Clone for acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::refns::GraphRefNamespace::clone(&self) -> acetone_graph::refns::GraphRefNamespace
 impl core::cmp::Eq for acetone_graph::refns::GraphRefNamespace
