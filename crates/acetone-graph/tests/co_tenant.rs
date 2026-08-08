@@ -1235,3 +1235,122 @@ fn two_co_tenant_graphs_coexist_and_are_selectable_and_isolated() {
     assert!(ref_value(&project, "refs/heads/acetone/alpha/main").is_some());
     assert!(ref_value(&project, "refs/heads/acetone/beta/main").is_some());
 }
+
+/// acetone-j6ui / PR #263 review Blocker 1. A half-initialised SECOND graph
+/// (marker written, per-graph workspace not yet provisioned) on a repo where
+/// the FIRST graph's workspace lingers on the pre-split shared ref must NOT
+/// read the first graph's workspace via the shared-ref fallback. Two
+/// defences: init migrates the sole graph's shared workspace to its
+/// per-graph ref before the second marker exists, and the shared-ref
+/// fallback fires only for a sole graph.
+#[test]
+fn a_torn_second_init_does_not_read_the_first_graphs_workspace() {
+    let (project, _dir, _c, _b) = code_repo();
+    let alpha =
+        Repository::init_co_tenant(&project, "alpha", InitOptions::default()).expect("init alpha");
+    seed_graph(&alpha, 2);
+    // Stage uncommitted work in alpha, then put its workspace on the OLD
+    // shared ref (a pre-split repo) and drop alpha's per-graph ref.
+    let mut tx = alpha.begin_write().expect("begin");
+    tx.put_node(
+        &node(42),
+        &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(42))])),
+    )
+    .expect("node");
+    tx.save().expect("save");
+    drop(alpha);
+    let a_ws = "refs/worktree/acetone/alpha/workspace";
+    let shared = "refs/worktree/acetone/workspace";
+    let val = ref_value(&project, a_ws).expect("alpha ws present");
+    git(&project, &["update-ref", shared, &val]);
+    git(&project, &["update-ref", "-d", a_ws]);
+
+    // Simulate a TORN second init: write beta's marker but do NOT provision
+    // its per-graph workspace ref (the crash window this PR must survive).
+    // The marker points at a throwaway empty blob, as init_co_tenant's does.
+    let empty_blob = {
+        use std::io::Write;
+        let mut c = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(["hash-object", "-w", "-t", "blob", "--stdin"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        c.stdin.take().unwrap().write_all(b"").unwrap();
+        let o = c.wait_with_output().unwrap();
+        String::from_utf8(o.stdout).unwrap().trim().to_owned()
+    };
+    git(
+        &project,
+        &["update-ref", "refs/acetone/graphs/beta", &empty_blob],
+    );
+    assert!(
+        ref_value(&project, "refs/worktree/acetone/beta/workspace").is_none(),
+        "precondition: beta's per-graph workspace is absent (torn init)"
+    );
+
+    // Opening beta must NOT return alpha's node 42. With two markers now
+    // present, the shared-ref fallback is disabled, so beta reads as a
+    // virtual/empty workspace (or errors) — never alpha's data. A
+    // virtual/absent workspace surfacing as an error is also acceptable;
+    // the point is it must never expose alpha's workspace.
+    if let Ok(beta) = Repository::open_graph(&project, "beta") {
+        let snap = beta.workspace_snapshot().expect("snap");
+        assert!(
+            snap.get_node(&node(42)).expect("get").is_none(),
+            "ISOLATION: torn beta must not see alpha's uncommitted node 42"
+        );
+    }
+}
+
+/// The data-preservation half of the fix: adding a SECOND graph migrates the
+/// FIRST graph's shared-ref workspace to its per-graph ref, so the first
+/// graph keeps its uncommitted work (the sole-graph fallback would otherwise
+/// stop seeing it once a second graph exists).
+#[test]
+fn adding_a_second_graph_preserves_the_first_graphs_shared_workspace() {
+    let (project, _dir, _c, _b) = code_repo();
+    let alpha =
+        Repository::init_co_tenant(&project, "alpha", InitOptions::default()).expect("init alpha");
+    seed_graph(&alpha, 2);
+    let mut tx = alpha.begin_write().expect("begin");
+    tx.put_node(
+        &node(55),
+        &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(55))])),
+    )
+    .expect("node");
+    tx.save().expect("save");
+    drop(alpha);
+    // Put alpha on the pre-split shared ref.
+    let a_ws = "refs/worktree/acetone/alpha/workspace";
+    let shared = "refs/worktree/acetone/workspace";
+    let val = ref_value(&project, a_ws).expect("alpha ws");
+    git(&project, &["update-ref", shared, &val]);
+    git(&project, &["update-ref", "-d", a_ws]);
+
+    // Add a second graph through the real init path.
+    Repository::init_co_tenant(&project, "beta", InitOptions::default()).expect("init beta");
+
+    // Alpha's workspace was migrated to its per-graph ref, and its
+    // uncommitted node survives; the shared ref is gone.
+    assert!(
+        ref_value(&project, a_ws).is_some(),
+        "alpha's workspace must be migrated to its per-graph ref"
+    );
+    assert!(
+        ref_value(&project, shared).is_none(),
+        "the shared ref must be removed by the migration"
+    );
+    let alpha = Repository::open_graph(&project, "alpha").expect("reopen alpha");
+    assert!(
+        alpha
+            .workspace_snapshot()
+            .expect("snap")
+            .get_node(&node(55))
+            .expect("get")
+            .is_some(),
+        "alpha's uncommitted node must survive adding a second graph"
+    );
+}
