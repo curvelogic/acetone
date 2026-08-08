@@ -19,6 +19,8 @@ Wire protocol (ADR-0074):
     A write's terminal ok carries a "write" object with the mutation counts.
 
 Usage:
+    # The demo writes a `Demo {id}` node, so declare that label's key first.
+    acetone --repo path/to/repo declare-label Demo --key id
     acetone serve --repo path/to/repo --socket /tmp/acetone.sock &
     python3 acetone_daemon_client.py /tmp/acetone.sock
 """
