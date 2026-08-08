@@ -8,7 +8,6 @@ use std::io::{self, IsTerminal};
 use acetone_core::cypher::exec::value::{NodeValue, RelValue, Value};
 use acetone_core::cypher::exec::{QueryLimits, QueryResult};
 use acetone_core::cypher::session::{Outcome as QueryOutcome, Session};
-use acetone_core::graph::Repository;
 use anyhow::{Context, Result, anyhow};
 
 use unicode_width::UnicodeWidthStr;
@@ -55,8 +54,10 @@ pub(crate) fn cli_limits(timeout_secs: u64) -> QueryLimits {
 /// for a write, persist and save) lives in the library [`Session`] (ADR-0039);
 /// the CLI keeps only presentation. `param_specs` are the raw `--param
 /// KEY=VALUE` flags, parsed here so a bad binding fails before anything runs.
+#[allow(clippy::too_many_arguments)] // CLI flags map 1:1 to args; --graph is one more
 pub fn run(
     repo_path: &std::path::Path,
+    graph: Option<&str>,
     cypher: &str,
     at: Option<&str>,
     format: Format,
@@ -66,7 +67,7 @@ pub fn run(
 ) -> Result<()> {
     let params = parse_params(param_specs)?;
     let limits = cli_limits(timeout_secs);
-    let repo = Repository::open(repo_path).context("opening repository")?;
+    let repo = crate::commands::open(repo_path, graph)?;
     let session = Session::new(&repo).autodeclare(autodeclare);
     match at {
         // A read against a past version; a write with `--at` is rejected.
@@ -625,7 +626,7 @@ enum Outcome {
 /// `;` or on a blank line; meta-commands (`:help`, `:declare-*`, `:commit`,
 /// …) are handled at the start of a fresh statement, and `:quit`/`:cancel`
 /// work mid-statement too.
-pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
+pub fn shell(repo_path: &std::path::Path, graph: Option<&str>, timeout_secs: u64) -> Result<()> {
     let mut format = Format::Table;
     let mut buffer = String::new();
     // Session parameters (`:param`), passed to every statement as `$name`.
@@ -643,6 +644,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
                 // Run an unterminated final statement.
                 flush_pending(
                     repo_path,
+                    graph,
                     &mut buffer,
                     &mut format,
                     &mut params,
@@ -653,6 +655,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
             }
             if let Outcome::Quit = process_shell_line(
                 repo_path,
+                graph,
                 &mut buffer,
                 &mut format,
                 &mut params,
@@ -679,7 +682,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
         let _ = editor.load_history(path);
     }
     loop {
-        let prompt = shell_prompt(repo_path, buffer.is_empty());
+        let prompt = shell_prompt(repo_path, graph, buffer.is_empty());
         match editor.readline(&prompt) {
             Ok(line) => {
                 if !line.trim().is_empty() {
@@ -687,6 +690,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
                 }
                 if let Outcome::Quit = process_shell_line(
                     repo_path,
+                    graph,
                     &mut buffer,
                     &mut format,
                     &mut params,
@@ -706,6 +710,7 @@ pub fn shell(repo_path: &std::path::Path, timeout_secs: u64) -> Result<()> {
             Err(rustyline::error::ReadlineError::Eof) => {
                 flush_pending(
                     repo_path,
+                    graph,
                     &mut buffer,
                     &mut format,
                     &mut params,
@@ -734,11 +739,11 @@ fn shell_history_path() -> Option<std::path::PathBuf> {
 /// The prompt for the next line: branch-aware (with a `*` dirty marker) at the
 /// start of a statement, aligned continuation otherwise. Best-effort — falls
 /// back to a plain prompt if the repo cannot be read.
-fn shell_prompt(repo_path: &std::path::Path, fresh: bool) -> String {
+fn shell_prompt(repo_path: &std::path::Path, graph: Option<&str>, fresh: bool) -> String {
     if !fresh {
         return "      -> ".to_string();
     }
-    match Repository::open(repo_path) {
+    match crate::commands::open(repo_path, graph) {
         Ok(repo) => {
             let branch = repo
                 .current_branch()
@@ -767,8 +772,10 @@ fn shell_prompt(repo_path: &std::path::Path, fresh: bool) -> String {
 
 /// Process one input line against the accumulating statement buffer: dispatch
 /// a meta-command, accumulate a partial statement, or run a completed one.
+#[allow(clippy::too_many_arguments)] // shell state threaded explicitly; --graph is one more
 fn process_shell_line(
     repo_path: &std::path::Path,
+    graph: Option<&str>,
     buffer: &mut String,
     format: &mut Format,
     params: &mut BTreeMap<String, Value>,
@@ -785,7 +792,15 @@ fn process_shell_line(
         let cmd = body.split_whitespace().next().unwrap_or("");
         let escapes = matches!(cmd, "quit" | "q" | "exit" | "cancel");
         if buffer.is_empty() || escapes {
-            match handle_meta(repo_path, trimmed, format, params, buffer, autodeclare) {
+            match handle_meta(
+                repo_path,
+                graph,
+                trimmed,
+                format,
+                params,
+                buffer,
+                autodeclare,
+            ) {
                 Ok(true) => return Outcome::Quit,
                 Ok(false) => {}
                 // Errors go to stderr so they never interleave with result
@@ -816,6 +831,7 @@ fn process_shell_line(
     }
     if let Err(e) = run_in_shell(
         repo_path,
+        graph,
         &query,
         *format,
         params,
@@ -833,6 +849,7 @@ fn process_shell_line(
 /// shell`) still executes rather than being silently dropped.
 fn flush_pending(
     repo_path: &std::path::Path,
+    graph: Option<&str>,
     buffer: &mut String,
     format: &mut Format,
     params: &mut BTreeMap<String, Value>,
@@ -843,6 +860,7 @@ fn flush_pending(
         // A blank line is already a statement terminator; reuse that path.
         let _ = process_shell_line(
             repo_path,
+            graph,
             buffer,
             format,
             params,
@@ -855,13 +873,14 @@ fn flush_pending(
 
 fn run_in_shell(
     repo_path: &std::path::Path,
+    graph: Option<&str>,
     cypher: &str,
     format: Format,
     params: &BTreeMap<String, Value>,
     timeout_secs: u64,
     autodeclare: bool,
 ) -> Result<()> {
-    let repo = Repository::open(repo_path)?;
+    let repo = crate::commands::open(repo_path, graph)?;
     // The library `Session` dispatches read vs write: a write goes through the
     // transactional path and advances the workspace (so subsequent shell queries
     // see it), exactly as `run` does — the shell never silently executes the read
@@ -899,6 +918,7 @@ fn parse_meta_args(rest: &str) -> (Vec<String>, std::collections::BTreeMap<Strin
 /// accumulating statement (cleared by `:cancel`).
 fn handle_meta(
     repo_path: &std::path::Path,
+    graph: Option<&str>,
     line: &str,
     format: &mut Format,
     params: &mut BTreeMap<String, Value>,
@@ -994,17 +1014,17 @@ fn handle_meta(
             }
             _ => anyhow::bail!("usage: :autodeclare [on|off]"),
         },
-        "status" => crate::commands::status(repo_path, false)?,
+        "status" => crate::commands::status(repo_path, graph, false)?,
         "commit" => {
             if rest.is_empty() {
                 anyhow::bail!("usage: :commit <message>");
             }
-            crate::commands::commit(repo_path, rest, &[], false)?;
+            crate::commands::commit(repo_path, graph, rest, &[], false)?;
         }
         "schema" => {
             let (_pos, flags) = parse_meta_args(rest);
             let at = flags.get("at").and_then(|v| v.first()).map(String::as_str);
-            crate::commands::schema(repo_path, at, false)?;
+            crate::commands::schema(repo_path, graph, at, false)?;
         }
         "declare-label" => {
             let (pos, flags) = parse_meta_args(rest);
@@ -1020,7 +1040,9 @@ fn handle_meta(
             let types = flags.get("type").cloned().unwrap_or_default();
             let require = flags.get("require").cloned().unwrap_or_default();
             let unique = flags.get("unique").cloned().unwrap_or_default();
-            crate::commands::declare_label(repo_path, label, &key, &types, &require, &unique)?;
+            crate::commands::declare_label(
+                repo_path, graph, label, &key, &types, &require, &unique,
+            )?;
         }
         "declare-rel-type" => {
             let (pos, flags) = parse_meta_args(rest);
@@ -1028,7 +1050,7 @@ fn handle_meta(
                 anyhow!("usage: :declare-rel-type <TYPE> [--type P:T ...] [--type P:T ...]")
             })?;
             let types = flags.get("type").cloned().unwrap_or_default();
-            crate::commands::declare_rel_type(repo_path, rtype, &types)?;
+            crate::commands::declare_rel_type(repo_path, graph, rtype, &types)?;
         }
         "declare-index" => {
             let (pos, flags) = parse_meta_args(rest);
@@ -1043,19 +1065,19 @@ fn handle_meta(
             if props.is_empty() {
                 anyhow::bail!("usage: :declare-index <name> --label <L> --property <p>...");
             }
-            crate::commands::declare_index(repo_path, name, label, &props)?;
+            crate::commands::declare_index(repo_path, graph, name, label, &props)?;
         }
         "checkout" => {
             let refspec = rest
                 .split_whitespace()
                 .next()
                 .context("usage: :checkout <ref>")?;
-            let repo = Repository::open(repo_path)?;
+            let repo = crate::commands::open(repo_path, graph)?;
             repo.checkout_branch(refspec)?;
             outln!("switched to {refspec}");
         }
         "log" => {
-            let repo = Repository::open(repo_path)?;
+            let repo = crate::commands::open(repo_path, graph)?;
             for entry in repo.log(None)? {
                 // Commit subjects are repository-controlled (a hostile
                 // clone); sanitise before the terminal, as the top-level

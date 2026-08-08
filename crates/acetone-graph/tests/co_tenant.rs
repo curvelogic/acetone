@@ -1145,3 +1145,93 @@ fn fsck_verifies_the_per_graph_workspace_ref() {
         report.findings
     );
 }
+
+/// acetone-j6ui: a repository hosts more than one co-tenant graph. init no
+/// longer refuses a second graph; each has its own namespace and per-graph
+/// workspace ref, so writes are isolated; plain open can't choose; open_graph
+/// selects; list_graphs enumerates; a bad name is NoSuchGraph.
+#[test]
+fn two_co_tenant_graphs_coexist_and_are_selectable_and_isolated() {
+    let (project, _dir, _c, _b) = code_repo();
+
+    let a =
+        Repository::init_co_tenant(&project, "alpha", InitOptions::default()).expect("init alpha");
+    seed_graph(&a, 2); // nodes 0,1 in alpha
+
+    // A SECOND graph now succeeds (was GraphExists before acetone-j6ui).
+    let b =
+        Repository::init_co_tenant(&project, "beta", InitOptions::default()).expect("init beta");
+    // Give beta a distinct node so cross-reads are detectable.
+    let mut tx = b.begin_write().expect("begin beta");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "N".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+    })
+    .expect("schema");
+    tx.put_node(
+        &node(77),
+        &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(77))])),
+    )
+    .expect("node");
+    tx.commit("beta: seed", &[], None).expect("commit beta");
+
+    // A same-name re-init is still refused.
+    assert!(
+        matches!(
+            Repository::init_co_tenant(&project, "alpha", InitOptions::default()),
+            Err(acetone_graph::GraphError::GraphExists { .. })
+        ),
+        "re-initialising an existing graph must fail"
+    );
+
+    // list_graphs enumerates both, sorted.
+    assert_eq!(
+        Repository::list_graphs(&project).expect("list"),
+        vec!["alpha".to_owned(), "beta".to_owned()]
+    );
+
+    // Plain open cannot choose.
+    assert!(
+        matches!(
+            Repository::open(&project),
+            Err(acetone_graph::GraphError::MultipleGraphs { .. })
+        ),
+        "plain open must refuse to choose among multiple graphs"
+    );
+
+    // open_graph selects; each graph sees ONLY its own nodes.
+    let a = Repository::open_graph(&project, "alpha").expect("open alpha");
+    let sa = a.workspace_snapshot().expect("snap alpha");
+    assert!(
+        sa.get_node(&node(0)).expect("get").is_some(),
+        "alpha has node 0"
+    );
+    assert!(
+        sa.get_node(&node(77)).expect("get").is_none(),
+        "alpha must NOT see beta's node 77 (isolation)"
+    );
+    let b = Repository::open_graph(&project, "beta").expect("open beta");
+    let sb = b.workspace_snapshot().expect("snap beta");
+    assert!(
+        sb.get_node(&node(77)).expect("get").is_some(),
+        "beta has node 77"
+    );
+    assert!(
+        sb.get_node(&node(0)).expect("get").is_none(),
+        "beta must NOT see alpha's node 0 (isolation)"
+    );
+
+    // A missing graph names the available ones.
+    match Repository::open_graph(&project, "gamma") {
+        Err(acetone_graph::GraphError::NoSuchGraph { name, available }) => {
+            assert_eq!(name, "gamma");
+            assert_eq!(available, vec!["alpha".to_owned(), "beta".to_owned()]);
+        }
+        other => panic!("expected NoSuchGraph, got {other:?}"),
+    }
+
+    // The graph branches are on disjoint namespaces; code's main is untouched.
+    assert_eq!(git(&project, &["symbolic-ref", "HEAD"]), "refs/heads/main");
+    assert!(ref_value(&project, "refs/heads/acetone/alpha/main").is_some());
+    assert!(ref_value(&project, "refs/heads/acetone/beta/main").is_some());
+}

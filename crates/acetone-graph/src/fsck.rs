@@ -369,14 +369,35 @@ pub fn check(repo: &Repository) -> Result<FsckReport, GraphError> {
 /// underlying [`GitStore`] and runs the same checks, reporting the damage as
 /// [`Finding`]s rather than erroring at open.
 pub fn check_path(path: &std::path::Path) -> Result<FsckReport, GraphError> {
+    check_path_graph(path, None)
+}
+
+/// `check_path`, scoped to a named co-tenant graph (acetone-j6ui): the CLI
+/// `--graph` flag routes here so `acetone fsck --graph <g>` checks that
+/// graph even when the repository hosts several (where the auto-detecting
+/// `check_path` would otherwise fall back to the whole-store standalone
+/// scope). `None` is exactly `check_path`. Still store-only, so it runs on
+/// a damaged workspace — the marker ref that names the graph is intact even
+/// when the workspace blob is not.
+pub fn check_path_graph(
+    path: &std::path::Path,
+    graph: Option<&str>,
+) -> Result<FsckReport, GraphError> {
     let store = GitStore::open_discovering(path)?;
-    // Resolve the namespace the way `open` does, so a damaged-workspace
-    // fsck of a co-tenant graph still scopes to that graph (acetone-j6ui).
-    // A repository with a damaged marker or multiple graphs falls back to
-    // the standalone prefixes — fsck must run even then, and the wider
-    // scope is the safe direction for a diagnostic.
-    let ns = crate::repo::detect_namespace(&store)
-        .unwrap_or_else(|_| crate::refns::GraphRefNamespace::standalone());
+    // Resolve the namespace the way `open`/`open_graph` do, so a
+    // damaged-workspace fsck of a co-tenant graph still scopes to that
+    // graph. Without an explicit graph, a repository with a damaged marker
+    // or multiple graphs falls back to the standalone prefixes — fsck must
+    // run even then, and the wider scope is the safe direction for a
+    // diagnostic.
+    let ns = match graph {
+        Some(name) => {
+            crate::repo::validate_graph_name(name)?;
+            crate::refns::GraphRefNamespace::co_tenant(name)
+        }
+        None => crate::repo::detect_namespace(&store)
+            .unwrap_or_else(|_| crate::refns::GraphRefNamespace::standalone()),
+    };
     check_store(
         &store,
         ns.branch_prefix(),

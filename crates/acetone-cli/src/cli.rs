@@ -50,6 +50,13 @@ pub struct Cli {
     #[arg(long, global = true, default_value = ".")]
     pub repo: PathBuf,
 
+    /// Which co-tenant graph to operate on, when the repository hosts more
+    /// than one (acetone-j6ui). Unnecessary for a standalone repository or
+    /// one with a single graph — those are selected automatically; required
+    /// only to disambiguate. `acetone graph list` shows the names.
+    #[arg(long, global = true, value_name = "GRAPH")]
+    pub graph: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -318,6 +325,11 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect the co-tenant graphs this repository hosts (acetone-j6ui).
+    Graph {
+        #[command(subcommand)]
+        action: GraphAction,
+    },
 
     // ---- Data & query ----
     /// Import a source file into the graph.
@@ -556,6 +568,17 @@ pub enum Command {
 
 /// Actions on the schema beyond printing it.
 #[derive(clap::Subcommand, Debug)]
+pub enum GraphAction {
+    /// List the co-tenant graph names this repository hosts, one per line
+    /// (sorted). Empty for a standalone repository or one with no graph.
+    List {
+        /// Emit a JSON array of names instead of one per line.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum SchemaAction {
     /// Apply a declarative schema document (the `schema --json` shape):
     /// diff against the current schema, stage additions and changes in one

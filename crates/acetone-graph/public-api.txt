@@ -448,6 +448,9 @@ pub acetone_graph::error::GraphError::NoMergeBase::ours: alloc::string::String
 pub acetone_graph::error::GraphError::NoMergeBase::theirs: alloc::string::String
 pub acetone_graph::error::GraphError::NoSuchBranch
 pub acetone_graph::error::GraphError::NoSuchBranch::name: alloc::string::String
+pub acetone_graph::error::GraphError::NoSuchGraph
+pub acetone_graph::error::GraphError::NoSuchGraph::available: alloc::vec::Vec<alloc::string::String>
+pub acetone_graph::error::GraphError::NoSuchGraph::name: alloc::string::String
 pub acetone_graph::error::GraphError::NoSuchNode
 pub acetone_graph::error::GraphError::NoSuchNode::key: alloc::string::String
 pub acetone_graph::error::GraphError::NoSuchNode::label: alloc::string::String
@@ -847,6 +850,7 @@ impl<T> typenum::type_operators::Same for acetone_graph::fsck::FsckReport
 pub type acetone_graph::fsck::FsckReport::Output = T
 pub fn acetone_graph::fsck::check(&acetone_graph::repo::Repository) -> core::result::Result<acetone_graph::fsck::FsckReport, acetone_graph::error::GraphError>
 pub fn acetone_graph::fsck::check_path(&std::path::Path) -> core::result::Result<acetone_graph::fsck::FsckReport, acetone_graph::error::GraphError>
+pub fn acetone_graph::fsck::check_path_graph(&std::path::Path, core::option::Option<&str>) -> core::result::Result<acetone_graph::fsck::FsckReport, acetone_graph::error::GraphError>
 pub mod acetone_graph::import
 pub enum acetone_graph::import::ImportError
 pub acetone_graph::import::ImportError::Config(alloc::string::String)
@@ -1857,6 +1861,7 @@ pub fn acetone_graph::repo::Repository::head_commit(&self) -> core::result::Resu
 pub fn acetone_graph::repo::Repository::init(&std::path::Path, acetone_graph::repo::InitOptions) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::init_co_tenant(&std::path::Path, &str, acetone_graph::repo::InitOptions) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::is_dirty(&self) -> core::result::Result<bool, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::list_graphs(&std::path::Path) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::log(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<acetone_graph::repo::LogEntry>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::log_all(&self) -> core::result::Result<alloc::vec::Vec<acetone_graph::repo::LogEntry>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::merge(&self, &str, &str) -> core::result::Result<acetone_graph::merge::MergeOutcome, acetone_graph::error::GraphError>
@@ -1864,6 +1869,7 @@ pub fn acetone_graph::repo::Repository::merge_base(&self, &acetone_store::hash::
 pub fn acetone_graph::repo::Repository::merge_head(&self) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::namespace(&self) -> &acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::repo::Repository::open(&std::path::Path) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::open_graph(&std::path::Path, &str) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reindex(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::rekey(&self, &acetone_model::graph_keys::NodeKey, &acetone_model::graph_keys::NodeKey, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reset_workspace_to_head(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
@@ -2112,6 +2118,9 @@ pub acetone_graph::GraphError::NoMergeBase::ours: alloc::string::String
 pub acetone_graph::GraphError::NoMergeBase::theirs: alloc::string::String
 pub acetone_graph::GraphError::NoSuchBranch
 pub acetone_graph::GraphError::NoSuchBranch::name: alloc::string::String
+pub acetone_graph::GraphError::NoSuchGraph
+pub acetone_graph::GraphError::NoSuchGraph::available: alloc::vec::Vec<alloc::string::String>
+pub acetone_graph::GraphError::NoSuchGraph::name: alloc::string::String
 pub acetone_graph::GraphError::NoSuchNode
 pub acetone_graph::GraphError::NoSuchNode::key: alloc::string::String
 pub acetone_graph::GraphError::NoSuchNode::label: alloc::string::String
@@ -2995,6 +3004,7 @@ pub fn acetone_graph::repo::Repository::head_commit(&self) -> core::result::Resu
 pub fn acetone_graph::repo::Repository::init(&std::path::Path, acetone_graph::repo::InitOptions) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::init_co_tenant(&std::path::Path, &str, acetone_graph::repo::InitOptions) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::is_dirty(&self) -> core::result::Result<bool, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::list_graphs(&std::path::Path) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::log(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<acetone_graph::repo::LogEntry>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::log_all(&self) -> core::result::Result<alloc::vec::Vec<acetone_graph::repo::LogEntry>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::merge(&self, &str, &str) -> core::result::Result<acetone_graph::merge::MergeOutcome, acetone_graph::error::GraphError>
@@ -3002,6 +3012,7 @@ pub fn acetone_graph::repo::Repository::merge_base(&self, &acetone_store::hash::
 pub fn acetone_graph::repo::Repository::merge_head(&self) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::namespace(&self) -> &acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::repo::Repository::open(&std::path::Path) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::open_graph(&std::path::Path, &str) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reindex(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::rekey(&self, &acetone_model::graph_keys::NodeKey, &acetone_model::graph_keys::NodeKey, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::reset_workspace_to_head(&self) -> core::result::Result<(), acetone_graph::error::GraphError>

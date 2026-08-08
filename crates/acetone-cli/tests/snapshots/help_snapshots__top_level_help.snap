@@ -22,6 +22,7 @@ Commands:
   declare-index     Declare a property index over `(label, properties)`
   reindex           Rebuild every declared index from the nodes map
   schema            Show the declared schema — labels and keys, relationship types and indexes
+  graph             Inspect the co-tenant graphs this repository hosts (acetone-j6ui)
   import            Import a source file into the graph
   export            Export a graph version as per-label and per-type tables
   query             Run an openCypher read query against the graph [aliases: cypher]
@@ -42,6 +43,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
   -h, --help
           Print help (see a summary with '-h')
