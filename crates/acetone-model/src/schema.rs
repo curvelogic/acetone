@@ -527,6 +527,13 @@ impl SchemaEntry {
         }
     }
 
+    /// The `schema`-map key of the relationship type named `name`, without
+    /// building a full entry — for staging a deletion of that entry
+    /// (acetone-lwv2 rename moves the entry between names).
+    pub fn rel_type_key(name: &str) -> Vec<u8> {
+        entry_key(KIND_RTYPE, name)
+    }
+
     /// The `schema`-map value: a canonical CBOR text-keyed map.
     /// Infallible: definitions contain only names and booleans.
     pub fn encode_value(&self) -> Vec<u8> {

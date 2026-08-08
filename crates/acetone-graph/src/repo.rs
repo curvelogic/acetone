@@ -97,6 +97,23 @@ pub const GRAPHS_REF_PREFIX: &str = "refs/acetone/graphs/";
 /// Namespace of branches (git-native). The standalone layout's branch
 /// prefix; see [`GraphRefNamespace`](crate::refns::GraphRefNamespace).
 pub const BRANCH_REF_PREFIX: &str = "refs/heads/";
+
+/// How [`Repository::rename_rel_type`] treats an edge-key collision — an
+/// `old` edge and an existing `new` edge sharing `(src, dst, disc)` — when
+/// renaming a relationship type into one that already exists (acetone-lwv2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenamePolicy {
+    /// Refuse the rename, naming the collisions, if any edge would collapse
+    /// onto an existing target-type edge. The safe default.
+    Refuse,
+    /// Union each colliding pair's property records into one edge — still
+    /// refusing when they disagree on a shared property's value.
+    Merge,
+}
+
+/// How many edge-key collisions a rename refusal names before summarising
+/// the rest (the count is always exact; the sample is bounded).
+const RENAME_COLLISION_SAMPLE: usize = 8;
 /// Namespace of tags (git-native). The standalone layout's tag prefix.
 pub const TAG_REF_PREFIX: &str = "refs/tags/";
 /// The branch a fresh repository's checked-out ref points at.
@@ -792,6 +809,140 @@ impl Repository {
         // move, but the delete-before-put discipline keeps it robust.
         txn.delete_node(old)?;
         txn.put_node(new, &record)?;
+        txn.commit(message, &[], None)
+    }
+
+    /// Rename a relationship type `old` to `new`, healing the one-way growth
+    /// that autodeclare (ADR-0060) otherwise bakes in — near-duplicate
+    /// predicates (`influenced by` / `was influenced by`) collapse into one
+    /// (ADR-0072 decision 2, acetone-lwv2). The relationship type is part of
+    /// every edge key `(src, type, dst, disc)`, so this rewrites every edge
+    /// of `old` in **both** the forward and reverse maps (delete-old /
+    /// put-new, like [`rekey`](Self::rekey)) and moves the `rtype` schema
+    /// entry, in one commit.
+    ///
+    /// When `new` already exists (a **merge**), two conflicts can arise and
+    /// are surfaced as [`GraphError::RelTypeRenameConflict`] rather than
+    /// silently resolved:
+    /// - **Edge-key collision** — an `old` edge and an existing `new` edge
+    ///   share `(src, dst, disc)`, so they would collapse onto one key.
+    ///   Refused unless `policy` is [`RenamePolicy::Merge`], which unions
+    ///   their property records (and still refuses a shared property whose
+    ///   values disagree).
+    /// - **Declaration mismatch** — the two types declare different
+    ///   discriminator properties (the discriminator is part of the key, so
+    ///   two regimes cannot be reconciled) or conflicting property types.
+    ///
+    /// Workspace-level: it rewrites the current workspace and commits, so
+    /// queries at *past* versions still see `old`. A history-rewriting
+    /// variant (a `FormatTransform`) is future work.
+    pub fn rename_rel_type(
+        &self,
+        old: &str,
+        new: &str,
+        policy: RenamePolicy,
+        message: &str,
+    ) -> Result<Hash, GraphError> {
+        if old == new {
+            return Err(GraphError::RelTypeRenameConflict {
+                reason: format!("the source and target type are both {old:?}"),
+            });
+        }
+        let mut txn = self.begin_write()?;
+        let snapshot = self.workspace_snapshot()?;
+
+        // Partition edges: those to rename (type == old), and the encoded
+        // keys of existing `new` edges, so a rename onto an occupied key is
+        // detected. `NodeKey`/`Value` are not `Ord`, so the collision index
+        // is keyed on the memcomparable forward-key bytes (which already
+        // encode `(src, type, dst, disc)`).
+        let all_edges = snapshot.edges()?;
+        let mut existing_new: BTreeMap<Vec<u8>, EdgeRecord> = BTreeMap::new();
+        for (edge, record) in &all_edges {
+            if edge.rtype() == new {
+                existing_new.insert(edge.encode_fwd()?, record.clone());
+            }
+        }
+        let to_rename: Vec<&(EdgeKey, EdgeRecord)> =
+            all_edges.iter().filter(|(e, _)| e.rtype() == old).collect();
+
+        // The source type must exist as a declaration or as edges — renaming
+        // nothing is a mistake worth reporting, not a silent no-op.
+        let has_old_decl = snapshot
+            .schema_entries()?
+            .iter()
+            .any(|e| matches!(e, SchemaEntry::RelType { name, .. } if name == old));
+        if to_rename.is_empty() && !has_old_decl {
+            return Err(GraphError::NoSuchRelType {
+                name: old.to_owned(),
+            });
+        }
+
+        // The renamed key of an `old` edge: same endpoints and discriminator,
+        // type `new`. Its forward-key bytes are the collision-index probe.
+        let renamed_key = |edge: &EdgeKey| -> Result<EdgeKey, GraphError> {
+            Ok(EdgeKey::new(
+                edge.src().clone(),
+                new,
+                edge.dst().clone(),
+                edge.disc().clone(),
+            )?)
+        };
+
+        // Detect edge-key collisions up front, so a refusal names them all
+        // before any mutation is staged.
+        let mut collisions: Vec<(EdgeKey, EdgeRecord)> = Vec::new();
+        for (edge, record) in &to_rename {
+            if existing_new.contains_key(&renamed_key(edge)?.encode_fwd()?) {
+                collisions.push(((*edge).clone(), record.clone()));
+            }
+        }
+        if !collisions.is_empty() && policy != RenamePolicy::Merge {
+            let n = collisions.len();
+            let sample: Vec<String> = collisions
+                .iter()
+                .take(RENAME_COLLISION_SAMPLE)
+                .map(|(e, _)| {
+                    format!(
+                        "{}-[{new}]->{}",
+                        render_node_key(e.src()),
+                        render_node_key(e.dst())
+                    )
+                })
+                .collect();
+            return Err(GraphError::RelTypeRenameConflict {
+                reason: format!(
+                    "renaming {old:?} to {new:?} would collapse {n} edge(s) onto existing \
+                     {new:?} edges ({}{}); pass --merge to union their records",
+                    sample.join(", "),
+                    if n > sample.len() { ", …" } else { "" },
+                ),
+            });
+        }
+
+        // Reconcile the schema entries before touching edges, so a
+        // declaration mismatch refuses cheaply.
+        let merged_entry = reconcile_rel_type_entries(&snapshot, old, new)?;
+
+        // Rewrite every `old` edge to `new`. On a collision under
+        // `--merge`, union the two records (refusing a disagreeing shared
+        // property) and write the merged record onto the shared key.
+        for (edge, record) in &to_rename {
+            let renamed = renamed_key(edge)?;
+            txn.delete_edge(edge)?;
+            let record = match existing_new.get(&renamed.encode_fwd()?) {
+                Some(existing) => merge_edge_records(old, new, edge, record, existing)?,
+                None => (*record).clone(),
+            };
+            txn.put_edge(&renamed, &record)?;
+        }
+
+        // Move/merge the schema entry: delete the old rtype entry, and put
+        // the (possibly reconciled) entry under the new name.
+        txn.delete_schema_entry(&SchemaEntry::rel_type_key(old));
+        if let Some(entry) = merged_entry {
+            txn.put_schema(&entry)?;
+        }
         txn.commit(message, &[], None)
     }
 
@@ -2130,6 +2281,105 @@ fn is_blank(store: &GitStore, manifest: &Manifest) -> Result<bool, GraphError> {
     Ok(*manifest == blank)
 }
 
+/// Reconcile the `rtype` schema entries of a rename `old` → `new`, returning
+/// the entry to write under `new` (acetone-lwv2). `None` means neither type
+/// is declared (an edges-only rename with no schema entry to move). When
+/// both are declared, the two declarations must agree: the discriminator is
+/// part of the edge key, so two discriminator regimes cannot merge, and a
+/// property declared with different types on each side is a genuine
+/// conflict. Otherwise the property types and existence constraints are
+/// unioned onto `new`.
+fn reconcile_rel_type_entries(
+    snapshot: &Snapshot<'_>,
+    old: &str,
+    new: &str,
+) -> Result<Option<SchemaEntry>, GraphError> {
+    let entries = snapshot.schema_entries()?;
+    let find = |want: &str| {
+        entries.iter().find_map(|e| match e {
+            SchemaEntry::RelType { name, def } if name == want => Some(def.clone()),
+            _ => None,
+        })
+    };
+    let old_def = find(old);
+    let new_def = find(new);
+    let def = match (old_def, new_def) {
+        (None, None) => return Ok(None),
+        // Only one side declared: carry that declaration onto `new`.
+        (Some(def), None) | (None, Some(def)) => def,
+        (Some(od), Some(nd)) => {
+            if od.discriminator() != nd.discriminator() {
+                return Err(GraphError::RelTypeRenameConflict {
+                    reason: format!(
+                        "{old:?} and {new:?} declare different discriminators \
+                         ({:?} vs {:?}) — the discriminator is part of the edge key \
+                         and cannot be merged",
+                        od.discriminator(),
+                        nd.discriminator(),
+                    ),
+                });
+            }
+            let mut types = nd.types().clone();
+            for (prop, ty) in od.types() {
+                if let Some(existing) = types.get(prop)
+                    && existing != ty
+                {
+                    return Err(GraphError::RelTypeRenameConflict {
+                        reason: format!(
+                            "{old:?} and {new:?} declare property {prop:?} with \
+                             different types",
+                        ),
+                    });
+                }
+                types.insert(prop.clone(), *ty);
+            }
+            let mut exists: std::collections::BTreeSet<String> =
+                nd.exists().iter().cloned().collect();
+            exists.extend(od.exists().iter().cloned());
+            RelTypeDef::new(od.discriminator().map(str::to_owned), types, exists).map_err(|e| {
+                GraphError::RelTypeRenameConflict {
+                    reason: format!("reconciled declaration is invalid: {e}"),
+                }
+            })?
+        }
+    };
+    Ok(Some(SchemaEntry::RelType {
+        name: new.to_owned(),
+        def,
+    }))
+}
+
+/// Union a colliding pair's property records for a `--merge` rename
+/// (acetone-lwv2): the renamed `old` edge and the existing `new` edge share
+/// a key, so their records become one. A property present on both must
+/// agree; a disagreement is a conflict the operator must resolve, not a
+/// silent last-writer-wins.
+fn merge_edge_records(
+    old: &str,
+    new: &str,
+    edge: &EdgeKey,
+    old_rec: &EdgeRecord,
+    existing: &EdgeRecord,
+) -> Result<EdgeRecord, GraphError> {
+    let mut merged = existing.properties().clone();
+    for (prop, value) in old_rec.properties() {
+        if let Some(current) = merged.get(prop)
+            && current != value
+        {
+            return Err(GraphError::RelTypeRenameConflict {
+                reason: format!(
+                    "merging {old:?} into {new:?} on {}-[{new}]->{}: property {prop:?} \
+                     disagrees between the two edges",
+                    render_node_key(edge.src()),
+                    render_node_key(edge.dst()),
+                ),
+            });
+        }
+        merged.insert(prop.clone(), value.clone());
+    }
+    Ok(EdgeRecord::new(merged))
+}
+
 /// Move a sole co-tenant graph's uncommitted workspace and merge-head off
 /// the pre-split shared refs (`refs/worktree/acetone/{workspace,merge-head}`)
 /// onto `target`'s per-graph refs, then delete the shared refs
@@ -2376,6 +2626,14 @@ impl<'r> Transaction<'r> {
         self.schema
             .push(BatchOp::Put(entry.map_key(), entry.encode_value()));
         Ok(())
+    }
+
+    /// Stage removal of the schema entry with map key `map_key` (e.g.
+    /// [`SchemaEntry::rel_type_key`]). Used by the relationship-type rename
+    /// to drop the old-named entry (acetone-lwv2); a Delete of an absent key
+    /// is a harmless no-op at apply time.
+    fn delete_schema_entry(&mut self, map_key: &[u8]) {
+        self.schema.push(BatchOp::Delete(map_key.to_vec()));
     }
 
     /// Whether any mutations are staged.

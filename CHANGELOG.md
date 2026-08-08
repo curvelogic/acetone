@@ -39,6 +39,20 @@ fine.)
   `Repository::open_graph`, `Repository::list_graphs`,
   `fsck::check_path_graph`.
 
+- **`acetone rename-rel-type OLD NEW`** — rename a relationship type,
+  healing the near-duplicate predicates that autodeclare (ADR-0060)
+  otherwise accumulates one-way (`was influenced by` → `influenced by`,
+  ADR-0072 / acetone-lwv2). It rewrites every edge of OLD to NEW in one
+  commit (both the forward and reverse maps, so `edges_rev` stays
+  consistent) and moves the schema declaration. Renaming into a type
+  that already exists is a **merge**: edges that would collapse onto an
+  identical key are refused (naming them) unless `--merge` is given,
+  which unions their properties and still refuses a property the two
+  edges disagree on; irreconcilable declarations (differing
+  discriminator regimes or property types) are refused. Workspace-level
+  — past versions keep the old type. Library:
+  `Repository::rename_rel_type`.
+
 ### Changed
 
 - **A co-tenant graph's uncommitted workspace now lives on a per-graph

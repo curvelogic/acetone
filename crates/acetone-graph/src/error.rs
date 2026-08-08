@@ -185,6 +185,24 @@ pub enum GraphError {
         /// Rendered key.
         key: String,
     },
+    /// A relationship-type rename/merge named a source type that the graph
+    /// does not have (no schema entry and no edges of that type).
+    #[error("no relationship type {name:?} to rename (no declaration and no edges)")]
+    NoSuchRelType {
+        /// The source type name.
+        name: String,
+    },
+    /// A relationship-type rename/merge cannot proceed as asked
+    /// (acetone-lwv2): renaming into an existing type would collapse edges
+    /// onto identical keys and `--merge` was not given, the two types'
+    /// declarations are irreconcilable (differing discriminator regimes or
+    /// property types), or `--merge` hit records that disagree on a shared
+    /// property. The `reason` names the specific conflicts (bounded).
+    #[error("cannot rename relationship type: {reason}")]
+    RelTypeRenameConflict {
+        /// A human-readable account of the blocking conflicts.
+        reason: String,
+    },
     /// A schema change would alter a label's key tuple while nodes bearing that
     /// label already exist. Node identity is `(primary label, key tuple)`
     /// (Invariant #3), so changing the key orphans every existing node's key

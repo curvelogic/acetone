@@ -564,6 +564,25 @@ pub enum Command {
         #[arg(short = 'm', long)]
         message: String,
     },
+    /// Rename a relationship type, healing near-duplicate predicates that
+    /// autodeclare accumulates (acetone-lwv2). Rewrites every edge of OLD to
+    /// NEW in one commit and moves its schema declaration. If NEW already
+    /// exists, edges that would collide onto an identical key are refused
+    /// unless `--merge` is given (which unions their properties, still
+    /// refusing a property the two edges disagree on).
+    RenameRelType {
+        /// The current relationship type.
+        old: String,
+        /// The new relationship type.
+        new: String,
+        /// Merge colliding edges into the existing target type instead of
+        /// refusing.
+        #[arg(long)]
+        merge: bool,
+        /// Commit message.
+        #[arg(short = 'm', long, default_value = "rename relationship type")]
+        message: String,
+    },
 }
 
 /// Actions on the schema beyond printing it.

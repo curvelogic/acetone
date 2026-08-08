@@ -783,6 +783,7 @@ pub fn acetone_model::schema::SchemaEntry::decode(&[u8], &[u8]) -> core::result:
 pub fn acetone_model::schema::SchemaEntry::encode_value(&self) -> alloc::vec::Vec<u8>
 pub fn acetone_model::schema::SchemaEntry::map_key(&self) -> alloc::vec::Vec<u8>
 pub fn acetone_model::schema::SchemaEntry::name(&self) -> &str
+pub fn acetone_model::schema::SchemaEntry::rel_type_key(&str) -> alloc::vec::Vec<u8>
 impl core::clone::Clone for acetone_model::schema::SchemaEntry
 pub fn acetone_model::schema::SchemaEntry::clone(&self) -> acetone_model::schema::SchemaEntry
 impl core::cmp::Eq for acetone_model::schema::SchemaEntry
