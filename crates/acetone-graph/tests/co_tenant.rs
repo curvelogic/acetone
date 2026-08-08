@@ -1293,15 +1293,20 @@ fn a_torn_second_init_does_not_read_the_first_graphs_workspace() {
 
     // Opening beta must NOT return alpha's node 42. With two markers now
     // present, the shared-ref fallback is disabled, so beta reads as a
-    // virtual/empty workspace (or errors) — never alpha's data. A
-    // virtual/absent workspace surfacing as an error is also acceptable;
-    // the point is it must never expose alpha's workspace.
-    if let Ok(beta) = Repository::open_graph(&project, "beta") {
-        let snap = beta.workspace_snapshot().expect("snap");
-        assert!(
-            snap.get_node(&node(42)).expect("get").is_none(),
-            "ISOLATION: torn beta must not see alpha's uncommitted node 42"
-        );
+    // virtual/absent workspace — a `NoWorkspace` error is the expected
+    // outcome (there is no committed beta workspace and no valid fallback).
+    // If it DOES open, it must not expose alpha's data. Asserting the error
+    // shape (rather than `if let Ok`) keeps the test from passing silently.
+    match Repository::open_graph(&project, "beta") {
+        Err(acetone_graph::GraphError::NoWorkspace { .. }) => {}
+        Ok(beta) => {
+            let snap = beta.workspace_snapshot().expect("snap");
+            assert!(
+                snap.get_node(&node(42)).expect("get").is_none(),
+                "ISOLATION: torn beta must not see alpha's uncommitted node 42"
+            );
+        }
+        other => panic!("torn beta must be NoWorkspace or isolated, got {other:?}"),
     }
 }
 
