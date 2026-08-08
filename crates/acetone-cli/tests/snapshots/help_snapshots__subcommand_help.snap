@@ -14,6 +14,7 @@ Options:
       --object-format <OBJECT_FORMAT>  Object format (hash function) for the new repository [default: sha1] [possible values: sha1, sha256]
       --repo <REPO>                    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
       --co-tenant <GRAPH>              Create the graph as a **co-tenant** of an existing git repository, on its own ref namespace (`refs/heads/acetone/<GRAPH>/*`) alongside the code, instead of a standalone repository. GRAPH names the graph
+      --graph <GRAPH>                  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
   -h, --help                           Print help
 
 ========== acetone status --help ==========
@@ -22,9 +23,10 @@ Show the current branch, head commit and workspace state
 Usage: acetone status [OPTIONS]
 
 Options:
-      --json         Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
-      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --json           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
+      --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --graph <GRAPH>  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+  -h, --help           Print help
 
 ========== acetone commit --help ==========
 Turn the workspace's staged changes into a commit.
@@ -41,6 +43,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
       --trailer <TRAILER>
           A `KEY=VALUE` commit trailer; may be repeated
@@ -67,6 +72,9 @@ Options:
           
           [default: .]
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
       --json
           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
 
@@ -85,6 +93,7 @@ Arguments:
 Options:
   -d, --delete <NAME>  Delete branch NAME instead. Ref removal only — no commit or graph data is deleted, so the branch's commits stay reachable by hash. Refuses to delete the checked-out branch
       --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --graph <GRAPH>  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
       --json           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
   -h, --help           Print help
 
@@ -114,6 +123,9 @@ Options:
   -d, --delete <NAME>
           Delete tag NAME instead. Ref removal only — no commit or graph data is deleted, so the tagged commit stays reachable by hash
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
       --json
           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
 
@@ -129,8 +141,9 @@ Arguments:
   <BRANCH>  Branch to switch to
 
 Options:
-      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --graph <GRAPH>  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+  -h, --help           Print help
 
 ========== acetone merge --help ==========
 Merge another version into the current branch.
@@ -155,6 +168,9 @@ Options:
       --abort
           Abandon a merge in progress, restoring the pre-merge branch tip
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -177,6 +193,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
       --type <PROPERTY:TYPE>
           Declare a property's type as `<property>:<type>`; repeat.
@@ -214,6 +233,9 @@ Options:
           
           Types: bool, int, float, string, bytes, date, time, datetime, duration, list. Enforced on write and checked against existing relationships at declare time, exactly as node property types are (spec §2, acetone-7qw.12); unlike node types, no seek relies on them (indexes are node-only), so this guards honesty, not query results. Declared types do not close the shape (ADR-0070).
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -237,6 +259,9 @@ Options:
           
           [default: .]
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
       --property <PROPERTY>
           An indexed property; repeat, in order, for a composite index
 
@@ -255,6 +280,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
   -h, --help
           Print help (see a summary with '-h')
@@ -278,6 +306,9 @@ Options:
 
       --at <AT>
           Read the schema at a specific ref (branch, tag or commit hash) instead of the current workspace state
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
       --json
           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
@@ -303,6 +334,9 @@ Options:
           
           [default: .]
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
   -l, --label <LABEL>
           Export only this label's nodes
 
@@ -325,9 +359,10 @@ Arguments:
   <KEY>    Key value (parsed as an integer if it looks like one, else a string — see the CLI-level docs)
 
 Options:
-      --prop <PROP>  A `KEY=VALUE` non-key property; may be repeated
-      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --prop <PROP>    A `KEY=VALUE` non-key property; may be repeated
+      --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --graph <GRAPH>  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+  -h, --help           Print help
 
 ========== acetone rekey --help ==========
 Change a node's key (single-column keys).
@@ -355,6 +390,9 @@ Options:
           
           [default: .]
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -376,6 +414,9 @@ Options:
 
       --all-theirs
           Take the merged-in version's value for every conflict
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
   -h, --help
           Print help (see a summary with '-h')
@@ -403,6 +444,9 @@ Options:
           
           [default: .]
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -416,9 +460,10 @@ Arguments:
   <KEY>    Key value (same parsing rule as `put-node`)
 
 Options:
-      --json         Emit machine-readable JSON (the node object, or `null` on a miss with a non-zero exit). The JSON shape is unstable pre-1.0 and may change at any minor release
-      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --json           Emit machine-readable JSON (the node object, or `null` on a miss with a non-zero exit). The JSON shape is unstable pre-1.0 and may change at any minor release
+      --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --graph <GRAPH>  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+  -h, --help           Print help
 
 ========== acetone put-edge --help ==========
 Insert or replace an edge (plumbing; no properties, no discriminator)
@@ -433,8 +478,9 @@ Arguments:
   <DST_KEY>    Destination node's key value
 
 Options:
-      --repo <REPO>  Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
-  -h, --help         Print help
+      --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --graph <GRAPH>  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+  -h, --help           Print help
 
 ========== acetone list-nodes --help ==========
 List nodes, in key order
@@ -444,6 +490,7 @@ Usage: acetone list-nodes [OPTIONS]
 Options:
   -l, --label <LABEL>  Restrict to one primary label
       --repo <REPO>    Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
+      --graph <GRAPH>  Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
       --json           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
   -h, --help           Print help
 
@@ -459,6 +506,7 @@ Options:
       --at <AT>            Read at a specific ref (branch, tag or commit hash) instead of the current workspace state — whole-query time travel
       --repo <REPO>        Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -f, --format <FORMAT>    Output format [default: table] [possible values: table, json, csv]
+      --graph <GRAPH>      Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
       --param <KEY=VALUE>  Bind a query parameter (repeatable): `--param KEY=VALUE`, where VALUE is a Cypher literal — a number, quoted string, true/false, null, or a list/map of literals. Quote strings through the shell: `--param 'name="billing"'`. The query reads it as `$KEY`
       --timeout <SECONDS>  Wall-clock budget in seconds (0 disables). The deterministic work caps still apply either way; this bounds how long they may take to be reached on a store-backed graph (ADR-0069) [default: 60]
       --autodeclare        Opt in to relationship-type autodeclare (ADR-0060): a write may coin an unknown relationship type in CREATE/MERGE position, appending it to the schema in the same transaction as the data. Off by default; reads never coin a type
@@ -477,6 +525,9 @@ Options:
           
           [default: .]
 
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -492,6 +543,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
   -h, --help
           Print help (see a summary with '-h')
@@ -511,6 +565,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
       --mask-bits <MASK_BITS>
           Target rolling-hash mask bits, mean chunk size ≈ 2^mask_bits (default: the repo's current value)
@@ -542,6 +599,9 @@ Options:
           Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument
           
           [default: .]
+
+      --graph <GRAPH>
+          Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
   -l, --label <LABEL>
           Node mode: the primary label for every imported row. The label's declared key selects which fields form the node key

@@ -212,28 +212,50 @@ impl Repository {
 
         // Preconditions, checked before ANY write so a rejected init leaves the
         // repository — and the user's code — completely untouched.
-        // (1) The repository must not already host an acetone graph. Reporting
-        //     the existing graph's name covers both a same-graph re-init and a
-        //     second (unsupported) graph, and — crucially — refusing *before*
-        //     writing the marker keeps a failed second init from leaving a
-        //     stray marker that would make `open` see multiple graphs.
-        if let Some((existing, _)) = store.list_refs(GRAPHS_REF_PREFIX)?.first() {
-            let name = existing.strip_prefix(GRAPHS_REF_PREFIX).unwrap_or(existing);
+        let existing_markers = store.list_refs(GRAPHS_REF_PREFIX)?;
+        // (1) This graph name must not already exist (a same-graph re-init).
+        //     Multiple *distinct* graphs are allowed (acetone-j6ui): each
+        //     lives on its own namespace and its own per-graph workspace ref
+        //     (acetone-42d), so they do not race. Refusing *before* writing
+        //     the marker keeps a failed init from leaving a stray marker.
+        let this_marker = format!("{GRAPHS_REF_PREFIX}{graph}");
+        if existing_markers
+            .iter()
+            .any(|(name, _)| name == &this_marker)
+        {
             return Err(GraphError::GraphExists {
-                name: name.to_owned(),
+                name: graph.to_owned(),
             });
         }
-        // (2) Nor a standalone acetone workspace: co-tenant init starts a fresh
-        //     graph and shares the per-worktree workspace ref, so it cannot be
-        //     layered onto an existing acetone repository. Check both the
-        //     per-worktree ref and the legacy pre-ADR-0014 shared workspace ref,
-        //     so a legacy standalone repository is rejected too (otherwise a
-        //     co-tenant graph could be layered onto it, and a later write would
-        //     race two workspaces over the same refs).
-        if store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some()
-            || store.read_ref(&workspace_ref(DEFAULT_WORKSPACE))?.is_some()
+        // (2) A co-tenant graph must not be layered onto a *standalone*
+        //     acetone repository (which owns refs/heads/main etc. — a later
+        //     write would race the standalone workspace). A standalone repo
+        //     has a workspace ref but NO graph marker; once any graph marker
+        //     exists the repo is already co-tenant, and a global workspace
+        //     ref there is a first co-tenant graph's not-yet-migrated
+        //     workspace (acetone-42d), not a standalone one — so only guard
+        //     when there is no marker at all.
+        if existing_markers.is_empty()
+            && (store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some()
+                || store.read_ref(&workspace_ref(DEFAULT_WORKSPACE))?.is_some())
         {
             return Err(GraphError::ExistingAcetoneWorkspace);
+        }
+
+        // Before adding a SECOND graph, migrate an existing sole graph's
+        // workspace off the pre-split shared ref onto its own per-graph ref
+        // (PR #263 review blocker 1). The shared-global fallback fires only
+        // for a sole graph (`legacy_ref_value`); once this init makes the
+        // repository multi-graph, the existing graph would lose visibility
+        // of a workspace still on the shared ref — and a half-initialised
+        // *new* graph could read it as its own. Doing this BEFORE writing
+        // the new marker means a crash mid-migration leaves the repo still
+        // single-graph (the new marker absent), where the fallback is still
+        // valid, so no state reads another graph's workspace. Idempotent.
+        if let [(only, _)] = existing_markers.as_slice() {
+            let existing = only.strip_prefix(GRAPHS_REF_PREFIX).unwrap_or(only);
+            validate_graph_name(existing)?;
+            migrate_shared_worktree_refs(&store, &GraphRefNamespace::co_tenant(existing))?;
         }
 
         // Write the marker FIRST (ADR-0050). The marker is what makes `open`
@@ -302,6 +324,41 @@ impl Repository {
         Ok(repo)
     }
 
+    /// Open a *named* co-tenant graph, for a repository that hosts more than
+    /// one (acetone-j6ui): where [`Self::open`] cannot choose and returns
+    /// [`GraphError::MultipleGraphs`], this selects `graph` directly. Errors
+    /// with [`GraphError::NoSuchGraph`] (listing the available names) if the
+    /// repository hosts no graph by that name. Read-only, like `open`.
+    pub fn open_graph(path: &Path, graph: &str) -> Result<Repository, GraphError> {
+        validate_graph_name(graph)?;
+        let store = GitStore::open_discovering(path)?;
+        // The marker ref is the authority on which graphs exist (ADR-0050);
+        // require it, so a typo names a graph rather than silently opening an
+        // empty co-tenant layout that would read as `NoWorkspace`.
+        let marker = format!("{GRAPHS_REF_PREFIX}{graph}");
+        if store.read_ref(&marker)?.is_none() {
+            return Err(GraphError::NoSuchGraph {
+                name: graph.to_owned(),
+                available: list_graph_names(&store)?,
+            });
+        }
+        let repo = Repository {
+            store,
+            workspace: DEFAULT_WORKSPACE.to_owned(),
+            namespace: GraphRefNamespace::co_tenant(graph),
+        };
+        repo.workspace_manifest()?;
+        Ok(repo)
+    }
+
+    /// The names of every co-tenant graph this repository hosts, sorted
+    /// (acetone-j6ui). Empty for a standalone repository or one acetone has
+    /// never initialised. Read-only.
+    pub fn list_graphs(path: &Path) -> Result<Vec<String>, GraphError> {
+        let store = GitStore::open_discovering(path)?;
+        list_graph_names(&store)
+    }
+
     /// Build the workspace tree (`{manifest, chunks/}`, huo) for the manifest
     /// blob `manifest_hash`, anchoring its complete chunk set. Returns the
     /// tree hash the workspace ref should point at.
@@ -341,13 +398,32 @@ impl Repository {
     /// shared global `refs/worktree/acetone/workspace` a co-tenant graph
     /// written before the per-graph split used, then the pre-ADR-0014
     /// shared `refs/acetone/workspaces/<name>`. Read only — never CAS'd.
+    ///
+    /// The shared-global fallback fires **only when this graph is the sole
+    /// graph** in the repository (PR #263 review blocker 1): that ref is a
+    /// single-graph pre-split artifact, and once several graphs coexist it
+    /// is not attributable to any one — so a graph among many (in
+    /// particular a half-initialised second graph whose per-graph ref does
+    /// not exist yet) must never read it and mistake another graph's
+    /// workspace for its own. `init_co_tenant` migrates the sole graph's
+    /// shared workspace to its per-graph ref before adding a second graph,
+    /// so the sole graph does not lose visibility of it here.
     fn legacy_ref_value(&self) -> Result<Option<Hash>, GraphError> {
         if let Some(shared) = self.namespace.legacy_workspace_ref()
+            && self.is_sole_graph()?
             && let Some(hash) = self.store.read_ref(shared)?
         {
             return Ok(Some(hash));
         }
         Ok(self.store.read_ref(&workspace_ref(&self.workspace))?)
+    }
+
+    /// Whether this repository hosts at most one co-tenant graph — the
+    /// condition under which a pre-split shared worktree ref is
+    /// unambiguously this graph's (acetone-j6ui). Standalone repositories
+    /// have no markers and never take the shared-global fallback anyway.
+    fn is_sole_graph(&self) -> Result<bool, GraphError> {
+        Ok(self.store.list_refs(GRAPHS_REF_PREFIX)?.len() <= 1)
     }
 
     /// The effective workspace-ref target: this graph's per-worktree ref,
@@ -1057,7 +1133,12 @@ impl Repository {
         if let Some(hash) = self.store.read_ref(self.namespace.merge_head_ref())? {
             return Ok(Some(hash));
         }
-        if let Some(legacy) = self.namespace.legacy_merge_head_ref() {
+        // Same sole-graph restriction as the workspace fallback (PR #263
+        // review blocker 1): the pre-split shared merge-head is a
+        // single-graph artifact, unattributable once several graphs exist.
+        if let Some(legacy) = self.namespace.legacy_merge_head_ref()
+            && self.is_sole_graph()?
+        {
             return Ok(self.store.read_ref(legacy)?);
         }
         Ok(None)
@@ -2049,6 +2130,37 @@ fn is_blank(store: &GitStore, manifest: &Manifest) -> Result<bool, GraphError> {
     Ok(*manifest == blank)
 }
 
+/// Move a sole co-tenant graph's uncommitted workspace and merge-head off
+/// the pre-split shared refs (`refs/worktree/acetone/{workspace,merge-head}`)
+/// onto `target`'s per-graph refs, then delete the shared refs
+/// (acetone-j6ui / PR #263 review blocker 1). Called by `init_co_tenant`
+/// just before a repository becomes multi-graph, so the shared ref — which
+/// is only attributable while a single graph exists — does not linger to be
+/// read by another graph. Idempotent and best-effort per ref: writes the
+/// per-graph ref only if absent (a prior partial migration leaves it
+/// present), then removes the shared source. The per-graph ref is written
+/// before the shared one is deleted, so a crash between leaves the
+/// authoritative per-graph copy in place with the shared ref merely
+/// lingering — still safe, and a retry completes it.
+fn migrate_shared_worktree_refs(
+    store: &GitStore,
+    target: &GraphRefNamespace,
+) -> Result<(), GraphError> {
+    for (shared, per_graph) in [
+        (target.legacy_workspace_ref(), target.workspace_ref()),
+        (target.legacy_merge_head_ref(), target.merge_head_ref()),
+    ] {
+        let Some(shared) = shared else { continue };
+        if let Some(value) = store.read_ref(shared)? {
+            if store.read_ref(per_graph)?.is_none() {
+                store.write_ref(per_graph, None, &value)?;
+            }
+            store.delete_ref(shared)?;
+        }
+    }
+    Ok(())
+}
+
 /// Write the empty-graph workspace: build the empty manifest under
 /// `chunk_params`, anchor its chunk set in a workspace tree, and point
 /// `workspace_ref` at it. Shared by [`Repository::init`] (standalone, the
@@ -2080,10 +2192,26 @@ fn provision_empty_workspace(
     Ok(())
 }
 
+/// The names of every co-tenant graph marker in `store`, stripped and
+/// sorted (acetone-j6ui). `list_refs` returns direct refs sorted by full
+/// name, and the prefix is common, so the stripped names are sorted too.
+fn list_graph_names(store: &GitStore) -> Result<Vec<String>, GraphError> {
+    Ok(store
+        .list_refs(GRAPHS_REF_PREFIX)?
+        .into_iter()
+        .map(|(name, _)| {
+            name.strip_prefix(GRAPHS_REF_PREFIX)
+                .unwrap_or(&name)
+                .to_owned()
+        })
+        .collect())
+}
+
 /// Detect a repository's ref layout from its co-tenant graph markers
 /// (ADR-0050): no marker ⇒ standalone; exactly one ⇒ co-tenant for that graph.
-/// More than one is [`GraphError::MultipleGraphs`] (multi-graph selection is
-/// deferred). The marker is a *direct* ref, so `list_refs` enumerates it.
+/// More than one is [`GraphError::MultipleGraphs`] — plain `open` cannot
+/// choose, so the caller selects with [`Repository::open_graph`] (the CLI
+/// `--graph` flag). The marker is a *direct* ref, so `list_refs` enumerates it.
 ///
 /// The marker-derived name is **re-validated** before it shapes a namespace
 /// (acetone-c2a): `init_co_tenant` validates the name it writes, but a marker
@@ -2121,7 +2249,7 @@ pub(crate) fn detect_namespace(store: &GitStore) -> Result<GraphRefNamespace, Gr
 /// (git ref-format rules), and ASCII control/space/special characters git
 /// forbids in ref components. The store door (`validated_ref_name`) is the final
 /// backstop; this keeps the rejection close to the caller.
-fn validate_graph_name(graph: &str) -> Result<(), GraphError> {
+pub(crate) fn validate_graph_name(graph: &str) -> Result<(), GraphError> {
     let reject = |reason: &'static str| {
         Err(GraphError::InvalidGraphName {
             name: graph.to_owned(),

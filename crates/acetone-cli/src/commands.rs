@@ -23,20 +23,20 @@ use crate::output::{errln, outln};
 use serde_json::{Value as Json, json};
 
 /// Dispatch one parsed command.
-pub fn run(repo_path: &Path, command: Command) -> Result<()> {
+pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()> {
     match command {
         Command::Init {
             object_format,
             co_tenant,
             path,
         } => init(repo_path, &object_format, co_tenant.as_deref(), path),
-        Command::Status { json } => status(repo_path, json),
+        Command::Status { json } => status(repo_path, graph, json),
         Command::Commit {
             message,
             trailer,
             allow_empty,
-        } => commit(repo_path, &message, &trailer, allow_empty),
-        Command::Log { all, json } => log(repo_path, all, json),
+        } => commit(repo_path, graph, &message, &trailer, allow_empty),
+        Command::Log { all, json } => log(repo_path, graph, all, json),
         Command::Branch {
             name,
             refspec,
@@ -44,6 +44,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             json,
         } => branch(
             repo_path,
+            graph,
             name.as_deref(),
             refspec.as_deref(),
             delete.as_deref(),
@@ -57,36 +58,45 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             json,
         } => tag(
             repo_path,
+            graph,
             name.as_deref(),
             refspec.as_deref(),
             message.as_deref(),
             delete.as_deref(),
             json,
         ),
-        Command::Checkout { branch: name } => checkout(repo_path, &name),
+        Command::Checkout { branch: name } => checkout(repo_path, graph, &name),
         Command::Merge {
             refspec,
             message,
             abort,
-        } => merge(repo_path, refspec.as_deref(), message.as_deref(), abort),
+        } => merge(
+            repo_path,
+            graph,
+            refspec.as_deref(),
+            message.as_deref(),
+            abort,
+        ),
         Command::Resolve {
             all_ours,
             all_theirs,
-        } => resolve(repo_path, all_ours, all_theirs),
+        } => resolve(repo_path, graph, all_ours, all_theirs),
         Command::DeclareLabel {
             label,
             key,
             r#type,
             require,
             unique,
-        } => declare_label(repo_path, &label, &key, &r#type, &require, &unique),
-        Command::DeclareRelType { rtype, r#type } => declare_rel_type(repo_path, &rtype, &r#type),
+        } => declare_label(repo_path, graph, &label, &key, &r#type, &require, &unique),
+        Command::DeclareRelType { rtype, r#type } => {
+            declare_rel_type(repo_path, graph, &rtype, &r#type)
+        }
         Command::DeclareIndex {
             name,
             label,
             property,
-        } => declare_index(repo_path, &name, &label, &property),
-        Command::Reindex => reindex(repo_path),
+        } => declare_index(repo_path, graph, &name, &label, &property),
+        Command::Reindex => reindex(repo_path, graph),
         Command::Schema { action, at, json } => match action {
             Some(crate::cli::SchemaAction::Apply { file, dry_run }) => {
                 // The export flags would otherwise be silently ignored
@@ -95,15 +105,18 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
                 if at.is_some() || json {
                     bail!("--at/--json apply to `schema` (export), not `schema apply`");
                 }
-                schema_apply(repo_path, &file, dry_run)
+                schema_apply(repo_path, graph, &file, dry_run)
             }
-            None => schema(repo_path, at.as_deref(), json),
+            None => schema(repo_path, graph, at.as_deref(), json),
+        },
+        Command::Graph { action } => match action {
+            crate::cli::GraphAction::List { json } => graph_list(repo_path, json),
         },
         Command::Migrate {
             min_bytes,
             mask_bits,
             max_bytes,
-        } => migrate(repo_path, min_bytes, mask_bits, max_bytes),
+        } => migrate(repo_path, graph, min_bytes, mask_bits, max_bytes),
         Command::Export {
             format,
             label,
@@ -111,20 +124,21 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             out,
         } => crate::export::run(
             repo_path,
+            graph,
             &format,
             label.as_deref(),
             edge.as_deref(),
             out.as_deref(),
         ),
-        Command::PutNode { label, key, prop } => put_node(repo_path, &label, &key, &prop),
+        Command::PutNode { label, key, prop } => put_node(repo_path, graph, &label, &key, &prop),
         Command::Rekey {
             label,
             old_key,
             new_key,
             message,
-        } => rekey(repo_path, &label, &old_key, &new_key, &message),
-        Command::Diff { from, to, json } => diff(repo_path, &from, &to, json),
-        Command::GetNode { label, key, json } => get_node(repo_path, &label, &key, json),
+        } => rekey(repo_path, graph, &label, &old_key, &new_key, &message),
+        Command::Diff { from, to, json } => diff(repo_path, graph, &from, &to, json),
+        Command::GetNode { label, key, json } => get_node(repo_path, graph, &label, &key, json),
         Command::PutEdge {
             src_label,
             src_key,
@@ -132,9 +146,9 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             dst_label,
             dst_key,
         } => put_edge(
-            repo_path, &src_label, &src_key, &rtype, &dst_label, &dst_key,
+            repo_path, graph, &src_label, &src_key, &rtype, &dst_label, &dst_key,
         ),
-        Command::ListNodes { label, json } => list_nodes(repo_path, label.as_deref(), json),
+        Command::ListNodes { label, json } => list_nodes(repo_path, graph, label.as_deref(), json),
         Command::Query {
             cypher,
             at,
@@ -146,6 +160,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             let format = crate::query::Format::parse(&format)?;
             crate::query::run(
                 repo_path,
+                graph,
                 &cypher,
                 at.as_deref(),
                 format,
@@ -159,9 +174,9 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             max_concurrent,
             timeout,
         } => crate::serve::serve(repo_path, &socket, max_concurrent, timeout),
-        Command::Shell { timeout } => crate::query::shell(repo_path, timeout),
-        Command::Fsck => fsck(repo_path),
-        Command::Gc => gc(repo_path),
+        Command::Shell { timeout } => crate::query::shell(repo_path, graph, timeout),
+        Command::Fsck => fsck(repo_path, graph),
+        Command::Gc => gc(repo_path, graph),
         Command::Import {
             format,
             source,
@@ -175,6 +190,7 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
             batch_size,
         } => crate::import::run(
             repo_path,
+            graph,
             &format,
             &source,
             label.as_deref(),
@@ -189,11 +205,27 @@ pub fn run(repo_path: &Path, command: Command) -> Result<()> {
     }
 }
 
-fn fsck(repo_path: &Path) -> Result<()> {
+fn graph_list(repo_path: &Path, json: bool) -> Result<()> {
+    let names = Repository::list_graphs(repo_path)
+        .with_context(|| format!("listing graphs at {}", repo_path.display()))?;
+    if json {
+        emit_json(&Json::Array(names.into_iter().map(Json::String).collect()));
+    } else {
+        for name in &names {
+            // Graph names are validated ref components, but sanitise at the
+            // terminal boundary like every other repository-controlled string.
+            outln!("{}", sanitise_line(name));
+        }
+    }
+    Ok(())
+}
+
+fn fsck(repo_path: &Path, graph: Option<&str>) -> Result<()> {
     // Open only the store (not a full Repository): fsck must run even when the
     // default workspace manifest is damaged — precisely when it is needed
     // (acetone-zhp). `Repository::open` would fail-fast decoding that manifest.
-    let report = acetone_core::graph::fsck::check_path(repo_path)
+    // `--graph` scopes the check to one graph of a multi-graph repo.
+    let report = acetone_core::graph::fsck::check_path_graph(repo_path, graph)
         .with_context(|| format!("checking repository at {}", repo_path.display()))?;
     for finding in &report.findings {
         // Findings embed repository-controlled text (index names, ref
@@ -263,13 +295,22 @@ fn init(
     Ok(())
 }
 
-pub(crate) fn open(repo_path: &Path) -> Result<Repository> {
-    Repository::open(repo_path)
-        .with_context(|| format!("opening repository at {}", repo_path.display()))
+/// Open the repository, selecting a co-tenant graph when `graph` is given
+/// (the global `--graph` flag, acetone-j6ui). Without it, a standalone or
+/// single-graph repository opens automatically; a repository hosting
+/// several graphs returns [`GraphError::MultipleGraphs`] naming them, so
+/// the user learns to pass `--graph`.
+pub(crate) fn open(repo_path: &Path, graph: Option<&str>) -> Result<Repository> {
+    match graph {
+        Some(name) => Repository::open_graph(repo_path, name)
+            .with_context(|| format!("opening graph {name:?} at {}", repo_path.display())),
+        None => Repository::open(repo_path)
+            .with_context(|| format!("opening repository at {}", repo_path.display())),
+    }
 }
 
-pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
-    let repo = open(repo_path)?;
+pub(crate) fn status(repo_path: &Path, graph: Option<&str>, json: bool) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     // Short branch name (None when detached), head hash, dirtiness, merge
     // state and the workspace counts — the same facts both paths report.
     let branch = repo.current_branch()?.map(|full| {
@@ -356,11 +397,12 @@ pub(crate) fn status(repo_path: &Path, json: bool) -> Result<()> {
 
 pub(crate) fn commit(
     repo_path: &Path,
+    graph: Option<&str>,
     message: &str,
     trailers: &[String],
     allow_empty: bool,
 ) -> Result<()> {
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     // Completing a merge always commits (it records the two-parent history)
     // even when the resolved result happens to match HEAD. It still refuses if
     // conflicts remain unresolved (the library errors, but this is friendlier).
@@ -404,8 +446,8 @@ pub(crate) fn commit(
     Ok(())
 }
 
-fn log(repo_path: &Path, all: bool, json: bool) -> Result<()> {
-    let repo = open(repo_path)?;
+fn log(repo_path: &Path, graph: Option<&str>, all: bool, json: bool) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     // Default: the current branch's first-parent chain (its own changelog).
     // `--all`: every commit reachable from any branch, deterministic
     // newest-first topological order (acetone-b6q).
@@ -472,12 +514,13 @@ fn log(repo_path: &Path, all: bool, json: bool) -> Result<()> {
 
 fn branch(
     repo_path: &Path,
+    graph: Option<&str>,
     name: Option<&str>,
     refspec: Option<&str>,
     delete: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     if let Some(name) = delete {
         // Ref removal only: the commits stay in the store, reachable by
         // hash, until a git-level gc expires them (acetone gc never
@@ -541,13 +584,14 @@ fn branch(
 
 fn tag(
     repo_path: &Path,
+    graph: Option<&str>,
     name: Option<&str>,
     refspec: Option<&str>,
     message: Option<&str>,
     delete: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     if let Some(name) = delete {
         // Ref removal only: the tagged commit stays in the store, reachable
         // by hash (acetone gc never deletes).
@@ -592,8 +636,8 @@ fn tag(
     Ok(())
 }
 
-fn checkout(repo_path: &Path, name: &str) -> Result<()> {
-    let repo = open(repo_path)?;
+fn checkout(repo_path: &Path, graph: Option<&str>, name: &str) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     repo.checkout_branch(name)
         .with_context(|| format!("checking out branch {name:?}"))?;
     outln!("switched to branch {name:?}");
@@ -602,11 +646,12 @@ fn checkout(repo_path: &Path, name: &str) -> Result<()> {
 
 fn merge(
     repo_path: &Path,
+    graph: Option<&str>,
     refspec: Option<&str>,
     message: Option<&str>,
     abort: bool,
 ) -> Result<()> {
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     if abort {
         repo.abort_merge().context("aborting merge")?;
         outln!("merge aborted — workspace restored to the branch tip");
@@ -661,7 +706,7 @@ fn merge(
     Ok(())
 }
 
-fn resolve(repo_path: &Path, all_ours: bool, all_theirs: bool) -> Result<()> {
+fn resolve(repo_path: &Path, graph: Option<&str>, all_ours: bool, all_theirs: bool) -> Result<()> {
     let side = match (all_ours, all_theirs) {
         (true, false) => acetone_core::graph::repo::ResolveSide::Ours,
         (false, true) => acetone_core::graph::repo::ResolveSide::Theirs,
@@ -671,7 +716,7 @@ fn resolve(repo_path: &Path, all_ours: bool, all_theirs: bool) -> Result<()> {
         ),
         (true, true) => bail!("--all-ours and --all-theirs are mutually exclusive"),
     };
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     let count = repo.resolve_all(side).context("resolving conflicts")?;
     // The resolved graph may still carry (or newly compose) graph-level
     // violations — e.g. picking the side that deleted a node while the merge
@@ -796,6 +841,7 @@ fn parse_property_types(
 
 pub(crate) fn declare_label(
     repo_path: &Path,
+    graph: Option<&str>,
     label: &str,
     key: &[String],
     types: &[String],
@@ -806,7 +852,7 @@ pub(crate) fn declare_label(
     let types = parse_property_types(types)?;
     let def = LabelDef::new(key.to_vec(), types, require.to_vec(), unique.to_vec())
         .with_context(|| format!("declaring schema for label {label:?}"))?;
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     // Backfill check (acetone-9gw): a `--require`/`--unique` set declared
     // over existing data the data already violates is refused with the
     // violating nodes named — accepting it silently would leave violations
@@ -867,7 +913,12 @@ pub(crate) fn declare_label(
     Ok(())
 }
 
-pub(crate) fn declare_rel_type(repo_path: &Path, rtype: &str, type_specs: &[String]) -> Result<()> {
+pub(crate) fn declare_rel_type(
+    repo_path: &Path,
+    graph: Option<&str>,
+    rtype: &str,
+    type_specs: &[String],
+) -> Result<()> {
     use acetone_core::model::schema::{RelTypeDef, SchemaEntry};
     let types = parse_property_types(type_specs)?;
     let def = RelTypeDef::new(None, types, [])
@@ -876,7 +927,7 @@ pub(crate) fn declare_rel_type(repo_path: &Path, rtype: &str, type_specs: &[Stri
         name: rtype.to_owned(),
         def,
     };
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     let mut txn = repo.begin_write()?;
     txn.put_schema(&entry)?;
     txn.save().context("saving workspace")?;
@@ -886,6 +937,7 @@ pub(crate) fn declare_rel_type(repo_path: &Path, rtype: &str, type_specs: &[Stri
 
 pub(crate) fn declare_index(
     repo_path: &Path,
+    graph: Option<&str>,
     name: &str,
     label: &str,
     properties: &[String],
@@ -897,7 +949,7 @@ pub(crate) fn declare_index(
         name: name.to_owned(),
         def,
     };
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     let mut txn = repo.begin_write()?;
     // Declaring the index stages its schema entry; the flush builds the
     // `idx/<name>` map from the current nodes (spec §3.3, Invariant #5).
@@ -917,8 +969,8 @@ pub(crate) fn declare_index(
     Ok(())
 }
 
-fn reindex(repo_path: &Path) -> Result<()> {
-    let repo = open(repo_path)?;
+fn reindex(repo_path: &Path, graph: Option<&str>) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     repo.reindex().context("reindexing")?;
     outln!("reindexed");
     Ok(())
@@ -997,7 +1049,12 @@ fn parse_refusing_duplicate_keys(text: &str) -> Result<Json> {
     Ok(value)
 }
 
-pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Result<()> {
+pub(crate) fn schema_apply(
+    repo_path: &Path,
+    graph: Option<&str>,
+    file: &str,
+    dry_run: bool,
+) -> Result<()> {
     use acetone_core::model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
     use std::collections::BTreeMap;
 
@@ -1178,7 +1235,7 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
     }
 
     // --- diff against the current schema ---
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     let snapshot = repo.workspace_snapshot()?;
     // Mid-merge, a conflicted schema entry is absent from the merged map:
     // the diff would report it as `add` and the apply would silently
@@ -1335,10 +1392,15 @@ pub(crate) fn schema_apply(repo_path: &Path, file: &str, dry_run: bool) -> Resul
     Ok(())
 }
 
-pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<()> {
+pub(crate) fn schema(
+    repo_path: &Path,
+    graph: Option<&str>,
+    at: Option<&str>,
+    json: bool,
+) -> Result<()> {
     use acetone_core::model::schema::SchemaEntry;
 
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     let snapshot = match at {
         Some(refspec) => repo
             .snapshot(refspec)
@@ -1535,13 +1597,14 @@ pub(crate) fn schema(repo_path: &Path, at: Option<&str>, json: bool) -> Result<(
 
 fn migrate(
     repo_path: &Path,
+    graph: Option<&str>,
     min_bytes: Option<u32>,
     mask_bits: Option<u32>,
     max_bytes: Option<u32>,
 ) -> Result<()> {
     use acetone_core::graph::{Rechunk, rewrite_history};
 
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     // Each unspecified parameter defaults to the repo's current value, so a
     // no-flag `migrate` re-chunks under the same parameters — a repair that
     // leaves every hash unchanged (history-independence), never a silent
@@ -1565,8 +1628,8 @@ fn migrate(
     Ok(())
 }
 
-fn gc(repo_path: &Path) -> Result<()> {
-    let repo = open(repo_path)?;
+fn gc(repo_path: &Path, graph: Option<&str>) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     let stats = repo.gc().context("consolidating the object store")?;
     outln!(
         "gc: packed {} object(s) ({} delta, {} whole) into {} bytes; \
@@ -1581,8 +1644,15 @@ fn gc(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn rekey(repo_path: &Path, label: &str, old_key: &str, new_key: &str, message: &str) -> Result<()> {
-    let repo = open(repo_path)?;
+fn rekey(
+    repo_path: &Path,
+    graph: Option<&str>,
+    label: &str,
+    old_key: &str,
+    new_key: &str,
+    message: &str,
+) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     let old = single_key(label, old_key)?;
     let new = single_key(label, new_key)?;
     let commit = repo
@@ -1597,8 +1667,14 @@ fn rekey(repo_path: &Path, label: &str, old_key: &str, new_key: &str, message: &
     Ok(())
 }
 
-fn put_node(repo_path: &Path, label: &str, key: &str, props: &[String]) -> Result<()> {
-    let repo = open(repo_path)?;
+fn put_node(
+    repo_path: &Path,
+    graph: Option<&str>,
+    label: &str,
+    key: &str,
+    props: &[String],
+) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     let node_key = single_key(label, key)?;
     let mut properties = BTreeMap::new();
     for raw in props {
@@ -1650,9 +1726,9 @@ pub(crate) fn format_edge_key(key: &EdgeKey) -> String {
     }
 }
 
-fn diff(repo_path: &Path, from: &str, to: &str, json: bool) -> Result<()> {
+fn diff(repo_path: &Path, graph: Option<&str>, from: &str, to: &str, json: bool) -> Result<()> {
     use acetone_core::graph::diff::ChangeKind;
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     let diff = repo
         .diff(from, to)
         .with_context(|| format!("diffing {from:?}..{to:?}"))?;
@@ -1729,8 +1805,14 @@ fn diff(repo_path: &Path, from: &str, to: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_node(repo_path: &Path, label: &str, key: &str, json: bool) -> Result<()> {
-    let repo = open(repo_path)?;
+fn get_node(
+    repo_path: &Path,
+    graph: Option<&str>,
+    label: &str,
+    key: &str,
+    json: bool,
+) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     let node_key = single_key(label, key)?;
     let snapshot = repo.workspace_snapshot()?;
     match snapshot.get_node(&node_key)? {
@@ -1794,13 +1876,14 @@ fn node_to_json(key: &NodeKey, record: &NodeRecord) -> Json {
 
 fn put_edge(
     repo_path: &Path,
+    graph: Option<&str>,
     src_label: &str,
     src_key: &str,
     rtype: &str,
     dst_label: &str,
     dst_key: &str,
 ) -> Result<()> {
-    let repo = open(repo_path)?;
+    let repo = open(repo_path, graph)?;
     let src = single_key(src_label, src_key)?;
     let dst = single_key(dst_label, dst_key)?;
     let edge_key = EdgeKey::new(src, rtype, dst, Value::Null).context("building edge key")?;
@@ -1817,8 +1900,13 @@ fn put_edge(
     Ok(())
 }
 
-fn list_nodes(repo_path: &Path, label: Option<&str>, json: bool) -> Result<()> {
-    let repo = open(repo_path)?;
+fn list_nodes(
+    repo_path: &Path,
+    graph: Option<&str>,
+    label: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let repo = open(repo_path, graph)?;
     let snapshot = repo.workspace_snapshot()?;
     let nodes = snapshot.nodes()?;
     if json {

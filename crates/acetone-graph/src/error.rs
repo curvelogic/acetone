@@ -385,17 +385,25 @@ pub enum GraphError {
          a co-tenant graph to it"
     )]
     ExistingAcetoneWorkspace,
-    /// `open` found more than one co-tenant graph marker in the repository.
-    /// Selecting among several graphs is not supported in 0.3 (single graph
-    /// per repository); the layout is parameterised for it but the ergonomics
-    /// are deferred (ADR-0050).
+    /// Plain `open` found more than one co-tenant graph marker and cannot
+    /// choose. The caller must name one (`open_graph`, or the CLI `--graph`
+    /// flag); the names are listed so a UI can offer them (acetone-j6ui).
     #[error(
-        "repository hosts multiple acetone graphs ({names:?}); selecting among \
-         them is not supported yet"
+        "repository hosts multiple acetone graphs ({names:?}); select one with \
+         --graph <name>"
     )]
     MultipleGraphs {
         /// The graph names found.
         names: Vec<String>,
+    },
+    /// `open_graph` (or `--graph`) named a graph this repository does not
+    /// host. The available graph names are listed (acetone-j6ui).
+    #[error("no acetone graph named {name:?} in this repository; available: {available:?}")]
+    NoSuchGraph {
+        /// The requested graph name.
+        name: String,
+        /// The graph names the repository does host.
+        available: Vec<String>,
     },
 }
 

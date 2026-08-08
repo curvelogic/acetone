@@ -65,13 +65,14 @@ impl Format {
 /// Run the `export` subcommand.
 pub fn run(
     repo_path: &Path,
+    graph: Option<&str>,
     format: &str,
     label: Option<&str>,
     edge: Option<&str>,
     out: Option<&Path>,
 ) -> Result<()> {
     let format = Format::parse(format)?;
-    let repo = crate::commands::open(repo_path)?;
+    let repo = crate::commands::open(repo_path, graph)?;
     let snapshot = repo.workspace_snapshot()?;
     let schema = snapshot.schema_entries()?;
     let key_names = key_names(&schema);

@@ -28,6 +28,16 @@ fine.)
   connection cap, read/write idle timeouts against slow/stalled peers,
   typed error kinds with span-aware rendering, and stale-socket reclaim
   so a host restart after a crash rebinds cleanly.
+- **Multiple co-tenant graphs in one repository** (acetone-j6ui): a
+  repository can now host several acetone graphs alongside its code,
+  each on its own ref namespace and its own per-graph workspace, so
+  their writes are isolated. `acetone init --co-tenant <name>` no
+  longer refuses a second graph; a new global `--graph <name>` flag
+  selects which one a command operates on (a repository with a single
+  graph still needs no flag); `acetone graph list` shows the names; and
+  a command that cannot choose says so, naming `--graph`. Library:
+  `Repository::open_graph`, `Repository::list_graphs`,
+  `fsck::check_path_graph`.
 
 ### Changed
 

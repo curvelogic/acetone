@@ -127,19 +127,30 @@ fn init_co_tenant_on_a_non_git_directory_errors_clearly() {
 }
 
 #[test]
-fn init_co_tenant_refuses_a_second_graph_and_names_the_existing_one() {
+fn init_co_tenant_refuses_a_same_name_reinit_but_allows_a_distinct_graph() {
+    // acetone-j6ui: a repository may host several graphs, so a second
+    // DISTINCT graph is allowed; only re-initialising an EXISTING name is
+    // refused (naming that graph).
     let (_dir, repo) = code_repo();
     assert!(
         acetone(&repo, &["init", "--co-tenant", "assets"])
             .status
             .success()
     );
-    let out = acetone(&repo, &["init", "--co-tenant", "other"]);
-    assert!(!out.status.success(), "a second graph must be refused");
+    // A distinct second graph now succeeds.
     assert!(
-        stderr(&out).contains("assets") || stdout(&out).contains("assets"),
+        acetone(&repo, &["init", "--co-tenant", "other"])
+            .status
+            .success(),
+        "a second distinct graph must be allowed (acetone-j6ui)"
+    );
+    // Re-initialising an existing name is refused, naming it.
+    let dup = acetone(&repo, &["init", "--co-tenant", "assets"]);
+    assert!(!dup.status.success(), "a same-name re-init must be refused");
+    assert!(
+        stderr(&dup).contains("assets") || stdout(&dup).contains("assets"),
         "the error should name the existing graph: {}",
-        stderr(&out)
+        stderr(&dup)
     );
 }
 
@@ -226,4 +237,125 @@ fn tag_in_co_tenant_mode_lands_in_the_graph_namespace_and_resolves_by_short_name
     );
     assert_eq!(stdout(&out).trim(), "n\n1", "{}", stderr(&out));
     assert_eq!(stdout(&acetone(&repo, &["tag"])), "v1\n");
+}
+
+/// acetone-j6ui: the multi-graph CLI surface — two graphs in one repo, the
+/// `--graph` selector, and `graph list`, all through the shipped binary.
+#[test]
+fn multi_graph_cli_selection_and_listing() {
+    let (_dir, repo) = code_repo();
+
+    // Two co-tenant graphs now coexist.
+    assert!(
+        acetone(&repo, &["init", "--co-tenant", "alpha"])
+            .status
+            .success(),
+        "init alpha"
+    );
+    assert!(
+        acetone(&repo, &["init", "--co-tenant", "beta"])
+            .status
+            .success(),
+        "init beta (a second graph must be allowed)"
+    );
+
+    // `graph list` enumerates them, sorted; --json too.
+    let list = acetone(&repo, &["graph", "list"]);
+    assert!(list.status.success());
+    assert_eq!(stdout(&list), "alpha\nbeta\n");
+    let list_json = acetone(&repo, &["graph", "list", "--json"]);
+    assert_eq!(
+        stdout(&list_json).split_whitespace().collect::<String>(),
+        "[\"alpha\",\"beta\"]"
+    );
+
+    // Plain `status` cannot choose; the error names the flag.
+    let ambiguous = acetone(&repo, &["status"]);
+    assert!(!ambiguous.status.success());
+    assert!(
+        stderr(&ambiguous).contains("multiple acetone graphs")
+            && stderr(&ambiguous).contains("--graph"),
+        "ambiguous status must point at --graph: {}",
+        stderr(&ambiguous)
+    );
+
+    // Declare a key and write into ALPHA only.
+    assert!(
+        acetone(
+            &repo,
+            &["--graph", "alpha", "declare-label", "Doc", "--key", "id"]
+        )
+        .status
+        .success(),
+        "declare-label in alpha"
+    );
+    let w = acetone(
+        &repo,
+        &["--graph", "alpha", "query", "CREATE (:Doc {id:'a1'})"],
+    );
+    assert!(w.status.success(), "write to alpha: {}", stderr(&w));
+
+    // ALPHA sees the node; BETA (its own namespace + workspace) does not —
+    // isolation through the CLI.
+    let a = acetone(
+        &repo,
+        &[
+            "--graph",
+            "alpha",
+            "query",
+            "--format",
+            "json",
+            "MATCH (d:Doc) RETURN count(d) AS n",
+        ],
+    );
+    assert!(
+        stdout(&a).contains("\"n\":1") || stdout(&a).contains("\"n\": 1"),
+        "alpha n=1: {}",
+        stdout(&a)
+    );
+    // Beta has no Doc label declared, so a MATCH returns zero rows/nothing;
+    // the key check: beta must not see alpha's node. Declare + count on beta.
+    assert!(
+        acetone(
+            &repo,
+            &["--graph", "beta", "declare-label", "Doc", "--key", "id"]
+        )
+        .status
+        .success()
+    );
+    let b = acetone(
+        &repo,
+        &[
+            "--graph",
+            "beta",
+            "query",
+            "--format",
+            "json",
+            "MATCH (d:Doc) RETURN count(d) AS n",
+        ],
+    );
+    assert!(
+        stdout(&b).contains("\"n\":0") || stdout(&b).contains("\"n\": 0"),
+        "beta n=0 (isolated): {}",
+        stdout(&b)
+    );
+
+    // A missing graph names the available ones.
+    let bad = acetone(&repo, &["--graph", "gamma", "status"]);
+    assert!(!bad.status.success());
+    assert!(
+        stderr(&bad).contains("no acetone graph named \"gamma\"") && stderr(&bad).contains("alpha"),
+        "NoSuchGraph must list available graphs: {}",
+        stderr(&bad)
+    );
+
+    // fsck scopes to the named graph (does not error on the multi-graph repo).
+    let f = acetone(&repo, &["--graph", "alpha", "fsck"]);
+    assert!(f.status.success(), "fsck --graph alpha: {}", stderr(&f));
+
+    // The code branch is untouched throughout.
+    assert_eq!(
+        stdout(&git(&repo, &["symbolic-ref", "HEAD"])).trim(),
+        "refs/heads/main"
+    );
 }

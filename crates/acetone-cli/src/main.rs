@@ -16,7 +16,7 @@ use clap::Parser;
 
 fn main() {
     let cli = cli::Cli::parse();
-    if let Err(err) = commands::run(&cli.repo, cli.command) {
+    if let Err(err) = commands::run(&cli.repo, cli.graph.as_deref(), cli.command) {
         // The Display chain (`{:#}`), never Debug: acetone-graph's errors
         // are already the friendly, typed messages a user should see.
         eprintln!("error: {err:#}");

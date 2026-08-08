@@ -126,10 +126,17 @@ impl GraphRefNamespace {
                 // future per-graph state.
                 format!("refs/acetone/{graph}/"),
                 // Linked-worktree durability anchors (ADR-0044). Shared, not
-                // per-graph — but while co-tenancy is single-graph every
-                // anchor mirrors THIS graph's workspace tree, so they are its
-                // gc roots. Multi-graph co-tenancy must revisit this (the
-                // bead notes the overlap with acetone-gns).
+                // per-graph, and keyed on the worktree id alone. KNOWN
+                // LIMITATION (acetone-j6ui.4, PR #263 review): two co-tenant
+                // graphs written from the SAME linked (non-main) worktree
+                // share one anchor and clobber each other's, so the
+                // non-last-writer's UNCOMMITTED state loses ADR-0044
+                // protection against a *foreign* `git gc` of that worktree.
+                // Contained: committed data is branch-protected, acetone's
+                // own gc enumerates every worktree's refs and preserves both,
+                // and the main worktree writes no anchor. A per-(worktree,
+                // graph) anchor is the fix (it must keep gc/fsck's
+                // worktree-id staleness parse correct — acetone-j6ui.4).
                 WORKTREE_ANCHOR_PREFIX.to_owned(),
                 // Per-worktree acetone state (`refs/worktree/acetone/*`:
                 // workspace and merge refs, ADR-0014). Same single-graph

@@ -429,6 +429,7 @@ fn source_hash(file: &mut File, source: &Path) -> Result<String> {
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     repo_path: &Path,
+    graph: Option<&str>,
     format: &str,
     source: &Path,
     label: Option<&str>,
@@ -448,7 +449,7 @@ pub fn run(
     let hash = source_hash(&mut file, source)?;
     let mut extractor = FileExtractor::from_file(format, file, source, mapping)?;
 
-    let repo = crate::commands::open(repo_path)?;
+    let repo = crate::commands::open(repo_path, graph)?;
     let opts = ImportOptions {
         branch: branch.map(str::to_owned),
         message: message.map(str::to_owned),
