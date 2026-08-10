@@ -447,7 +447,7 @@ fn concurrent_writes_do_not_deadlock() {
     let wins = frames.iter().filter(|f| f.get("ok").is_some()).count();
     let locked = frames
         .iter()
-        .filter(|f| f["error"]["kind"] == "graph")
+        .filter(|f| f["error"]["kind"] == "locked")
         .count();
     assert!(wins >= 1, "at least one write commits: {frames:?}");
     assert_eq!(
@@ -482,7 +482,7 @@ fn a_live_writer_lock_is_a_typed_error_not_a_hang() {
     );
     let frame = read_frame(&mut s);
     assert_eq!(
-        frame["error"]["kind"], "graph",
+        frame["error"]["kind"], "locked",
         "typed locked error: {frame}"
     );
 
@@ -565,6 +565,10 @@ fn a_non_rust_python_client_drives_a_full_session() {
     assert!(
         stdout.contains("imported") && stdout.contains("'nodes': 2"),
         "the client must stream an import: {stdout}"
+    );
+    assert!(
+        stdout.contains("merged") && stdout.contains("fast-forward"),
+        "the client must drive a merge: {stdout}"
     );
     assert!(
         stdout.contains("status:"),
@@ -978,8 +982,207 @@ fn the_daemon_recovers_a_stale_writer_lock_but_not_a_live_one() {
     );
     let err = read_frame(&mut s);
     assert_eq!(
-        err["error"]["kind"], "graph",
+        err["error"]["kind"], "locked",
         "a live lock must refuse: {err}"
     );
     assert!(lock.exists(), "the live lock must be left in place");
+}
+
+/// A helper: drive a verb request and drain to the terminal ok/error frame.
+fn verb(s: &mut UnixStream, req: serde_json::Value) -> serde_json::Value {
+    write_frame(s, &req);
+    let mut frame = read_frame(s);
+    while frame.get("ok").is_none() && frame.get("error").is_none() {
+        frame = read_frame(s);
+    }
+    frame
+}
+
+#[test]
+fn the_ref_advancing_verbs_drive_a_full_branch_and_merge_cycle() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    assert!(
+        Command::new(bin)
+            .args(["init", repo.to_str().unwrap()])
+            .output()
+            .expect("init")
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["declare-label", "Doc", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "schema"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    // Base: create a1, commit on main.
+    verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "query",
+        "params": {"cypher": "CREATE (:Doc {id: 'a1', v: 0})"}}),
+    );
+    let c = verb(
+        &mut s,
+        serde_json::json!({"id": 2, "verb": "commit", "params": {"message": "base"}}),
+    );
+    assert!(c["ok"]["commit"].is_string(), "commit returns a hash: {c}");
+
+    // Branch `feature` off HEAD, list shows both, checkout it.
+    let b = verb(
+        &mut s,
+        serde_json::json!({"id": 3, "verb": "branch", "params": {"name": "feature"}}),
+    );
+    assert_eq!(b["ok"]["created"], "feature", "{b}");
+    let list = verb(&mut s, serde_json::json!({"id": 4, "verb": "branch"}));
+    let names: Vec<&str> = list["ok"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"main") && names.contains(&"feature"),
+        "{list}"
+    );
+    let co = verb(
+        &mut s,
+        serde_json::json!({"id": 5, "verb": "checkout", "params": {"branch": "feature"}}),
+    );
+    assert_eq!(co["ok"]["checked_out"], "feature", "{co}");
+
+    // On feature: set a1.v = 2, commit.
+    verb(
+        &mut s,
+        serde_json::json!({"id": 6, "verb": "query",
+        "params": {"cypher": "MATCH (d:Doc {id:'a1'}) SET d.v = 2"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 7, "verb": "commit", "params": {"message": "feature edit"}}),
+    );
+
+    // Back on main: set a1.v = 1, commit — a conflicting edit to the same cell.
+    verb(
+        &mut s,
+        serde_json::json!({"id": 8, "verb": "checkout", "params": {"branch": "main"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 9, "verb": "query",
+        "params": {"cypher": "MATCH (d:Doc {id:'a1'}) SET d.v = 1"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 10, "verb": "commit", "params": {"message": "main edit"}}),
+    );
+
+    // Merge feature into main → a cell conflict, returned as DATA.
+    let m = verb(
+        &mut s,
+        serde_json::json!({"id": 11, "verb": "merge", "params": {"refspec": "feature"}}),
+    );
+    assert_eq!(m["ok"]["outcome"], "conflicts", "a conflicting merge: {m}");
+    assert!(m["ok"]["count"].as_u64().unwrap() >= 1, "{m}");
+
+    // Resolve to ours, then commit completes the merge.
+    let r = verb(
+        &mut s,
+        serde_json::json!({"id": 12, "verb": "resolve", "params": {"all_ours": true}}),
+    );
+    assert!(r["ok"]["resolved"].as_u64().unwrap() >= 1, "{r}");
+    let done = verb(
+        &mut s,
+        serde_json::json!({"id": 13, "verb": "commit", "params": {"message": "merge"}}),
+    );
+    assert!(done["ok"]["commit"].is_string(), "merge commit: {done}");
+
+    // a1.v resolved to ours (1); the merge is committed and visible.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 14, "verb": "query",
+        "params": {"cypher": "MATCH (d:Doc {id:'a1'}) RETURN d.v"}}),
+    );
+    let row = read_frame(&mut s);
+    assert_eq!(row["row"]["values"][0], 1, "resolved to ours: {row}");
+}
+
+#[test]
+fn a_ref_verb_recovers_a_stale_writer_lock() {
+    // PR #270 review MAJOR-1: commit/checkout/merge/resolve must also break
+    // a stale lock, not just query/import.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let lock = repo.join("acetone-writer.lock");
+    let dead_pid = {
+        let mut child = Command::new("true").spawn().expect("spawn");
+        let pid = child.id();
+        child.wait().expect("reap");
+        pid
+    };
+    std::fs::write(&lock, format!("pid={dead_pid} unix-time=1\n")).expect("plant");
+
+    // The FIRST write on this connection is a `commit` — it must recover the
+    // stale lock rather than wedge.
+    let mut s = hello(&socket);
+    let c = verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "commit",
+        "params": {"message": "x", "allow_empty": true}}),
+    );
+    assert!(
+        c["ok"]["commit"].is_string(),
+        "commit recovered the stale lock: {c}"
+    );
+    assert!(!lock.exists(), "the stale lock was removed");
+}
+
+#[test]
+fn ref_verbs_reject_bad_input_typed_not_panicking() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    // An adversarial branch name is rejected (not injected, not a panic).
+    let b = verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "branch",
+        "params": {"name": "../../../evil"}}),
+    );
+    assert!(
+        b.get("error").is_some(),
+        "adversarial branch name rejected: {b}"
+    );
+    // A non-array trailer is a typed bad-request (not silently dropped).
+    let t = verb(
+        &mut s,
+        serde_json::json!({"id": 2, "verb": "commit",
+        "params": {"message": "m", "trailer": "k=v"}}),
+    );
+    assert_eq!(t["error"]["kind"], "bad-request", "non-array trailer: {t}");
+    // checkout with no branch param → bad-request.
+    let co = verb(
+        &mut s,
+        serde_json::json!({"id": 3, "verb": "checkout", "params": {}}),
+    );
+    assert_eq!(co["error"]["kind"], "bad-request", "{co}");
+    // resolve needing exactly one side.
+    let r = verb(
+        &mut s,
+        serde_json::json!({"id": 4, "verb": "resolve",
+        "params": {"all_ours": true, "all_theirs": true}}),
+    );
+    assert_eq!(r["error"]["kind"], "bad-request", "{r}");
+    // The connection survives every typed refusal.
+    let ok = verb(&mut s, serde_json::json!({"id": 5, "verb": "status"}));
+    assert!(ok["ok"]["nodes"].is_number(), "connection survives: {ok}");
 }

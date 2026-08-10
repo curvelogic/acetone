@@ -28,7 +28,11 @@ fine.)
   `chunk` frames (no path ever crosses the wire, ADR-0074 §4 — a
   streamed import is staged to a daemon-private file the peer never
   names), and the `CALL acetone.log/conflicts/diff/blame` procedures
-  reachable through `query`, **daemon-only stale-writer-lock recovery**
+  reachable through `query`, the ref-advancing verbs `commit`, `branch`,
+  `checkout`, `merge` and `resolve` (operating on the one shared
+  per-worktree workspace — a connection is a view onto it, like
+  concurrent CLI processes; per-connection isolated sessions are
+  anticipated future work), **daemon-only stale-writer-lock recovery**
   (a write that hits a lock left by a SIGKILLed writer breaks it and
   retries once when the recorded pid names no live process — so
   `acetone serve` no longer crash-loops on a dead writer's lock; a live
@@ -39,9 +43,9 @@ fine.)
   typed error kinds with span-aware rendering, and stale-socket reclaim
   so a host restart after a crash rebinds cleanly. A worked **non-Rust
   client** — `examples/acetone_daemon_client.py`, stdlib-only Python —
-  drives an import/query/coin/schema-apply/status session over the
-  documented frame protocol, showing the daemon needs no acetone library
-  to embed.
+  drives an import/query/coin/schema-apply/status/commit/branch/merge
+  session over the documented frame protocol, showing the daemon needs
+  no acetone library to embed.
 - **Multiple co-tenant graphs in one repository** (acetone-j6ui): a
   repository can now host several acetone graphs alongside its code,
   each on its own ref namespace and its own per-graph workspace, so
