@@ -462,14 +462,16 @@ fn concurrent_writes_do_not_deadlock() {
 /// serving reads (PR #261 review: this became load-bearing when writes
 /// shipped without the ADR-0074 §8 recovery).
 #[test]
-fn a_stale_writer_lock_is_a_typed_error_not_a_hang() {
+fn a_live_writer_lock_is_a_typed_error_not_a_hang() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = seeded_repo(&dir);
     let socket = dir.path().join("acetone.sock");
-    // Plant a stale lock in the repo's git dir, as a SIGKILLed writer
-    // would leave. The repo dir is the git dir for a bare init.
+    // Plant a LIVE lock — naming this test process's own pid — in the repo's
+    // git dir. (A *stale* lock is now recovered, ADR-0074 §8, covered by
+    // `the_daemon_recovers_a_stale_writer_lock_but_not_a_live_one`; a live
+    // lock must still surface a typed error without wedging the daemon.)
     let lock = repo.join("acetone-writer.lock");
-    std::fs::write(&lock, "pid=999999 unix-time=1\n").expect("plant lock");
+    std::fs::write(&lock, format!("pid={} unix-time=1\n", std::process::id())).expect("plant lock");
     let _daemon = start_daemon(&repo, &socket);
 
     let mut s = hello(&socket);
@@ -931,4 +933,53 @@ fn an_import_error_surfaces_its_cause_not_a_bare_importing() {
         read_frame(&mut s)["ok"]["nodes"].is_number(),
         "connection survives"
     );
+}
+
+#[test]
+fn the_daemon_recovers_a_stale_writer_lock_but_not_a_live_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let lock = repo.join("acetone-writer.lock");
+
+    // A dead pid: spawn a child and reap it, so its pid names no process.
+    let dead_pid = {
+        let mut child = Command::new("true").spawn().expect("spawn");
+        let pid = child.id();
+        child.wait().expect("reap");
+        pid
+    };
+
+    // A stale lock (dead pid) is recovered: the write goes through.
+    std::fs::write(&lock, format!("pid={dead_pid} unix-time=1\n")).expect("plant stale");
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query", "params": {
+            "cypher": "CREATE (:Doc {id: 'recovered'})"
+        }}),
+    );
+    let ok = read_frame(&mut s);
+    assert_eq!(
+        ok["ok"]["write"]["nodes_created"], 1,
+        "the daemon must recover a stale lock and complete the write: {ok}"
+    );
+    assert!(!lock.exists(), "the stale lock was removed");
+
+    // A LIVE lock (this test process's own pid) is NOT broken: the write
+    // is refused, the lock left in place.
+    std::fs::write(&lock, format!("pid={} unix-time=1\n", std::process::id())).expect("plant live");
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "CREATE (:Doc {id: 'blocked'})"
+        }}),
+    );
+    let err = read_frame(&mut s);
+    assert_eq!(
+        err["error"]["kind"], "graph",
+        "a live lock must refuse: {err}"
+    );
+    assert!(lock.exists(), "the live lock must be left in place");
 }

@@ -1155,6 +1155,54 @@ pub fn acetone_graph::import::VecExtractor::next_record(&mut self) -> core::resu
 pub fn acetone_graph::import::run(&acetone_graph::repo::Repository, &mut dyn acetone_graph::import::SourceExtractor, acetone_graph::import::ImportOptions) -> core::result::Result<acetone_graph::import::ImportOutcome, acetone_graph::error::GraphError>
 pub mod acetone_graph::index
 pub mod acetone_graph::lock
+pub enum acetone_graph::lock::StaleLockOutcome
+pub acetone_graph::lock::StaleLockOutcome::Absent
+pub acetone_graph::lock::StaleLockOutcome::Broken
+pub acetone_graph::lock::StaleLockOutcome::Live
+impl core::clone::Clone for acetone_graph::lock::StaleLockOutcome
+pub fn acetone_graph::lock::StaleLockOutcome::clone(&self) -> acetone_graph::lock::StaleLockOutcome
+impl core::cmp::Eq for acetone_graph::lock::StaleLockOutcome
+impl core::cmp::PartialEq for acetone_graph::lock::StaleLockOutcome
+pub fn acetone_graph::lock::StaleLockOutcome::eq(&self, &acetone_graph::lock::StaleLockOutcome) -> bool
+impl core::fmt::Debug for acetone_graph::lock::StaleLockOutcome
+pub fn acetone_graph::lock::StaleLockOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for acetone_graph::lock::StaleLockOutcome
+impl core::marker::StructuralPartialEq for acetone_graph::lock::StaleLockOutcome
+impl core::marker::Freeze for acetone_graph::lock::StaleLockOutcome
+impl core::marker::Send for acetone_graph::lock::StaleLockOutcome
+impl core::marker::Sync for acetone_graph::lock::StaleLockOutcome
+impl core::marker::Unpin for acetone_graph::lock::StaleLockOutcome
+impl core::marker::UnsafeUnpin for acetone_graph::lock::StaleLockOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_graph::lock::StaleLockOutcome
+impl core::panic::unwind_safe::UnwindSafe for acetone_graph::lock::StaleLockOutcome
+impl<Q, K> equivalent::Equivalent<K> for acetone_graph::lock::StaleLockOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_graph::lock::StaleLockOutcome::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_graph::lock::StaleLockOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_graph::lock::StaleLockOutcome::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_graph::lock::StaleLockOutcome where U: core::convert::From<T>
+pub fn acetone_graph::lock::StaleLockOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_graph::lock::StaleLockOutcome where U: core::convert::Into<T>
+pub type acetone_graph::lock::StaleLockOutcome::Error = core::convert::Infallible
+pub fn acetone_graph::lock::StaleLockOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_graph::lock::StaleLockOutcome where U: core::convert::TryFrom<T>
+pub type acetone_graph::lock::StaleLockOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_graph::lock::StaleLockOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_graph::lock::StaleLockOutcome where T: core::clone::Clone
+pub type acetone_graph::lock::StaleLockOutcome::Owned = T
+pub fn acetone_graph::lock::StaleLockOutcome::clone_into(&self, &mut T)
+pub fn acetone_graph::lock::StaleLockOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_graph::lock::StaleLockOutcome where T: 'static + ?core::marker::Sized
+pub fn acetone_graph::lock::StaleLockOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_graph::lock::StaleLockOutcome where T: ?core::marker::Sized
+pub fn acetone_graph::lock::StaleLockOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_graph::lock::StaleLockOutcome where T: ?core::marker::Sized
+pub fn acetone_graph::lock::StaleLockOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_graph::lock::StaleLockOutcome where T: core::clone::Clone
+pub unsafe fn acetone_graph::lock::StaleLockOutcome::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_graph::lock::StaleLockOutcome
+pub fn acetone_graph::lock::StaleLockOutcome::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_graph::lock::StaleLockOutcome
+pub type acetone_graph::lock::StaleLockOutcome::Output = T
 pub struct acetone_graph::lock::WriteLock
 impl acetone_graph::lock::WriteLock
 pub fn acetone_graph::lock::WriteLock::acquire(&std::path::Path) -> core::result::Result<acetone_graph::lock::WriteLock, acetone_graph::error::GraphError>
@@ -1189,6 +1237,7 @@ pub fn acetone_graph::lock::WriteLock::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_graph::lock::WriteLock
 pub type acetone_graph::lock::WriteLock::Output = T
 pub const acetone_graph::lock::WRITER_LOCK_FILE: &str
+pub fn acetone_graph::lock::break_stale_lock(&std::path::Path) -> core::result::Result<acetone_graph::lock::StaleLockOutcome, acetone_graph::error::GraphError>
 pub mod acetone_graph::merge
 pub enum acetone_graph::merge::ConflictMap
 pub acetone_graph::merge::ConflictMap::Edges

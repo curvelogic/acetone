@@ -128,6 +128,42 @@ already have as a process, and removes the temptation to add any.*
      one-second-resolution clocks, and errs on the side of *not*
      breaking a live lock. The unit's tests include the pid-reuse race
      and the double-recoverer race.
+   - **Shipped (acetone-pz0k.6)**: the pid-**liveness** half — break iff
+     the recorded pid names no live process (`kill(pid, 0)` via nix's safe
+     wrapper, so every crate keeps `#![forbid(unsafe_code)]`), removal by
+     `unlink`-then-`O_EXCL`-recreate, and the daemon serialising all
+     recovery behind one process-wide mutex (so the double-recoverer race
+     cannot occur intra-process; the daemon is one process per repository).
+     The **pid-reuse refinement** — when the pid names *some* live process,
+     checking its identity and start time to tell a reused pid from the
+     original holder — is **deferred** (acetone-pz0k.7): it needs
+     platform-specific process introspection (`/proc` on Linux, `sysctl`/
+     `proc_pidinfo` on macOS) whose only tractable forms are a hand-rolled
+     unsafe FFI shim (untestable off-target, in a corruption-critical path)
+     or a heavy process-info crate (`sysinfo` pulls 10+ transitive crates
+     including Windows/objc2 for a unix-only daemon). The shipped subset is
+     strictly safe: a still-live pid is treated as a live lock and refused,
+     exactly as today — so a reused pid still needs manual recovery, no
+     worse than the status quo, and never a wrongful break. Wired into the
+     daemon's `query` write path; extending it to the `schema-apply`/
+     `import` write paths is a small follow-up (one write of any kind
+     recovers the lock for all subsequent ones).
+   - **Safety boundary (PR #269 review):** the break is
+     `unlink`-then-`O_EXCL`-recreate, and `remove_file` is unconditional
+     (path-based). That is safe under this ADR's **one-daemon-per-repository
+     model** because the daemon serialises all recovery behind one in-process
+     mutex, so no recoverer ever removes another's freshly-acquired lock. It
+     is NOT safe if **two daemons run against one repository** on different
+     sockets: they share no mutex, and file locks have no race-free
+     cross-process "break if still stale" primitive (even the coupled
+     unlink+O_EXCL still lets one process remove the other's fresh lock).
+     Running two daemons on one repository is therefore **unsupported** and
+     reopens the double-writer window. Making recovery robust regardless of
+     daemon count — an enforced daemon-exclusivity lock at `serve` startup,
+     or replacing the O_EXCL lock file with a stale-immune `flock`/`fcntl`
+     advisory lock the kernel drops on death (portability permitting) — is
+     tracked as a decision (acetone-pz0k.8), settled at the Phase 11
+     boundary.
 
 ## Consequences
 

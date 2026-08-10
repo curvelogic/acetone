@@ -57,6 +57,7 @@ dependencies = [
  "acetone-model",
  "acetone-prolly",
  "acetone-store",
+ "nix",
  "proptest",
  "tempfile",
  "thiserror 2.0.18",

@@ -28,8 +28,12 @@ fine.)
   `chunk` frames (no path ever crosses the wire, ADR-0074 §4 — a
   streamed import is staged to a daemon-private file the peer never
   names), and the `CALL acetone.log/conflicts/diff/blame` procedures
-  reachable through `query`, writes serialising on the existing
-  single-writer lock, per-query budgets unchanged, and a
+  reachable through `query`, **daemon-only stale-writer-lock recovery**
+  (a write that hits a lock left by a SIGKILLed writer breaks it and
+  retries once when the recorded pid names no live process — so
+  `acetone serve` no longer crash-loops on a dead writer's lock; a live
+  pid is always refused, never wrongly broken; ADR-0074 §8), writes
+  serialising on the existing single-writer lock, per-query budgets unchanged, and a
   `--max-concurrent` bound (default 4) on their sum, a separate
   connection cap, read/write idle timeouts against slow/stalled peers,
   typed error kinds with span-aware rendering, and stale-socket reclaim
