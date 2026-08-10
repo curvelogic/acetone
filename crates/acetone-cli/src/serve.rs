@@ -14,8 +14,11 @@
 //! `graph` (locked) error to retry, exactly as two concurrent CLI
 //! processes would. On a write that hits a lock left by a SIGKILLed
 //! writer, the daemon (only) breaks it if its pid is dead and retries
-//! once (ADR-0074 §8). The ref-advancing verbs land in a later unit
-//! against this protocol unchanged.
+//! once (ADR-0074 §8). The ref-advancing verbs `commit`/`branch`/
+//! `checkout`/`merge`/`resolve` operate on the ONE shared per-worktree
+//! workspace — a connection is a view onto it, like concurrent CLI
+//! processes (per-connection isolated sessions are anticipated future
+//! work).
 //!
 //! Security model (ADR-0074 §1): the socket IS the authentication — the
 //! kernel enforces `0600`; the daemon holds no auth code and trusts every
@@ -323,6 +326,35 @@ fn connection(
                 let _permit = permits.acquire();
                 run_import(&mut stream, repo, &request, &id)?;
             }
+            // The ref-advancing verbs (acetone-pz0k.5). Greg's decision: a
+            // connection is a view onto the ONE shared per-worktree workspace,
+            // exactly like concurrent CLI processes — a `commit` commits
+            // whatever is staged, a `checkout` moves the HEAD every connection
+            // sees, a merge-in-progress is shared. (Per-connection isolated
+            // sessions are anticipated future work; the verbs here are thin
+            // wrappers over the same `Repository` methods, so that mode is a
+            // matter of which workspace ref a connection resolves, not a
+            // protocol change.) All take a query permit.
+            "commit" => {
+                let _permit = permits.acquire();
+                run_commit(&mut stream, repo, &request, &id)?;
+            }
+            "branch" => {
+                let _permit = permits.acquire();
+                run_branch(&mut stream, repo, &request, &id)?;
+            }
+            "checkout" => {
+                let _permit = permits.acquire();
+                run_checkout(&mut stream, repo, &request, &id)?;
+            }
+            "merge" => {
+                let _permit = permits.acquire();
+                run_merge(&mut stream, repo, &request, &id)?;
+            }
+            "resolve" => {
+                let _permit = permits.acquire();
+                run_resolve(&mut stream, repo, &request, &id)?;
+            }
             other => {
                 write_frame(
                     &mut stream,
@@ -330,7 +362,8 @@ fn connection(
                         "kind": "unknown-verb",
                         "message": format!(
                             "verb {other:?} is not served (this build serves \"query\" \
-                             (read and write), \"status\", \"schema-apply\" and \"import\")"
+                             (read and write), \"status\", \"schema-apply\", \"import\", \
+                             \"commit\", \"branch\", \"checkout\", \"merge\" and \"resolve\")"
                         ),
                     }}),
                 )?;
@@ -731,6 +764,220 @@ fn run_import(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
             stream,
             &json!({"id": id, "error": {"kind": "import", "message": format!("{e:#}")}}),
         ),
+    }
+}
+
+// --- ref-advancing verbs (acetone-pz0k.5) -----------------------------------
+//
+// These operate on the ONE shared per-worktree workspace (Greg's decision):
+// a connection is a view onto it, like concurrent CLI processes. They are
+// thin wrappers over the same `Repository` methods the CLI uses.
+
+/// A typed `bad-request` frame for a malformed verb request.
+fn bad_request(stream: &mut UnixStream, id: &Json, message: &str) -> Result<()> {
+    write_frame(
+        stream,
+        &json!({"id": id, "error": {"kind": "bad-request", "message": message}}),
+    )
+}
+
+/// A typed error frame for a `GraphError`, mapping the common variants to
+/// distinct kinds so a machine client can tell a retriable lock conflict from
+/// a permanent one; the message carries the detail.
+fn graph_error_frame(stream: &mut UnixStream, id: &Json, e: &GraphError) -> Result<()> {
+    let kind = match e {
+        GraphError::Locked { .. } => "locked",
+        GraphError::DirtyWorkspace => "dirty-workspace",
+        GraphError::NoSuchBranch { .. } => "no-such-branch",
+        GraphError::BranchExists { .. } => "branch-exists",
+        GraphError::NoCurrentBranch => "no-current-branch",
+        GraphError::NothingToCommit => "nothing-to-commit",
+        GraphError::MergeInProgress => "merge-in-progress",
+        GraphError::BranchConflict { .. } | GraphError::WorkspaceConflict { .. } => "conflict",
+        _ => "graph",
+    };
+    write_frame(
+        stream,
+        &json!({"id": id, "error": {"kind": kind, "message": e.to_string()}}),
+    )
+}
+
+/// Serve `commit`: commit the shared workspace. `params.message` (required),
+/// `params.trailer` (optional `["k=v", ...]`), `params.allow_empty`.
+fn run_commit(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+    let Some(message) = request.pointer("/params/message").and_then(Json::as_str) else {
+        return bad_request(stream, id, "commit needs params.message (a string)");
+    };
+    let allow_empty = request
+        .pointer("/params/allow_empty")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    let mut trailers: Vec<(String, String)> = Vec::new();
+    if let Some(arr) = request.pointer("/params/trailer").and_then(Json::as_array) {
+        for entry in arr {
+            let Some(raw) = entry.as_str() else {
+                return bad_request(stream, id, "trailer entries must be \"key=value\" strings");
+            };
+            match crate::value::parse_kv(raw, "trailer") {
+                Ok((k, v)) => trailers.push((k.to_owned(), v.to_owned())),
+                Err(e) => return bad_request(stream, id, &e.to_string()),
+            }
+        }
+    }
+    let txn = match repo.begin_write() {
+        Ok(t) => t,
+        Err(e) => return graph_error_frame(stream, id, &e),
+    };
+    let committed = if allow_empty {
+        txn.commit_allow_empty(message, &trailers, None)
+    } else {
+        txn.commit(message, &trailers, None)
+    };
+    match committed {
+        Ok(commit) => write_frame(
+            stream,
+            &json!({"id": id, "ok": {"commit": commit.to_hex()}}),
+        ),
+        Err(e) => graph_error_frame(stream, id, &e),
+    }
+}
+
+/// Serve `branch`: list (no params), create (`params.name`, optional
+/// `params.refspec`), or delete (`params.delete`).
+fn run_branch(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+    let p = |k: &str| {
+        request
+            .pointer(&format!("/params/{k}"))
+            .and_then(Json::as_str)
+    };
+    if let Some(name) = p("delete") {
+        return match repo.delete_branch(name) {
+            Ok(was) => write_frame(
+                stream,
+                &json!({"id": id, "ok": {"deleted": name, "was": was.to_hex()}}),
+            ),
+            Err(e) => graph_error_frame(stream, id, &e),
+        };
+    }
+    if let Some(name) = p("name") {
+        return match repo.create_branch(name, p("refspec")) {
+            Ok(at) => write_frame(
+                stream,
+                &json!({"id": id, "ok": {"created": name, "at": at.to_hex()}}),
+            ),
+            Err(e) => graph_error_frame(stream, id, &e),
+        };
+    }
+    match repo.branches() {
+        Ok(branches) => {
+            let list: Vec<Json> = branches
+                .into_iter()
+                .map(|(name, head)| json!({"name": name, "head": head.to_hex()}))
+                .collect();
+            write_frame(stream, &json!({"id": id, "ok": {"branches": list}}))
+        }
+        Err(e) => graph_error_frame(stream, id, &e),
+    }
+}
+
+/// Serve `checkout`: switch the shared current-branch pointer. `params.branch`.
+fn run_checkout(
+    stream: &mut UnixStream,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
+    let Some(branch) = request.pointer("/params/branch").and_then(Json::as_str) else {
+        return bad_request(stream, id, "checkout needs params.branch (a string)");
+    };
+    match repo.checkout_branch(branch) {
+        Ok(()) => write_frame(stream, &json!({"id": id, "ok": {"checked_out": branch}})),
+        Err(e) => graph_error_frame(stream, id, &e),
+    }
+}
+
+/// Serve `merge`: merge `params.refspec` into the current branch (optional
+/// `params.message`), or abort a merge in progress (`params.abort`).
+/// Conflicts come back as DATA in the terminal frame, mid-merge on the shared
+/// workspace — a client resolves via `resolve`/write queries then `commit`.
+fn run_merge(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+    if request
+        .pointer("/params/abort")
+        .and_then(Json::as_bool)
+        .unwrap_or(false)
+    {
+        return match repo.abort_merge() {
+            Ok(()) => write_frame(stream, &json!({"id": id, "ok": {"aborted": true}})),
+            Err(e) => graph_error_frame(stream, id, &e),
+        };
+    }
+    let Some(refspec) = request.pointer("/params/refspec").and_then(Json::as_str) else {
+        return bad_request(stream, id, "merge needs params.refspec (or params.abort)");
+    };
+    let message = request
+        .pointer("/params/message")
+        .and_then(Json::as_str)
+        .unwrap_or("merge");
+    match repo.merge(refspec, message) {
+        Ok(acetone_core::graph::merge::MergeOutcome::AlreadyUpToDate) => {
+            write_frame(stream, &json!({"id": id, "ok": {"outcome": "up-to-date"}}))
+        }
+        Ok(acetone_core::graph::merge::MergeOutcome::FastForward(head)) => write_frame(
+            stream,
+            &json!({"id": id, "ok": {"outcome": "fast-forward", "head": head.to_hex()}}),
+        ),
+        Ok(acetone_core::graph::merge::MergeOutcome::Merged(commit)) => write_frame(
+            stream,
+            &json!({"id": id, "ok": {"outcome": "merged", "commit": commit.to_hex()}}),
+        ),
+        Ok(acetone_core::graph::merge::MergeOutcome::Conflicts(conflicts)) => {
+            let rendered: Vec<String> = conflicts
+                .iter()
+                .map(crate::commands::render_conflict)
+                .collect();
+            write_frame(
+                stream,
+                &json!({"id": id, "ok": {
+                    "outcome": "conflicts",
+                    "count": rendered.len(),
+                    "conflicts": rendered,
+                }}),
+            )
+        }
+        Err(e) => graph_error_frame(stream, id, &e),
+    }
+}
+
+/// Serve `resolve`: resolve every remaining merge conflict to one side —
+/// `params.all_ours` or `params.all_theirs`.
+fn run_resolve(
+    stream: &mut UnixStream,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
+    let ours = request
+        .pointer("/params/all_ours")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    let theirs = request
+        .pointer("/params/all_theirs")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    let side = match (ours, theirs) {
+        (true, false) => acetone_core::graph::repo::ResolveSide::Ours,
+        (false, true) => acetone_core::graph::repo::ResolveSide::Theirs,
+        _ => {
+            return bad_request(
+                stream,
+                id,
+                "resolve needs exactly one of params.all_ours or params.all_theirs",
+            );
+        }
+    };
+    match repo.resolve_all(side) {
+        Ok(n) => write_frame(stream, &json!({"id": id, "ok": {"resolved": n}})),
+        Err(e) => graph_error_frame(stream, id, &e),
     }
 }
 

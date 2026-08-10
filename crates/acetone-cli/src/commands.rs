@@ -776,7 +776,7 @@ fn render_edge_key(key: &[u8]) -> String {
 
 /// Render one merge conflict — cell clash or graph-level violation — as a
 /// single human-readable line.
-fn render_conflict(c: &MergeConflict) -> String {
+pub(crate) fn render_conflict(c: &MergeConflict) -> String {
     match c {
         MergeConflict::Cell(cell) => {
             // A cell-wise merge (ADR-0035) names the single property that

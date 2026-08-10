@@ -94,6 +94,36 @@ class AcetoneClient:
         _, _, summary = self._read_response()
         return summary
 
+    def commit(self, message, allow_empty=False):
+        """Commit the shared workspace. Returns the terminal `ok` summary."""
+        _, _, ok = self._request(
+            {"verb": "commit", "params": {"message": message, "allow_empty": allow_empty}}
+        )
+        return ok
+
+    def branch(self, name=None, delete=None):
+        """List branches (no args), create one (`name`), or delete (`delete`)."""
+        params = {}
+        if name is not None:
+            params["name"] = name
+        if delete is not None:
+            params["delete"] = delete
+        _, _, ok = self._request({"verb": "branch", "params": params})
+        return ok
+
+    def checkout(self, branch):
+        """Switch the shared current-branch pointer."""
+        _, _, ok = self._request({"verb": "checkout", "params": {"branch": branch}})
+        return ok
+
+    def merge(self, refspec, message="merge"):
+        """Merge `refspec` into the current branch. On conflicts the terminal
+        `ok` has outcome=="conflicts" with the conflicts as data."""
+        _, _, ok = self._request(
+            {"verb": "merge", "params": {"refspec": refspec, "message": message}}
+        )
+        return ok
+
     def _request(self, body):
         self._next_id += 1
         self._send_frame({"id": self._next_id, **body})
@@ -175,6 +205,15 @@ def main():
 
         # Inspect the workspace state.
         print("status:", client.status())
+
+        # Commit the accumulated work, then a branch → edit → merge cycle.
+        print("committed:", client.commit("demo work"))
+        client.branch(name="feature")
+        client.checkout("feature")
+        client.query("CREATE (:Demo {id: 'on-feature'})")
+        client.commit("feature work")
+        client.checkout("main")
+        print("merged:", client.merge("feature"))  # fast-forwards main
     finally:
         client.close()
 
