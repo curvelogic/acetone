@@ -66,10 +66,13 @@ fn recover_stale_writer_lock(repo: &Repository) -> bool {
 }
 
 /// Run a write operation and, if it failed on the single-writer lock left by
-/// a dead writer, break that lock and retry ONCE (ADR-0074 §8). Every
-/// lock-taking daemon verb — `query` writes, `import`, and the ref-advancing
-/// verbs — goes through this, so a SIGKILLed writer's stale lock never
-/// crash-loops the daemon whatever the first write is (PR #270 review). A
+/// a dead writer, break that lock and retry ONCE (ADR-0074 §8). The `query`
+/// write path and the ref-advancing verbs (`commit`/`checkout`/`merge`/
+/// `resolve`) go through this, so a SIGKILLed writer's stale lock never
+/// crash-loops those verbs (PR #270 review). The `schema-apply`/`import`
+/// write paths do NOT yet — they surface the lock error through `anyhow`, not
+/// the typed `GraphError` this helper keys on; extending recovery to them is
+/// the deferred half (acetone-pz0k.7). A
 /// *live* lock is NOT retried — `recover_stale_writer_lock` returns false and
 /// short-circuits the retry — so genuine contention returns its typed error
 /// to the client unchanged, and a live lock is never broken.

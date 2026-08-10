@@ -1,0 +1,241 @@
+<title>Phase 11 — Embedding &amp; Co-tenancy · Boundary Review</title>
+<style>
+  :root {
+    --paper: #fafbfa; --ink: #1a1f1d; --muted: #5c6763;
+    --accent: #2e7d6b; --accent-soft: #e3efeb;
+    --warn: #b0731f; --warn-soft: #f6ecdc;
+    --rule: #d8dedb; --card: #ffffff;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --paper: #101413; --ink: #e4e9e7; --muted: #93a09b;
+      --accent: #5fb39e; --accent-soft: #1b2a26;
+      --warn: #d99a45; --warn-soft: #2c2418;
+      --rule: #2a332f; --card: #171c1a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #101413; --ink: #e4e9e7; --muted: #93a09b;
+    --accent: #5fb39e; --accent-soft: #1b2a26;
+    --warn: #d99a45; --warn-soft: #2c2418;
+    --rule: #2a332f; --card: #171c1a;
+  }
+  :root[data-theme="light"] {
+    --paper: #fafbfa; --ink: #1a1f1d; --muted: #5c6763;
+    --accent: #2e7d6b; --accent-soft: #e3efeb;
+    --warn: #b0731f; --warn-soft: #f6ecdc;
+    --rule: #d8dedb; --card: #ffffff;
+  }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--serif); font-size: 17px; line-height: 1.55;
+    margin: 0; padding: 0 1.5rem;
+  }
+  .slide {
+    max-width: 52rem; margin: 0 auto; min-height: 88vh;
+    padding: 4rem 0 3rem; border-bottom: 1px solid var(--rule);
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem;
+  }
+  h1 { font-size: 2.4rem; line-height: 1.15; margin: 0 0 1rem; text-wrap: balance; }
+  h2 { font-size: 1.7rem; line-height: 1.2; margin: 0 0 1.2rem; text-wrap: balance; }
+  p { margin: 0.5rem 0; max-width: 44rem; }
+  .lede { font-size: 1.1rem; color: var(--muted); }
+  code { font-family: var(--mono); font-size: 0.84em; background: var(--accent-soft); padding: 0.08em 0.35em; border-radius: 3px; }
+  .big-numbers { display: flex; flex-wrap: wrap; gap: 1.2rem; margin: 1.6rem 0; }
+  .num {
+    background: var(--card); border: 1px solid var(--rule); border-radius: 6px;
+    padding: 1rem 1.4rem; min-width: 11rem; flex: 1;
+  }
+  .num .v { font-family: var(--mono); font-size: 1.7rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .num .l { font-size: 0.82rem; color: var(--muted); margin-top: 0.2rem; }
+  ul { padding-left: 1.3rem; margin: 0.8rem 0; max-width: 44rem; }
+  li { margin: 0.45rem 0; }
+  li::marker { color: var(--accent); }
+  .tablewrap { overflow-x: auto; margin: 1.2rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+  th { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase;
+       color: var(--muted); text-align: left; padding: 0.4em 0.9em 0.4em 0; border-bottom: 1px solid var(--ink); }
+  td { padding: 0.5em 0.9em 0.5em 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td:first-child { font-family: var(--mono); font-size: 0.78rem; white-space: nowrap; }
+  .callout { background: var(--warn-soft); border-left: 3px solid var(--warn); padding: 0.8rem 1.1rem; margin: 1.2rem 0; border-radius: 0 4px 4px 0; max-width: 44rem; }
+  .good { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 0.8rem 1.1rem; margin: 1.2rem 0; border-radius: 0 4px 4px 0; max-width: 44rem; }
+  .footer-note { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); margin-top: 2rem; }
+  .wire { font-family: var(--mono); font-size: 0.78rem; background: var(--card); border: 1px solid var(--rule);
+          border-radius: 6px; padding: 0.9rem 1.1rem; margin: 1.1rem 0; overflow-x: auto; color: var(--muted); }
+  .wire b { color: var(--accent); font-weight: 600; }
+</style>
+
+<section class="slide">
+  <div class="eyebrow">Phase 11 boundary review · 2026-08-10</div>
+  <h1>Embedding &amp; co-tenancy</h1>
+  <p class="lede">acetone learned to be driven from another language, and to
+  hold more than one graph in a repository. A per-repository daemon over a
+  local socket, <em>n</em> co-tenant graphs behind a <code>--graph</code>
+  selector, and relationship-type schema evolution — twelve adversarially-
+  reviewed PRs in which no review round came back empty.</p>
+  <div class="big-numbers">
+    <div class="num"><div class="v">12</div><div class="l">reviewed PRs across daemon · multi-graph · rename/merge</div></div>
+    <div class="num"><div class="v">~220</div><div class="l">lines of stdlib Python drive a full session — no acetone library</div></div>
+    <div class="num"><div class="v">2218/3897</div><div class="l">TCK held, zero failures (no Cypher surface this phase)</div></div>
+  </div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Context</div>
+  <h2>What the tenant asked for</h2>
+  <p>Phase 10 put acetone to work under a real project. That project's
+  consolidated feedback (ADR-0072) named two capabilities the workbench model
+  didn't yet cover:</p>
+  <ul>
+    <li><strong>Embeddable by a non-Rust host</strong> — process-per-command has a
+    latency floor and no way to hold a warm repository. A host in any language
+    needs to drive acetone over a stable interface, without linking a Rust
+    library.</li>
+    <li><strong>Multi-tenant within one repository</strong> — more than one graph in
+    a single repo the user owns, each isolated, so a host can co-locate
+    tenants without a repo sprawl.</li>
+  </ul>
+  <p>ADR-0073 made these Phase 11. The governing principle for the daemon
+  (ADR-0074, Greg-discussed): <em>it adds no authority acetone doesn't already
+  have as a process, and removes the temptation to add any</em> — the host
+  keeps auth, tenancy and transport policy; acetone is handed a directory.</p>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">What was done · 1 of 3</div>
+  <h2>The daemon: a socket, not a server</h2>
+  <p><code>acetone serve</code> is one process per repository on a <code>0600</code>
+  unix domain socket — the kernel ACL <em>is</em> the authentication; acetone
+  holds no auth code. Length-prefixed JSON frames, so every language speaks
+  it:</p>
+  <div class="wire">&gt;&gt;&gt; <b>import</b>  (source streams as chunk frames — <b>no path over the wire</b>)<br>
+  &gt;&gt;&gt; <b>query</b>   MATCH (d:Demo) RETURN d.id      → rows, then a typed ok<br>
+  &gt;&gt;&gt; <b>query</b>   CREATE (a)-[:`relates to`]-&gt;(b)  (autodeclare: coin the type)<br>
+  &gt;&gt;&gt; <b>commit</b> · <b>branch</b> · <b>checkout</b> · <b>merge</b> · <b>resolve</b> · <b>status</b></div>
+  <ul>
+    <li><strong>No paths ever cross the wire</strong> — payload verbs
+    (<code>schema-apply</code>, <code>import</code>) stream bytes as
+    <code>chunk</code> frames; a streamed import stages to a daemon-private
+    file the peer never names.</li>
+    <li><strong>Bounded</strong> — the CLI's per-query governor + wall clock, a
+    <code>--max-concurrent</code> execution bound, a separate connection cap,
+    idle timeouts against stalled peers, a 100k-row daemon ceiling.</li>
+    <li><strong>Recovers a dead writer's lock</strong> — the daemon (only) breaks a
+    stale <code>acetone-writer.lock</code> when its pid names no live process,
+    so it no longer crash-loops; a live lock is always refused.</li>
+  </ul>
+  <div class="good"><strong>Demonstrated:</strong> a stdlib-only Python client
+  drives import → query → coin → schema-apply → status → commit → branch →
+  merge against a live daemon, through the shipped binary — the criterion's
+  four demo actions, no acetone library in sight.</div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">What was done · 2 of 3</div>
+  <h2>Multi-graph: n tenants, one repository</h2>
+  <p>A second graph inits into an existing repository; <code>--graph</code>
+  selects at open; each graph lives in its own ref namespace.</p>
+  <ul>
+    <li><strong>Per-graph workspace / merge-head refs</strong> — the
+    <code>acetone-42d</code> family resolved with <em>no format change</em>:
+    refs fall back per-graph → shared-global → pre-ADR-0014, and the first
+    write migrates. The CAS hazard flagged in the design note was a false
+    alarm — <code>begin_write</code> already decouples the CAS-expected ref
+    value from the base content.</li>
+    <li><strong>fsck / gc / migrate namespace-scoped</strong> — an operation on a
+    graph touches only that graph's refs and objects; scoping is
+    property-tested with <em>n</em>&gt;1, cross-graph isolation asserted.</li>
+    <li><strong>Isolation held under review</strong> — a torn 2nd-graph init that
+    could read graph A's workspace via the shared-ref fallback was caught and
+    closed (the <code>is_sole_graph</code> gate + migrate-at-init).</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">What was done · 3 of 3</div>
+  <h2>Schema evolution: rename and merge a relationship type</h2>
+  <p>The autodeclare ratchet (Phase 10) lets a host coin relationship types as
+  it writes — which, unchecked, accretes near-duplicate predicates. Phase 11
+  ships the repair, in the migrate family, through the shipped CLI:</p>
+  <ul>
+    <li><strong>Rename</strong> rewrites the schema entry <em>and</em> the edge keys
+    that carry the type.</li>
+    <li><strong>Merge</strong> folds one type into another under an explicit,
+    discriminator-aware same-pair collision policy.</li>
+  </ul>
+  <div class="good"><strong>The ratchet repair, end to end:</strong> coin
+  <code>relates-to</code>, <code>relatesTo</code> and <code>related</code> as a
+  host would drift into over a session, then heal all three into one canonical
+  type — schema entry and every edge key rewritten, demonstrated as a
+  test.</div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Problems &amp; decisions · the review gate earned its keep</div>
+  <h2>Every review round found something real</h2>
+  <div class="tablewrap">
+  <table>
+    <tr><th>Where</th><th>What review caught</th></tr>
+    <tr><td>PR #263</td><td>A half-initialised 2nd graph could read graph A's workspace via the shared-ref fallback — closed with a sole-graph gate + migrate-at-init</td></tr>
+    <tr><td>PR #262</td><td>Two real defects: the merge-in-progress backstop needed the legacy merge-head fallback; fsck had to verify the per-graph workspace ref</td></tr>
+    <tr><td>PR #269</td><td>A <code>u32→i32</code> pid cast could flip a huge pid negative (probing a process group); recovery bounded to the strictly-safe pid-liveness subset; multi-daemon boundary documented</td></tr>
+    <tr><td>PR #270</td><td>The ref-advancing write verbs initially skipped stale-lock recovery — routed all lock-taking verbs through one helper; error kinds unified across verbs</td></tr>
+    <tr><td>Milestone security review</td><td><strong>CLEAN</strong> under a live hostile client — 4 GiB length prefix refused before allocation, ref injection (<code>../</code>, NUL, newline) typed-errored at the store door, cross-tenant isolation and stale-lock boundary held; no blocker/major/minor</td></tr>
+  </table>
+  </div>
+  <p>All findings fixed or rebutted with citations. <strong>No unresolved
+  disagreements; no decision beads needed for review disputes.</strong></p>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Problems &amp; decisions · for ratification</div>
+  <h2>The boundary agenda</h2>
+  <ul>
+    <li><strong>ADR-0074</strong> — the daemon's transport, protocol and lifecycle
+    (a mid-phase decision, flagged for retrospective review): socket + framing
+    + handshake + verb set + the no-paths rule + stale-lock recovery.</li>
+    <li><strong>The session contract</strong> — your call (2026-08-10): a connection is
+    a <em>view onto the one shared per-worktree workspace</em>, like concurrent
+    CLI processes; implemented with a view to per-connection isolated sessions
+    later. Review confirmed the wire protocol is model-agnostic, so that mode
+    is a workspace-ref change, not a protocol change.</li>
+    <li><strong><code>acetone-pz0k.8</code> (decision)</strong> — robust stale-lock
+    recovery regardless of daemon count. The shipped recovery is safe under
+    one-daemon-per-repo; two daemons on one repo is unsupported and reopens the
+    double-writer window. Enforce daemon-exclusivity at <code>serve</code>
+    startup, or move to a stale-immune <code>flock</code>/<code>fcntl</code>
+    lock — your call.</li>
+  </ul>
+  <div class="callout"><strong>Flagged follow-up — <code>acetone-j6ui.4</code>:</strong>
+  the linked-worktree durability anchor is not graph-keyed, so two co-tenant
+  graphs written from the same <em>linked</em> worktree share one anchor. Only
+  defence-in-depth degrades (a foreign <code>git gc</code> of <em>uncommitted</em>
+  linked-worktree chunks); every primary guarantee holds. Deferred on
+  severity + fix-risk (the fix touches two prune-decision parse sites where an
+  error is data loss) — it wants its own reviewed unit. Your call.</div>
+</section>
+
+<section class="slide">
+  <div class="eyebrow">Where we are</div>
+  <h2>Gate evidence, and ready for the live demo</h2>
+  <div class="tablewrap">
+  <table>
+    <tr><th>Criterion</th><th>Status</th></tr>
+    <tr><td>1 · Daemon</td><td>MET — full verb set, no paths over the wire, budgets + bounds, stale-lock recovery, non-Rust session demo</td></tr>
+    <tr><td>2 · Multi-graph</td><td>MET — 2nd-graph init, <code>--graph</code>, per-graph refs, scoped fsck/gc/migrate, isolation property-tested</td></tr>
+    <tr><td>3 · Rename/merge</td><td>MET — rename + discriminator-aware merge in the migrate family; ratchet repair end-to-end</td></tr>
+    <tr><td>4 · Standing quality</td><td>MET — main green throughout; TCK 2218/3897 zero failures; milestone security review at the boundary</td></tr>
+  </table>
+  </div>
+  <p class="lede">Live demo, step by step, one step per turn: serve a
+  repository · drive it from the Python client · coin a type under autodeclare
+  · stream an import with no path over the wire · init a second co-tenant graph
+  · branch, merge and resolve over the socket.</p>
+  <p class="footer-note">Report: docs/reports/phase-11.md · Protocol: docs/adr/0074-daemon-protocol.md · This deck: docs/demos/phase-11-deck.html · The gate (acetone-j1hq.1) is Greg's to close.</p>
+</section>
