@@ -12,6 +12,7 @@ repository.workspace = true
 acetone-model.workspace = true
 acetone-prolly.workspace = true
 acetone-store.workspace = true
+nix.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

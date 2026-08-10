@@ -12,9 +12,10 @@
 //! `--max-concurrent`. One writer
 //! wins the single-writer lock; a concurrent write returns a typed
 //! `graph` (locked) error to retry, exactly as two concurrent CLI
-//! processes would. The stale-writer-lock recovery of ADR-0074 §8 and
-//! the ref-advancing verbs land in later units against this protocol
-//! unchanged.
+//! processes would. On a write that hits a lock left by a SIGKILLed
+//! writer, the daemon (only) breaks it if its pid is dead and retries
+//! once (ADR-0074 §8). The ref-advancing verbs land in a later unit
+//! against this protocol unchanged.
 //!
 //! Security model (ADR-0074 §1): the socket IS the authentication — the
 //! kernel enforces `0600`; the daemon holds no auth code and trusts every
@@ -31,7 +32,35 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value as Json, json};
 
 use acetone_core::cypher::session::{Outcome, QueryError, Session};
+use acetone_core::graph::GraphError;
+use acetone_core::graph::lock::{StaleLockOutcome, break_stale_lock};
 use acetone_core::graph::repo::Repository;
+
+/// Serialises stale-writer-lock recovery across the daemon's connection
+/// threads (ADR-0074 §8): the daemon is one process per repository, so with
+/// at most one recoverer active the double-recoverer race (two threads each
+/// unlinking and recreating the lock) cannot occur, and `O_EXCL` on the
+/// re-acquire is the cross-process backstop. A plain `()` mutex — held only
+/// for the brief break decision, never across a write.
+static LOCK_RECOVERY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether a query outcome failed on the single-writer lock — the only
+/// error the daemon attempts to recover (ADR-0074 §8).
+fn is_locked(outcome: &Result<Outcome, QueryError>) -> bool {
+    matches!(outcome, Err(QueryError::Graph(GraphError::Locked { .. })))
+}
+
+/// Break a stale writer lock and report whether the caller should retry
+/// (ADR-0074 §8), serialised behind [`LOCK_RECOVERY`]. Returns `true` only
+/// when the lock was genuinely stale (dead pid) and removed, or was already
+/// gone — never when a live process holds it.
+fn recover_stale_writer_lock(repo: &Repository) -> bool {
+    let _guard = LOCK_RECOVERY.lock().unwrap_or_else(|e| e.into_inner());
+    matches!(
+        break_stale_lock(repo.store().git_dir()),
+        Ok(StaleLockOutcome::Broken | StaleLockOutcome::Absent)
+    )
+}
 
 /// Frames above this are refused at the framing layer, before any parse
 /// (ADR-0074 §2 — the import-bound precedent applied to the wire).
@@ -347,7 +376,14 @@ fn run_query(
     // named in ADR-0074 §6 (PR #259 review, final note).
     let limits =
         crate::query::cli_limits(timeout_secs).with_max_result_rows(DAEMON_MAX_RESULT_ROWS);
-    let outcome = session.run_with(cypher, &BTreeMap::new(), &limits);
+    let mut outcome = session.run_with(cypher, &BTreeMap::new(), &limits);
+    // Daemon-only stale-writer-lock recovery (ADR-0074 §8): a write that hit
+    // a lock left by a SIGKILLed writer would otherwise crash-loop the
+    // daemon. If the lock's pid is dead, break it (serialised across
+    // connections) and retry the write ONCE. The CLI never does this.
+    if is_locked(&outcome) && recover_stale_writer_lock(repo) {
+        outcome = session.run_with(cypher, &BTreeMap::new(), &limits);
+    }
     match outcome {
         // Both outcomes stream rows the same way (a write may RETURN);
         // the terminal `ok` frame carries the write-summary counts for a
