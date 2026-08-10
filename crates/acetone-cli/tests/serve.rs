@@ -447,7 +447,7 @@ fn concurrent_writes_do_not_deadlock() {
     let wins = frames.iter().filter(|f| f.get("ok").is_some()).count();
     let locked = frames
         .iter()
-        .filter(|f| f["error"]["kind"] == "graph")
+        .filter(|f| f["error"]["kind"] == "locked")
         .count();
     assert!(wins >= 1, "at least one write commits: {frames:?}");
     assert_eq!(
@@ -482,7 +482,7 @@ fn a_live_writer_lock_is_a_typed_error_not_a_hang() {
     );
     let frame = read_frame(&mut s);
     assert_eq!(
-        frame["error"]["kind"], "graph",
+        frame["error"]["kind"], "locked",
         "typed locked error: {frame}"
     );
 
@@ -982,7 +982,7 @@ fn the_daemon_recovers_a_stale_writer_lock_but_not_a_live_one() {
     );
     let err = read_frame(&mut s);
     assert_eq!(
-        err["error"]["kind"], "graph",
+        err["error"]["kind"], "locked",
         "a live lock must refuse: {err}"
     );
     assert!(lock.exists(), "the live lock must be left in place");
@@ -1110,4 +1110,79 @@ fn the_ref_advancing_verbs_drive_a_full_branch_and_merge_cycle() {
     );
     let row = read_frame(&mut s);
     assert_eq!(row["row"]["values"][0], 1, "resolved to ours: {row}");
+}
+
+#[test]
+fn a_ref_verb_recovers_a_stale_writer_lock() {
+    // PR #270 review MAJOR-1: commit/checkout/merge/resolve must also break
+    // a stale lock, not just query/import.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let lock = repo.join("acetone-writer.lock");
+    let dead_pid = {
+        let mut child = Command::new("true").spawn().expect("spawn");
+        let pid = child.id();
+        child.wait().expect("reap");
+        pid
+    };
+    std::fs::write(&lock, format!("pid={dead_pid} unix-time=1\n")).expect("plant");
+
+    // The FIRST write on this connection is a `commit` — it must recover the
+    // stale lock rather than wedge.
+    let mut s = hello(&socket);
+    let c = verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "commit",
+        "params": {"message": "x", "allow_empty": true}}),
+    );
+    assert!(
+        c["ok"]["commit"].is_string(),
+        "commit recovered the stale lock: {c}"
+    );
+    assert!(!lock.exists(), "the stale lock was removed");
+}
+
+#[test]
+fn ref_verbs_reject_bad_input_typed_not_panicking() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    // An adversarial branch name is rejected (not injected, not a panic).
+    let b = verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "branch",
+        "params": {"name": "../../../evil"}}),
+    );
+    assert!(
+        b.get("error").is_some(),
+        "adversarial branch name rejected: {b}"
+    );
+    // A non-array trailer is a typed bad-request (not silently dropped).
+    let t = verb(
+        &mut s,
+        serde_json::json!({"id": 2, "verb": "commit",
+        "params": {"message": "m", "trailer": "k=v"}}),
+    );
+    assert_eq!(t["error"]["kind"], "bad-request", "non-array trailer: {t}");
+    // checkout with no branch param → bad-request.
+    let co = verb(
+        &mut s,
+        serde_json::json!({"id": 3, "verb": "checkout", "params": {}}),
+    );
+    assert_eq!(co["error"]["kind"], "bad-request", "{co}");
+    // resolve needing exactly one side.
+    let r = verb(
+        &mut s,
+        serde_json::json!({"id": 4, "verb": "resolve",
+        "params": {"all_ours": true, "all_theirs": true}}),
+    );
+    assert_eq!(r["error"]["kind"], "bad-request", "{r}");
+    // The connection survives every typed refusal.
+    let ok = verb(&mut s, serde_json::json!({"id": 5, "verb": "status"}));
+    assert!(ok["ok"]["nodes"].is_number(), "connection survives: {ok}");
 }

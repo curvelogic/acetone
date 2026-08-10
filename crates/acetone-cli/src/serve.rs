@@ -53,12 +53,6 @@ use acetone_core::graph::repo::Repository;
 /// never across a write.
 static LOCK_RECOVERY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Whether a query outcome failed on the single-writer lock — the only
-/// error the daemon attempts to recover (ADR-0074 §8).
-fn is_locked(outcome: &Result<Outcome, QueryError>) -> bool {
-    matches!(outcome, Err(QueryError::Graph(GraphError::Locked { .. })))
-}
-
 /// Break a stale writer lock and report whether the caller should retry
 /// (ADR-0074 §8), serialised behind [`LOCK_RECOVERY`]. Returns `true` only
 /// when the lock was genuinely stale (dead pid) and removed, or was already
@@ -69,6 +63,30 @@ fn recover_stale_writer_lock(repo: &Repository) -> bool {
         break_stale_lock(repo.store().git_dir()),
         Ok(StaleLockOutcome::Broken | StaleLockOutcome::Absent)
     )
+}
+
+/// Run a write operation and, if it failed on the single-writer lock left by
+/// a dead writer, break that lock and retry ONCE (ADR-0074 §8). Every
+/// lock-taking daemon verb — `query` writes, `import`, and the ref-advancing
+/// verbs — goes through this, so a SIGKILLed writer's stale lock never
+/// crash-loops the daemon whatever the first write is (PR #270 review). A
+/// *live* lock is retried once against a still-held lock and then surfaced,
+/// so genuine contention still returns a typed error to the client.
+fn with_lock_recovery<T, E>(
+    repo: &Repository,
+    is_locked: impl Fn(&E) -> bool,
+    mut op: impl FnMut() -> Result<T, E>,
+) -> Result<T, E> {
+    let first = op();
+    match &first {
+        Err(e) if is_locked(e) && recover_stale_writer_lock(repo) => op(),
+        _ => first,
+    }
+}
+
+/// Whether a `GraphError` is the single-writer-lock conflict.
+fn is_graph_locked(e: &GraphError) -> bool {
+    matches!(e, GraphError::Locked { .. })
 }
 
 /// Frames above this are refused at the framing layer, before any parse
@@ -415,14 +433,15 @@ fn run_query(
     // named in ADR-0074 §6 (PR #259 review, final note).
     let limits =
         crate::query::cli_limits(timeout_secs).with_max_result_rows(DAEMON_MAX_RESULT_ROWS);
-    let mut outcome = session.run_with(cypher, &BTreeMap::new(), &limits);
     // Daemon-only stale-writer-lock recovery (ADR-0074 §8): a write that hit
-    // a lock left by a SIGKILLed writer would otherwise crash-loop the
-    // daemon. If the lock's pid is dead, break it (serialised across
-    // connections) and retry the write ONCE. The CLI never does this.
-    if is_locked(&outcome) && recover_stale_writer_lock(repo) {
-        outcome = session.run_with(cypher, &BTreeMap::new(), &limits);
-    }
+    // a lock left by a SIGKILLed writer would otherwise crash-loop the daemon
+    // — break a dead-pid lock and retry once (the same helper the ref verbs
+    // use). The CLI never does this.
+    let outcome = with_lock_recovery(
+        repo,
+        |e: &QueryError| matches!(e, QueryError::Graph(GraphError::Locked { .. })),
+        || session.run_with(cypher, &BTreeMap::new(), &limits),
+    );
     match outcome {
         // Both outcomes stream rows the same way (a write may RETURN);
         // the terminal `ok` frame carries the write-summary counts for a
@@ -482,6 +501,11 @@ fn run_query(
                 QueryError::Bind(_) => "bind",
                 QueryError::Exec(_) => "exec",
                 QueryError::Persist(_) => "persist",
+                // Surface the writer-lock conflict as `locked` — the same
+                // kind the ref verbs use — so a client tells a retriable
+                // lock conflict from a permanent graph error consistently
+                // across verbs (PR #270 review M-2).
+                QueryError::Graph(GraphError::Locked { .. }) => "locked",
                 QueryError::Graph(_) => "graph",
                 QueryError::WriteAtVersion => "write-at-version",
             };
@@ -793,7 +817,13 @@ fn graph_error_frame(stream: &mut UnixStream, id: &Json, e: &GraphError) -> Resu
         GraphError::NoCurrentBranch => "no-current-branch",
         GraphError::NothingToCommit => "nothing-to-commit",
         GraphError::MergeInProgress => "merge-in-progress",
-        GraphError::BranchConflict { .. } | GraphError::WorkspaceConflict { .. } => "conflict",
+        // "concurrent-modification" (a ref/workspace moved under us — reload
+        // and retry), deliberately NOT "conflict": that would collide with
+        // the merge verb's `outcome:"conflicts"` ok-frame, which is
+        // resolve-these DATA, not a retriable error (PR #270 review M-4).
+        GraphError::BranchConflict { .. } | GraphError::WorkspaceConflict { .. } => {
+            "concurrent-modification"
+        }
         _ => "graph",
     };
     write_frame(
@@ -813,26 +843,43 @@ fn run_commit(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
         .and_then(Json::as_bool)
         .unwrap_or(false);
     let mut trailers: Vec<(String, String)> = Vec::new();
-    if let Some(arr) = request.pointer("/params/trailer").and_then(Json::as_array) {
-        for entry in arr {
-            let Some(raw) = entry.as_str() else {
-                return bad_request(stream, id, "trailer entries must be \"key=value\" strings");
-            };
-            match crate::value::parse_kv(raw, "trailer") {
-                Ok((k, v)) => trailers.push((k.to_owned(), v.to_owned())),
-                Err(e) => return bad_request(stream, id, &e.to_string()),
+    match request.pointer("/params/trailer") {
+        None => {}
+        // A present-but-not-an-array trailer is a client mistake, not
+        // silently dropped metadata (PR #270 review M-3).
+        Some(Json::Array(arr)) => {
+            for entry in arr {
+                let Some(raw) = entry.as_str() else {
+                    return bad_request(
+                        stream,
+                        id,
+                        "trailer entries must be \"key=value\" strings",
+                    );
+                };
+                match crate::value::parse_kv(raw, "trailer") {
+                    Ok((k, v)) => trailers.push((k.to_owned(), v.to_owned())),
+                    Err(e) => return bad_request(stream, id, &e.to_string()),
+                }
             }
         }
+        Some(_) => {
+            return bad_request(
+                stream,
+                id,
+                "params.trailer must be an array of \"key=value\" strings",
+            );
+        }
     }
-    let txn = match repo.begin_write() {
-        Ok(t) => t,
-        Err(e) => return graph_error_frame(stream, id, &e),
-    };
-    let committed = if allow_empty {
-        txn.commit_allow_empty(message, &trailers, None)
-    } else {
-        txn.commit(message, &trailers, None)
-    };
+    // Take the lock through the stale-lock-recovery wrapper (ADR-0074 §8), so
+    // a dead writer's lock doesn't wedge `commit` (PR #270 review MAJOR-1).
+    let committed = with_lock_recovery(repo, is_graph_locked, || {
+        let txn = repo.begin_write()?;
+        if allow_empty {
+            txn.commit_allow_empty(message, &trailers, None)
+        } else {
+            txn.commit(message, &trailers, None)
+        }
+    });
     match committed {
         Ok(commit) => write_frame(
             stream,
@@ -890,7 +937,7 @@ fn run_checkout(
     let Some(branch) = request.pointer("/params/branch").and_then(Json::as_str) else {
         return bad_request(stream, id, "checkout needs params.branch (a string)");
     };
-    match repo.checkout_branch(branch) {
+    match with_lock_recovery(repo, is_graph_locked, || repo.checkout_branch(branch)) {
         Ok(()) => write_frame(stream, &json!({"id": id, "ok": {"checked_out": branch}})),
         Err(e) => graph_error_frame(stream, id, &e),
     }
@@ -906,7 +953,7 @@ fn run_merge(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Js
         .and_then(Json::as_bool)
         .unwrap_or(false)
     {
-        return match repo.abort_merge() {
+        return match with_lock_recovery(repo, is_graph_locked, || repo.abort_merge()) {
             Ok(()) => write_frame(stream, &json!({"id": id, "ok": {"aborted": true}})),
             Err(e) => graph_error_frame(stream, id, &e),
         };
@@ -918,7 +965,7 @@ fn run_merge(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Js
         .pointer("/params/message")
         .and_then(Json::as_str)
         .unwrap_or("merge");
-    match repo.merge(refspec, message) {
+    match with_lock_recovery(repo, is_graph_locked, || repo.merge(refspec, message)) {
         Ok(acetone_core::graph::merge::MergeOutcome::AlreadyUpToDate) => {
             write_frame(stream, &json!({"id": id, "ok": {"outcome": "up-to-date"}}))
         }
@@ -975,7 +1022,7 @@ fn run_resolve(
             );
         }
     };
-    match repo.resolve_all(side) {
+    match with_lock_recovery(repo, is_graph_locked, || repo.resolve_all(side)) {
         Ok(n) => write_frame(stream, &json!({"id": id, "ok": {"resolved": n}})),
         Err(e) => graph_error_frame(stream, id, &e),
     }
