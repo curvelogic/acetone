@@ -132,26 +132,33 @@ pub fn break_stale_lock(git_dir: &Path) -> Result<StaleLockOutcome, GraphError> 
     }
 }
 
-/// Parse the pid from a lock file's `pid=<n> unix-time=<t>` contents. `None`
-/// if the shape is not exactly that (an unparseable lock is never broken).
-fn parse_lock_pid(contents: &str) -> Option<u32> {
+/// Parse the pid from a lock file's `pid=<n> unix-time=<t>` contents as a
+/// **positive `i32`** — a real POSIX pid. `None` if the shape is not exactly
+/// that (an unparseable lock is never broken). Parsing directly as `i32`
+/// (not `u32`-then-cast) rejects a corrupted/adversarial pid above
+/// `i32::MAX`, which would otherwise cast to a negative value and make
+/// `kill` probe a process *group* rather than a process (a wrong liveness
+/// answer in a corruption-critical path).
+fn parse_lock_pid(contents: &str) -> Option<i32> {
     contents
         .split_whitespace()
         .find_map(|tok| tok.strip_prefix("pid="))
-        .and_then(|n| n.parse::<u32>().ok())
-        .filter(|&pid| pid != 0)
+        .and_then(|n| n.parse::<i32>().ok())
+        .filter(|&pid| pid > 0)
 }
 
 /// Whether a process with `pid` currently exists, via `kill(pid, 0)` (POSIX,
 /// both release targets — ADR-0074 §8), through nix's SAFE wrapper so the
-/// crate keeps `#![forbid(unsafe_code)]`. `Ok` means the process exists;
-/// `ESRCH` means it does not; any other error (e.g. `EPERM` — it exists but
-/// is another user's) errs toward "live" (do not break).
-fn pid_is_live(pid: u32) -> bool {
+/// crate keeps `#![forbid(unsafe_code)]`. `pid` is a validated positive
+/// `i32` (a real process, never a `kill` process-group sentinel). `Ok` means
+/// the process exists; `ESRCH` means it does not; any other error (e.g.
+/// `EPERM` — it exists but is another user's) errs toward "live" (do not
+/// break).
+fn pid_is_live(pid: i32) -> bool {
     use nix::errno::Errno;
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
-    match kill(Pid::from_raw(pid as i32), None) {
+    match kill(Pid::from_raw(pid), None) {
         Ok(()) => true,
         Err(Errno::ESRCH) => false,
         Err(_) => true,
@@ -289,6 +296,14 @@ mod tests {
         assert!(dir.path().join(WRITER_LOCK_FILE).exists());
         // pid=0 is also refused (never a real acquirable pid).
         plant_lock(dir.path(), "pid=0 unix-time=1\n");
+        assert_eq!(
+            break_stale_lock(dir.path()).expect("break"),
+            StaleLockOutcome::Live
+        );
+        // A pid above i32::MAX (corrupt/adversarial) must NOT be broken: it
+        // would cast to a negative kill() process-group sentinel. Parsed as a
+        // positive i32, it is unparseable -> Live.
+        plant_lock(dir.path(), "pid=4000000000 unix-time=1\n");
         assert_eq!(
             break_stale_lock(dir.path()).expect("break"),
             StaleLockOutcome::Live
