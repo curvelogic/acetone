@@ -678,9 +678,16 @@ fn run_import(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
                 "imported": true, "nodes": nodes, "edges": edges, "commit": commit.to_hex(),
             }}),
         ),
+        // `{e:#}` renders anyhow's whole cause chain, not just the outer
+        // `.context("importing")` — so a peer can tell a retriable lock
+        // conflict ("...locked by another writer") from a permanent data
+        // error, rather than the bare "importing" (PR #268 review M1).
+        // Concurrent imports race the shared workspace exactly as two
+        // concurrent `acetone import` processes do (a dirty-workspace
+        // refusal, not corruption); a client retries.
         Err(e) => write_frame(
             stream,
-            &json!({"id": id, "error": {"kind": "import", "message": e.to_string()}}),
+            &json!({"id": id, "error": {"kind": "import", "message": format!("{e:#}")}}),
         ),
     }
 }

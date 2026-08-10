@@ -897,3 +897,38 @@ fn an_over_cap_import_payload_is_refused_and_closes() {
         "over-cap import payload must close the connection"
     );
 }
+
+#[test]
+fn an_import_error_surfaces_its_cause_not_a_bare_importing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // seeded_repo leaves the workspace dirty (uncommitted nodes), so an
+    // import refuses — and the frame must name WHY (PR #268 review M1),
+    // not the bare outer "importing" context.
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "import", "params": {"format": "ndjson", "label": "Doc"}}),
+    );
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "chunk": "{\"id\":\"x\"}\n"}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+    let frame = read_frame(&mut s);
+    assert_eq!(frame["error"]["kind"], "import", "{frame}");
+    let msg = frame["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("uncommitted"),
+        "the error must name its cause, not a bare 'importing': {msg:?}"
+    );
+    // The connection survives a logic error (payload was fully read).
+    write_frame(&mut s, &serde_json::json!({"id": 2, "verb": "status"}));
+    assert!(
+        read_frame(&mut s)["ok"]["nodes"].is_number(),
+        "connection survives"
+    );
+}
