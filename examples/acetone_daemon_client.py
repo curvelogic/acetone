@@ -62,10 +62,26 @@ class AcetoneClient:
         _, _, summary = self._request({"verb": "status"})
         return summary
 
-    def _request(self, body):
+    def schema_apply(self, document, dry_run=False):
+        """Apply a schema document (JSON text) streamed as chunk frames — a
+        payload verb: the document's bytes cross the wire, never a path
+        (ADR-0074 §4). Returns the terminal `ok` summary."""
         self._next_id += 1
         req_id = self._next_id
-        self._send_frame({"id": req_id, **body})
+        self._send_frame(
+            {"id": req_id, "verb": "schema-apply", "params": {"dry_run": dry_run}}
+        )
+        self._send_frame({"id": req_id, "chunk": document})
+        self._send_frame({"id": req_id, "chunk_end": True})
+        _, _, summary = self._read_response()
+        return summary
+
+    def _request(self, body):
+        self._next_id += 1
+        self._send_frame({"id": self._next_id, **body})
+        return self._read_response()
+
+    def _read_response(self):
         columns, rows = None, []
         while True:
             frame = self._read_frame()
@@ -117,6 +133,11 @@ def main():
         # A read: the write is visible on the same live workspace.
         columns, rows, _ = client.query("MATCH (d:Demo) RETURN d.id")
         print("read:", columns, "->", rows)
+
+        # A payload verb: apply a schema document streamed as chunk frames.
+        applied = client.schema_apply('{"labels": [{"name": "Note", "key": ["id"]}]}')
+        print("schema-applied:", applied)
+        client.query("CREATE (:Note {id: 'n1'})")  # the new label is usable
 
         # Coin: a CREATE naming an undeclared relationship type, with
         # autodeclare, mints the type as it writes.

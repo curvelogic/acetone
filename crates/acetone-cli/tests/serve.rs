@@ -638,3 +638,170 @@ fn a_write_coins_a_rel_type_only_with_autodeclare() {
         "autodeclare coins and creates the edge: {terminal}"
     );
 }
+
+#[test]
+fn the_schema_apply_verb_applies_a_streamed_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    // Request, then stream the document as two chunk frames + chunk_end —
+    // no path crosses the wire.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply", "params": {}}),
+    );
+    let doc = r#"{"labels": [{"name": "Widget", "key": ["id"]}]}"#;
+    let (a, b) = doc.split_at(20);
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": a}));
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": b}));
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+
+    // Drain plan advisories to the terminal ok.
+    let mut frame = read_frame(&mut s);
+    while frame.get("ok").is_none() && frame.get("error").is_none() {
+        frame = read_frame(&mut s);
+    }
+    assert_eq!(frame["ok"]["applied"], 1, "schema applied: {frame}");
+
+    // The label + key are now declared: a Widget create succeeds on the
+    // same live workspace.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "CREATE (:Widget {id: 'x'})"
+        }}),
+    );
+    let ok = read_frame(&mut s);
+    assert_eq!(ok["ok"]["write"]["nodes_created"], 1, "declared: {ok}");
+}
+
+#[test]
+fn schema_apply_dry_run_streams_the_plan_without_applying() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply", "params": {"dry_run": true}}),
+    );
+    let doc = r#"{"labels": [{"name": "Widget", "key": ["id"]}]}"#;
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": doc}));
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+
+    let mut saw_plan = false;
+    let mut frame = read_frame(&mut s);
+    while frame.get("ok").is_none() && frame.get("error").is_none() {
+        if frame.get("advisory").is_some() {
+            saw_plan = true;
+        }
+        frame = read_frame(&mut s);
+    }
+    assert!(saw_plan, "dry run must stream the plan as advisories");
+    assert_eq!(frame["ok"]["dry_run"], true, "{frame}");
+    assert_eq!(
+        frame["ok"]["applied"], 0,
+        "dry run applies nothing: {frame}"
+    );
+}
+
+#[test]
+fn an_over_cap_schema_apply_payload_is_refused_and_closes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    // A tiny payload cap so a small doc trips it.
+    let _daemon = start_daemon_env(
+        &repo,
+        &socket,
+        &[],
+        &[("ACETONE_SERVE_PAYLOAD_MAX_BYTES", "8")],
+    );
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply", "params": {}}),
+    );
+    // A chunk larger than 8 bytes.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "chunk": "0123456789abcdef"}),
+    );
+    let frame = read_frame(&mut s);
+    assert_eq!(frame["error"]["kind"], "payload-too-large", "{frame}");
+    // The connection is closed after the typed refusal (stream desynced).
+    use std::io::Read;
+    let mut probe = [0u8; 1];
+    let closed = matches!(s.read(&mut probe), Ok(0) | Err(_));
+    assert!(closed, "over-cap payload must close the connection");
+}
+
+#[test]
+fn schema_apply_rejects_a_malformed_chunk_frame_and_closes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply", "params": {}}),
+    );
+    // A chunk frame whose `chunk` is a number, not a string — a protocol
+    // violation, not a panic.
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": 123}));
+    let frame = read_frame(&mut s);
+    assert_eq!(frame["error"]["kind"], "bad-request", "{frame}");
+    assert_eq!(
+        frame["id"], 1,
+        "the error carries the request id, not a smuggled one"
+    );
+    use std::io::Read;
+    let mut probe = [0u8; 1];
+    assert!(
+        matches!(s.read(&mut probe), Ok(0) | Err(_)),
+        "a malformed chunk stream closes the connection"
+    );
+}
+
+#[test]
+fn a_bad_schema_document_is_typed_and_the_connection_survives() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    // A well-formed chunk stream (so the payload is synced) carrying a
+    // document with an unknown field — a LOGIC error, not a protocol one.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply", "params": {}}),
+    );
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "chunk": r#"{"labels": [{"name": "X", "key": ["id"], "bogus": 1}]}"#}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+    let frame = read_frame(&mut s);
+    assert_eq!(
+        frame["error"]["kind"], "schema-apply",
+        "typed doc error: {frame}"
+    );
+
+    // The connection survives (payload was fully read, stream synced): a
+    // follow-up status works.
+    write_frame(&mut s, &serde_json::json!({"id": 2, "verb": "status"}));
+    let ok = read_frame(&mut s);
+    assert!(
+        ok["ok"]["nodes"].is_number(),
+        "connection survives a doc error: {ok}"
+    );
+}

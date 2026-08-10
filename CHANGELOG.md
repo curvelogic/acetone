@@ -23,8 +23,10 @@ fine.)
   frames with a 16 MiB cap, the `query` verb (read and write — a
   write's terminal frame carries its summary counts, and a write may
   opt into relationship-type coinage with `params.autodeclare`) with
-  streamed rows and the advisory channel, a read-only `status` verb, and
-  the `CALL acetone.log/conflicts/diff/blame` procedures reachable
+  streamed rows and the advisory channel, a read-only `status` verb, a
+  `schema-apply` verb whose document streams in as `chunk` frames (no
+  path ever crosses the wire, ADR-0074 §4), and the
+  `CALL acetone.log/conflicts/diff/blame` procedures reachable
   through `query`, writes serialising on the existing
   single-writer lock, per-query budgets unchanged, and a
   `--max-concurrent` bound (default 4) on their sum, a separate
@@ -32,8 +34,8 @@ fine.)
   typed error kinds with span-aware rendering, and stale-socket reclaim
   so a host restart after a crash rebinds cleanly. A worked **non-Rust
   client** — `examples/acetone_daemon_client.py`, stdlib-only Python —
-  drives a query/coin/status session over the documented frame protocol,
-  showing the daemon needs no acetone library to embed.
+  drives a query/coin/schema-apply/status session over the documented
+  frame protocol, showing the daemon needs no acetone library to embed.
 - **Multiple co-tenant graphs in one repository** (acetone-j6ui): a
   repository can now host several acetone graphs alongside its code,
   each on its own ref namespace and its own per-graph workspace, so

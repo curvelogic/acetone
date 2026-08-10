@@ -1055,15 +1055,21 @@ fn parse_refusing_duplicate_keys(text: &str) -> Result<Json> {
     Ok(value)
 }
 
+/// The outcome of applying a schema document — the shared core returns it so
+/// both the CLI and the daemon render the final line their own way
+/// (acetone-pz0k.3).
+pub(crate) enum SchemaApplyOutcome {
+    DryRun,
+    NothingToApply,
+    Applied(usize),
+}
+
 pub(crate) fn schema_apply(
     repo_path: &Path,
     graph: Option<&str>,
     file: &str,
     dry_run: bool,
 ) -> Result<()> {
-    use acetone_core::model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
-    use std::collections::BTreeMap;
-
     let text = if file == "-" {
         use std::io::Read;
         let mut buf = String::new();
@@ -1075,7 +1081,30 @@ pub(crate) fn schema_apply(
         std::fs::read_to_string(file)
             .with_context(|| format!("reading schema document {file:?}"))?
     };
-    let doc: Json = parse_refusing_duplicate_keys(&text).context("parsing the schema document")?;
+    let repo = open(repo_path, graph)?;
+    match schema_apply_core(&repo, &text, dry_run, |line| outln!("{line}"))? {
+        SchemaApplyOutcome::DryRun => outln!("(dry run — nothing applied)"),
+        SchemaApplyOutcome::NothingToApply => outln!("(nothing to apply)"),
+        SchemaApplyOutcome::Applied(n) => outln!("applied {n} schema change(s)"),
+    }
+    Ok(())
+}
+
+/// Parse, diff and (unless `dry_run`) apply a schema document against `repo`'s
+/// workspace, emitting each plan line through `on_plan` — the CLI prints them,
+/// the daemon streams them as advisories. One logic path for both surfaces
+/// (acetone-pz0k.3): `text` is the document (from a file, stdin, or streamed
+/// chunk frames) and the repository is already opened and graph-selected.
+pub(crate) fn schema_apply_core(
+    repo: &Repository,
+    text: &str,
+    dry_run: bool,
+    mut on_plan: impl FnMut(String),
+) -> Result<SchemaApplyOutcome> {
+    use acetone_core::model::schema::{IndexDef, LabelDef, PropertyType, RelTypeDef, SchemaEntry};
+    use std::collections::BTreeMap;
+
+    let doc: Json = parse_refusing_duplicate_keys(text).context("parsing the schema document")?;
 
     // --- strict manual decoding: unknown fields are typo traps, refused ---
     fn obj<'j>(v: &'j Json, what: &str) -> Result<&'j serde_json::Map<String, Json>> {
@@ -1241,7 +1270,6 @@ pub(crate) fn schema_apply(
     }
 
     // --- diff against the current schema ---
-    let repo = open(repo_path, graph)?;
     let snapshot = repo.workspace_snapshot()?;
     // Mid-merge, a conflicted schema entry is absent from the merged map:
     // the diff would report it as `add` and the apply would silently
@@ -1322,7 +1350,7 @@ pub(crate) fn schema_apply(
             .find(|c| describe(c) == (kind.clone(), name.clone()));
         match existing {
             None => {
-                outln!("{kind} {}: add", format_label(&name));
+                on_plan(format!("{kind} {}: add", format_label(&name)));
                 to_stage.push(entry);
             }
             Some(c) if *c == *entry => {
@@ -1331,13 +1359,13 @@ pub(crate) fn schema_apply(
             Some(c) => {
                 let drops = dropped_facets(c, entry);
                 if drops.is_empty() {
-                    outln!("{kind} {}: change", format_label(&name));
+                    on_plan(format!("{kind} {}: change", format_label(&name)));
                 } else {
-                    outln!(
+                    on_plan(format!(
                         "{kind} {}: change (drops {})",
                         format_label(&name),
                         drops.join(", ")
-                    );
+                    ));
                 }
                 to_stage.push(entry);
             }
@@ -1351,19 +1379,19 @@ pub(crate) fn schema_apply(
         })
         .count();
     if unchanged > 0 {
-        outln!("{unchanged} unchanged");
+        on_plan(format!("{unchanged} unchanged"));
     }
     if untouched > 0 {
-        outln!("{untouched} in the repository but not in the document: left as-is");
+        on_plan(format!(
+            "{untouched} in the repository but not in the document: left as-is"
+        ));
     }
 
     if dry_run {
-        outln!("(dry run — nothing applied)");
-        return Ok(());
+        return Ok(SchemaApplyOutcome::DryRun);
     }
     if to_stage.is_empty() {
-        outln!("(nothing to apply)");
-        return Ok(());
+        return Ok(SchemaApplyOutcome::NothingToApply);
     }
 
     // Blocker 1 (PR #246 review): the require/unique backfill check
@@ -1394,8 +1422,7 @@ pub(crate) fn schema_apply(
     // stability) rejects the whole document.
     txn.save()
         .context("applying the schema document (nothing was applied)")?;
-    outln!("applied {} schema change(s)", to_stage.len());
-    Ok(())
+    Ok(SchemaApplyOutcome::Applied(to_stage.len()))
 }
 
 pub(crate) fn schema(
