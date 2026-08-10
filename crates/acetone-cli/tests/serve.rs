@@ -741,3 +741,67 @@ fn an_over_cap_schema_apply_payload_is_refused_and_closes() {
     let closed = matches!(s.read(&mut probe), Ok(0) | Err(_));
     assert!(closed, "over-cap payload must close the connection");
 }
+
+#[test]
+fn schema_apply_rejects_a_malformed_chunk_frame_and_closes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply", "params": {}}),
+    );
+    // A chunk frame whose `chunk` is a number, not a string — a protocol
+    // violation, not a panic.
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": 123}));
+    let frame = read_frame(&mut s);
+    assert_eq!(frame["error"]["kind"], "bad-request", "{frame}");
+    assert_eq!(
+        frame["id"], 1,
+        "the error carries the request id, not a smuggled one"
+    );
+    use std::io::Read;
+    let mut probe = [0u8; 1];
+    assert!(
+        matches!(s.read(&mut probe), Ok(0) | Err(_)),
+        "a malformed chunk stream closes the connection"
+    );
+}
+
+#[test]
+fn a_bad_schema_document_is_typed_and_the_connection_survives() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    // A well-formed chunk stream (so the payload is synced) carrying a
+    // document with an unknown field — a LOGIC error, not a protocol one.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply", "params": {}}),
+    );
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "chunk": r#"{"labels": [{"name": "X", "key": ["id"], "bogus": 1}]}"#}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+    let frame = read_frame(&mut s);
+    assert_eq!(
+        frame["error"]["kind"], "schema-apply",
+        "typed doc error: {frame}"
+    );
+
+    // The connection survives (payload was fully read, stream synced): a
+    // follow-up status works.
+    write_frame(&mut s, &serde_json::json!({"id": 2, "verb": "status"}));
+    let ok = read_frame(&mut s);
+    assert!(
+        ok["ok"]["nodes"].is_number(),
+        "connection survives a doc error: {ok}"
+    );
+}
