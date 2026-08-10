@@ -524,12 +524,14 @@ fn a_non_rust_python_client_drives_a_full_session() {
             .status
             .success()
     );
-    // The example writes a `Demo {id}` node, so declare that label first.
+    // The example imports/writes `Demo {id}` nodes; import needs a clean
+    // workspace, so declare the label and commit before serving.
     assert!(
         acetone(&repo, &["declare-label", "Demo", "--key", "id"])
             .status
             .success()
     );
+    assert!(acetone(&repo, &["commit", "-m", "setup"]).status.success());
     let socket = dir.path().join("acetone.sock");
     let _daemon = start_daemon(&repo, &socket);
 
@@ -557,6 +559,10 @@ fn a_non_rust_python_client_drives_a_full_session() {
     assert!(
         stdout.contains("coined+wrote") && stdout.contains("relationships_created"),
         "the client must coin a relationship type: {stdout}"
+    );
+    assert!(
+        stdout.contains("imported") && stdout.contains("'nodes': 2"),
+        "the client must stream an import: {stdout}"
     );
     assert!(
         stdout.contains("status:"),
@@ -803,5 +809,91 @@ fn a_bad_schema_document_is_typed_and_the_connection_survives() {
     assert!(
         ok["ok"]["nodes"].is_number(),
         "connection survives a doc error: {ok}"
+    );
+}
+
+#[test]
+fn the_import_verb_streams_a_source_and_commits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    assert!(
+        Command::new(bin)
+            .args(["init", repo.to_str().unwrap()])
+            .output()
+            .expect("init")
+            .status
+            .success()
+    );
+    // A declared + committed label, so the workspace is clean before import.
+    assert!(
+        acetone(&repo, &["declare-label", "Host", "--key", "name"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "schema"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "import", "params": {"format": "ndjson", "label": "Host"}}),
+    );
+    // Stream the source as chunk frames — no path crosses the wire.
+    let src = "{\"name\":\"web1\"}\n{\"name\":\"db1\"}\n";
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": src}));
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+
+    let mut frame = read_frame(&mut s);
+    while frame.get("ok").is_none() && frame.get("error").is_none() {
+        frame = read_frame(&mut s);
+    }
+    assert_eq!(frame["ok"]["imported"], true, "imported: {frame}");
+    assert_eq!(frame["ok"]["nodes"], 2, "two nodes: {frame}");
+
+    // A fresh connection sees the committed import (the workspace advanced).
+    let mut s2 = hello(&socket);
+    write_frame(
+        &mut s2,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "MATCH (h:Host) RETURN count(h)"
+        }}),
+    );
+    let row = read_frame(&mut s2);
+    assert_eq!(
+        row["row"]["values"][0], 2,
+        "import is committed and visible: {row}"
+    );
+}
+
+#[test]
+fn an_over_cap_import_payload_is_refused_and_closes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon_env(
+        &repo,
+        &socket,
+        &[],
+        &[("ACETONE_SERVE_PAYLOAD_MAX_BYTES", "8")],
+    );
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "import", "params": {"format": "ndjson", "label": "Doc"}}),
+    );
+    // A source larger than the 8-byte cap, streamed across two chunks to
+    // prove the cap is cumulative, not per-frame.
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": "12345"}));
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": "67890"}));
+    let frame = read_frame(&mut s);
+    assert_eq!(frame["error"]["kind"], "payload-too-large", "{frame}");
+    use std::io::Read;
+    let mut probe = [0u8; 1];
+    assert!(
+        matches!(s.read(&mut probe), Ok(0) | Err(_)),
+        "over-cap import payload must close the connection"
     );
 }

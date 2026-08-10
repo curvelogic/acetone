@@ -18,6 +18,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::output::outln;
+use acetone_core::graph::Repository;
 
 /// How source rows map to canonical records.
 #[derive(Debug, Clone)]
@@ -441,28 +442,21 @@ pub fn run(
     message: Option<&str>,
     batch_size: Option<usize>,
 ) -> Result<()> {
-    let format = Format::parse(format)?;
-    let mapping = build_mapping(label, edge, from, to, disc)?;
-
-    let mut file = File::open(source)
-        .with_context(|| format!("opening import source {}", source.display()))?;
-    let hash = source_hash(&mut file, source)?;
-    let mut extractor = FileExtractor::from_file(format, file, source, mapping)?;
-
     let repo = crate::commands::open(repo_path, graph)?;
-    let opts = ImportOptions {
-        branch: branch.map(str::to_owned),
-        message: message.map(str::to_owned),
-        provenance: Provenance {
-            source: source.display().to_string(),
-            extractor: format.as_str().to_owned(),
-            source_hash: hash,
-        },
-        author: None,
+    let outcome = import_core(
+        &repo,
+        format,
+        source,
+        &source.display().to_string(),
+        label,
+        edge,
+        from,
+        to,
+        disc,
+        branch,
+        message,
         batch_size,
-    };
-
-    let outcome = acetone_core::graph::import(&repo, &mut extractor, opts).context("importing")?;
+    )?;
 
     let target = branch.unwrap_or("the current branch");
     match outcome {
@@ -485,6 +479,50 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+/// Import from a source file into `repo`, returning the outcome rather than
+/// printing it — the shared core for the CLI `run` (prints) and the daemon's
+/// streamed `import` verb (frames the outcome). `source` is the file to read
+/// (the CLI's source, or the daemon's private temp file); `provenance_source`
+/// is what the commit's provenance records as the origin (the CLI's path, or
+/// a "streamed" label for the daemon — the peer never names a path, ADR-0074
+/// §4). `repo` is already opened and graph-selected. (acetone-pz0k.4)
+#[allow(clippy::too_many_arguments)] // import's CLI flags map 1:1 to args
+pub fn import_core(
+    repo: &Repository,
+    format: &str,
+    source: &Path,
+    provenance_source: &str,
+    label: Option<&str>,
+    edge: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    disc: Option<&str>,
+    branch: Option<&str>,
+    message: Option<&str>,
+    batch_size: Option<usize>,
+) -> Result<ImportOutcome> {
+    let format = Format::parse(format)?;
+    let mapping = build_mapping(label, edge, from, to, disc)?;
+
+    let mut file = File::open(source)
+        .with_context(|| format!("opening import source {}", source.display()))?;
+    let hash = source_hash(&mut file, source)?;
+    let mut extractor = FileExtractor::from_file(format, file, source, mapping)?;
+
+    let opts = ImportOptions {
+        branch: branch.map(str::to_owned),
+        message: message.map(str::to_owned),
+        provenance: Provenance {
+            source: provenance_source.to_owned(),
+            extractor: format.as_str().to_owned(),
+            source_hash: hash,
+        },
+        author: None,
+        batch_size,
+    };
+    acetone_core::graph::import(repo, &mut extractor, opts).context("importing")
 }
 
 /// Turn the mutually-exclusive node/edge flags into a [`Mapping`].

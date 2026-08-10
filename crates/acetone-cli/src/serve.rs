@@ -6,13 +6,15 @@
 //! terminal frames (a write's terminal `ok` carries its summary counts;
 //! a write may opt into relationship-type coinage via
 //! `params.autodeclare`), a read-only `status` verb, and the first
-//! payload verb `schema-apply` (the document streams in as `chunk`
-//! frames — no path over the wire, ADR-0074 §4) — under exactly the
-//! CLI's per-query budgets, bounded by `--max-concurrent`. One writer
+//! payload verbs `schema-apply` and `import` (the document/source
+//! streams in as `chunk` frames — no path over the wire, ADR-0074 §4)
+//! — under exactly the CLI's per-query budgets, bounded by
+//! `--max-concurrent`. One writer
 //! wins the single-writer lock; a concurrent write returns a typed
 //! `graph` (locked) error to retry, exactly as two concurrent CLI
-//! processes would. Streamed `import` and the stale-writer-lock recovery
-//! of ADR-0074 §8 land in later units against this protocol unchanged.
+//! processes would. The stale-writer-lock recovery of ADR-0074 §8 and
+//! the ref-advancing verbs land in later units against this protocol
+//! unchanged.
 //!
 //! Security model (ADR-0074 §1): the socket IS the authentication — the
 //! kernel enforces `0600`; the daemon holds no auth code and trusts every
@@ -278,6 +280,14 @@ fn connection(
                 let _permit = permits.acquire();
                 run_schema_apply(&mut stream, repo, &request, &id)?;
             }
+            // Streamed import (acetone-pz0k.4): the source bytes arrive as
+            // chunk frames — NO path over the wire — and are staged to a
+            // daemon-private temp file the peer never names, then run
+            // through the same import path as the CLI.
+            "import" => {
+                let _permit = permits.acquire();
+                run_import(&mut stream, repo, &request, &id)?;
+            }
             other => {
                 write_frame(
                     &mut stream,
@@ -285,7 +295,7 @@ fn connection(
                         "kind": "unknown-verb",
                         "message": format!(
                             "verb {other:?} is not served (this build serves \"query\" \
-                             (read and write), \"status\" and \"schema-apply\")"
+                             (read and write), \"status\", \"schema-apply\" and \"import\")"
                         ),
                     }}),
                 )?;
@@ -446,23 +456,49 @@ fn run_status(stream: &mut UnixStream, repo: &Repository, id: &Json) -> Result<(
 /// 16 MiB payload (the production default otherwise stands).
 const SCHEMA_APPLY_MAX_BYTES: usize = 16 * 1024 * 1024;
 
-fn payload_cap() -> usize {
+/// Total-size cap on a streamed `import` source. Imports can be large, so
+/// this is generous (1 GiB) — the honest ceiling is the daemon's own disk,
+/// and the import path streams record-by-record so daemon *memory* stays
+/// bounded regardless (acetone-7qw.3). Bounds a peer's disk use.
+const IMPORT_MAX_BYTES: usize = 1024 * 1024 * 1024;
+
+/// The effective payload cap: `default` unless overridden by
+/// `ACETONE_SERVE_PAYLOAD_MAX_BYTES` (so a test can trip the cap without a
+/// large payload; the production default otherwise stands).
+fn payload_cap(default: usize) -> usize {
     std::env::var("ACETONE_SERVE_PAYLOAD_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(SCHEMA_APPLY_MAX_BYTES)
+        .unwrap_or(default)
 }
 
-/// Read a streamed text payload: `{"chunk": "<utf-8 text>"}` frames until a
-/// `{"chunk_end": true}` frame (ADR-0074 §4 — the peer streams the document's
-/// bytes; NO path ever crosses the wire). The accumulated size is capped. On
-/// a protocol violation (over the cap, a frame that is neither `chunk` nor
-/// `chunk_end`, or EOF before `chunk_end`) it sends a typed error frame and
-/// returns `Err`, which closes the connection: the chunk stream is then
-/// desynced and must not be read as the next request.
+/// Read a streamed text payload into a `String` (for schema-apply, which
+/// parses it in memory). Bounded by `cap`; see [`read_payload_to_writer`]
+/// for the framing/violation contract.
 fn read_payload(stream: &mut UnixStream, id: &Json, cap: usize) -> Result<String> {
-    let mut text = String::new();
+    let mut buf: Vec<u8> = Vec::new();
+    read_payload_to_writer(stream, id, cap, &mut buf)?;
+    // The chunks are JSON string values, hence already valid UTF-8; the
+    // conversion cannot realistically fail, but check rather than assume.
+    String::from_utf8(buf).context("streamed payload was not valid UTF-8")
+}
+
+/// Read a streamed payload — `{"chunk": "<utf-8 text>"}` frames until a
+/// `{"chunk_end": true}` frame (ADR-0074 §4 — the peer streams the bytes; NO
+/// path ever crosses the wire) — writing each chunk to `sink` as it arrives,
+/// so a large import stays O(1) in daemon memory. The cumulative size is
+/// capped at `cap`. On a protocol violation (over the cap, a frame that is
+/// neither `chunk` nor `chunk_end`, or EOF before `chunk_end`) it sends a
+/// typed error frame and returns `Err`, which closes the connection: the
+/// chunk stream is then desynced and must not be read as the next request.
+fn read_payload_to_writer(
+    stream: &mut UnixStream,
+    id: &Json,
+    cap: usize,
+    sink: &mut impl Write,
+) -> Result<()> {
+    let mut total: usize = 0;
     loop {
         let Some(frame) = read_frame(stream)? else {
             let _ = write_frame(
@@ -475,11 +511,12 @@ fn read_payload(stream: &mut UnixStream, id: &Json, cap: usize) -> Result<String
             bail!("payload stream closed before chunk_end");
         };
         if frame.get("chunk_end").and_then(Json::as_bool) == Some(true) {
-            return Ok(text);
+            return Ok(());
         }
         match frame.pointer("/chunk").and_then(Json::as_str) {
             Some(chunk) => {
-                if text.len().saturating_add(chunk.len()) > cap {
+                total = total.saturating_add(chunk.len());
+                if total > cap {
                     let _ = write_frame(
                         stream,
                         &json!({"id": id, "error": {
@@ -489,7 +526,8 @@ fn read_payload(stream: &mut UnixStream, id: &Json, cap: usize) -> Result<String
                     );
                     bail!("streamed payload exceeded the cap");
                 }
-                text.push_str(chunk);
+                sink.write_all(chunk.as_bytes())
+                    .context("writing the streamed payload")?;
             }
             None => {
                 let _ = write_frame(
@@ -520,7 +558,7 @@ fn run_schema_apply(
         .pointer("/params/dry_run")
         .and_then(Json::as_bool)
         .unwrap_or(false);
-    let text = read_payload(stream, id, payload_cap())?;
+    let text = read_payload(stream, id, payload_cap(SCHEMA_APPLY_MAX_BYTES))?;
     let mut plan = Vec::new();
     let outcome = crate::commands::schema_apply_core(repo, &text, dry_run, |line| plan.push(line));
     for line in plan {
@@ -540,6 +578,109 @@ fn run_schema_apply(
         Err(e) => write_frame(
             stream,
             &json!({"id": id, "error": {"kind": "schema-apply", "message": e.to_string()}}),
+        ),
+    }
+}
+
+/// Removes its directory (recursively) on drop — so a streamed import's
+/// staging directory is cleaned up however `run_import` returns (success,
+/// error, or a `?` early-out).
+struct DirGuard(PathBuf);
+impl Drop for DirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A fresh private (`0700`) directory for one streamed import's source file
+/// (acetone-pz0k.4). Named by pid + a process-lifetime counter so concurrent
+/// imports never collide; a crashed prior run's leftover at the same name is
+/// cleared first, then the directory is created exclusively and locked to
+/// `0700` — the same staging pattern `serve` uses for the socket, so the
+/// file is unreachable to other users whatever the temp dir's own mode.
+fn import_staging_dir() -> Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("acetone-import.{}.{}", std::process::id(), n));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir)
+        .with_context(|| format!("creating import staging dir {}", dir.display()))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .context("restricting the import staging dir to 0700")?;
+    Ok(dir)
+}
+
+/// Serve the `import` verb: stream the source bytes into a daemon-private
+/// staging file, then run the ordinary import path against it (acetone-pz0k.4).
+/// The peer never names a path (ADR-0074 §4) — the staging file is the
+/// daemon's own, removed when this returns. `params` mirror `acetone import`
+/// minus the source: `format` (required), the node/edge mapping, `branch`,
+/// `message`, `batch_size`.
+fn run_import(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+    let param = |k: &str| {
+        request
+            .pointer(&format!("/params/{k}"))
+            .and_then(Json::as_str)
+    };
+    let Some(format) = param("format") else {
+        return write_frame(
+            stream,
+            &json!({"id": id, "error": {
+                "kind": "bad-request",
+                "message": "import needs params.format (e.g. \"csv\" or \"ndjson\")",
+            }}),
+        );
+    };
+    let batch_size = request
+        .pointer("/params/batch_size")
+        .and_then(Json::as_u64)
+        .map(|n| n as usize);
+
+    // Stage the streamed source to a private temp file (removed on return).
+    let dir = import_staging_dir()?;
+    let _guard = DirGuard(dir.clone());
+    let source = dir.join("source");
+    {
+        let mut file =
+            std::fs::File::create(&source).context("creating the import staging file")?;
+        // A protocol violation here closes the connection (`?`); the guard
+        // still removes the staging dir on the way out.
+        read_payload_to_writer(stream, id, payload_cap(IMPORT_MAX_BYTES), &mut file)?;
+        file.flush().ok();
+    }
+
+    let outcome = crate::import::import_core(
+        repo,
+        format,
+        &source,
+        "(streamed over the acetone daemon socket)",
+        param("label"),
+        param("edge"),
+        param("from"),
+        param("to"),
+        param("disc"),
+        param("branch"),
+        param("message"),
+        batch_size,
+    );
+    match outcome {
+        Ok(acetone_core::graph::import::ImportOutcome::NoChange) => {
+            write_frame(stream, &json!({"id": id, "ok": {"imported": false}}))
+        }
+        Ok(acetone_core::graph::import::ImportOutcome::Committed {
+            commit,
+            nodes,
+            edges,
+        }) => write_frame(
+            stream,
+            &json!({"id": id, "ok": {
+                "imported": true, "nodes": nodes, "edges": edges, "commit": commit.to_hex(),
+            }}),
+        ),
+        Err(e) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "import", "message": e.to_string()}}),
         ),
     }
 }
