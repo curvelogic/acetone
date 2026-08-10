@@ -19,8 +19,10 @@ Wire protocol (ADR-0074):
     A write's terminal ok carries a "write" object with the mutation counts.
 
 Usage:
-    # The demo writes a `Demo {id}` node, so declare that label's key first.
+    # The demo imports/writes `Demo {id}` nodes; import needs a clean
+    # workspace, so declare the label and commit before serving.
     acetone --repo path/to/repo declare-label Demo --key id
+    acetone --repo path/to/repo commit -m setup
     acetone serve --repo path/to/repo --socket /tmp/acetone.sock &
     python3 acetone_daemon_client.py /tmp/acetone.sock
 """
@@ -76,6 +78,22 @@ class AcetoneClient:
         _, _, summary = self._read_response()
         return summary
 
+    def import_source(self, source, fmt, label=None, edge=None, message=None):
+        """Import a source (CSV/JSON/NDJSON text) streamed as chunk frames — a
+        payload verb, no path over the wire. Requires a clean workspace (it
+        commits). Returns the terminal `ok` summary."""
+        params = {"format": fmt}
+        for key, value in (("label", label), ("edge", edge), ("message", message)):
+            if value is not None:
+                params[key] = value
+        self._next_id += 1
+        req_id = self._next_id
+        self._send_frame({"id": req_id, "verb": "import", "params": params})
+        self._send_frame({"id": req_id, "chunk": source})
+        self._send_frame({"id": req_id, "chunk_end": True})
+        _, _, summary = self._read_response()
+        return summary
+
     def _request(self, body):
         self._next_id += 1
         self._send_frame({"id": self._next_id, **body})
@@ -126,6 +144,13 @@ def main():
         sys.exit(2)
     client = AcetoneClient(sys.argv[1])
     try:
+        # A payload verb first, while the workspace is clean (import commits):
+        # stream two NDJSON rows as Demo nodes.
+        imported = client.import_source(
+            '{"id": "imported-1"}\n{"id": "imported-2"}\n', "ndjson", label="Demo"
+        )
+        print("imported:", imported)
+
         # A write: create a node. The terminal ok carries the mutation counts.
         _, _, summary = client.query("CREATE (:Demo {id: 'from-python'})")
         print("wrote:", summary.get("write"))
