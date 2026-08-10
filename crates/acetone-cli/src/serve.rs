@@ -70,8 +70,9 @@ fn recover_stale_writer_lock(repo: &Repository) -> bool {
 /// lock-taking daemon verb — `query` writes, `import`, and the ref-advancing
 /// verbs — goes through this, so a SIGKILLed writer's stale lock never
 /// crash-loops the daemon whatever the first write is (PR #270 review). A
-/// *live* lock is retried once against a still-held lock and then surfaced,
-/// so genuine contention still returns a typed error to the client.
+/// *live* lock is NOT retried — `recover_stale_writer_lock` returns false and
+/// short-circuits the retry — so genuine contention returns its typed error
+/// to the client unchanged, and a live lock is never broken.
 fn with_lock_recovery<T, E>(
     repo: &Repository,
     is_locked: impl Fn(&E) -> bool,
