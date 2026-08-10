@@ -5,12 +5,13 @@
 //! AND write) with streamed rows, the advisory channel, and typed
 //! terminal frames (a write's terminal `ok` carries its summary counts;
 //! a write may opt into relationship-type coinage via
-//! `params.autodeclare`), plus a read-only `status` verb — under exactly
-//! the CLI's per-query budgets, bounded by
-//! `--max-concurrent`. One writer wins the single-writer lock; a
-//! concurrent write returns a typed `graph` (locked) error to retry,
-//! exactly as two concurrent CLI processes would. Streamed payload verbs
-//! (`import`/`schema-apply`/`export`) and the stale-writer-lock recovery
+//! `params.autodeclare`), a read-only `status` verb, and the first
+//! payload verb `schema-apply` (the document streams in as `chunk`
+//! frames — no path over the wire, ADR-0074 §4) — under exactly the
+//! CLI's per-query budgets, bounded by `--max-concurrent`. One writer
+//! wins the single-writer lock; a concurrent write returns a typed
+//! `graph` (locked) error to retry, exactly as two concurrent CLI
+//! processes would. Streamed `import` and the stale-writer-lock recovery
 //! of ADR-0074 §8 land in later units against this protocol unchanged.
 //!
 //! Security model (ADR-0074 §1): the socket IS the authentication — the
@@ -268,10 +269,15 @@ fn connection(
                 let _permit = permits.acquire();
                 run_status(&mut stream, repo, &id)?;
             }
-            // When the payload verbs land here (`import`, `schema-apply`,
-            // `export`), their bytes travel as `chunk` frames — NO PATHS
-            // OVER THE WIRE (ADR-0074 §4): a path param would let any
-            // socket peer read anything the daemon's uid can.
+            // The first payload verb (acetone-pz0k.3): the schema document
+            // arrives as a stream of `chunk` text frames after the request —
+            // NO PATHS OVER THE WIRE (ADR-0074 §4): a path param would let
+            // any socket peer read anything the daemon's uid can. `import`
+            // (bytes) follows the same protocol in its own unit.
+            "schema-apply" => {
+                let _permit = permits.acquire();
+                run_schema_apply(&mut stream, repo, &request, &id)?;
+            }
             other => {
                 write_frame(
                     &mut stream,
@@ -279,7 +285,7 @@ fn connection(
                         "kind": "unknown-verb",
                         "message": format!(
                             "verb {other:?} is not served (this build serves \"query\" \
-                             (read and write) and \"status\")"
+                             (read and write), \"status\" and \"schema-apply\")"
                         ),
                     }}),
                 )?;
@@ -428,6 +434,112 @@ fn run_status(stream: &mut UnixStream, repo: &Repository, id: &Json) -> Result<(
         Err(e) => write_frame(
             stream,
             &json!({"id": id, "error": {"kind": "graph", "message": e.to_string()}}),
+        ),
+    }
+}
+
+/// Total-size cap on a streamed schema-apply payload: schema documents are
+/// small, so a generous 16 MiB is far above any real document while bounding
+/// the memory a peer can make the daemon accumulate (ADR-0074 §6). `import`
+/// streams to its own bound in a later unit. Overridable via
+/// `ACETONE_SERVE_PAYLOAD_MAX_BYTES` so a test can exercise the cap without a
+/// 16 MiB payload (the production default otherwise stands).
+const SCHEMA_APPLY_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+fn payload_cap() -> usize {
+    std::env::var("ACETONE_SERVE_PAYLOAD_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(SCHEMA_APPLY_MAX_BYTES)
+}
+
+/// Read a streamed text payload: `{"chunk": "<utf-8 text>"}` frames until a
+/// `{"chunk_end": true}` frame (ADR-0074 §4 — the peer streams the document's
+/// bytes; NO path ever crosses the wire). The accumulated size is capped. On
+/// a protocol violation (over the cap, a frame that is neither `chunk` nor
+/// `chunk_end`, or EOF before `chunk_end`) it sends a typed error frame and
+/// returns `Err`, which closes the connection: the chunk stream is then
+/// desynced and must not be read as the next request.
+fn read_payload(stream: &mut UnixStream, id: &Json, cap: usize) -> Result<String> {
+    let mut text = String::new();
+    loop {
+        let Some(frame) = read_frame(stream)? else {
+            let _ = write_frame(
+                stream,
+                &json!({"id": id, "error": {
+                    "kind": "bad-request",
+                    "message": "connection closed before chunk_end",
+                }}),
+            );
+            bail!("payload stream closed before chunk_end");
+        };
+        if frame.get("chunk_end").and_then(Json::as_bool) == Some(true) {
+            return Ok(text);
+        }
+        match frame.pointer("/chunk").and_then(Json::as_str) {
+            Some(chunk) => {
+                if text.len().saturating_add(chunk.len()) > cap {
+                    let _ = write_frame(
+                        stream,
+                        &json!({"id": id, "error": {
+                            "kind": "payload-too-large",
+                            "message": format!("streamed payload exceeds the {cap}-byte cap"),
+                        }}),
+                    );
+                    bail!("streamed payload exceeded the cap");
+                }
+                text.push_str(chunk);
+            }
+            None => {
+                let _ = write_frame(
+                    stream,
+                    &json!({"id": id, "error": {
+                        "kind": "bad-request",
+                        "message": "expected a chunk or chunk_end frame",
+                    }}),
+                );
+                bail!("unexpected frame in payload stream");
+            }
+        }
+    }
+}
+
+/// Serve the `schema-apply` verb: apply a schema document streamed as chunk
+/// frames (acetone-pz0k.3). Plan lines stream as advisories; the terminal
+/// `ok` reports what was applied. A malformed document is a typed
+/// `schema-apply` error, leaving the connection open (the payload was fully
+/// read); a payload-protocol violation closes the connection (`read_payload`).
+fn run_schema_apply(
+    stream: &mut UnixStream,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
+    let dry_run = request
+        .pointer("/params/dry_run")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    let text = read_payload(stream, id, payload_cap())?;
+    let mut plan = Vec::new();
+    let outcome = crate::commands::schema_apply_core(repo, &text, dry_run, |line| plan.push(line));
+    for line in plan {
+        write_frame(stream, &json!({"id": id, "advisory": line}))?;
+    }
+    match outcome {
+        Ok(o) => {
+            let ok = match o {
+                crate::commands::SchemaApplyOutcome::DryRun => {
+                    json!({"dry_run": true, "applied": 0})
+                }
+                crate::commands::SchemaApplyOutcome::NothingToApply => json!({"applied": 0}),
+                crate::commands::SchemaApplyOutcome::Applied(n) => json!({"applied": n}),
+            };
+            write_frame(stream, &json!({"id": id, "ok": ok}))
+        }
+        Err(e) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "schema-apply", "message": e.to_string()}}),
         ),
     }
 }
