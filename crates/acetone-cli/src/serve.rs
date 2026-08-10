@@ -36,12 +36,18 @@ use acetone_core::graph::GraphError;
 use acetone_core::graph::lock::{StaleLockOutcome, break_stale_lock};
 use acetone_core::graph::repo::Repository;
 
-/// Serialises stale-writer-lock recovery across the daemon's connection
-/// threads (ADR-0074 §8): the daemon is one process per repository, so with
-/// at most one recoverer active the double-recoverer race (two threads each
-/// unlinking and recreating the lock) cannot occur, and `O_EXCL` on the
-/// re-acquire is the cross-process backstop. A plain `()` mutex — held only
-/// for the brief break decision, never across a write.
+/// Serialises stale-writer-lock recovery across this daemon's connection
+/// threads (ADR-0074 §8): with at most one recoverer active in the process,
+/// the double-recoverer race — two threads each unlinking and recreating the
+/// lock — cannot occur, so no thread ever removes another's freshly-acquired
+/// lock. This holds **within one daemon process**. It relies on ADR-0074's
+/// one-daemon-per-repository model: two daemons on ONE repository (started on
+/// different sockets) share no mutex, and `remove_file` in `break_stale_lock`
+/// is unconditional, so they could reopen the double-writer window — that
+/// configuration is UNSUPPORTED and would need an enforced daemon-exclusivity
+/// lock or a stale-file-immune (flock-style) writer lock (ADR §8, a filed
+/// decision). A plain `()` mutex, held only for the brief break decision,
+/// never across a write.
 static LOCK_RECOVERY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Whether a query outcome failed on the single-writer lock — the only

@@ -311,6 +311,27 @@ mod tests {
     }
 
     #[test]
+    fn the_cli_acquire_path_never_recovers_a_stale_lock() {
+        // WriteLock::acquire (the CLI write path) must ALWAYS return Locked
+        // on any existing lock, stale or not — recovery is the daemon's
+        // business alone (ADR-0074 §8). A stale lock (dead pid) stays a
+        // typed error here; only break_stale_lock (daemon-only) removes it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        plant_lock(dir.path(), &format!("pid={} unix-time=1\n", a_dead_pid()));
+        assert!(
+            matches!(
+                WriteLock::acquire(dir.path()),
+                Err(GraphError::Locked { .. })
+            ),
+            "acquire must not auto-recover even a stale lock"
+        );
+        assert!(
+            dir.path().join(WRITER_LOCK_FILE).exists(),
+            "acquire left the lock in place"
+        );
+    }
+
+    #[test]
     fn poisoned_lock_holder_is_sanitised_in_the_error() {
         // acetone-6tt: the holder string is read verbatim from a file a local
         // attacker could poison; ANSI/control bytes and bidi overrides must

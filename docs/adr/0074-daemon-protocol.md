@@ -136,7 +136,7 @@ already have as a process, and removes the temptation to add any.*
      cannot occur intra-process; the daemon is one process per repository).
      The **pid-reuse refinement** — when the pid names *some* live process,
      checking its identity and start time to tell a reused pid from the
-     original holder — is **deferred** (acetone-pz0k.9): it needs
+     original holder — is **deferred** (acetone-pz0k.7): it needs
      platform-specific process introspection (`/proc` on Linux, `sysctl`/
      `proc_pidinfo` on macOS) whose only tractable forms are a hand-rolled
      unsafe FFI shim (untestable off-target, in a corruption-critical path)
@@ -148,6 +148,22 @@ already have as a process, and removes the temptation to add any.*
      daemon's `query` write path; extending it to the `schema-apply`/
      `import` write paths is a small follow-up (one write of any kind
      recovers the lock for all subsequent ones).
+   - **Safety boundary (PR #269 review):** the break is
+     `unlink`-then-`O_EXCL`-recreate, and `remove_file` is unconditional
+     (path-based). That is safe under this ADR's **one-daemon-per-repository
+     model** because the daemon serialises all recovery behind one in-process
+     mutex, so no recoverer ever removes another's freshly-acquired lock. It
+     is NOT safe if **two daemons run against one repository** on different
+     sockets: they share no mutex, and file locks have no race-free
+     cross-process "break if still stale" primitive (even the coupled
+     unlink+O_EXCL still lets one process remove the other's fresh lock).
+     Running two daemons on one repository is therefore **unsupported** and
+     reopens the double-writer window. Making recovery robust regardless of
+     daemon count — an enforced daemon-exclusivity lock at `serve` startup,
+     or replacing the O_EXCL lock file with a stale-immune `flock`/`fcntl`
+     advisory lock the kernel drops on death (portability permitting) — is
+     tracked as a decision (acetone-pz0k.8), settled at the Phase 11
+     boundary.
 
 ## Consequences
 
