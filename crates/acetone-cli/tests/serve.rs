@@ -1347,6 +1347,55 @@ fn the_export_verb_streams_the_whole_graph_as_announced_tables() {
     );
 }
 
+/// A whole-graph export over the socket refuses a hostile label name with
+/// the same typed error the CLI's `--out <dir>` path refuses it — parity
+/// includes the refusals (PR #277 review finding 1): a peer that mirrors
+/// `--out <dir>` semantics by writing `<name>.<ext>` must never receive a
+/// name that would traverse out of its directory. Per-table export remains
+/// the escape hatch, exactly as the CLI suggests.
+#[test]
+fn a_whole_graph_export_refuses_a_hostile_label_like_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(
+        acetone(&repo, &["declare-label", "../evil", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "export", "params": {"format": "ndjson"}}),
+    );
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert!(
+        streamed.is_empty(),
+        "refused before any stream: {streamed:?}"
+    );
+    assert_eq!(terminal["error"]["kind"], "export", "{terminal}");
+    assert!(
+        terminal["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot derive a safe file name"),
+        "the CLI's refusal, on the wire: {terminal}"
+    );
+
+    // The explicit per-table path still works — the same escape hatch the
+    // CLI's refusal message points at.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "export",
+            "params": {"format": "ndjson", "label": "../evil"}}),
+    );
+    let (_, terminal) = collect_stream(&mut s);
+    assert!(terminal.get("ok").is_some(), "{terminal}");
+}
+
 /// Bad export requests get a typed refusal, not a stream.
 #[test]
 fn the_export_verb_refuses_bad_params() {

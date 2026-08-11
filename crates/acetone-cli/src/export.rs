@@ -286,7 +286,7 @@ fn export_all(
 /// containing a path separator, `..`, a NUL, or a control character could
 /// escape `--out` or corrupt the write; reject it (export that table on its
 /// own with an explicit `--out <file>` instead).
-fn safe_filename(name: &str, prefix: &str, format: Format) -> Result<String> {
+pub(crate) fn safe_filename(name: &str, prefix: &str, format: Format) -> Result<String> {
     let unsafe_component = name.is_empty()
         || name == "."
         || name == ".."

@@ -702,6 +702,14 @@ fn send_chunks(stream: &mut UnixStream, id: &Json, text: &str) -> Result<()> {
 /// drift. Tables are built before anything streams, so a refused export
 /// (multi-endpoint edge table, reserved column collision) is a clean typed
 /// error, never a truncated stream.
+///
+/// Memory bound (ADR-0074 §6, PR #277 review): unlike `query` — whose
+/// result a peer can compose to be arbitrarily larger than the graph
+/// (cross products), hence `DAEMON_MAX_RESULT_ROWS` — an export is at most
+/// one full projection of the graph as committed on disk, which the peer
+/// cannot inflate from the socket. The query permit bounds how many such
+/// projections materialise at once, exactly as `--max-concurrent` CLI
+/// export processes would; no extra row cap is imposed.
 fn run_export(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
     use crate::export::{Format, edge_table, key_names, node_table, render_table, table_names};
 
@@ -759,12 +767,19 @@ fn run_export(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
                 let (labels, rtypes) = table_names(&schema, &nodes, &edges);
                 let mut tables = Vec::new();
                 for label in &labels {
+                    // Parity includes the refusals (PR #277 review): a peer
+                    // mirroring `--out <dir>` writes `<name>.<ext>`, so a
+                    // name the CLI would refuse to derive a file from is
+                    // refused on the wire too, with per-table export as the
+                    // same escape hatch.
+                    crate::export::safe_filename(label, "", format)?;
                     let table = node_table(&nodes, &key_names, label);
                     let announce =
                         json!({"name": label, "kind": "nodes", "rows": table.rows.len()});
                     tables.push((announce, render_table(&table, format)));
                 }
                 for rtype in &rtypes {
+                    crate::export::safe_filename(rtype, "rel-", format)?;
                     let table = edge_table(&edges, rtype)?;
                     let announce =
                         json!({"name": rtype, "kind": "edges", "rows": table.rows.len()});
