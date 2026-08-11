@@ -16,13 +16,13 @@ fn acetone(repo: &Path, args: &[&str]) -> std::process::Output {
     Command::new(bin).args(&full).output().expect("run acetone")
 }
 
-fn write_frame(s: &mut UnixStream, v: &serde_json::Value) {
+fn write_frame(s: &mut impl Write, v: &serde_json::Value) {
     let b = serde_json::to_vec(v).expect("encode");
     s.write_all(&(b.len() as u32).to_be_bytes()).expect("len");
     s.write_all(&b).expect("body");
 }
 
-fn read_frame(s: &mut UnixStream) -> serde_json::Value {
+fn read_frame(s: &mut impl Read) -> serde_json::Value {
     let mut len = [0u8; 4];
     s.read_exact(&mut len).expect("len");
     let mut buf = vec![0u8; u32::from_be_bytes(len) as usize];
@@ -1120,7 +1120,6 @@ fn the_daemon_recovers_a_stale_writer_lock_but_not_a_live_one() {
     assert!(lock.exists(), "the live lock must be left in place");
 }
 
-/// A helper: drive a verb request and drain to the terminal ok/error frame.
 fn sigterm(d: &Daemon) {
     assert!(
         Command::new("kill")
@@ -1442,6 +1441,7 @@ fn the_fsck_verb_reports_a_clean_repository() {
     );
 }
 
+/// A helper: drive a verb request and drain to the terminal ok/error frame.
 fn verb(s: &mut UnixStream, req: serde_json::Value) -> serde_json::Value {
     write_frame(s, &req);
     let mut frame = read_frame(s);
@@ -1638,4 +1638,89 @@ fn ref_verbs_reject_bad_input_typed_not_panicking() {
     // The connection survives every typed refusal.
     let ok = verb(&mut s, serde_json::json!({"id": 5, "verb": "status"}));
     assert!(ok["ok"]["nodes"].is_number(), "connection survives: {ok}");
+}
+
+/// The stdio transport (acetone-zavr.2, ADR-0076's companion): the same
+/// frame protocol over the child's stdin/stdout — the LSP pattern. Stdout
+/// carries nothing but frames (the server-first hello IS the readiness
+/// signal; no readiness line), and closing stdin is the graceful shutdown.
+#[test]
+fn stdio_transport_serves_the_same_protocol() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "serve", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdio daemon");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+
+    // The FIRST bytes on stdout are a frame length prefix (the server
+    // hello) — not a readiness line, not a log. read_frame would fail on
+    // anything else.
+    let server_hello = read_frame(&mut stdout);
+    assert_eq!(server_hello["acetone"]["protocol"], 1, "{server_hello}");
+    write_frame(&mut stdin, &serde_json::json!({"acetone": {"protocol": 1}}));
+
+    // The same verbs work unchanged over the pipe.
+    write_frame(&mut stdin, &serde_json::json!({"id": 1, "verb": "status"}));
+    let ok = read_frame(&mut stdout);
+    assert_eq!(ok["ok"]["nodes"], 2, "status over stdio: {ok}");
+    assert_eq!(ok["ok"]["workspace"], "dirty", "{ok}");
+
+    write_frame(
+        &mut stdin,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "MATCH (d:Doc) RETURN d.id ORDER BY d.id"
+        }}),
+    );
+    let mut rows = Vec::new();
+    loop {
+        let frame = read_frame(&mut stdout);
+        if frame.get("row").is_some() {
+            rows.push(frame["row"]["values"][0].clone());
+        } else {
+            assert_eq!(frame["ok"]["rows"], 2, "terminal frame: {frame}");
+            break;
+        }
+    }
+    assert_eq!(rows, vec![serde_json::json!("d1"), serde_json::json!("d2")]);
+
+    // Closing stdin is the graceful shutdown (the LSP pattern): the child
+    // exits 0 of its own accord.
+    drop(stdin);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "stdio daemon must exit when stdin closes"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    assert!(status.success(), "clean exit on stdin EOF: {status:?}");
+}
+
+/// `--stdio` and `--socket` are mutually exclusive, and one is required.
+#[test]
+fn serve_requires_exactly_one_transport() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+
+    let both = acetone(&repo, &["serve", "--stdio", "--socket", "/tmp/x.sock"]);
+    assert!(!both.status.success(), "--stdio + --socket must refuse");
+
+    let neither = acetone(&repo, &["serve"]);
+    assert!(!neither.status.success(), "a transport must be chosen");
+    let err = String::from_utf8_lossy(&neither.stderr);
+    assert!(
+        err.contains("--socket") && err.contains("--stdio"),
+        "the error names both transports: {err}"
+    );
 }

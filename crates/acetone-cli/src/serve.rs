@@ -94,6 +94,39 @@ fn is_graph_locked(e: &GraphError) -> bool {
     matches!(e, GraphError::Locked { .. })
 }
 
+/// The frame transport: any bidirectional byte stream. The frame protocol
+/// is transport-agnostic (ADR-0074); today's transports are the unix
+/// socket and the stdio pipe pair (acetone-zavr.2).
+trait Transport: Read + Write {}
+impl<T: Read + Write> Transport for T {}
+
+/// The stdio transport (acetone-zavr.2, ADR-0076's companion): stdin and
+/// stdout combined into one bidirectional frame stream — the LSP
+/// child-process pattern. The host spawns the daemon and owns the pipe, so
+/// the kernel-ACL question disappears (the pipe is private to the parent
+/// by construction). Stdout discipline: nothing but frames is written to
+/// it — logs go to stderr, and the readiness line is socket-mode-only (the
+/// server-first hello is the readiness signal here).
+struct StdioStream {
+    input: std::io::Stdin,
+    output: std::io::Stdout,
+}
+
+impl Read for StdioStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.input.read(buf)
+    }
+}
+
+impl Write for StdioStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.output.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.flush()
+    }
+}
+
 /// Frames above this are refused at the framing layer, before any parse
 /// (ADR-0074 §2 — the import-bound precedent applied to the wire).
 const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
@@ -327,7 +360,7 @@ pub fn serve(
                 }
             };
             if let Err(e) = connection(
-                stream,
+                &mut stream,
                 &repo,
                 &repo_path,
                 &query_permits,
@@ -373,6 +406,39 @@ pub fn serve(
     Ok(())
 }
 
+/// Serve the frame protocol over stdin/stdout — `acetone serve --stdio`
+/// (acetone-zavr.2, ADR-0076's companion): the LSP child-process pattern.
+/// One connection by construction (no accept loop, no connection cap, no
+/// socket lifecycle, no readiness line — the server-first hello is the
+/// readiness signal). Graceful shutdown is the parent closing stdin: the
+/// in-flight request completes, the request loop sees EOF, and the process
+/// exits 0. IO timeouts are socket-mode-only — the pipe peer is the parent
+/// by construction, and a dead parent yields EOF/EPIPE. SIGTERM keeps its
+/// default disposition (die): with no socket there is nothing to reclaim,
+/// and the pipe vanishes with the process. A stdio child is still a daemon
+/// instance of this repository — the writer-lock story (ADR-0077,
+/// acetone-pz0k.7) applies to it identically.
+pub fn serve_stdio(repo_path: &Path, max_concurrent: usize, timeout_secs: u64) -> Result<()> {
+    if max_concurrent == 0 {
+        bail!("--max-concurrent must be at least 1");
+    }
+    let repo = Repository::open(repo_path).context("opening repository")?;
+    let permits = Semaphore::new(max_concurrent);
+    let draining = AtomicBool::new(false);
+    let mut stream = StdioStream {
+        input: std::io::stdin(),
+        output: std::io::stdout(),
+    };
+    connection(
+        &mut stream,
+        &repo,
+        repo_path,
+        &permits,
+        &draining,
+        timeout_secs,
+    )
+}
+
 /// Best-effort unlink on shutdown paths that drop the listener. Disarmed
 /// once the drain has done its own unlink: between that unlink and process
 /// exit (up to the grace period) the host may already have bound a NEW
@@ -393,7 +459,7 @@ impl Drop for SocketGuard {
 }
 
 fn connection(
-    mut stream: UnixStream,
+    stream: &mut dyn Transport,
     repo: &Repository,
     repo_path: &Path,
     permits: &Semaphore,
@@ -403,17 +469,17 @@ fn connection(
     // Hello, both ways (ADR-0074 §3). The daemon speaks first so a
     // client can fail fast on a protocol mismatch without composing one.
     write_frame(
-        &mut stream,
+        stream,
         &json!({"acetone": {"protocol": PROTOCOL, "version": env!("CARGO_PKG_VERSION")}}),
     )?;
-    let hello = read_frame(&mut stream)?.context("peer closed before hello")?;
+    let hello = read_frame(stream)?.context("peer closed before hello")?;
     let peer_protocol = hello
         .pointer("/acetone/protocol")
         .and_then(Json::as_u64)
         .unwrap_or(0);
     if peer_protocol != PROTOCOL {
         write_frame(
-            &mut stream,
+            stream,
             &json!({"error": {
                 "kind": "protocol-mismatch",
                 "message": format!("this daemon speaks protocol {PROTOCOL}"),
@@ -424,13 +490,13 @@ fn connection(
 
     // Request loop: one request at a time per connection (a client wanting
     // parallelism opens connections; admission is the host's business).
-    while let Some(request) = read_frame(&mut stream)? {
+    while let Some(request) = read_frame(stream)? {
         let id = request.get("id").cloned().unwrap_or(Json::Null);
         let verb = request.get("verb").and_then(Json::as_str).unwrap_or("");
         match verb {
             "query" => {
                 let _permit = permits.acquire();
-                run_query(&mut stream, repo, &request, &id, timeout_secs)?;
+                run_query(stream, repo, &request, &id, timeout_secs)?;
             }
             // A read-only snapshot of the workspace state — the same
             // document `acetone status --json` prints (acetone-pz0k.4,
@@ -438,7 +504,7 @@ fn connection(
             // of `status` cannot bypass the concurrency bound.
             "status" => {
                 let _permit = permits.acquire();
-                run_status(&mut stream, repo, &id)?;
+                run_status(stream, repo, &id)?;
             }
             // The first payload verb (acetone-pz0k.3): the schema document
             // arrives as a stream of `chunk` text frames after the request —
@@ -447,7 +513,7 @@ fn connection(
             // (bytes) follows the same protocol in its own unit.
             "schema-apply" => {
                 let _permit = permits.acquire();
-                run_schema_apply(&mut stream, repo, &request, &id)?;
+                run_schema_apply(stream, repo, &request, &id)?;
             }
             // Streamed import (acetone-pz0k.4): the source bytes arrive as
             // chunk frames — NO path over the wire — and are staged to a
@@ -455,7 +521,7 @@ fn connection(
             // through the same import path as the CLI.
             "import" => {
                 let _permit = permits.acquire();
-                run_import(&mut stream, repo, &request, &id)?;
+                run_import(stream, repo, &request, &id)?;
             }
             // The ref-advancing verbs (acetone-pz0k.5). Greg's decision: a
             // connection is a view onto the ONE shared per-worktree workspace,
@@ -468,23 +534,23 @@ fn connection(
             // protocol change.) All take a query permit.
             "commit" => {
                 let _permit = permits.acquire();
-                run_commit(&mut stream, repo, &request, &id)?;
+                run_commit(stream, repo, &request, &id)?;
             }
             "branch" => {
                 let _permit = permits.acquire();
-                run_branch(&mut stream, repo, &request, &id)?;
+                run_branch(stream, repo, &request, &id)?;
             }
             "checkout" => {
                 let _permit = permits.acquire();
-                run_checkout(&mut stream, repo, &request, &id)?;
+                run_checkout(stream, repo, &request, &id)?;
             }
             "merge" => {
                 let _permit = permits.acquire();
-                run_merge(&mut stream, repo, &request, &id)?;
+                run_merge(stream, repo, &request, &id)?;
             }
             "resolve" => {
                 let _permit = permits.acquire();
-                run_resolve(&mut stream, repo, &request, &id)?;
+                run_resolve(stream, repo, &request, &id)?;
             }
             // Read-only projections at CLI parity (acetone-zavr.4): the
             // export streams table text as chunk frames — the outbound
@@ -493,15 +559,15 @@ fn connection(
             // and names its own files. fsck streams findings as frames.
             "export" => {
                 let _permit = permits.acquire();
-                run_export(&mut stream, repo, &request, &id)?;
+                run_export(stream, repo, &request, &id)?;
             }
             "fsck" => {
                 let _permit = permits.acquire();
-                run_fsck(&mut stream, repo_path, &id)?;
+                run_fsck(stream, repo_path, &id)?;
             }
             other => {
                 write_frame(
-                    &mut stream,
+                    stream,
                     &json!({"id": id, "error": {
                         "kind": "unknown-verb",
                         "message": format!(
@@ -525,7 +591,7 @@ fn connection(
 }
 
 fn run_query(
-    stream: &mut UnixStream,
+    stream: &mut dyn Transport,
     repo: &Repository,
     request: &Json,
     id: &Json,
@@ -657,7 +723,7 @@ fn run_query(
 /// one terminal `ok` frame (acetone-pz0k.4). Read-only — takes no write lock.
 /// The body is the same document `status --json` prints — both render from
 /// [`commands::StatusFacts`], so CLI parity is structural (acetone-sye1).
-fn run_status(stream: &mut UnixStream, repo: &Repository, id: &Json) -> Result<()> {
+fn run_status(stream: &mut dyn Transport, repo: &Repository, id: &Json) -> Result<()> {
     let status = crate::commands::StatusFacts::gather(repo).map(|facts| facts.to_json());
     match status {
         Ok(ok) => write_frame(stream, &json!({"id": id, "ok": ok})),
@@ -676,7 +742,7 @@ const EXPORT_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Stream `text` to the peer as `{"id", "chunk"}` frames, split on char
 /// boundaries near [`EXPORT_CHUNK_BYTES`].
-fn send_chunks(stream: &mut UnixStream, id: &Json, text: &str) -> Result<()> {
+fn send_chunks(stream: &mut dyn Transport, id: &Json, text: &str) -> Result<()> {
     let mut rest = text;
     while !rest.is_empty() {
         let mut cut = rest.len().min(EXPORT_CHUNK_BYTES);
@@ -710,7 +776,12 @@ fn send_chunks(stream: &mut UnixStream, id: &Json, text: &str) -> Result<()> {
 /// cannot inflate from the socket. The query permit bounds how many such
 /// projections materialise at once, exactly as `--max-concurrent` CLI
 /// export processes would; no extra row cap is imposed.
-fn run_export(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+fn run_export(
+    stream: &mut dyn Transport,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
     use crate::export::{Format, edge_table, key_names, node_table, render_table, table_names};
 
     let format = match request.pointer("/params/format").and_then(Json::as_str) {
@@ -821,7 +892,7 @@ fn run_export(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
 /// the store directly (not the connection's `Repository`) so a damaged
 /// workspace manifest — precisely when fsck is needed — can still be
 /// checked, mirroring the CLI (acetone-zhp).
-fn run_fsck(stream: &mut UnixStream, repo_path: &Path, id: &Json) -> Result<()> {
+fn run_fsck(stream: &mut dyn Transport, repo_path: &Path, id: &Json) -> Result<()> {
     match acetone_core::graph::fsck::check_path_graph(repo_path, None) {
         Ok(report) => {
             for finding in &report.findings {
@@ -871,7 +942,7 @@ fn payload_cap(default: usize) -> usize {
 /// Read a streamed text payload into a `String` (for schema-apply, which
 /// parses it in memory). Bounded by `cap`; see [`read_payload_to_writer`]
 /// for the framing/violation contract.
-fn read_payload(stream: &mut UnixStream, id: &Json, cap: usize) -> Result<String> {
+fn read_payload(stream: &mut dyn Transport, id: &Json, cap: usize) -> Result<String> {
     let mut buf: Vec<u8> = Vec::new();
     read_payload_to_writer(stream, id, cap, &mut buf)?;
     // The chunks are JSON string values, hence already valid UTF-8; the
@@ -888,7 +959,7 @@ fn read_payload(stream: &mut UnixStream, id: &Json, cap: usize) -> Result<String
 /// typed error frame and returns `Err`, which closes the connection: the
 /// chunk stream is then desynced and must not be read as the next request.
 fn read_payload_to_writer(
-    stream: &mut UnixStream,
+    stream: &mut dyn Transport,
     id: &Json,
     cap: usize,
     sink: &mut impl Write,
@@ -944,7 +1015,7 @@ fn read_payload_to_writer(
 /// `schema-apply` error, leaving the connection open (the payload was fully
 /// read); a payload-protocol violation closes the connection (`read_payload`).
 fn run_schema_apply(
-    stream: &mut UnixStream,
+    stream: &mut dyn Transport,
     repo: &Repository,
     request: &Json,
     id: &Json,
@@ -1012,7 +1083,12 @@ fn import_staging_dir() -> Result<PathBuf> {
 /// daemon's own, removed when this returns. `params` mirror `acetone import`
 /// minus the source: `format` (required), the node/edge mapping, `branch`,
 /// `message`, `batch_size`.
-fn run_import(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+fn run_import(
+    stream: &mut dyn Transport,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
     let param = |k: &str| {
         request
             .pointer(&format!("/params/{k}"))
@@ -1094,7 +1170,7 @@ fn run_import(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
 // thin wrappers over the same `Repository` methods the CLI uses.
 
 /// A typed `bad-request` frame for a malformed verb request.
-fn bad_request(stream: &mut UnixStream, id: &Json, message: &str) -> Result<()> {
+fn bad_request(stream: &mut dyn Transport, id: &Json, message: &str) -> Result<()> {
     write_frame(
         stream,
         &json!({"id": id, "error": {"kind": "bad-request", "message": message}}),
@@ -1104,7 +1180,7 @@ fn bad_request(stream: &mut UnixStream, id: &Json, message: &str) -> Result<()> 
 /// A typed error frame for a `GraphError`, mapping the common variants to
 /// distinct kinds so a machine client can tell a retriable lock conflict from
 /// a permanent one; the message carries the detail.
-fn graph_error_frame(stream: &mut UnixStream, id: &Json, e: &GraphError) -> Result<()> {
+fn graph_error_frame(stream: &mut dyn Transport, id: &Json, e: &GraphError) -> Result<()> {
     let kind = match e {
         GraphError::Locked { .. } => "locked",
         GraphError::DirtyWorkspace => "dirty-workspace",
@@ -1130,7 +1206,12 @@ fn graph_error_frame(stream: &mut UnixStream, id: &Json, e: &GraphError) -> Resu
 
 /// Serve `commit`: commit the shared workspace. `params.message` (required),
 /// `params.trailer` (optional `["k=v", ...]`), `params.allow_empty`.
-fn run_commit(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+fn run_commit(
+    stream: &mut dyn Transport,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
     let Some(message) = request.pointer("/params/message").and_then(Json::as_str) else {
         return bad_request(stream, id, "commit needs params.message (a string)");
     };
@@ -1187,7 +1268,12 @@ fn run_commit(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
 
 /// Serve `branch`: list (no params), create (`params.name`, optional
 /// `params.refspec`), or delete (`params.delete`).
-fn run_branch(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+fn run_branch(
+    stream: &mut dyn Transport,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
     let p = |k: &str| {
         request
             .pointer(&format!("/params/{k}"))
@@ -1225,7 +1311,7 @@ fn run_branch(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &J
 
 /// Serve `checkout`: switch the shared current-branch pointer. `params.branch`.
 fn run_checkout(
-    stream: &mut UnixStream,
+    stream: &mut dyn Transport,
     repo: &Repository,
     request: &Json,
     id: &Json,
@@ -1243,7 +1329,12 @@ fn run_checkout(
 /// `params.message`), or abort a merge in progress (`params.abort`).
 /// Conflicts come back as DATA in the terminal frame, mid-merge on the shared
 /// workspace — a client resolves via `resolve`/write queries then `commit`.
-fn run_merge(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+fn run_merge(
+    stream: &mut dyn Transport,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
     if request
         .pointer("/params/abort")
         .and_then(Json::as_bool)
@@ -1294,7 +1385,7 @@ fn run_merge(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Js
 /// Serve `resolve`: resolve every remaining merge conflict to one side —
 /// `params.all_ours` or `params.all_theirs`.
 fn run_resolve(
-    stream: &mut UnixStream,
+    stream: &mut dyn Transport,
     repo: &Repository,
     request: &Json,
     id: &Json,
@@ -1326,7 +1417,7 @@ fn run_resolve(
 
 // --- framing (ADR-0074 §2) --------------------------------------------------
 
-fn write_frame(stream: &mut UnixStream, value: &Json) -> Result<()> {
+fn write_frame(stream: &mut dyn Transport, value: &Json) -> Result<()> {
     let bytes = serde_json::to_vec(value)?;
     let len = u32::try_from(bytes.len())
         .ok()
@@ -1336,11 +1427,16 @@ fn write_frame(stream: &mut UnixStream, value: &Json) -> Result<()> {
     };
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&bytes)?;
+    // Frames must reach the peer as they complete: Rust's Stdout is
+    // line-buffered (LineWriter) and compact JSON frames contain no
+    // newlines, so on the stdio transport an unflushed frame would sit in
+    // the buffer forever. Flush per frame — a no-op on a unix socket.
+    stream.flush()?;
     Ok(())
 }
 
 /// `Ok(None)` is a clean EOF between frames.
-fn read_frame(stream: &mut UnixStream) -> Result<Option<Json>> {
+fn read_frame(stream: &mut dyn Transport) -> Result<Option<Json>> {
     let mut len_bytes = [0u8; 4];
     match stream.read_exact(&mut len_bytes) {
         Ok(()) => {}

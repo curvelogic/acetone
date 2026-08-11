@@ -177,9 +177,18 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
         }
         Command::Serve {
             socket,
+            stdio,
             max_concurrent,
             timeout,
-        } => crate::serve::serve(repo_path, &socket, max_concurrent, timeout),
+        } => match (socket, stdio) {
+            (Some(socket), false) => {
+                crate::serve::serve(repo_path, &socket, max_concurrent, timeout)
+            }
+            (None, true) => crate::serve::serve_stdio(repo_path, max_concurrent, timeout),
+            // `--socket` + `--stdio` is refused by clap (conflicts_with).
+            (None, false) => bail!("serve needs a transport: --socket <path> or --stdio"),
+            (Some(_), true) => unreachable!("clap refuses --socket with --stdio"),
+        },
         Command::Shell { timeout } => crate::query::shell(repo_path, graph, timeout),
         Command::Fsck => fsck(repo_path, graph),
         Command::Gc => gc(repo_path, graph),

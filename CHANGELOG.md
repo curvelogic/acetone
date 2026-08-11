@@ -18,6 +18,15 @@ fine.)
 
 ### Added
 
+- **`acetone serve --stdio`** — the frame protocol over stdin/stdout
+  (the LSP child-process pattern; ADR-0076's companion feature): the
+  host spawns the daemon and owns the pipe, so there is no socket path,
+  no stale-socket reclaim and no kernel-ACL question. Stdout carries
+  nothing but frames (no readiness line — the server-first hello is the
+  readiness signal; logs go to stderr), and closing stdin is the
+  graceful shutdown. Same verbs, same budgets; `--socket` and `--stdio`
+  are mutually exclusive and one must be chosen.
+
 - **Daemon `export` and `fsck` verbs** (Phase 12 verb parity): `export`
   streams a table — or, with neither `label` nor `edge`, every table,
   each announced by a `table` frame — as `chunk` frames rendered by the
