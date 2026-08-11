@@ -326,7 +326,14 @@ pub fn serve(
                     return;
                 }
             };
-            if let Err(e) = connection(stream, &repo, &query_permits, &draining, timeout_secs) {
+            if let Err(e) = connection(
+                stream,
+                &repo,
+                &repo_path,
+                &query_permits,
+                &draining,
+                timeout_secs,
+            ) {
                 // A broken/idle peer is routine, not a daemon error.
                 eprintln!("connection ended: {e:#}");
             }
@@ -388,6 +395,7 @@ impl Drop for SocketGuard {
 fn connection(
     mut stream: UnixStream,
     repo: &Repository,
+    repo_path: &Path,
     permits: &Semaphore,
     draining: &AtomicBool,
     timeout_secs: u64,
@@ -478,6 +486,19 @@ fn connection(
                 let _permit = permits.acquire();
                 run_resolve(&mut stream, repo, &request, &id)?;
             }
+            // Read-only projections at CLI parity (acetone-zavr.4): the
+            // export streams table text as chunk frames — the outbound
+            // mirror of schema-apply/import's inbound chunks, and again NO
+            // paths over the wire (ADR-0074 §4): the peer receives bytes
+            // and names its own files. fsck streams findings as frames.
+            "export" => {
+                let _permit = permits.acquire();
+                run_export(&mut stream, repo, &request, &id)?;
+            }
+            "fsck" => {
+                let _permit = permits.acquire();
+                run_fsck(&mut stream, repo_path, &id)?;
+            }
             other => {
                 write_frame(
                     &mut stream,
@@ -486,7 +507,8 @@ fn connection(
                         "message": format!(
                             "verb {other:?} is not served (this build serves \"query\" \
                              (read and write), \"status\", \"schema-apply\", \"import\", \
-                             \"commit\", \"branch\", \"checkout\", \"merge\" and \"resolve\")"
+                             \"commit\", \"branch\", \"checkout\", \"merge\", \"resolve\", \
+                             \"export\" and \"fsck\")"
                         ),
                     }}),
                 )?;
@@ -641,6 +663,179 @@ fn run_status(stream: &mut UnixStream, repo: &Repository, id: &Json) -> Result<(
         Ok(ok) => write_frame(stream, &json!({"id": id, "ok": ok})),
         // A damaged/absent workspace is reported as a typed error, mirroring
         // how the `query` verb maps engine errors.
+        Err(e) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "graph", "message": e.to_string()}}),
+        ),
+    }
+}
+
+/// Chunk size for streamed outbound text (the `export` verb): well under
+/// the 16 MiB frame cap, large enough that framing overhead is noise.
+const EXPORT_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Stream `text` to the peer as `{"id", "chunk"}` frames, split on char
+/// boundaries near [`EXPORT_CHUNK_BYTES`].
+fn send_chunks(stream: &mut UnixStream, id: &Json, text: &str) -> Result<()> {
+    let mut rest = text;
+    while !rest.is_empty() {
+        let mut cut = rest.len().min(EXPORT_CHUNK_BYTES);
+        while !rest.is_char_boundary(cut) {
+            cut += 1;
+        }
+        let (head, tail) = rest.split_at(cut);
+        write_frame(stream, &json!({"id": id, "chunk": head}))?;
+        rest = tail;
+    }
+    Ok(())
+}
+
+/// Serve the `export` verb (acetone-zavr.4): a read-only projection at CLI
+/// parity, streamed as chunk frames — the outbound mirror of the inbound
+/// payload verbs, with NO paths over the wire (ADR-0074 §4). With
+/// `params.label` or `params.edge`, one table streams and the terminal `ok`
+/// carries its row count. With neither, the whole graph streams — each
+/// table announced by a `{"table": {name, kind, rows}}` frame before its
+/// chunks (the socket equivalent of `--out <dir>`; the peer names its own
+/// files) — and the terminal `ok` carries the table count. The same
+/// `render_table` the CLI uses produces the text, so the surfaces cannot
+/// drift. Tables are built before anything streams, so a refused export
+/// (multi-endpoint edge table, reserved column collision) is a clean typed
+/// error, never a truncated stream.
+///
+/// Memory bound (ADR-0074 §6, PR #277 review): unlike `query` — whose
+/// result a peer can compose to be arbitrarily larger than the graph
+/// (cross products), hence `DAEMON_MAX_RESULT_ROWS` — an export is at most
+/// one full projection of the graph as committed on disk, which the peer
+/// cannot inflate from the socket. The query permit bounds how many such
+/// projections materialise at once, exactly as `--max-concurrent` CLI
+/// export processes would; no extra row cap is imposed.
+fn run_export(stream: &mut UnixStream, repo: &Repository, request: &Json, id: &Json) -> Result<()> {
+    use crate::export::{Format, edge_table, key_names, node_table, render_table, table_names};
+
+    let format = match request.pointer("/params/format").and_then(Json::as_str) {
+        None => {
+            return write_frame(
+                stream,
+                &json!({"id": id, "error": {
+                    "kind": "bad-request",
+                    "message": "export needs params.format (\"csv\", \"json\" or \"ndjson\")",
+                }}),
+            );
+        }
+        Some(name) => match Format::parse(name) {
+            Ok(f) => f,
+            Err(e) => {
+                return write_frame(
+                    stream,
+                    &json!({"id": id, "error": {"kind": "bad-request", "message": e.to_string()}}),
+                );
+            }
+        },
+    };
+    let label = request.pointer("/params/label").and_then(Json::as_str);
+    let edge = request.pointer("/params/edge").and_then(Json::as_str);
+    if label.is_some() && edge.is_some() {
+        return write_frame(
+            stream,
+            &json!({"id": id, "error": {
+                "kind": "bad-request",
+                "message": "params.label and params.edge are mutually exclusive",
+            }}),
+        );
+    }
+
+    // Build every table first (announcement, text); stream only on success.
+    let built = (|| -> anyhow::Result<(Vec<(Json, String)>, Json)> {
+        let snapshot = repo.workspace_snapshot()?;
+        let schema = snapshot.schema_entries()?;
+        let key_names = key_names(&schema);
+        let nodes = snapshot.nodes()?;
+        let edges = snapshot.edges()?;
+        match (label, edge) {
+            (Some(label), None) => {
+                let table = node_table(&nodes, &key_names, label);
+                let ok = json!({"rows": table.rows.len()});
+                Ok((vec![(Json::Null, render_table(&table, format))], ok))
+            }
+            (None, Some(rtype)) => {
+                let table = edge_table(&edges, rtype)?;
+                let ok = json!({"rows": table.rows.len()});
+                Ok((vec![(Json::Null, render_table(&table, format))], ok))
+            }
+            (None, None) => {
+                let (labels, rtypes) = table_names(&schema, &nodes, &edges);
+                let mut tables = Vec::new();
+                for label in &labels {
+                    // Parity includes the refusals (PR #277 review): a peer
+                    // mirroring `--out <dir>` writes `<name>.<ext>`, so a
+                    // name the CLI would refuse to derive a file from is
+                    // refused on the wire too, with per-table export as the
+                    // same escape hatch.
+                    crate::export::safe_filename(label, "", format)?;
+                    let table = node_table(&nodes, &key_names, label);
+                    let announce =
+                        json!({"name": label, "kind": "nodes", "rows": table.rows.len()});
+                    tables.push((announce, render_table(&table, format)));
+                }
+                for rtype in &rtypes {
+                    crate::export::safe_filename(rtype, "rel-", format)?;
+                    let table = edge_table(&edges, rtype)?;
+                    let announce =
+                        json!({"name": rtype, "kind": "edges", "rows": table.rows.len()});
+                    tables.push((announce, render_table(&table, format)));
+                }
+                let ok = json!({"tables": tables.len()});
+                Ok((tables, ok))
+            }
+            // Refused with a bad-request frame before this closure runs.
+            (Some(_), Some(_)) => unreachable!("label+edge refused above"),
+        }
+    })();
+
+    match built {
+        Ok((tables, ok)) => {
+            for (announce, text) in &tables {
+                if !announce.is_null() {
+                    write_frame(stream, &json!({"id": id, "table": announce}))?;
+                }
+                send_chunks(stream, id, text)?;
+            }
+            write_frame(stream, &json!({"id": id, "ok": ok}))
+        }
+        // A refused or failed export (multi-endpoint edge table, damaged
+        // workspace) is a typed error, mirroring the CLI's refusal.
+        Err(e) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "export", "message": format!("{e:#}")}}),
+        ),
+    }
+}
+
+/// Serve the `fsck` verb (acetone-zavr.4): findings stream as
+/// `{"id", "finding"}` frames — raw strings; JSON escaping carries any
+/// control bytes, and sanitising for a terminal is the *displaying* side's
+/// job, exactly as the CLI sanitises at its own boundary — then a terminal
+/// `ok` with `{clean, errors, advisories}`. Integrity errors are DATA to
+/// the peer (the CLI's nonzero exit is its own presentation choice). Opens
+/// the store directly (not the connection's `Repository`) so a damaged
+/// workspace manifest — precisely when fsck is needed — can still be
+/// checked, mirroring the CLI (acetone-zhp).
+fn run_fsck(stream: &mut UnixStream, repo_path: &Path, id: &Json) -> Result<()> {
+    match acetone_core::graph::fsck::check_path_graph(repo_path, None) {
+        Ok(report) => {
+            for finding in &report.findings {
+                write_frame(stream, &json!({"id": id, "finding": finding.to_string()}))?;
+            }
+            write_frame(
+                stream,
+                &json!({"id": id, "ok": {
+                    "clean": report.is_clean(),
+                    "errors": report.errors().count(),
+                    "advisories": report.advisories().count(),
+                }}),
+            )
+        }
         Err(e) => write_frame(
             stream,
             &json!({"id": id, "error": {"kind": "graph", "message": e.to_string()}}),

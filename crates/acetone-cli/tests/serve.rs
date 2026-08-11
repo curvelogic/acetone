@@ -1258,6 +1258,190 @@ fn a_second_sigterm_during_the_drain_exits_immediately() {
     );
 }
 
+/// Read frames until the terminal one (`ok` or `error`), returning
+/// (streamed frames, terminal frame).
+fn collect_stream(s: &mut UnixStream) -> (Vec<serde_json::Value>, serde_json::Value) {
+    let mut streamed = Vec::new();
+    loop {
+        let frame = read_frame(s);
+        if frame.get("ok").is_some() || frame.get("error").is_some() {
+            return (streamed, frame);
+        }
+        streamed.push(frame);
+    }
+}
+
+/// The `export` verb streams a single table as chunk frames whose
+/// concatenation is exactly the table text the CLI prints for the same
+/// export — parity over the socket, no paths over the wire (acetone-zavr.4).
+#[test]
+fn the_export_verb_streams_a_table_matching_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "export",
+            "params": {"format": "ndjson", "label": "Doc"}}),
+    );
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert_eq!(
+        terminal["ok"]["rows"], 2,
+        "both Doc nodes exported: {terminal}"
+    );
+    let text: String = streamed
+        .iter()
+        .map(|f| f["chunk"].as_str().expect("chunk frames carry text"))
+        .collect();
+
+    let cli = acetone(&repo, &["export", "--format", "ndjson", "--label", "Doc"]);
+    assert!(cli.status.success(), "{cli:?}");
+    let cli_stdout = String::from_utf8(cli.stdout).expect("utf-8");
+    // The CLI prints the table then a trailing "exported N ..." summary
+    // line; the socket streams the table alone.
+    let cli_table = cli_stdout
+        .trim_end()
+        .strip_suffix("exported 2 Doc node(s)")
+        .expect("CLI export ends with its summary line")
+        .trim_end();
+    assert_eq!(
+        text.trim_end(),
+        cli_table,
+        "the socket table must match the CLI's"
+    );
+}
+
+/// A whole-graph export (no label, no edge) announces each table with a
+/// `table` frame before its chunks — the socket equivalent of `--out <dir>`,
+/// with the peer naming its own files (acetone-zavr.4).
+#[test]
+fn the_export_verb_streams_the_whole_graph_as_announced_tables() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "export", "params": {"format": "json"}}),
+    );
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert_eq!(terminal["ok"]["tables"], 1, "one Doc table: {terminal}");
+    let announcements: Vec<&serde_json::Value> = streamed
+        .iter()
+        .filter(|f| f.get("table").is_some())
+        .collect();
+    assert_eq!(announcements.len(), 1, "{streamed:?}");
+    assert_eq!(announcements[0]["table"]["name"], "Doc");
+    assert_eq!(announcements[0]["table"]["kind"], "nodes");
+    assert_eq!(announcements[0]["table"]["rows"], 2);
+    assert!(
+        streamed.iter().any(|f| f.get("chunk").is_some()),
+        "the table's content follows as chunks: {streamed:?}"
+    );
+}
+
+/// A whole-graph export over the socket refuses a hostile label name with
+/// the same typed error the CLI's `--out <dir>` path refuses it — parity
+/// includes the refusals (PR #277 review finding 1): a peer that mirrors
+/// `--out <dir>` semantics by writing `<name>.<ext>` must never receive a
+/// name that would traverse out of its directory. Per-table export remains
+/// the escape hatch, exactly as the CLI suggests.
+#[test]
+fn a_whole_graph_export_refuses_a_hostile_label_like_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(
+        acetone(&repo, &["declare-label", "../evil", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "export", "params": {"format": "ndjson"}}),
+    );
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert!(
+        streamed.is_empty(),
+        "refused before any stream: {streamed:?}"
+    );
+    assert_eq!(terminal["error"]["kind"], "export", "{terminal}");
+    assert!(
+        terminal["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot derive a safe file name"),
+        "the CLI's refusal, on the wire: {terminal}"
+    );
+
+    // The explicit per-table path still works — the same escape hatch the
+    // CLI's refusal message points at.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "export",
+            "params": {"format": "ndjson", "label": "../evil"}}),
+    );
+    let (_, terminal) = collect_stream(&mut s);
+    assert!(terminal.get("ok").is_some(), "{terminal}");
+}
+
+/// Bad export requests get a typed refusal, not a stream.
+#[test]
+fn the_export_verb_refuses_bad_params() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "export", "params": {"format": "xml"}}),
+    );
+    let e = read_frame(&mut s);
+    assert_eq!(e["error"]["kind"], "bad-request", "{e}");
+
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "export",
+            "params": {"format": "csv", "label": "Doc", "edge": "KNOWS"}}),
+    );
+    let e = read_frame(&mut s);
+    assert_eq!(e["error"]["kind"], "bad-request", "{e}");
+}
+
+/// The `fsck` verb reports a clean repository as clean, with no finding
+/// frames (acetone-zavr.4).
+#[test]
+fn the_fsck_verb_reports_a_clean_repository() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(&mut s, &serde_json::json!({"id": 1, "verb": "fsck"}));
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert_eq!(terminal["ok"]["clean"], true, "{terminal}");
+    assert_eq!(terminal["ok"]["errors"], 0, "{terminal}");
+    assert!(
+        streamed.is_empty(),
+        "a clean repository streams no findings: {streamed:?}"
+    );
+}
+
 fn verb(s: &mut UnixStream, req: serde_json::Value) -> serde_json::Value {
     write_frame(s, &req);
     let mut frame = read_frame(s);

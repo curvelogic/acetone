@@ -433,9 +433,11 @@ pub enum Command {
         autodeclare: bool,
     },
     /// Serve this repository over a local unix socket (ADR-0074): the
-    /// per-repository daemon. Unit-1 build: versioned hello + read
-    /// queries with streamed rows; the socket is created mode 0600 and
-    /// the kernel's ACL is the authentication.
+    /// per-repository daemon speaking the length-prefixed JSON frame
+    /// protocol. Verbs: query (read and write, streamed rows), status,
+    /// schema-apply, import, commit, branch, checkout, merge, resolve,
+    /// export and fsck. The socket is created mode 0600 and the kernel's
+    /// ACL is the authentication; SIGTERM drains gracefully.
     Serve {
         /// Socket path to create (refused if it already exists).
         #[arg(long)]

@@ -18,6 +18,13 @@ fine.)
 
 ### Added
 
+- **Daemon `export` and `fsck` verbs** (Phase 12 verb parity): `export`
+  streams a table — or, with neither `label` nor `edge`, every table,
+  each announced by a `table` frame — as `chunk` frames rendered by the
+  same code as the CLI's `acetone export`, with no path ever crossing
+  the wire (the peer names its own files); `fsck` streams findings as
+  frames and reports `{clean, errors, advisories}`. `serve --help` now
+  describes the full verb set rather than the unit-1 build.
 - **Graceful SIGTERM drain for `acetone serve`** (ADR-0074 §7's
   anticipated refinement): on SIGTERM the daemon stops accepting,
   unlinks its socket immediately (new connections fail fast), lets each

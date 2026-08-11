@@ -38,14 +38,14 @@ use anyhow::{Context, Result, bail};
 use crate::output::outln;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Format {
+pub(crate) enum Format {
     Csv,
     Json,
     Ndjson,
 }
 
 impl Format {
-    fn parse(name: &str) -> Result<Self> {
+    pub(crate) fn parse(name: &str) -> Result<Self> {
         Ok(match name {
             "csv" => Format::Csv,
             "json" => Format::Json,
@@ -102,7 +102,7 @@ pub fn run(
 }
 
 /// Map each label to its declared key property names.
-fn key_names(schema: &[SchemaEntry]) -> BTreeMap<String, Vec<String>> {
+pub(crate) fn key_names(schema: &[SchemaEntry]) -> BTreeMap<String, Vec<String>> {
     schema
         .iter()
         .filter_map(|e| match e {
@@ -113,9 +113,9 @@ fn key_names(schema: &[SchemaEntry]) -> BTreeMap<String, Vec<String>> {
 }
 
 /// A tabular result: ordered column names and string/typed cells per row.
-struct Table {
-    columns: Vec<String>,
-    rows: Vec<BTreeMap<String, Value>>,
+pub(crate) struct Table {
+    pub(crate) columns: Vec<String>,
+    pub(crate) rows: Vec<BTreeMap<String, Value>>,
 }
 
 /// A node's full property map: re-exposed key properties (in key order) plus
@@ -136,7 +136,7 @@ fn node_properties(
 
 /// Build the node table for one label: key columns first (declaration order),
 /// then the union of non-key property names, sorted.
-fn node_table(
+pub(crate) fn node_table(
     nodes: &[(NodeKey, NodeRecord)],
     key_names: &BTreeMap<String, Vec<String>>,
     label: &str,
@@ -164,7 +164,7 @@ fn node_table(
 /// table drops endpoint labels — import supplies one `--from`/`--to` pair for
 /// the whole table — a type must connect a single `(srcLabel, dstLabel)` pair,
 /// or the flat table cannot round-trip; that is rejected loudly here.
-fn edge_table(
+pub(crate) fn edge_table(
     edges: &[(EdgeKey, acetone_core::model::records::EdgeRecord)],
     rtype: &str,
 ) -> Result<Table> {
@@ -229,15 +229,14 @@ fn edge_table(
     Ok(Table { columns, rows })
 }
 
-/// Export every keyed label and relationship type into `dir`.
-fn export_all(
+/// The label and relationship-type table names a whole-graph export covers:
+/// everything declared in the schema plus anything present in the data but
+/// not declared.
+pub(crate) fn table_names(
+    schema: &[SchemaEntry],
     nodes: &[(NodeKey, NodeRecord)],
     edges: &[(EdgeKey, acetone_core::model::records::EdgeRecord)],
-    schema: &[SchemaEntry],
-    key_names: &BTreeMap<String, Vec<String>>,
-    format: Format,
-    dir: &Path,
-) -> Result<()> {
+) -> (BTreeSet<String>, BTreeSet<String>) {
     let mut labels: BTreeSet<String> = BTreeSet::new();
     let mut rtypes: BTreeSet<String> = BTreeSet::new();
     for entry in schema {
@@ -251,9 +250,21 @@ fn export_all(
             SchemaEntry::Index { .. } => {}
         }
     }
-    // Also cover any labels/types present in the data but not declared.
     labels.extend(nodes.iter().map(|(k, _)| k.label().to_owned()));
     rtypes.extend(edges.iter().map(|(k, _)| k.rtype().to_owned()));
+    (labels, rtypes)
+}
+
+/// Export every keyed label and relationship type into `dir`.
+fn export_all(
+    nodes: &[(NodeKey, NodeRecord)],
+    edges: &[(EdgeKey, acetone_core::model::records::EdgeRecord)],
+    schema: &[SchemaEntry],
+    key_names: &BTreeMap<String, Vec<String>>,
+    format: Format,
+    dir: &Path,
+) -> Result<()> {
+    let (labels, rtypes) = table_names(schema, nodes, edges);
 
     for label in &labels {
         let table = node_table(nodes, key_names, label);
@@ -275,7 +286,7 @@ fn export_all(
 /// containing a path separator, `..`, a NUL, or a control character could
 /// escape `--out` or corrupt the write; reject it (export that table on its
 /// own with an explicit `--out <file>` instead).
-fn safe_filename(name: &str, prefix: &str, format: Format) -> Result<String> {
+pub(crate) fn safe_filename(name: &str, prefix: &str, format: Format) -> Result<String> {
     let unsafe_component = name.is_empty()
         || name == "."
         || name == ".."
@@ -290,13 +301,20 @@ fn safe_filename(name: &str, prefix: &str, format: Format) -> Result<String> {
     Ok(format!("{prefix}{name}.{}", format.ext()))
 }
 
-/// Serialise a table and write it to `out` (a file) or stdout.
-fn write_table(table: &Table, format: Format, out: Option<&Path>) -> Result<()> {
-    let text = match format {
+/// Serialise a table to its textual form — the one rendering the CLI
+/// writes to files/stdout and the daemon's `export` verb streams as chunk
+/// frames (acetone-zavr.4), so the two surfaces cannot drift.
+pub(crate) fn render_table(table: &Table, format: Format) -> String {
+    match format {
         Format::Csv => to_csv(table),
         Format::Json => to_json(table, false),
         Format::Ndjson => to_json(table, true),
-    };
+    }
+}
+
+/// Serialise a table and write it to `out` (a file) or stdout.
+fn write_table(table: &Table, format: Format, out: Option<&Path>) -> Result<()> {
+    let text = render_table(table, format);
     match out {
         Some(path) => std::fs::write(path, text)
             .with_context(|| format!("writing export to {}", path.display()))?,
