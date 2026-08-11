@@ -342,11 +342,14 @@ pub fn serve(
     // in-flight handlers — each finishes its current request and closes —
     // bounded by the grace period. Exit is 0 either way: a clean stop is
     // what the host asked for; abandoned stragglers are noted on stderr.
-    drop(listener);
-    let _ = std::fs::remove_file(socket);
+    // Unlink before dropping the listener so there is no instant in which
+    // the path is free while this daemon still exists — a restarting host's
+    // reclaim can never race into the gap (PR #276 review, SF-2 residue).
     // The drain owns this unlink; the guard must not repeat it at process
     // exit, by which time the path may hold a new daemon's socket (SF-2).
+    let _ = std::fs::remove_file(socket);
     socket_guard.disarm();
+    drop(listener);
     eprintln!("draining: stopped accepting; waiting for in-flight connections");
     let deadline = std::time::Instant::now() + drain_grace();
     loop {
