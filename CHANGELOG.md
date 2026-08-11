@@ -16,6 +16,18 @@ fine.)
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (daemon protocol):** the `status` verb's `ok` body is now
+  exactly the document `acetone status --json` prints — it gains
+  `schema_entries`, `workspace` (`"clean"`/`"dirty"`) and the
+  `merge: {in_progress, conflicts_remaining}` block (null outside a
+  merge), reports the branch by its short name (`main`, not
+  `refs/heads/main`), and **drops the `dirty` boolean** in favour of
+  `workspace`. One shape for both machine surfaces, rendered from one
+  gathered set of facts, so a daemon embedding no longer reconstructs
+  merge state by peeking git refs (acetone-sye1).
+
 ## [0.6.0] - 2026-08-11
 
 ### Added

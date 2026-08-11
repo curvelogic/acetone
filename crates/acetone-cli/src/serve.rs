@@ -526,20 +526,10 @@ fn run_query(
 
 /// Serve the `status` verb: a read-only snapshot of the workspace state, as
 /// one terminal `ok` frame (acetone-pz0k.4). Read-only — takes no write lock.
+/// The body is the same document `status --json` prints — both render from
+/// [`commands::StatusFacts`], so CLI parity is structural (acetone-sye1).
 fn run_status(stream: &mut UnixStream, repo: &Repository, id: &Json) -> Result<()> {
-    let status = (|| -> Result<Json, acetone_core::graph::GraphError> {
-        let branch = repo.current_branch()?;
-        let head = repo.head_commit()?.map(|h| h.to_hex());
-        let dirty = repo.is_dirty()?;
-        let snapshot = repo.workspace_snapshot()?;
-        Ok(json!({
-            "branch": branch,
-            "head": head,
-            "dirty": dirty,
-            "nodes": snapshot.node_count()?,
-            "edges": snapshot.edge_count()?,
-        }))
-    })();
+    let status = crate::commands::StatusFacts::gather(repo).map(|facts| facts.to_json());
     match status {
         Ok(ok) => write_frame(stream, &json!({"id": id, "ok": ok})),
         // A damaged/absent workspace is reported as a typed error, mirroring

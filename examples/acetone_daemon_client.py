@@ -60,7 +60,9 @@ class AcetoneClient:
         return self._request({"verb": "query", "params": params})
 
     def status(self):
-        """The workspace state (branch, head, dirty, node/edge counts)."""
+        """The workspace state — the same document `acetone status --json`
+        prints: branch, head, workspace clean/dirty, node/edge counts,
+        schema_entries and the merge block (null outside a merge)."""
         _, _, summary = self._request({"verb": "status"})
         return summary
 
