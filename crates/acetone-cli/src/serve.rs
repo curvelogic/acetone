@@ -1427,9 +1427,10 @@ fn write_frame(stream: &mut dyn Transport, value: &Json) -> Result<()> {
     };
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&bytes)?;
-    // Frames must reach the peer as they complete: stdout is block-buffered
-    // when piped (the stdio transport), so flush per frame — a no-op on a
-    // unix socket.
+    // Frames must reach the peer as they complete: Rust's Stdout is
+    // line-buffered (LineWriter) and compact JSON frames contain no
+    // newlines, so on the stdio transport an unflushed frame would sit in
+    // the buffer forever. Flush per frame — a no-op on a unix socket.
     stream.flush()?;
     Ok(())
 }
