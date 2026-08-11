@@ -35,16 +35,23 @@ repo-pool model (ADR-0072): a host that wants N daemons runs N
 repositories.
 
 Option (b) is not pursued: it would replace working, reviewed recovery
-machinery wholesale for a portability-sensitive primitive, to solve a
-configuration the model already rules out. Option (c) alone leaves the
-window open to accident.
+machinery — and the lock protocol the CLI's transient writers share —
+wholesale, to solve a configuration the model already rules out.
+Option (c) alone leaves the window open to accident.
 
 ## Consequences
 
 - `acetone-pz0k.7`'s scope is fixed: the startup exclusivity lock, the
   pid-reuse refinement (process identity + start-time, not bare pid),
   and routing the `schema-apply`/`import` write paths through the typed
-  recovery helper.
+  recovery helper. Because the refusal replaces a documentation caveat,
+  the exclusivity lock's reliability is load-bearing: the unit's design
+  must name the primitive explicitly (flock vs fcntl — the classic
+  fcntl close-any-fd release hazard rules choices in or out), the lock
+  file's placement, and the lock's granularity (repository vs worktree
+  — the writer lock it protects is per-worktree, ADR-0014; "per
+  repository" here is the stronger default, settled consciously in
+  that design).
 - The "two daemons on one repo" caveat leaves the documentation once
   the refusal ships — the failure mode becomes an error message, and
   gate criterion 3 of ADR-0075 tracks it.

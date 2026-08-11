@@ -52,8 +52,9 @@ explicit delegation per ADR-0067):
 
 1. The boundary assessment's daemon gaps are closed through the shipped
    interface: `status` at CLI parity, a schema-inspection and
-   declaration path, `params.at`, `export` and `fsck` verbs, SIGTERM
-   drain, and the stdio transport.
+   declaration path (both halves owned by `acetone-ezyj`), `params.at`,
+   `export` and `fsck` verbs, and SIGTERM drain — plus the stdio
+   transport (ADR-0076's companion feature, not an assessment finding).
 2. A history-facing feature — reading diffs, blame and a structured
    change report — is buildable **entirely over the socket** by a
    non-Rust client, demonstrated end-to-end.

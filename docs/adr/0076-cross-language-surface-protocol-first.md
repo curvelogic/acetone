@@ -9,8 +9,12 @@ adopting the proposal recorded at the 0.6 boundary grooming · Date:
 Greg asked at the 0.6 boundary whether the daemon is the right approach
 to cross-language use, versus a C ABI or per-language native bindings.
 The assessment: acetone sits naturally in the protocol-first-with-thin-
-clients camp (the Dolt/LSP/TigerBeetle pattern). Chunky operations
-dominate socket round-trips (measured in ADR-0074's latency work); the
+clients camp (the Dolt/LSP/TigerBeetle pattern). The workload is
+chunky, streamed operations (imports, queries, merges), making
+per-round-trip overhead second-order — a qualitative argument today:
+the latency measurement against process-per-command that ADR-0074
+promised as phase evidence was never performed, and is now owed in this
+phase's protocol-document work (`acetone-zavr.8`). The
 writer lock is inherently cross-process, so in-process embedding
 *distributes* the arbitration problem rather than removing it; process
 isolation is a feature for a corruption-critical store; one versioned
