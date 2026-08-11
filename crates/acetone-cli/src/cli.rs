@@ -440,8 +440,14 @@ pub enum Command {
     /// ACL is the authentication; SIGTERM drains gracefully.
     Serve {
         /// Socket path to create (refused if it already exists).
+        #[arg(long, conflicts_with = "stdio")]
+        socket: Option<PathBuf>,
+        /// Speak the frame protocol over stdin/stdout instead of a socket
+        /// (the LSP child-process pattern): the host spawns the daemon and
+        /// owns the pipe; stdout carries nothing but frames; closing stdin
+        /// is the graceful shutdown.
         #[arg(long)]
-        socket: PathBuf,
+        stdio: bool,
         /// Maximum concurrently executing queries (per-query budgets
         /// still apply to each; this bounds their sum).
         #[arg(long, default_value_t = 4)]
