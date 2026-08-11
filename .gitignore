@@ -15,3 +15,6 @@ spikes/*/target/
 
 # mdBook build output (built in CI; see .github/workflows/docs.yml)
 docs/manual/book/
+
+# Python bytecode (examples/ daemon client)
+__pycache__/
