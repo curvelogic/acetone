@@ -315,54 +315,99 @@ pub(crate) fn open(repo_path: &Path, graph: Option<&str>) -> Result<Repository> 
     }
 }
 
+/// The workspace facts `status` reports, gathered once and rendered by the
+/// CLI text path, the CLI `--json` path and the daemon's `status` verb — so
+/// socket/CLI parity is structural, not maintained by hand (acetone-sye1).
+pub(crate) struct StatusFacts {
+    /// Short branch name; `None` when detached.
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub dirty: bool,
+    /// While a merge is in progress: how many conflicts remain, and whether
+    /// any is a graph-level violation (which resolves by editing the graph,
+    /// not by picking a side).
+    pub merge: Option<(usize, bool)>,
+    pub nodes: usize,
+    pub edges: usize,
+    pub schema_entries: usize,
+}
+
+impl StatusFacts {
+    pub(crate) fn gather(repo: &Repository) -> Result<Self, acetone_core::graph::GraphError> {
+        let branch = repo.current_branch()?.map(|full| {
+            repo.namespace()
+                .branch_name(&full)
+                .unwrap_or(&full)
+                .to_owned()
+        });
+        let head = repo.head_commit()?.map(|h| h.to_hex());
+        let dirty = repo.is_dirty()?;
+        // Graph violations are re-derived live (ADR-0058), so a violation
+        // left by a resolution shows up here too.
+        let merge = if repo.merge_head()?.is_some() {
+            let conflicts = repo.conflicts()?;
+            let has_graph = conflicts.iter().any(|c| {
+                matches!(
+                    c,
+                    acetone_core::graph::conflicts::WorkspaceConflict::Graph(_)
+                )
+            });
+            Some((conflicts.len(), has_graph))
+        } else {
+            None
+        };
+        // Streaming counts (security review LOW-2): no record decode, no Vec
+        // materialisation — status stays cheap on a large graph.
+        let snapshot = repo.workspace_snapshot()?;
+        Ok(StatusFacts {
+            branch,
+            head,
+            dirty,
+            merge,
+            nodes: snapshot.node_count()?,
+            edges: snapshot.edge_count()?,
+            schema_entries: snapshot.schema_entry_count()?,
+        })
+    }
+
+    /// The one JSON document both machine surfaces emit: `status --json`
+    /// prints it and the daemon's `status` verb returns it as the `ok` body.
+    pub(crate) fn to_json(&self) -> Json {
+        let merge = self
+            .merge
+            .map(|(remaining, _)| json!({ "in_progress": true, "conflicts_remaining": remaining }))
+            .unwrap_or(Json::Null);
+        json!({
+            "branch": self.branch,
+            "head": self.head,
+            "workspace": if self.dirty { "dirty" } else { "clean" },
+            "nodes": self.nodes,
+            "edges": self.edges,
+            "schema_entries": self.schema_entries,
+            "merge": merge,
+        })
+    }
+}
+
 pub(crate) fn status(repo_path: &Path, graph: Option<&str>, json: bool) -> Result<()> {
     let repo = open(repo_path, graph)?;
-    // Short branch name (None when detached), head hash, dirtiness, merge
-    // state and the workspace counts — the same facts both paths report.
-    let branch = repo.current_branch()?.map(|full| {
-        repo.namespace()
-            .branch_name(&full)
-            .unwrap_or(&full)
-            .to_owned()
-    });
-    let head = repo.head_commit()?.map(|h| h.to_hex());
-    let dirty = repo.is_dirty()?;
-    // While a merge is in progress, report how many conflicts remain and
-    // whether any is a graph-level violation (which resolves by editing the
-    // graph, not by picking a side). Graph violations are re-derived live
-    // (ADR-0058), so a violation left by a resolution shows up here too.
-    let (merge_remaining, merge_has_graph) = if repo.merge_head()?.is_some() {
-        let conflicts = repo.conflicts()?;
-        let has_graph = conflicts.iter().any(|c| {
-            matches!(
-                c,
-                acetone_core::graph::conflicts::WorkspaceConflict::Graph(_)
-            )
-        });
-        (Some(conflicts.len()), has_graph)
-    } else {
-        (None, false)
+    let facts = StatusFacts::gather(&repo)?;
+    let StatusFacts {
+        ref branch,
+        ref head,
+        dirty,
+        merge,
+        nodes,
+        edges,
+        schema_entries,
+    } = facts;
+    let (merge_remaining, merge_has_graph) = match merge {
+        Some((remaining, has_graph)) => (Some(remaining), has_graph),
+        None => (None, false),
     };
-    // Streaming counts (security review LOW-2): no record decode, no Vec
-    // materialisation — status stays cheap on a large graph.
-    let snapshot = repo.workspace_snapshot()?;
-    let nodes = snapshot.node_count()?;
-    let edges = snapshot.edge_count()?;
-    let schema_entries = snapshot.schema_entry_count()?;
 
     if json {
-        let merge = merge_remaining
-            .map(|remaining| json!({ "in_progress": true, "conflicts_remaining": remaining }))
-            .unwrap_or(Json::Null);
-        emit_json(&json!({
-            "branch": branch,
-            "head": head,
-            "workspace": if dirty { "dirty" } else { "clean" },
-            "nodes": nodes,
-            "edges": edges,
-            "schema_entries": schema_entries,
-            "merge": merge,
-        }));
+        emit_json(&facts.to_json());
         return Ok(());
     }
 

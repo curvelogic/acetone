@@ -590,11 +590,19 @@ fn the_status_verb_reports_workspace_state() {
     assert_eq!(ok["ok"]["edges"], 0, "{ok}");
     assert!(ok["ok"]["branch"].is_string(), "branch present: {ok}");
     // seeded_repo stages the nodes without committing, so the workspace is
-    // dirty and there is no head yet — status reports that faithfully.
+    // dirty and there is no head yet — status reports that faithfully. The
+    // frame carries the same fields as `status --json` (acetone-sye1): the
+    // workspace state as clean/dirty, the schema-entry count, and the merge
+    // block (null outside a merge).
     assert_eq!(
-        ok["ok"]["dirty"], true,
+        ok["ok"]["workspace"], "dirty",
         "uncommitted workspace is dirty: {ok}"
     );
+    assert!(
+        ok["ok"]["schema_entries"].as_u64().unwrap() >= 1,
+        "the declared label counts as a schema entry: {ok}"
+    );
+    assert!(ok["ok"]["merge"].is_null(), "no merge in progress: {ok}");
     assert!(ok["ok"]["head"].is_null(), "no commit yet: {ok}");
 
     // After a write over the socket, a fresh status reflects the new count.
@@ -608,6 +616,130 @@ fn the_status_verb_reports_workspace_state() {
     write_frame(&mut s, &serde_json::json!({"id": 3, "verb": "status"}));
     let ok = read_frame(&mut s);
     assert_eq!(ok["ok"]["nodes"], 3, "status sees the socket write: {ok}");
+}
+
+/// The status frame reports an in-progress merge exactly as `status --json`
+/// does: `merge: {in_progress, conflicts_remaining}` while conflicts stand,
+/// `merge: null` once the merge is committed (acetone-sye1). Before this, a
+/// daemon embedding had to peek the merge-head git ref and re-run
+/// `CALL acetone.conflicts()` to reconstruct merge state.
+#[test]
+fn the_status_frame_reports_merge_in_progress() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    assert!(
+        Command::new(bin)
+            .args(["init", repo.to_str().unwrap()])
+            .output()
+            .expect("init")
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["declare-label", "Doc", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "schema"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    // Base commit on main, a conflicting edit on each side of a branch.
+    verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "query",
+        "params": {"cypher": "CREATE (:Doc {id: 'a1', v: 0})"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 2, "verb": "commit", "params": {"message": "base"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 3, "verb": "branch", "params": {"name": "feature"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 4, "verb": "checkout", "params": {"branch": "feature"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 5, "verb": "query",
+        "params": {"cypher": "MATCH (d:Doc {id:'a1'}) SET d.v = 2"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 6, "verb": "commit", "params": {"message": "feature edit"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 7, "verb": "checkout", "params": {"branch": "main"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 8, "verb": "query",
+        "params": {"cypher": "MATCH (d:Doc {id:'a1'}) SET d.v = 1"}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 9, "verb": "commit", "params": {"message": "main edit"}}),
+    );
+    let m = verb(
+        &mut s,
+        serde_json::json!({"id": 10, "verb": "merge", "params": {"refspec": "feature"}}),
+    );
+    assert_eq!(m["ok"]["outcome"], "conflicts", "a conflicting merge: {m}");
+
+    // Mid-merge: status reports the merge block with the remaining count.
+    write_frame(&mut s, &serde_json::json!({"id": 11, "verb": "status"}));
+    let st = read_frame(&mut s);
+    assert_eq!(st["ok"]["merge"]["in_progress"], true, "{st}");
+    assert!(
+        st["ok"]["merge"]["conflicts_remaining"].as_u64().unwrap() >= 1,
+        "{st}"
+    );
+
+    // Resolve and commit; the merge block returns to null.
+    verb(
+        &mut s,
+        serde_json::json!({"id": 12, "verb": "resolve", "params": {"all_ours": true}}),
+    );
+    verb(
+        &mut s,
+        serde_json::json!({"id": 13, "verb": "commit", "params": {"message": "merge"}}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 14, "verb": "status"}));
+    let st = read_frame(&mut s);
+    assert!(st["ok"]["merge"].is_null(), "merge completed: {st}");
+}
+
+/// Structural parity: the status frame body is the same JSON document
+/// (compared as parsed values) `acetone status --json` prints for the same repository
+/// (acetone-sye1) — both render from one gathered set of facts, so parity
+/// cannot silently drift.
+#[test]
+fn the_status_frame_matches_the_cli_json_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(&mut s, &serde_json::json!({"id": 1, "verb": "status"}));
+    let frame = read_frame(&mut s);
+
+    let cli = acetone(&repo, &["status", "--json"]);
+    assert!(cli.status.success(), "{cli:?}");
+    let cli: serde_json::Value =
+        serde_json::from_slice(&cli.stdout).expect("cli status --json parses");
+
+    assert_eq!(
+        frame["ok"], cli,
+        "the daemon status frame and the CLI JSON document must be identical"
+    );
 }
 
 #[test]
