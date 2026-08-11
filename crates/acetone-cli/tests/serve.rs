@@ -1215,6 +1215,49 @@ fn sigterm_drains_a_live_connection_after_its_request() {
     assert!(!socket.exists(), "the socket stays unlinked");
 }
 
+/// A second SIGTERM during the drain means the host is done waiting: the
+/// daemon exits at once, nonzero, rather than sitting out the grace period
+/// behind an idle peer (PR #276 review SF-1 — SIGTERM must never become a
+/// silently ignored signal).
+#[test]
+fn a_second_sigterm_during_the_drain_exits_immediately() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    // Both timeouts far above the test's own deadline: without the second
+    // SIGTERM the idle connection below would hold the drain for minutes.
+    let mut daemon = start_daemon_env(
+        &repo,
+        &socket,
+        &[],
+        &[
+            ("ACETONE_SERVE_DRAIN_GRACE_SECS", "600"),
+            ("ACETONE_SERVE_IO_TIMEOUT_SECS", "600"),
+        ],
+    );
+    let _idle = hello(&socket);
+
+    sigterm(&daemon);
+    // The drain has begun once the socket is unlinked; the flag is set
+    // strictly before that, so the second signal below always lands as
+    // the escalation.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while socket.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the drain must unlink the socket promptly"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    sigterm(&daemon);
+
+    let status = wait_exit(&mut daemon, 10);
+    assert!(
+        !status.success(),
+        "a forced exit is nonzero (the drain was cut short): {status:?}"
+    );
+}
+
 fn verb(s: &mut UnixStream, req: serde_json::Value) -> serde_json::Value {
     write_frame(s, &req);
     let mut frame = read_frame(s);

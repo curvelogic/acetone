@@ -202,7 +202,7 @@ pub fn serve(
     let published = std::fs::rename(&staging, socket);
     let _ = std::fs::remove_dir_all(&staging_dir);
     published.with_context(|| format!("publishing the socket at {}", socket.display()))?;
-    let _guard = SocketGuard(socket.to_path_buf());
+    let mut socket_guard = SocketGuard(Some(socket.to_path_buf()));
 
     // Readiness handshake: exactly one line on stdout (ADR-0074 §7).
     println!(
@@ -233,8 +233,21 @@ pub fn serve(
         std::thread::Builder::new()
             .name("signals".into())
             .spawn(move || {
-                if signals.forever().next().is_some() {
-                    draining.store(true, Ordering::SeqCst);
+                // The thread loops for the process's lifetime: dropping the
+                // Signals iterator would leave SIGTERM registered-but-ignored
+                // (signal-hook does not restore the default disposition), so
+                // a one-shot thread would make every later SIGTERM a no-op
+                // (PR #276 review SF-1). The first signal starts the drain
+                // and wakes the accept loop; a repeat means the host is done
+                // waiting — exit at once, nonzero. The repeat also covers the
+                // two paths that can lose the first wake (the wake-connect
+                // failing on an externally removed socket; the wake being
+                // consumed by the accept-error arm).
+                for _ in signals.forever() {
+                    if draining.swap(true, Ordering::SeqCst) {
+                        eprintln!("second SIGTERM during the drain; exiting immediately");
+                        std::process::exit(1);
+                    }
                     let _ = UnixStream::connect(&socket);
                 }
             })
@@ -248,8 +261,15 @@ pub fn serve(
         let mut stream = match stream {
             Ok(s) => s,
             // EMFILE and friends: at the fd limit. Back off rather than
-            // spin, and never die on a transient accept error.
+            // spin, and never die on a transient accept error — but honour
+            // a drain first: this arm can be what consumed the SIGTERM
+            // wake connection (EMFILE is plausible exactly when a host
+            // drains an overloaded daemon), and re-blocking in accept here
+            // would strand the drain (PR #276 review SF-1).
             Err(e) => {
+                if draining.load(Ordering::SeqCst) {
+                    break;
+                }
                 eprintln!("accept error: {e}");
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
@@ -324,6 +344,9 @@ pub fn serve(
     // what the host asked for; abandoned stragglers are noted on stderr.
     drop(listener);
     let _ = std::fs::remove_file(socket);
+    // The drain owns this unlink; the guard must not repeat it at process
+    // exit, by which time the path may hold a new daemon's socket (SF-2).
+    socket_guard.disarm();
     eprintln!("draining: stopped accepting; waiting for in-flight connections");
     let deadline = std::time::Instant::now() + drain_grace();
     loop {
@@ -340,11 +363,22 @@ pub fn serve(
     Ok(())
 }
 
-/// Best-effort unlink on shutdown paths that drop the listener.
-struct SocketGuard(PathBuf);
+/// Best-effort unlink on shutdown paths that drop the listener. Disarmed
+/// once the drain has done its own unlink: between that unlink and process
+/// exit (up to the grace period) the host may already have bound a NEW
+/// daemon at the path, and an unconditional drop-time unlink here would
+/// sever that daemon's live socket (PR #276 review SF-2).
+struct SocketGuard(Option<PathBuf>);
+impl SocketGuard {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
 impl Drop for SocketGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
