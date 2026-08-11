@@ -30,6 +30,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value as Json, json};
@@ -122,6 +123,20 @@ fn io_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// How long a SIGTERM drain waits for in-flight connections before exiting
+/// anyway (ADR-0074 §7's drain, acetone-zavr.5). Matches the io timeout's
+/// default so an idle keep-alive peer cannot hold the drain longer than it
+/// could hold a read. Overridable via `ACETONE_SERVE_DRAIN_GRACE_SECS` so
+/// tests need not wait the production default.
+fn drain_grace() -> std::time::Duration {
+    let secs = std::env::var("ACETONE_SERVE_DRAIN_GRACE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(30);
+    std::time::Duration::from_secs(secs)
+}
+
 /// Per-query result-row ceiling for the daemon — well below the library
 /// default (1,000,000) because the daemon materialises the whole result
 /// and its peak is summed across `--max-concurrent` (ADR-0074 §6).
@@ -203,7 +218,33 @@ pub fn serve(
     let query_permits = Arc::new(Semaphore::new(max_concurrent));
     let conn_permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
+    // Graceful SIGTERM drain (ADR-0074 §7, acetone-zavr.5): the handler
+    // thread sets the flag, then wake-connects once to the published socket
+    // so the blocking accept below returns and sees it. Registered only
+    // after the socket is published, so the wake-connect always has an
+    // endpoint; a SIGTERM in the narrow start-up window before this point
+    // keeps the default disposition (die; stale-socket reclaim covers it).
+    let draining = Arc::new(AtomicBool::new(false));
+    {
+        let draining = Arc::clone(&draining);
+        let socket = socket.to_path_buf();
+        let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM])
+            .context("registering the SIGTERM handler")?;
+        std::thread::Builder::new()
+            .name("signals".into())
+            .spawn(move || {
+                if signals.forever().next().is_some() {
+                    draining.store(true, Ordering::SeqCst);
+                    let _ = UnixStream::connect(&socket);
+                }
+            })
+            .context("spawning the signal thread")?;
+    }
+
     for stream in listener.incoming() {
+        if draining.load(Ordering::SeqCst) {
+            break;
+        }
         let mut stream = match stream {
             Ok(s) => s,
             // EMFILE and friends: at the fd limit. Back off rather than
@@ -227,6 +268,7 @@ pub fn serve(
             continue;
         };
         let query_permits = Arc::clone(&query_permits);
+        let draining = Arc::clone(&draining);
         let repo_path = repo_path.clone();
         // A spawn failure must not unwind the accept loop: drop the
         // permit (by not moving it in) and keep serving.
@@ -264,7 +306,7 @@ pub fn serve(
                     return;
                 }
             };
-            if let Err(e) = connection(stream, &repo, &query_permits, timeout_secs) {
+            if let Err(e) = connection(stream, &repo, &query_permits, &draining, timeout_secs) {
                 // A broken/idle peer is routine, not a daemon error.
                 eprintln!("connection ended: {e:#}");
             }
@@ -273,6 +315,27 @@ pub fn serve(
             eprintln!("could not spawn a connection handler; backing off");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    // Drain (only reachable via the SIGTERM flag): stop accepting, unlink
+    // the socket immediately so new connects fail fast, then wait for the
+    // in-flight handlers — each finishes its current request and closes —
+    // bounded by the grace period. Exit is 0 either way: a clean stop is
+    // what the host asked for; abandoned stragglers are noted on stderr.
+    drop(listener);
+    let _ = std::fs::remove_file(socket);
+    eprintln!("draining: stopped accepting; waiting for in-flight connections");
+    let deadline = std::time::Instant::now() + drain_grace();
+    loop {
+        let active = MAX_CONNECTIONS - conn_permits.available();
+        if active == 0 {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            eprintln!("drain grace expired with {active} connection(s) still open; exiting");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
     Ok(())
 }
@@ -289,6 +352,7 @@ fn connection(
     mut stream: UnixStream,
     repo: &Repository,
     permits: &Semaphore,
+    draining: &AtomicBool,
     timeout_secs: u64,
 ) -> Result<()> {
     // Hello, both ways (ADR-0074 §3). The daemon speaks first so a
@@ -390,6 +454,12 @@ fn connection(
                     }}),
                 )?;
             }
+        }
+        // Under a drain, the request just read was served in full; close
+        // the connection (a plain EOF to the peer) instead of reading
+        // another one (acetone-zavr.5).
+        if draining.load(Ordering::SeqCst) {
+            return Ok(());
         }
     }
     Ok(())
@@ -1094,6 +1164,12 @@ impl Semaphore {
         }
         *count -= 1;
         Permit(self)
+    }
+
+    /// Currently-free permits — the drain uses this to see when every
+    /// connection handler has ended (acetone-zavr.5).
+    fn available(&self) -> usize {
+        *lock_count(&self.count)
     }
 
     /// Non-blocking, `'static`-owned permit (the connection semaphore,
