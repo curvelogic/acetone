@@ -1121,6 +1121,143 @@ fn the_daemon_recovers_a_stale_writer_lock_but_not_a_live_one() {
 }
 
 /// A helper: drive a verb request and drain to the terminal ok/error frame.
+fn sigterm(d: &Daemon) {
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &d.child.id().to_string()])
+            .status()
+            .expect("send SIGTERM")
+            .success()
+    );
+}
+
+/// Wait for the daemon to exit on its own, bounded — a drain must not need
+/// the test harness's kill-on-drop to terminate it.
+fn wait_exit(d: &mut Daemon, secs: u64) -> std::process::ExitStatus {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if let Some(status) = d.child.try_wait().expect("try_wait") {
+            return status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "daemon did not exit within {secs}s of SIGTERM"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+/// A graceful SIGTERM on an idle daemon: exits 0 promptly of its own accord
+/// and unlinks the socket (ADR-0074 §7's anticipated drain, acetone-zavr.5).
+#[test]
+fn sigterm_on_an_idle_daemon_exits_cleanly_and_unlinks_the_socket() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let mut daemon = start_daemon(&repo, &socket);
+
+    sigterm(&daemon);
+    let status = wait_exit(&mut daemon, 10);
+    assert!(status.success(), "clean drain exits 0: {status:?}");
+    assert!(!socket.exists(), "the drain unlinks the socket");
+}
+
+/// A drain with a live connection: the connection's next request is still
+/// served (finish in-flight), the connection then closes, new connections
+/// are refused (the socket is gone), and the daemon exits 0 within the
+/// grace period (acetone-zavr.5).
+#[test]
+fn sigterm_drains_a_live_connection_after_its_request() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let mut daemon = start_daemon_env(
+        &repo,
+        &socket,
+        &[],
+        &[("ACETONE_SERVE_DRAIN_GRACE_SECS", "10")],
+    );
+
+    let mut s = hello(&socket);
+    sigterm(&daemon);
+
+    // The accept loop stops and the socket is unlinked promptly.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while socket.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the drain must unlink the socket promptly"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(
+        UnixStream::connect(&socket).is_err(),
+        "new connections are refused during the drain"
+    );
+
+    // The established connection still gets its in-flight request served…
+    write_frame(&mut s, &serde_json::json!({"id": 1, "verb": "status"}));
+    let ok = read_frame(&mut s);
+    assert!(
+        ok["ok"]["nodes"].is_u64(),
+        "the request racing the drain is served, not dropped: {ok}"
+    );
+    // …and the daemon then closes the connection instead of reading another
+    // request: the next read sees EOF.
+    let mut len = [0u8; 4];
+    match s.read_exact(&mut len) {
+        Err(_) => {}
+        Ok(_) => panic!("the connection must close after the drain-time request"),
+    }
+
+    let status = wait_exit(&mut daemon, 10);
+    assert!(status.success(), "the drain exits 0: {status:?}");
+    assert!(!socket.exists(), "the socket stays unlinked");
+}
+
+/// A second SIGTERM during the drain means the host is done waiting: the
+/// daemon exits at once, nonzero, rather than sitting out the grace period
+/// behind an idle peer (PR #276 review SF-1 — SIGTERM must never become a
+/// silently ignored signal).
+#[test]
+fn a_second_sigterm_during_the_drain_exits_immediately() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    // Both timeouts far above the test's own deadline: without the second
+    // SIGTERM the idle connection below would hold the drain for minutes.
+    let mut daemon = start_daemon_env(
+        &repo,
+        &socket,
+        &[],
+        &[
+            ("ACETONE_SERVE_DRAIN_GRACE_SECS", "600"),
+            ("ACETONE_SERVE_IO_TIMEOUT_SECS", "600"),
+        ],
+    );
+    let _idle = hello(&socket);
+
+    sigterm(&daemon);
+    // The drain has begun once the socket is unlinked; the flag is set
+    // strictly before that, so the second signal below always lands as
+    // the escalation.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while socket.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the drain must unlink the socket promptly"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    sigterm(&daemon);
+
+    let status = wait_exit(&mut daemon, 10);
+    assert!(
+        !status.success(),
+        "a forced exit is nonzero (the drain was cut short): {status:?}"
+    );
+}
+
 fn verb(s: &mut UnixStream, req: serde_json::Value) -> serde_json::Value {
     write_frame(s, &req);
     let mut frame = read_frame(s);

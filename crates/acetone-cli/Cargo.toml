@@ -47,6 +47,13 @@ sha2.workspace = true
 # — the library crates stay free of it. The non-TTY (piped) path bypasses
 # rustyline entirely, keeping the shell scriptable and testable.
 rustyline = "15"
+# signal-hook: the standard safe signal-handling crate (MIT/Apache-2.0,
+# actively maintained). Justification (CLAUDE.md's dependency rule): the
+# daemon's graceful SIGTERM drain (ADR-0074 §7, acetone-zavr.5) needs a
+# signal handler; std has no signal API, and hand-rolling sigaction means
+# `unsafe` plus getting async-signal-safety right — precisely the bug class
+# this crate exists to prevent. Confined to acetone-cli's serve path.
+signal-hook = "0.3"
 # unicode-width: the de-facto Rust implementation of Unicode TR#11 display
 # width (MIT/Apache-2.0, tiny). Used only to align the `--format table`
 # box-drawing borders correctly for CJK/emoji (2 cells) and combining marks

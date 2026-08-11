@@ -16,6 +16,16 @@ fine.)
 
 ## [Unreleased]
 
+### Added
+
+- **Graceful SIGTERM drain for `acetone serve`** (ADR-0074 §7's
+  anticipated refinement): on SIGTERM the daemon stops accepting,
+  unlinks its socket immediately (new connections fail fast), lets each
+  in-flight request complete before its connection closes, waits up to a
+  grace period (default 30 s, `ACETONE_SERVE_DRAIN_GRACE_SECS`) for
+  handlers to finish, and exits 0. A second SIGTERM during the drain
+  forces an immediate exit (nonzero).
+
 ### Changed
 
 - **Breaking (daemon protocol):** the `status` verb's `ok` body is now
