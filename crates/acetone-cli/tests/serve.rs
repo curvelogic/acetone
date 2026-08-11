@@ -715,8 +715,8 @@ fn the_status_frame_reports_merge_in_progress() {
     assert!(st["ok"]["merge"].is_null(), "merge completed: {st}");
 }
 
-/// Structural parity: the status frame body is byte-for-byte the same JSON
-/// document `acetone status --json` prints for the same repository
+/// Structural parity: the status frame body is the same JSON document
+/// (compared as parsed values) `acetone status --json` prints for the same repository
 /// (acetone-sye1) — both render from one gathered set of facts, so parity
 /// cannot silently drift.
 #[test]

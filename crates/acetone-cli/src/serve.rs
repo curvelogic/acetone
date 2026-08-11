@@ -323,9 +323,9 @@ fn connection(
                 let _permit = permits.acquire();
                 run_query(&mut stream, repo, &request, &id, timeout_secs)?;
             }
-            // A read-only snapshot of the workspace state (branch, head,
-            // dirty, counts) — the socket equivalent of `acetone status`
-            // (acetone-pz0k.4). Cheap; still takes a query permit so a burst
+            // A read-only snapshot of the workspace state — the same
+            // document `acetone status --json` prints (acetone-pz0k.4,
+            // acetone-sye1). Cheap; still takes a query permit so a burst
             // of `status` cannot bypass the concurrency bound.
             "status" => {
                 let _permit = permits.acquire();
