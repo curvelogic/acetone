@@ -18,6 +18,14 @@ fine.)
 
 ### Added
 
+- **Daemon `schema` verb** — the declared schema as the same document
+  `acetone schema --json` prints, optionally at a past version
+  (`params.at`). With `schema-apply` this closes the read-modify-apply
+  loop over the socket, which is the daemon's incremental schema path
+  (documented in the manual, along with why there are deliberately no
+  `declare-*` verbs and why `schema-apply` refuses mid-merge). The
+  Python example client gains `schema(at=None)`.
+
 - **`params.at` on the daemon's `query` verb** — whole-query time
   travel over the socket, exactly the CLI's `query --at`: a read runs
   against the named past version; a write with `at` is refused typed

@@ -2057,3 +2057,85 @@ fn the_query_verb_accepts_params_at() {
         "the refusal names the refspec: {e}"
     );
 }
+
+/// The `schema` verb (acetone-ezyj): the same document `acetone schema
+/// --json` prints, as the ok body — the read half of the socket's
+/// read-modify-apply schema loop.
+#[test]
+fn the_schema_verb_matches_the_cli_document_and_round_trips() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let c1 = {
+        let out = acetone(&repo, &["commit", "-m", "one label"]);
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .find(|w| w.len() == 40 && w.chars().all(|c| c.is_ascii_hexdigit()))
+            .expect("commit hash")
+            .to_string()
+    };
+    assert!(
+        acetone(&repo, &["declare-label", "Extra", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "two labels"])
+            .status
+            .success()
+    );
+
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    // The document equals the CLI's, parsed.
+    write_frame(&mut s, &serde_json::json!({"id": 1, "verb": "schema"}));
+    let ok = read_frame(&mut s);
+    let cli = acetone(&repo, &["schema", "--json"]);
+    assert!(cli.status.success(), "{cli:?}");
+    let cli_doc: serde_json::Value = serde_json::from_slice(&cli.stdout).expect("json");
+    assert_eq!(
+        ok["ok"], cli_doc,
+        "the socket document must match the CLI's"
+    );
+    assert_eq!(ok["ok"]["labels"].as_array().unwrap().len(), 2, "{ok}");
+
+    // params.at reads the past schema (one label).
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "schema", "params": {"at": c1}}),
+    );
+    let then = read_frame(&mut s);
+    assert_eq!(
+        then["ok"]["labels"].as_array().unwrap().len(),
+        1,
+        "the past schema: {then}"
+    );
+
+    // Round trip: the verb's own document schema-applies cleanly — the
+    // read-modify-write loop closes over the socket alone.
+    let document = serde_json::to_string(&ok["ok"]).expect("serialise");
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 3, "verb": "schema-apply"}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 3, "chunk": document}));
+    write_frame(&mut s, &serde_json::json!({"id": 3, "chunk_end": true}));
+    let (_, terminal) = collect_stream(&mut s);
+    assert!(
+        terminal.get("ok").is_some(),
+        "the document round-trips: {terminal}"
+    );
+
+    // A non-string at is refused, the connection survives.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 4, "verb": "schema", "params": {"at": 7}}),
+    );
+    let e = read_frame(&mut s);
+    assert_eq!(e["error"]["kind"], "bad-request", "{e}");
+    write_frame(&mut s, &serde_json::json!({"id": 5, "verb": "status"}));
+    let st = read_frame(&mut s);
+    assert!(st["ok"]["nodes"].is_number(), "connection survives: {st}");
+}

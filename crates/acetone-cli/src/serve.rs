@@ -527,6 +527,13 @@ fn connection(
                 let _permit = permits.acquire();
                 run_status(stream, repo, &id)?;
             }
+            // The declared schema as `acetone schema --json`'s document —
+            // the read half of the socket's read-modify-apply loop with
+            // schema-apply (acetone-ezyj).
+            "schema" => {
+                let _permit = permits.acquire();
+                run_schema(stream, repo, &request, &id)?;
+            }
             // The first payload verb (acetone-pz0k.3): the schema document
             // arrives as a stream of `chunk` text frames after the request —
             // NO PATHS OVER THE WIRE (ADR-0074 §4): a path param would let
@@ -601,7 +608,7 @@ fn connection(
                             "verb {other:?} is not served (this build serves \"query\" \
                              (read and write), \"status\", \"schema-apply\", \"import\", \
                              \"commit\", \"branch\", \"checkout\", \"merge\", \"resolve\", \
-                             \"export\", \"fsck\" and \"report\")"
+                             \"export\", \"fsck\", \"report\" and \"schema\")"
                         ),
                     }}),
                 )?;
@@ -807,6 +814,50 @@ fn send_chunks(stream: &mut dyn Transport, id: &Json, text: &str) -> Result<()> 
         rest = tail;
     }
     Ok(())
+}
+
+/// Serve the `schema` verb (acetone-ezyj): the declared schema as the
+/// same document `acetone schema --json` prints — the read half of the
+/// read-modify-apply loop whose write half is `schema-apply`. Accepts
+/// `params.at` for a past version's schema, the query verb's pattern.
+fn run_schema(
+    stream: &mut dyn Transport,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
+    let at = match request.pointer("/params/at") {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some(refspec) => Some(refspec),
+            None => {
+                return write_frame(
+                    stream,
+                    &json!({"id": id, "error": {
+                        "kind": "bad-request",
+                        "message": "params.at must be a string refspec",
+                    }}),
+                );
+            }
+        },
+    };
+    let entries = (|| -> Result<_, GraphError> {
+        let snapshot = match at {
+            Some(refspec) => repo.snapshot(refspec)?,
+            None => repo.workspace_snapshot()?,
+        };
+        snapshot.schema_entries()
+    })();
+    match entries {
+        Ok(entries) => write_frame(
+            stream,
+            &json!({"id": id, "ok": crate::commands::schema_document(&entries)}),
+        ),
+        Err(e) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "graph", "message": e.to_string()}}),
+        ),
+    }
 }
 
 /// Serve the `export` verb (acetone-zavr.4): a read-only projection at CLI

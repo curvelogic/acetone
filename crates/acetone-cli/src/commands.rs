@@ -1580,6 +1580,83 @@ pub(crate) fn schema_apply_core(
     Ok(SchemaApplyOutcome::Applied(to_stage.len()))
 }
 
+/// The `acetone schema --json` document, shared by the CLI and the
+/// daemon's `schema` verb (acetone-ezyj) — structural parity, the
+/// StatusFacts precedent: one builder, two surfaces.
+pub(crate) fn schema_document(entries: &[acetone_core::model::schema::SchemaEntry]) -> Json {
+    use acetone_core::model::schema::SchemaEntry;
+    let mut labels: Vec<(&str, &acetone_core::model::schema::LabelDef)> = Vec::new();
+    let mut rel_types: Vec<(&str, &acetone_core::model::schema::RelTypeDef)> = Vec::new();
+    let mut indexes: Vec<(&str, &acetone_core::model::schema::IndexDef)> = Vec::new();
+    for entry in entries {
+        match entry {
+            SchemaEntry::Label { name, def } => labels.push((name, def)),
+            SchemaEntry::RelType { name, def } => rel_types.push((name, def)),
+            SchemaEntry::Index { name, def } => indexes.push((name, def)),
+        }
+    }
+    let strings = |names: &[String]| -> Json {
+        Json::Array(names.iter().map(|n| Json::String(n.clone())).collect())
+    };
+    let label_json: Vec<Json> = labels
+        .iter()
+        .map(|(name, def)| {
+            json!({
+                "name": name,
+                "key": strings(def.key()),
+                "types": Json::Object(
+                    def.types()
+                        .iter()
+                        .map(|(p, t)| (p.clone(), Json::String(t.as_str().to_owned())))
+                        .collect(),
+                ),
+                "required": strings(def.exists()),
+                "unique": strings(def.unique()),
+                "surrogate": def.is_surrogate(),
+            })
+        })
+        .collect();
+    // Objects since acetone-7qw.12 (previously bare name strings — the
+    // --json shape is explicitly unstable pre-1.0; CHANGELOG notes it).
+    let rel_json: Vec<Json> = rel_types
+        .iter()
+        .map(|(name, def)| {
+            json!({
+                "name": name,
+                // Complete shape in one break (PR #243 review minor 8):
+                // discriminator and required ride along now rather than
+                // forcing a second --json change later.
+                "discriminator": match def.discriminator() {
+                    Some(d) => Json::String(d.to_owned()),
+                    None => Json::Null,
+                },
+                "types": Json::Object(
+                    def.types()
+                        .iter()
+                        .map(|(p, t)| (p.clone(), Json::String(t.as_str().to_owned())))
+                        .collect(),
+                ),
+                "required": strings(def.exists()),
+            })
+        })
+        .collect();
+    let index_json: Vec<Json> = indexes
+        .iter()
+        .map(|(name, def)| {
+            json!({
+                "name": name,
+                "label": def.label(),
+                "properties": strings(def.properties()),
+            })
+        })
+        .collect();
+    json!({
+        "labels": label_json,
+        "relationship_types": rel_json,
+        "indexes": index_json,
+    })
+}
+
 pub(crate) fn schema(
     repo_path: &Path,
     graph: Option<&str>,
@@ -1612,66 +1689,7 @@ pub(crate) fn schema(
     }
 
     if json {
-        let strings = |names: &[String]| -> Json {
-            Json::Array(names.iter().map(|n| Json::String(n.clone())).collect())
-        };
-        let label_json: Vec<Json> = labels
-            .iter()
-            .map(|(name, def)| {
-                json!({
-                    "name": name,
-                    "key": strings(def.key()),
-                    "types": Json::Object(
-                        def.types()
-                            .iter()
-                            .map(|(p, t)| (p.clone(), Json::String(t.as_str().to_owned())))
-                            .collect(),
-                    ),
-                    "required": strings(def.exists()),
-                    "unique": strings(def.unique()),
-                    "surrogate": def.is_surrogate(),
-                })
-            })
-            .collect();
-        // Objects since acetone-7qw.12 (previously bare name strings — the
-        // --json shape is explicitly unstable pre-1.0; CHANGELOG notes it).
-        let rel_json: Vec<Json> = rel_types
-            .iter()
-            .map(|(name, def)| {
-                json!({
-                    "name": name,
-                    // Complete shape in one break (PR #243 review minor 8):
-                    // discriminator and required ride along now rather than
-                    // forcing a second --json change later.
-                    "discriminator": match def.discriminator() {
-                        Some(d) => Json::String(d.to_owned()),
-                        None => Json::Null,
-                    },
-                    "types": Json::Object(
-                        def.types()
-                            .iter()
-                            .map(|(p, t)| (p.clone(), Json::String(t.as_str().to_owned())))
-                            .collect(),
-                    ),
-                    "required": strings(def.exists()),
-                })
-            })
-            .collect();
-        let index_json: Vec<Json> = indexes
-            .iter()
-            .map(|(name, def)| {
-                json!({
-                    "name": name,
-                    "label": def.label(),
-                    "properties": strings(def.properties()),
-                })
-            })
-            .collect();
-        emit_json(&json!({
-            "labels": label_json,
-            "relationship_types": rel_json,
-            "indexes": index_json,
-        }));
+        emit_json(&schema_document(&entries));
         return Ok(());
     }
 
