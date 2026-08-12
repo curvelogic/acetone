@@ -2208,3 +2208,41 @@ fn the_schema_verb_matches_the_cli_document_and_round_trips() {
     let st = read_frame(&mut s);
     assert!(st["ok"]["nodes"].is_number(), "connection survives: {st}");
 }
+
+/// Ancestry refspecs compose with `params.at` over the socket
+/// (acetone-bvq × acetone-ghpf), and a hostile suffix is a typed error
+/// the connection survives — never a panic (PR #284 review F4).
+#[test]
+fn params_at_accepts_ancestry_and_survives_hostile_suffixes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "two"]).status.success());
+    assert!(acetone(&repo, &["put-node", "Doc", "d3"]).status.success());
+    assert!(acetone(&repo, &["commit", "-m", "three"]).status.success());
+
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query", "params": {
+            "cypher": "MATCH (d:Doc) RETURN count(d)", "at": "main~1",
+        }}),
+    );
+    let row = read_frame(&mut s);
+    assert_eq!(row["row"]["values"][0], 2, "the parent version: {row}");
+    let _ = read_frame(&mut s); // terminal ok
+
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "MATCH (d:Doc) RETURN count(d)", "at": "main~٣x",
+        }}),
+    );
+    let e = read_frame(&mut s);
+    assert_eq!(e["error"]["kind"], "graph", "typed, not a panic: {e}");
+    write_frame(&mut s, &serde_json::json!({"id": 3, "verb": "status"}));
+    let st = read_frame(&mut s);
+    assert!(st["ok"]["nodes"].is_number(), "connection survives: {st}");
+}

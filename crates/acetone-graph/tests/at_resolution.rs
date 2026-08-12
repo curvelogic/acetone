@@ -195,3 +195,107 @@ fn branch_short_names_and_absent_names_are_unchanged() {
         "expected UnresolvedRefspec, got {err:?}"
     );
 }
+
+/// Git ancestry syntax (acetone-bvq): `~N` walks first parents, `^N` picks
+/// a merge's N-th parent, `HEAD` names the current head, and operators
+/// chain left-to-right — making spec §5.2's `acetone.diff('main~1', …)`
+/// example real.
+#[test]
+fn ancestry_refspecs_walk_the_commit_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let c1 = commit_one(&repo, "a");
+    let c2 = commit_one(&repo, "b");
+    let c3 = commit_one(&repo, "c");
+
+    // ~N is the N-th first-parent ancestor; bare ~ is ~1; ~0 is identity.
+    assert_eq!(repo.resolve_commit("main~1").expect("~1"), c2);
+    assert_eq!(repo.resolve_commit("main~2").expect("~2"), c1);
+    assert_eq!(repo.resolve_commit("main~").expect("bare ~"), c2);
+    assert_eq!(repo.resolve_commit("main~0").expect("~0"), c3);
+
+    // ^ on a linear commit is the first parent; operators chain.
+    assert_eq!(repo.resolve_commit("main^").expect("^"), c2);
+    assert_eq!(repo.resolve_commit("main^^").expect("^^"), c1);
+    assert_eq!(repo.resolve_commit("main~1^").expect("~1^"), c1);
+
+    // HEAD names the current head, and takes suffixes.
+    assert_eq!(repo.resolve_commit("HEAD").expect("HEAD"), c3);
+    assert_eq!(repo.resolve_commit("HEAD^").expect("HEAD^"), c2);
+
+    // A hex base takes suffixes too.
+    let hex = format!("{}~1", c3.to_hex());
+    assert_eq!(repo.resolve_commit(&hex).expect("hex~1"), c2);
+
+    // Walking past the root is an unresolved refspec naming the input.
+    match repo.resolve_commit("main~99") {
+        Err(GraphError::UnresolvedRefspec { refspec }) => {
+            assert_eq!(refspec, "main~99");
+        }
+        other => panic!("over-deep ancestry must refuse: {other:?}"),
+    }
+    // As is a parent a commit does not have.
+    match repo.resolve_commit("main^2") {
+        Err(GraphError::UnresolvedRefspec { .. }) => {}
+        other => panic!("^2 on a single-parent commit must refuse: {other:?}"),
+    }
+}
+
+/// `^2` picks a merge commit's second parent (theirs), as git does.
+#[test]
+fn caret_two_names_a_merges_second_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let base = commit_one(&repo, "base");
+    repo.create_branch("other", Some(&base.to_hex()))
+        .expect("branch");
+    repo.checkout_branch("other").expect("checkout");
+    let theirs = commit_one(&repo, "theirs");
+    repo.checkout_branch("main").expect("checkout main");
+    let ours = commit_one(&repo, "ours");
+    match repo.merge("other", "merge other").expect("merge") {
+        acetone_graph::merge::MergeOutcome::Merged(_) => {}
+        other => panic!("expected a merge commit: {other:?}"),
+    }
+
+    assert_eq!(repo.resolve_commit("main^1").expect("^1"), ours);
+    assert_eq!(repo.resolve_commit("main^2").expect("^2"), theirs);
+    // ^0 is the merge commit itself.
+    assert_eq!(
+        repo.resolve_commit("main^0").expect("^0"),
+        repo.head_commit().expect("head").expect("commit")
+    );
+}
+
+/// Hostile suffixes — multibyte characters in the operator position,
+/// trailing garbage, huge counts — are refused typed, never a panic
+/// (params.at hands this parser untrusted peer data).
+#[test]
+fn hostile_ancestry_suffixes_refuse_without_panicking() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    // TWO commits, so a leading `~`/`^` walk SUCCEEDS and the parser
+    // genuinely reaches the hostile character on its next iteration — with
+    // one parentless commit the walk fails first and the multibyte inputs
+    // never touch the slice (PR #284 review F1: the single-commit version
+    // of this test passed against the panicking code).
+    commit_one(&repo, "a");
+    commit_one(&repo, "b");
+
+    for hostile in [
+        "main~٣x",                   // multibyte in the operator position (panicked pre-fix)
+        "main~0٣x",                  // ~0 identity first: reaches iteration 2 in any repo
+        "main~é",                    // multibyte immediately after ~
+        "main~1x",                   // trailing garbage after digits
+        "main~+1",                   // sign is not a digit
+        "main~99999999999999999999", // usize overflow
+        "~1",                        // empty base
+        "^",                         // empty base, bare operator
+        "main~^~^~^99",
+    ] {
+        match repo.resolve_commit(hostile) {
+            Err(GraphError::UnresolvedRefspec { .. }) => {}
+            other => panic!("{hostile:?} must refuse typed: {other:?}"),
+        }
+    }
+}
