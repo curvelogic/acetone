@@ -2011,15 +2011,24 @@ fn the_query_verb_accepts_params_at() {
     assert_eq!(now["row"]["values"][0], 3, "the workspace: {now}");
     let _ = read_frame(&mut s); // terminal ok
 
-    // A write at a version is refused typed, exactly as the CLI refuses.
+    // A write at a version is refused typed, exactly as the CLI refuses —
+    // and even with autodeclare set, the refusal is structurally prior to
+    // any coinage (PR #282 review): the schema is untouched afterwards.
     write_frame(
         &mut s,
         &serde_json::json!({"id": 3, "verb": "query", "params": {
-            "cypher": "CREATE (:Doc {id: 'nope'})", "at": c1,
+            "cypher": "CREATE (:Doc)-[:NEVER_COINED]->(:Doc)",
+            "at": c1, "autodeclare": true,
         }}),
     );
     let e = read_frame(&mut s);
     assert_eq!(e["error"]["kind"], "write-at-version", "{e}");
+    write_frame(&mut s, &serde_json::json!({"id": 30, "verb": "status"}));
+    let st = read_frame(&mut s);
+    assert_eq!(
+        st["ok"]["schema_entries"], 1,
+        "no rel-type was coined by the refused write: {st}"
+    );
 
     // A non-string at is a bad request, and the connection survives.
     write_frame(
@@ -2039,7 +2048,7 @@ fn the_query_verb_accepts_params_at() {
         }}),
     );
     let e = read_frame(&mut s);
-    assert!(e.get("error").is_some(), "{e}");
+    assert_eq!(e["error"]["kind"], "graph", "{e}");
     assert!(
         e["error"]["message"]
             .as_str()
