@@ -1752,3 +1752,67 @@ fn blame_subject_reaches_the_socket() {
     let done = read_frame(&mut s);
     assert_eq!(done["ok"]["rows"], 1, "{done}");
 }
+
+/// The `report` verb streams the same JSON document the CLI prints —
+/// the change report is buildable entirely over the socket
+/// (acetone-zavr.7, gate criterion 2).
+#[test]
+fn the_report_verb_streams_the_cli_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let c1 = {
+        let out = acetone(&repo, &["commit", "-m", "seed"]);
+        assert!(out.status.success());
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        text.split_whitespace()
+            .find(|w| w.len() == 40 && w.chars().all(|c| c.is_ascii_hexdigit()))
+            .expect("commit hash in output")
+            .to_string()
+    };
+    assert!(
+        acetone(
+            &repo,
+            &["put-node", "Doc", "d3", "--prop", "title=\"three\""]
+        )
+        .status
+        .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "add d3"]).status.success());
+
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "report",
+            "params": {"from": c1, "to": "main", "json": true}}),
+    );
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert_eq!(terminal["ok"]["nodes"], 1, "one added node: {terminal}");
+    let text: String = streamed
+        .iter()
+        .map(|f| f["chunk"].as_str().expect("chunk frames carry text"))
+        .collect();
+
+    let cli = acetone(&repo, &["report", &c1, "main", "--json"]);
+    assert!(cli.status.success(), "{cli:?}");
+    assert_eq!(
+        text,
+        String::from_utf8_lossy(&cli.stdout),
+        "the socket document is byte-identical to the CLI's stdout"
+    );
+
+    // The markdown artefact streams the same way when json is omitted.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "report",
+            "params": {"from": c1, "to": "main"}}),
+    );
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert!(terminal.get("ok").is_some(), "{terminal}");
+    let md: String = streamed
+        .iter()
+        .filter_map(|f| f["chunk"].as_str())
+        .collect();
+    assert!(md.contains("+ "), "the markdown artefact streams: {md}");
+}

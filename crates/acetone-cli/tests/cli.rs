@@ -3624,3 +3624,150 @@ fn blame_distinguishes_absent_from_uncommitted() {
         stdout(&uncommitted)
     );
 }
+
+/// `acetone report FROM TO` — the PR-style change report (acetone-zavr.7):
+/// property-level before/after per change, commit metadata on both ends.
+#[test]
+fn report_shows_property_level_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=alice"])
+            .status
+            .success()
+    );
+    let c1 = commit_hex(&acetone(&repo, &["commit", "-m", "base"]));
+    assert!(
+        acetone(&repo, &["query", "MATCH (n:N {id: 1}) SET n.name = 'bob'"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "3", "--prop", "name=carol"])
+            .status
+            .success()
+    );
+    let c2 = commit_hex(&acetone(&repo, &["commit", "-m", "update"]));
+
+    let out = acetone(&repo, &["report", &c1, &c2, "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(doc["from"]["commit"], serde_json::json!(c1), "{doc}");
+    assert_eq!(doc["from"]["subject"], "base", "{doc}");
+    assert_eq!(doc["to"]["subject"], "update", "{doc}");
+    let nodes = doc["nodes"].as_array().expect("nodes");
+    let modified = nodes
+        .iter()
+        .find(|n| n["kind"] == "modified")
+        .expect("the modified node");
+    assert_eq!(modified["label"], "N", "{modified}");
+    assert_eq!(
+        modified["properties"]["name"]["before"], "alice",
+        "{modified}"
+    );
+    assert_eq!(modified["properties"]["name"]["after"], "bob", "{modified}");
+    let added = nodes
+        .iter()
+        .find(|n| n["kind"] == "added")
+        .expect("the added node");
+    assert_eq!(added["properties"]["name"]["after"], "carol", "{added}");
+    assert!(
+        added["properties"]["name"].get("before").is_none(),
+        "an added node has no befores: {added}"
+    );
+    assert_eq!(doc["summary"]["nodes_modified"], 1, "{doc}");
+    assert_eq!(doc["summary"]["nodes_added"], 1, "{doc}");
+    assert!(doc["conflicts"].is_null(), "no merge in progress: {doc}");
+
+    // The default rendering is the markdown artefact: header carries both
+    // subjects, the sign lines carry the property arrow.
+    let md = acetone(&repo, &["report", &c1, &c2]);
+    assert!(md.status.success(), "{}", stderr(&md));
+    let text = stdout(&md);
+    assert!(text.contains("base") && text.contains("update"), "{text}");
+    assert!(text.contains("~ "), "modified sign line: {text}");
+    assert!(text.contains("+ "), "added sign line: {text}");
+    assert!(
+        text.contains("alice") && text.contains("bob"),
+        "the before → after pair renders: {text}"
+    );
+}
+
+/// During an in-progress merge the report carries the conflicts section —
+/// the same rows `CALL acetone.conflicts()` yields (acetone-zavr.7).
+#[test]
+fn report_includes_conflicts_during_a_merge() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "v=0"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    assert!(acetone(&repo, &["branch", "feature"]).status.success());
+    assert!(
+        acetone(&repo, &["query", "MATCH (n:N {id: 1}) SET n.v = 1"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "ours"]).status.success());
+    assert!(acetone(&repo, &["checkout", "feature"]).status.success());
+    assert!(
+        acetone(&repo, &["query", "MATCH (n:N {id: 1}) SET n.v = 2"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "theirs"]).status.success());
+    assert!(acetone(&repo, &["checkout", "main"]).status.success());
+    let merged = acetone(&repo, &["merge", "feature"]);
+    assert!(
+        String::from_utf8_lossy(&merged.stdout).contains("conflict")
+            || String::from_utf8_lossy(&merged.stderr).contains("conflict"),
+        "the merge must conflict: {merged:?}"
+    );
+
+    let out = acetone(&repo, &["report", "main", "feature", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(doc["conflicts"]["in_progress"], true, "{doc}");
+    let items = doc["conflicts"]["items"].as_array().expect("items");
+    assert!(!items.is_empty(), "{doc}");
+    assert_eq!(items[0]["kind"], "cell", "{doc}");
+    assert_eq!(items[0]["property"], "v", "{doc}");
+    assert_eq!(items[0]["ours"], 1, "{doc}");
+    assert_eq!(items[0]["theirs"], 2, "{doc}");
+}
+
+/// A bad refspec is a clean typed error, not a panic.
+#[test]
+fn report_refuses_a_bad_refspec() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "base"]).status.success());
+    let out = acetone(&repo, &["report", "nonesuch", "main", "--json"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("nonesuch"),
+        "the error names the refspec: {}",
+        stderr(&out)
+    );
+}

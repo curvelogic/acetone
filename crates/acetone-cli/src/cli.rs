@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 const AFTER_HELP: &str = "\
 Command groups:
   Everyday      init, status, commit, log, blame, branch, tag, checkout, diff,
-                merge, resolve
+                report, merge, resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate
@@ -214,6 +214,25 @@ pub enum Command {
         to: String,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
         /// may change at any minor release.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Produce a change report between two versions — the PR-style
+    /// artefact.
+    ///
+    /// Where `diff` lists what changed, `report` says how: property-level
+    /// before/after per node and relationship, commit metadata on both
+    /// endpoints, and — while a merge is in progress — the workspace's
+    /// conflicts with their three-way values. Renders as markdown by
+    /// default (paste it into a review); `--json` emits the structured
+    /// document a curation surface consumes.
+    Report {
+        /// The base version.
+        from: String,
+        /// The target version.
+        to: String,
+        /// Emit the structured JSON document instead of markdown. The JSON
+        /// shape is unstable pre-1.0 and may change at any minor release.
         #[arg(long)]
         json: bool,
     },
