@@ -266,3 +266,29 @@ fn caret_two_names_a_merges_second_parent() {
         repo.head_commit().expect("head").expect("commit")
     );
 }
+
+/// Hostile suffixes — multibyte characters in the operator position,
+/// trailing garbage, huge counts — are refused typed, never a panic
+/// (params.at hands this parser untrusted peer data).
+#[test]
+fn hostile_ancestry_suffixes_refuse_without_panicking() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    commit_one(&repo, "a");
+
+    for hostile in [
+        "main~٣x",                   // multibyte in the operator position (panicked pre-fix)
+        "main~é",                    // multibyte immediately after ~
+        "main~1x",                   // trailing garbage after digits
+        "main~+1",                   // sign is not a digit
+        "main~99999999999999999999", // usize overflow
+        "~1",                        // empty base
+        "^",                         // empty base, bare operator
+        "main~^~^~^99",
+    ] {
+        match repo.resolve_commit(hostile) {
+            Err(GraphError::UnresolvedRefspec { .. }) => {}
+            other => panic!("{hostile:?} must refuse typed: {other:?}"),
+        }
+    }
+}

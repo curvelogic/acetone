@@ -1675,7 +1675,11 @@ impl Repository {
         };
         let mut rest = suffix;
         while let Some(op) = rest.chars().next() {
-            rest = &rest[1..];
+            // Step by the operator's OWN width: a multibyte character in
+            // the operator position (hostile params.at input) must be
+            // refused typed, never sliced mid-char (a panic — found by
+            // this unit's own review prep).
+            rest = &rest[op.len_utf8()..];
             let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
             let count: usize = if digits == 0 {
                 1
