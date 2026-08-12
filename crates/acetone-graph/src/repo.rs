@@ -1637,6 +1637,82 @@ impl Repository {
     /// chain behind a ref that *did* match — still surfaces as its own
     /// error, never as a fall-through to a lower-precedence candidate.
     pub fn resolve_commit(&self, refspec: &str) -> Result<Hash, GraphError> {
+        // Git ancestry syntax (acetone-bvq): the first `~` or `^` splits a
+        // base name from an operator suffix. Splitting first shadows no
+        // real name — git-check-ref-format (enforced by gix on every ref
+        // this store writes or reads) forbids both characters in ref
+        // names, and hex never contains them.
+        let (base, suffix) = match refspec.find(['~', '^']) {
+            Some(split) => refspec.split_at(split),
+            None => (refspec, ""),
+        };
+        let mut commit = match self.resolve_plain(base) {
+            Ok(hash) => hash,
+            // `HEAD` names the current head — but only as a fallback, so a
+            // branch or tag literally named HEAD keeps winning (git
+            // reserves the name; acetone merely follows).
+            Err(GraphError::UnresolvedRefspec { .. }) if base == "HEAD" => self
+                .head_commit()?
+                .ok_or_else(|| GraphError::UnresolvedRefspec {
+                    refspec: refspec.to_owned(),
+                })?,
+            Err(e) => {
+                return Err(match e {
+                    // The error names the FULL refspec the caller wrote,
+                    // not the split base.
+                    GraphError::UnresolvedRefspec { .. } => GraphError::UnresolvedRefspec {
+                        refspec: refspec.to_owned(),
+                    },
+                    other => other,
+                });
+            }
+        };
+        // Evaluate operators left-to-right: `~N` = N-th first-parent
+        // ancestor (bare `~` = 1, `~0` = identity); `^N` = N-th parent
+        // (bare `^` = 1, `^0` = identity) — git parity.
+        let unresolved = || GraphError::UnresolvedRefspec {
+            refspec: refspec.to_owned(),
+        };
+        let mut rest = suffix;
+        while let Some(op) = rest.chars().next() {
+            rest = &rest[1..];
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            let count: usize = if digits == 0 {
+                1
+            } else {
+                rest[..digits].parse().map_err(|_| unresolved())?
+            };
+            rest = &rest[digits..];
+            match op {
+                '~' => {
+                    for _ in 0..count {
+                        let parents = self
+                            .store
+                            .read_commit(&commit)?
+                            .ok_or_else(unresolved)?
+                            .parents;
+                        commit = *parents.first().ok_or_else(unresolved)?;
+                    }
+                }
+                '^' if count == 0 => {}
+                '^' => {
+                    let parents = self
+                        .store
+                        .read_commit(&commit)?
+                        .ok_or_else(unresolved)?
+                        .parents;
+                    commit = *parents.get(count - 1).ok_or_else(unresolved)?;
+                }
+                _ => return Err(unresolved()),
+            }
+        }
+        Ok(commit)
+    }
+
+    /// Resolve a plain name — the pre-ancestry resolution order
+    /// (gitrevisions "first match wins"): exact `refs/…` path, tag short
+    /// name, branch short name, commit hash.
+    fn resolve_plain(&self, refspec: &str) -> Result<Hash, GraphError> {
         if refspec.starts_with("refs/")
             && let Some(hash) = read_ref_lenient(&self.store, refspec)?
         {

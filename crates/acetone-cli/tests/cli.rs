@@ -3771,3 +3771,31 @@ fn report_refuses_a_bad_refspec() {
         stderr(&out)
     );
 }
+
+/// Ancestry refspecs reach the shipped interface (acetone-bvq): the spec
+/// §5.2 example `diff main~1 main` works, as does HEAD^.
+#[test]
+fn diff_accepts_ancestry_refspecs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["put-node", "N", "1"]).status.success());
+    assert!(acetone(&repo, &["commit", "-m", "one"]).status.success());
+    assert!(acetone(&repo, &["put-node", "N", "2"]).status.success());
+    assert!(acetone(&repo, &["commit", "-m", "two"]).status.success());
+
+    let out = acetone(&repo, &["diff", "main~1", "main"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("+ node"), "{text}");
+    assert!(text.contains("2"), "{text}");
+
+    let same = acetone(&repo, &["diff", "HEAD^", "HEAD"]);
+    assert!(same.status.success(), "{}", stderr(&same));
+    assert_eq!(stdout(&same), text, "HEAD^..HEAD is main~1..main here");
+}

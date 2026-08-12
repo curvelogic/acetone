@@ -18,6 +18,13 @@ fine.)
 
 ### Added
 
+- **Git ancestry refspecs** — `main~1`, `HEAD^`, `<rev>~N`, `^N` (a
+  merge's N-th parent) resolve everywhere a refspec is accepted: `--at`
+  time travel, `diff`, `report`, `log`, tags, the daemon's `params.at`,
+  and `CALL acetone.diff('main~1', 'main')` — the spec §5.2 example —
+  now work as written. `HEAD` names the current head (a real ref of
+  that name still wins).
+
 - **Daemon `schema` verb** — the declared schema as the same document
   `acetone schema --json` prints, optionally at a past version
   (`params.at`). With `schema-apply` this closes the read-modify-apply
