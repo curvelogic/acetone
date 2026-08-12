@@ -411,6 +411,9 @@ pub acetone_graph::error::GraphError::DanglingEdge::endpoint: alloc::string::Str
 pub acetone_graph::error::GraphError::DanglingEdge::role: &'static str
 pub acetone_graph::error::GraphError::DanglingEdge::rtype: alloc::string::String
 pub acetone_graph::error::GraphError::DirtyWorkspace
+pub acetone_graph::error::GraphError::DisagreeingRemotes
+pub acetone_graph::error::GraphError::DisagreeingRemotes::graph: alloc::string::String
+pub acetone_graph::error::GraphError::DisagreeingRemotes::remotes: alloc::vec::Vec<alloc::string::String>
 pub acetone_graph::error::GraphError::EdgePropertyTypeViolation
 pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::actual: &'static str
 pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::declared: &'static str
@@ -448,6 +451,7 @@ pub acetone_graph::error::GraphError::Migrate(alloc::string::String)
 pub acetone_graph::error::GraphError::MultipleGraphs
 pub acetone_graph::error::GraphError::MultipleGraphs::names: alloc::vec::Vec<alloc::string::String>
 pub acetone_graph::error::GraphError::NoAttachableGraph
+pub acetone_graph::error::GraphError::NoAttachableGraph::reason: alloc::string::String
 pub acetone_graph::error::GraphError::NoCurrentBranch
 pub acetone_graph::error::GraphError::NoMergeBase
 pub acetone_graph::error::GraphError::NoMergeBase::ours: alloc::string::String
@@ -1904,6 +1908,7 @@ pub acetone_graph::repo::AttachOutcome::branches_created: alloc::vec::Vec<alloc:
 pub acetone_graph::repo::AttachOutcome::graph: alloc::string::String
 pub acetone_graph::repo::AttachOutcome::head_set: bool
 pub acetone_graph::repo::AttachOutcome::marker_written: bool
+pub acetone_graph::repo::AttachOutcome::remote: core::option::Option<alloc::string::String>
 impl core::clone::Clone for acetone_graph::repo::AttachOutcome
 pub fn acetone_graph::repo::AttachOutcome::clone(&self) -> acetone_graph::repo::AttachOutcome
 impl core::cmp::Eq for acetone_graph::repo::AttachOutcome
@@ -2268,6 +2273,9 @@ pub acetone_graph::GraphError::DanglingEdge::endpoint: alloc::string::String
 pub acetone_graph::GraphError::DanglingEdge::role: &'static str
 pub acetone_graph::GraphError::DanglingEdge::rtype: alloc::string::String
 pub acetone_graph::GraphError::DirtyWorkspace
+pub acetone_graph::GraphError::DisagreeingRemotes
+pub acetone_graph::GraphError::DisagreeingRemotes::graph: alloc::string::String
+pub acetone_graph::GraphError::DisagreeingRemotes::remotes: alloc::vec::Vec<alloc::string::String>
 pub acetone_graph::GraphError::EdgePropertyTypeViolation
 pub acetone_graph::GraphError::EdgePropertyTypeViolation::actual: &'static str
 pub acetone_graph::GraphError::EdgePropertyTypeViolation::declared: &'static str
@@ -2305,6 +2313,7 @@ pub acetone_graph::GraphError::Migrate(alloc::string::String)
 pub acetone_graph::GraphError::MultipleGraphs
 pub acetone_graph::GraphError::MultipleGraphs::names: alloc::vec::Vec<alloc::string::String>
 pub acetone_graph::GraphError::NoAttachableGraph
+pub acetone_graph::GraphError::NoAttachableGraph::reason: alloc::string::String
 pub acetone_graph::GraphError::NoCurrentBranch
 pub acetone_graph::GraphError::NoMergeBase
 pub acetone_graph::GraphError::NoMergeBase::ours: alloc::string::String

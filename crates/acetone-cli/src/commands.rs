@@ -420,7 +420,13 @@ fn attach(repo_path: &Path, graph: Option<&str>) -> Result<()> {
     if outcome.head_set {
         outln!("set the graph HEAD");
     }
-    outln!("attached graph {name}");
+    match &outcome.remote {
+        Some(remote) => outln!(
+            "attached graph {name} (from {})",
+            sanitise_identifier(remote)
+        ),
+        None => outln!("attached graph {name}"),
+    }
     Ok(())
 }
 

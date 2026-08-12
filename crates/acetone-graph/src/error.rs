@@ -74,21 +74,33 @@ pub enum GraphError {
         /// The lock file's path, for diagnostics.
         path: PathBuf,
     },
-    /// `attach` found no attachable co-tenant graph — no remote-tracking
-    /// ref under `refs/remotes/<remote>/acetone/…` matched (acetone-gufe).
-    #[error(
-        "no attachable co-tenant graph: no remote-tracking acetone branches \
-         were found (clone a repository that carries one, or check the \
-         remote and graph name)"
-    )]
-    NoAttachableGraph,
-    /// `attach` without `--graph` found several candidates, or one graph's
-    /// branches disagree across remotes — the caller must choose.
+    /// `attach` found no attachable co-tenant graph (acetone-gufe); the
+    /// reason says which precondition failed (nothing on any remote, the
+    /// named graph absent, or its default branch missing).
+    #[error("no attachable co-tenant graph: {reason}")]
+    NoAttachableGraph {
+        /// Which precondition failed, in user terms.
+        reason: String,
+    },
+    /// `attach` without `--graph` found several candidate graphs — the
+    /// caller must choose.
     #[error("attach needs --graph: candidates are {candidates:?}")]
     AmbiguousAttach {
-        /// The attachable graph names (or remote-qualified entries when
-        /// remotes disagree).
+        /// The attachable graph names.
         candidates: Vec<String>,
+    },
+    /// The remotes carrying this graph disagree about its branches, and no
+    /// `origin` remote (which takes precedence) exists to break the tie —
+    /// `attach` refuses rather than guessing (acetone-gufe).
+    #[error(
+        "remotes {remotes:?} disagree about graph {graph:?}; fetch or prune \
+         until they agree, or add an `origin` remote (origin takes precedence)"
+    )]
+    DisagreeingRemotes {
+        /// The graph whose branches disagree.
+        graph: String,
+        /// The remotes that disagree.
+        remotes: Vec<String>,
     },
     /// The workspace ref moved underneath this transaction (another
     /// writer advanced it between load and save).
