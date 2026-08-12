@@ -274,10 +274,17 @@ fn caret_two_names_a_merges_second_parent() {
 fn hostile_ancestry_suffixes_refuse_without_panicking() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(dir.path());
+    // TWO commits, so a leading `~`/`^` walk SUCCEEDS and the parser
+    // genuinely reaches the hostile character on its next iteration — with
+    // one parentless commit the walk fails first and the multibyte inputs
+    // never touch the slice (PR #284 review F1: the single-commit version
+    // of this test passed against the panicking code).
     commit_one(&repo, "a");
+    commit_one(&repo, "b");
 
     for hostile in [
         "main~٣x",                   // multibyte in the operator position (panicked pre-fix)
+        "main~0٣x",                  // ~0 identity first: reaches iteration 2 in any repo
         "main~é",                    // multibyte immediately after ~
         "main~1x",                   // trailing garbage after digits
         "main~+1",                   // sign is not a digit

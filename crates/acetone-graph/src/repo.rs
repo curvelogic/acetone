@@ -1617,8 +1617,17 @@ impl Repository {
             })?)
     }
 
-    /// Resolve a refspec — full ref name, tag or branch short name, or hex
-    /// commit hash — to a commit address.
+    /// Resolve a refspec — full ref name, tag or branch short name, hex
+    /// commit hash, or any of those with git ancestry suffixes — to a
+    /// commit address.
+    ///
+    /// Ancestry syntax (acetone-bvq): `~N` walks N first-parent steps
+    /// (bare `~` = 1, `~0` = identity); `^N` picks a merge's N-th parent
+    /// (bare `^` = 1, `^0` = identity); operators chain left-to-right
+    /// (`main~1^`, `HEAD^^`). `HEAD` names the current head, as a
+    /// fallback only — a real ref of that name wins. A missing ancestor
+    /// or malformed suffix is [`GraphError::UnresolvedRefspec`] naming
+    /// the refspec as written.
     ///
     /// Candidates are tried in git's own order (gitrevisions, "first match
     /// wins"): an exact `refs/…` path first, then the tag expansion

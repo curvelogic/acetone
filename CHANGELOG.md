@@ -21,8 +21,8 @@ fine.)
 - **Git ancestry refspecs** — `main~1`, `HEAD^`, `<rev>~N`, `^N` (a
   merge's N-th parent) resolve everywhere a refspec is accepted: `--at`
   time travel, `diff`, `report`, `log`, tags, the daemon's `params.at`,
-  and `CALL acetone.diff('main~1', 'main')` — the spec §5.2 example —
-  now work as written. `HEAD` names the current head (a real ref of
+  and `CALL acetone.diff('main~1', 'main')` — the convenience spec
+  §5.2 planned under this bead — now work as written. `HEAD` names the current head (a real ref of
   that name still wins).
 
 - **Daemon `schema` verb** — the declared schema as the same document
