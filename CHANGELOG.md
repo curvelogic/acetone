@@ -18,6 +18,16 @@ fine.)
 
 ### Added
 
+- **`acetone attach`** — reattach a cloned co-tenant graph in one
+  command (tenant-pulled): recreates the local-only state a `git clone`
+  does not transfer (the graph marker, the graph's HEAD, local branches
+  from their remote-tracking refs), idempotently — an existing branch
+  is never moved and a HEAD the user has since pointed elsewhere is
+  never reset. With several attachable graphs, `--graph` picks one;
+  with none, a clean typed refusal. `clone` + `attach` replaces the
+  three-command git plumbing dance (and the "don't run `init` in a
+  clone" footgun). Library: `Repository::attach_co_tenant`.
+
 - **Git ancestry refspecs** — `main~1`, `HEAD^`, `<rev>~N`, `^N` (a
   merge's N-th parent) resolve everywhere a refspec is accepted: `--at`
   time travel, `diff`, `report`, `log`, tags, the daemon's `params.at`,

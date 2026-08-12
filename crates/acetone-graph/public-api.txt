@@ -390,6 +390,8 @@ impl<T> typenum::type_operators::Same for acetone_graph::diff::NodeChange
 pub type acetone_graph::diff::NodeChange::Output = T
 pub mod acetone_graph::error
 #[non_exhaustive] pub enum acetone_graph::error::GraphError
+pub acetone_graph::error::GraphError::AmbiguousAttach
+pub acetone_graph::error::GraphError::AmbiguousAttach::candidates: alloc::vec::Vec<alloc::string::String>
 pub acetone_graph::error::GraphError::BranchCheckedOut
 pub acetone_graph::error::GraphError::BranchCheckedOut::name: alloc::string::String
 pub acetone_graph::error::GraphError::BranchConflict
@@ -445,6 +447,7 @@ pub acetone_graph::error::GraphError::MergeViolations(alloc::vec::Vec<acetone_gr
 pub acetone_graph::error::GraphError::Migrate(alloc::string::String)
 pub acetone_graph::error::GraphError::MultipleGraphs
 pub acetone_graph::error::GraphError::MultipleGraphs::names: alloc::vec::Vec<alloc::string::String>
+pub acetone_graph::error::GraphError::NoAttachableGraph
 pub acetone_graph::error::GraphError::NoCurrentBranch
 pub acetone_graph::error::GraphError::NoMergeBase
 pub acetone_graph::error::GraphError::NoMergeBase::ours: alloc::string::String
@@ -1896,6 +1899,54 @@ impl<T> core::convert::From<T> for acetone_graph::repo::ResolveSide
 pub fn acetone_graph::repo::ResolveSide::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_graph::repo::ResolveSide
 pub type acetone_graph::repo::ResolveSide::Output = T
+pub struct acetone_graph::repo::AttachOutcome
+pub acetone_graph::repo::AttachOutcome::branches_created: alloc::vec::Vec<alloc::string::String>
+pub acetone_graph::repo::AttachOutcome::graph: alloc::string::String
+pub acetone_graph::repo::AttachOutcome::head_set: bool
+pub acetone_graph::repo::AttachOutcome::marker_written: bool
+impl core::clone::Clone for acetone_graph::repo::AttachOutcome
+pub fn acetone_graph::repo::AttachOutcome::clone(&self) -> acetone_graph::repo::AttachOutcome
+impl core::cmp::Eq for acetone_graph::repo::AttachOutcome
+impl core::cmp::PartialEq for acetone_graph::repo::AttachOutcome
+pub fn acetone_graph::repo::AttachOutcome::eq(&self, &acetone_graph::repo::AttachOutcome) -> bool
+impl core::fmt::Debug for acetone_graph::repo::AttachOutcome
+pub fn acetone_graph::repo::AttachOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for acetone_graph::repo::AttachOutcome
+impl core::marker::Freeze for acetone_graph::repo::AttachOutcome
+impl core::marker::Send for acetone_graph::repo::AttachOutcome
+impl core::marker::Sync for acetone_graph::repo::AttachOutcome
+impl core::marker::Unpin for acetone_graph::repo::AttachOutcome
+impl core::marker::UnsafeUnpin for acetone_graph::repo::AttachOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_graph::repo::AttachOutcome
+impl core::panic::unwind_safe::UnwindSafe for acetone_graph::repo::AttachOutcome
+impl<Q, K> equivalent::Equivalent<K> for acetone_graph::repo::AttachOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_graph::repo::AttachOutcome::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for acetone_graph::repo::AttachOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn acetone_graph::repo::AttachOutcome::equivalent(&self, &K) -> bool
+impl<T, U> core::convert::Into<U> for acetone_graph::repo::AttachOutcome where U: core::convert::From<T>
+pub fn acetone_graph::repo::AttachOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_graph::repo::AttachOutcome where U: core::convert::Into<T>
+pub type acetone_graph::repo::AttachOutcome::Error = core::convert::Infallible
+pub fn acetone_graph::repo::AttachOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_graph::repo::AttachOutcome where U: core::convert::TryFrom<T>
+pub type acetone_graph::repo::AttachOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_graph::repo::AttachOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for acetone_graph::repo::AttachOutcome where T: core::clone::Clone
+pub type acetone_graph::repo::AttachOutcome::Owned = T
+pub fn acetone_graph::repo::AttachOutcome::clone_into(&self, &mut T)
+pub fn acetone_graph::repo::AttachOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for acetone_graph::repo::AttachOutcome where T: 'static + ?core::marker::Sized
+pub fn acetone_graph::repo::AttachOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_graph::repo::AttachOutcome where T: ?core::marker::Sized
+pub fn acetone_graph::repo::AttachOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_graph::repo::AttachOutcome where T: ?core::marker::Sized
+pub fn acetone_graph::repo::AttachOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for acetone_graph::repo::AttachOutcome where T: core::clone::Clone
+pub unsafe fn acetone_graph::repo::AttachOutcome::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for acetone_graph::repo::AttachOutcome
+pub fn acetone_graph::repo::AttachOutcome::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_graph::repo::AttachOutcome
+pub type acetone_graph::repo::AttachOutcome::Output = T
 #[non_exhaustive] pub struct acetone_graph::repo::InitOptions
 pub acetone_graph::repo::InitOptions::chunk_params: acetone_prolly::chunker::ChunkParams
 pub acetone_graph::repo::InitOptions::object_format: acetone_store::git::ObjectFormat
@@ -1979,6 +2030,7 @@ pub type acetone_graph::repo::LogEntry::Output = T
 pub struct acetone_graph::repo::Repository
 impl acetone_graph::repo::Repository
 pub fn acetone_graph::repo::Repository::abort_merge(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::attach_co_tenant(&std::path::Path, core::option::Option<&str>) -> core::result::Result<acetone_graph::repo::AttachOutcome, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::begin_write(&self) -> core::result::Result<acetone_graph::repo::Transaction<'_>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::blame(&self, &acetone_model::graph_keys::NodeKey) -> core::result::Result<alloc::vec::Vec<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::branches(&self) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, acetone_store::hash::Hash)>, acetone_graph::error::GraphError>
@@ -2195,6 +2247,8 @@ pub fn acetone_graph::fsck::FindingKind::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_graph::fsck::FindingKind
 pub type acetone_graph::fsck::FindingKind::Output = T
 #[non_exhaustive] pub enum acetone_graph::GraphError
+pub acetone_graph::GraphError::AmbiguousAttach
+pub acetone_graph::GraphError::AmbiguousAttach::candidates: alloc::vec::Vec<alloc::string::String>
 pub acetone_graph::GraphError::BranchCheckedOut
 pub acetone_graph::GraphError::BranchCheckedOut::name: alloc::string::String
 pub acetone_graph::GraphError::BranchConflict
@@ -2250,6 +2304,7 @@ pub acetone_graph::GraphError::MergeViolations(alloc::vec::Vec<acetone_graph::me
 pub acetone_graph::GraphError::Migrate(alloc::string::String)
 pub acetone_graph::GraphError::MultipleGraphs
 pub acetone_graph::GraphError::MultipleGraphs::names: alloc::vec::Vec<alloc::string::String>
+pub acetone_graph::GraphError::NoAttachableGraph
 pub acetone_graph::GraphError::NoCurrentBranch
 pub acetone_graph::GraphError::NoMergeBase
 pub acetone_graph::GraphError::NoMergeBase::ours: alloc::string::String
@@ -3130,6 +3185,7 @@ pub type acetone_graph::migrate::Rechunk::Output = T
 pub struct acetone_graph::Repository
 impl acetone_graph::repo::Repository
 pub fn acetone_graph::repo::Repository::abort_merge(&self) -> core::result::Result<(), acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::attach_co_tenant(&std::path::Path, core::option::Option<&str>) -> core::result::Result<acetone_graph::repo::AttachOutcome, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::begin_write(&self) -> core::result::Result<acetone_graph::repo::Transaction<'_>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::blame(&self, &acetone_model::graph_keys::NodeKey) -> core::result::Result<alloc::vec::Vec<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::branches(&self) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, acetone_store::hash::Hash)>, acetone_graph::error::GraphError>

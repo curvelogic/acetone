@@ -3799,3 +3799,81 @@ fn diff_accepts_ancestry_refspecs() {
     assert!(same.status.success(), "{}", stderr(&same));
     assert_eq!(stdout(&same), text, "HEAD^..HEAD is main~1..main here");
 }
+
+/// `acetone attach` — clone + one command is the whole co-tenant dance
+/// (acetone-gufe), and re-running it is a narrated no-op.
+#[test]
+fn attach_reattaches_a_cloned_co_tenant_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let origin = dir.path().join("origin");
+    std::fs::create_dir(&origin).expect("mkdir");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&dir.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "{args:?}: {:?}", out);
+    };
+    git(&[
+        "-C",
+        origin.to_str().unwrap(),
+        "-c",
+        "init.defaultBranch=main",
+        "init",
+    ]);
+    std::fs::write(origin.join("c.txt"), "c").expect("write");
+    git(&["-C", origin.to_str().unwrap(), "add", "c.txt"]);
+    git(&["-C", origin.to_str().unwrap(), "commit", "-m", "code"]);
+    assert!(
+        acetone(&origin, &["init", "--co-tenant", "g"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(
+            &origin,
+            &["--graph", "g", "declare-label", "N", "--key", "id"]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        acetone(&origin, &["--graph", "g", "put-node", "N", "1"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&origin, &["--graph", "g", "commit", "-m", "seed"])
+            .status
+            .success()
+    );
+
+    let clone = dir.path().join("clone");
+    git(&["clone", origin.to_str().unwrap(), clone.to_str().unwrap()]);
+
+    let out = acetone(&clone, &["attach"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("attached graph g"), "{text}");
+    assert!(text.contains("created branch main"), "{text}");
+
+    // The graph reads through the shipped interface.
+    let q = acetone(
+        &clone,
+        &["query", "MATCH (n:N) RETURN count(n)", "--format", "csv"],
+    );
+    assert!(q.status.success(), "{}", stderr(&q));
+    assert!(stdout(&q).contains('1'), "{}", stdout(&q));
+
+    // Idempotent re-run narrates the no-op.
+    let again = acetone(&clone, &["attach"]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(
+        stdout(&again).contains("already attached"),
+        "{}",
+        stdout(&again)
+    );
+}

@@ -74,6 +74,22 @@ pub enum GraphError {
         /// The lock file's path, for diagnostics.
         path: PathBuf,
     },
+    /// `attach` found no attachable co-tenant graph — no remote-tracking
+    /// ref under `refs/remotes/<remote>/acetone/…` matched (acetone-gufe).
+    #[error(
+        "no attachable co-tenant graph: no remote-tracking acetone branches \
+         were found (clone a repository that carries one, or check the \
+         remote and graph name)"
+    )]
+    NoAttachableGraph,
+    /// `attach` without `--graph` found several candidates, or one graph's
+    /// branches disagree across remotes — the caller must choose.
+    #[error("attach needs --graph: candidates are {candidates:?}")]
+    AmbiguousAttach {
+        /// The attachable graph names (or remote-qualified entries when
+        /// remotes disagree).
+        candidates: Vec<String>,
+    },
     /// The workspace ref moved underneath this transaction (another
     /// writer advanced it between load and save).
     #[error("workspace {name:?} changed concurrently; reload and retry")]

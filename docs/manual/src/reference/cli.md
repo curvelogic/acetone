@@ -95,6 +95,21 @@ Create a new acetone repository in `PATH` (default: `--repo`, or `.`).
   (`refs/heads/acetone/<GRAPH>/*`) alongside the code, instead of a
   standalone repository. `GRAPH` names the graph.
 
+### `acetone attach`
+
+Reattach a **cloned co-tenant graph**: a `git clone` transfers the
+graph's branches (as remote-tracking refs) but not its local-only state
+— the graph marker, the graph's `HEAD` pointer, local branches.
+`attach` recreates exactly those from `refs/remotes/…/acetone/…`,
+idempotently: an existing local branch is never moved, and a graph
+`HEAD` you have since pointed elsewhere is never reset, so re-running
+it is always safe. With several attachable graphs, pick one with the
+global `--graph` flag; with none, it refuses cleanly. `clone` +
+`attach` is the whole dance — and the blessed alternative to running
+`init` in a clone. No workspace is provisioned: the graph's committed
+state reads immediately, and the first write materialises the
+workspace.
+
 ### `acetone status`
 
 Show the current branch, head commit and workspace state (clean, dirty or

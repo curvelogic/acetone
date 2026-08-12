@@ -30,6 +30,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             co_tenant,
             path,
         } => init(repo_path, &object_format, co_tenant.as_deref(), path),
+        Command::Attach => attach(repo_path, graph),
         Command::Status { json } => status(repo_path, graph, json),
         Command::Commit {
             message,
@@ -398,6 +399,29 @@ impl StatusFacts {
             "merge": merge,
         })
     }
+}
+
+/// `acetone attach` (acetone-gufe): reattach a cloned co-tenant graph and
+/// narrate exactly what was created — nothing, on an idempotent re-run.
+fn attach(repo_path: &Path, graph: Option<&str>) -> Result<()> {
+    let outcome =
+        Repository::attach_co_tenant(repo_path, graph).context("attaching a co-tenant graph")?;
+    let name = sanitise_identifier(&outcome.graph);
+    if !outcome.marker_written && !outcome.head_set && outcome.branches_created.is_empty() {
+        outln!("graph {name} is already attached (nothing to do)");
+        return Ok(());
+    }
+    for branch in &outcome.branches_created {
+        outln!("created branch {}", sanitise_identifier(branch));
+    }
+    if outcome.marker_written {
+        outln!("wrote the graph marker");
+    }
+    if outcome.head_set {
+        outln!("set the graph HEAD");
+    }
+    outln!("attached graph {name}");
+    Ok(())
 }
 
 pub(crate) fn status(repo_path: &Path, graph: Option<&str>, json: bool) -> Result<()> {
