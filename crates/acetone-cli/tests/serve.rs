@@ -2075,8 +2075,9 @@ fn the_schema_verb_matches_the_cli_document_and_round_trips() {
             .to_string()
     };
     // A rich schema so the round trip guards every facet the document
-    // carries (PR #283 review F1): a typed/required/unique label, a
-    // discriminated rel type with a property type, and an index.
+    // carries (PR #283 review F1): a typed/required/unique label, a typed
+    // rel type, and an index — plus a DISCRIMINATED rel type seeded over
+    // the socket below (F2), since declare-rel-type cannot declare one.
     assert!(
         acetone(
             &repo,
@@ -2128,6 +2129,30 @@ fn the_schema_verb_matches_the_cli_document_and_round_trips() {
     let socket = dir.path().join("acetone.sock");
     let _daemon = start_daemon(&repo, &socket);
     let mut s = hello(&socket);
+
+    // Seed a DISCRIMINATED rel type through the read-modify-apply loop
+    // itself (PR #283 review F2): declare-rel-type deliberately cannot
+    // declare a discriminator, so read the document, add one, apply it —
+    // exactly the workflow the manual advertises — and the later round
+    // trip then pins the Some(discriminator) path too.
+    write_frame(&mut s, &serde_json::json!({"id": 10, "verb": "schema"}));
+    let mut base = read_frame(&mut s)["ok"].clone();
+    base["relationship_types"]
+        .as_array_mut()
+        .expect("relationship_types array")
+        .push(serde_json::json!({"name": "TAGGED", "discriminator": "port"}));
+    let modified = serde_json::to_string(&base).expect("serialise");
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 11, "verb": "schema-apply"}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 11, "chunk": modified}));
+    write_frame(&mut s, &serde_json::json!({"id": 11, "chunk_end": true}));
+    let (_, applied) = collect_stream(&mut s);
+    assert_eq!(
+        applied["ok"]["applied"], 1,
+        "the modification lands: {applied}"
+    );
 
     // The document equals the CLI's, parsed.
     write_frame(&mut s, &serde_json::json!({"id": 1, "verb": "schema"}));
