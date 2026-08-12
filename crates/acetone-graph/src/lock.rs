@@ -25,7 +25,10 @@
 //! live lock: a pid that still names *any* running process is treated as
 //! live and refused, unless the lock's recorded start time positively
 //! proves the pid was reused (acetone-pz0k.7; Linux only — macOS stays
-//! conservative). The
+//! conservative). The pid/start-time scheme assumes one host and one pid
+//! namespace — the same assumption the `kill(0)` liveness probe already
+//! makes; a worktree shared across hosts was never a supported writer
+//! topology. The
 //! break is `unlink`-then-`O_EXCL`-recreate on re-acquire, and the daemon
 //! serialises all recovery behind one mutex, so two recoverers cannot race.
 
@@ -148,12 +151,20 @@ impl DaemonLock {
                 let _ = lock.flush();
                 Ok(DaemonLock { _lock: lock })
             }
-            Err((_file, _errno)) => {
+            // Only genuine contention reads as "another daemon"; any other
+            // errno (ENOLCK on a lockless NFS mount, EINTR) is an IO
+            // failure and must not masquerade as a running holder
+            // (PR #281 review nit 1).
+            Err((_file, nix::errno::Errno::EWOULDBLOCK)) => {
                 let holder = std::fs::read_to_string(&path)
                     .map(|s| sanitise_holder(s.trim()))
                     .unwrap_or_else(|_| "unknown holder".to_owned());
                 Err(GraphError::DaemonExclusive { holder, path })
             }
+            Err((_file, errno)) => Err(GraphError::LockIo {
+                path,
+                source: std::io::Error::from(errno),
+            }),
         }
     }
 }

@@ -401,6 +401,9 @@ pub acetone_graph::error::GraphError::ChunkParamsMismatch::actual: alloc::string
 pub acetone_graph::error::GraphError::ChunkParamsMismatch::expected: alloc::string::String
 pub acetone_graph::error::GraphError::CorruptConflicts
 pub acetone_graph::error::GraphError::CorruptConflicts::reason: &'static str
+pub acetone_graph::error::GraphError::DaemonExclusive
+pub acetone_graph::error::GraphError::DaemonExclusive::holder: alloc::string::String
+pub acetone_graph::error::GraphError::DaemonExclusive::path: std::path::PathBuf
 pub acetone_graph::error::GraphError::DanglingEdge
 pub acetone_graph::error::GraphError::DanglingEdge::endpoint: alloc::string::String
 pub acetone_graph::error::GraphError::DanglingEdge::role: &'static str
@@ -1203,6 +1206,36 @@ impl<T> core::convert::From<T> for acetone_graph::lock::StaleLockOutcome
 pub fn acetone_graph::lock::StaleLockOutcome::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_graph::lock::StaleLockOutcome
 pub type acetone_graph::lock::StaleLockOutcome::Output = T
+pub struct acetone_graph::lock::DaemonLock
+impl acetone_graph::lock::DaemonLock
+pub fn acetone_graph::lock::DaemonLock::acquire(&std::path::Path) -> core::result::Result<acetone_graph::lock::DaemonLock, acetone_graph::error::GraphError>
+impl core::fmt::Debug for acetone_graph::lock::DaemonLock
+pub fn acetone_graph::lock::DaemonLock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for acetone_graph::lock::DaemonLock
+impl core::marker::Send for acetone_graph::lock::DaemonLock
+impl core::marker::Sync for acetone_graph::lock::DaemonLock
+impl core::marker::Unpin for acetone_graph::lock::DaemonLock
+impl core::marker::UnsafeUnpin for acetone_graph::lock::DaemonLock
+impl core::panic::unwind_safe::RefUnwindSafe for acetone_graph::lock::DaemonLock
+impl core::panic::unwind_safe::UnwindSafe for acetone_graph::lock::DaemonLock
+impl<T, U> core::convert::Into<U> for acetone_graph::lock::DaemonLock where U: core::convert::From<T>
+pub fn acetone_graph::lock::DaemonLock::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for acetone_graph::lock::DaemonLock where U: core::convert::Into<T>
+pub type acetone_graph::lock::DaemonLock::Error = core::convert::Infallible
+pub fn acetone_graph::lock::DaemonLock::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for acetone_graph::lock::DaemonLock where U: core::convert::TryFrom<T>
+pub type acetone_graph::lock::DaemonLock::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn acetone_graph::lock::DaemonLock::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for acetone_graph::lock::DaemonLock where T: 'static + ?core::marker::Sized
+pub fn acetone_graph::lock::DaemonLock::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for acetone_graph::lock::DaemonLock where T: ?core::marker::Sized
+pub fn acetone_graph::lock::DaemonLock::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for acetone_graph::lock::DaemonLock where T: ?core::marker::Sized
+pub fn acetone_graph::lock::DaemonLock::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for acetone_graph::lock::DaemonLock
+pub fn acetone_graph::lock::DaemonLock::from(T) -> T
+impl<T> typenum::type_operators::Same for acetone_graph::lock::DaemonLock
+pub type acetone_graph::lock::DaemonLock::Output = T
 pub struct acetone_graph::lock::WriteLock
 impl acetone_graph::lock::WriteLock
 pub fn acetone_graph::lock::WriteLock::acquire(&std::path::Path) -> core::result::Result<acetone_graph::lock::WriteLock, acetone_graph::error::GraphError>
@@ -1236,6 +1269,7 @@ impl<T> core::convert::From<T> for acetone_graph::lock::WriteLock
 pub fn acetone_graph::lock::WriteLock::from(T) -> T
 impl<T> typenum::type_operators::Same for acetone_graph::lock::WriteLock
 pub type acetone_graph::lock::WriteLock::Output = T
+pub const acetone_graph::lock::DAEMON_LOCK_FILE: &str
 pub const acetone_graph::lock::WRITER_LOCK_FILE: &str
 pub fn acetone_graph::lock::break_stale_lock(&std::path::Path) -> core::result::Result<acetone_graph::lock::StaleLockOutcome, acetone_graph::error::GraphError>
 pub mod acetone_graph::merge
@@ -2172,6 +2206,9 @@ pub acetone_graph::GraphError::ChunkParamsMismatch::actual: alloc::string::Strin
 pub acetone_graph::GraphError::ChunkParamsMismatch::expected: alloc::string::String
 pub acetone_graph::GraphError::CorruptConflicts
 pub acetone_graph::GraphError::CorruptConflicts::reason: &'static str
+pub acetone_graph::GraphError::DaemonExclusive
+pub acetone_graph::GraphError::DaemonExclusive::holder: alloc::string::String
+pub acetone_graph::GraphError::DaemonExclusive::path: std::path::PathBuf
 pub acetone_graph::GraphError::DanglingEdge
 pub acetone_graph::GraphError::DanglingEdge::endpoint: alloc::string::String
 pub acetone_graph::GraphError::DanglingEdge::role: &'static str
