@@ -1963,3 +1963,97 @@ fn the_import_verb_recovers_a_stale_writer_lock() {
     );
     assert!(!lock.exists(), "the stale lock was removed");
 }
+
+/// `params.at` on the query verb — whole-query time travel over the
+/// socket (acetone-ghpf), forwarding to the library's query_at_with
+/// exactly as the CLI's `query --at` does.
+#[test]
+fn the_query_verb_accepts_params_at() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let c1 = {
+        let out = acetone(&repo, &["commit", "-m", "two docs"]);
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .find(|w| w.len() == 40 && w.chars().all(|c| c.is_ascii_hexdigit()))
+            .expect("commit hash")
+            .to_string()
+    };
+    assert!(acetone(&repo, &["put-node", "Doc", "d3"]).status.success());
+    assert!(
+        acetone(&repo, &["commit", "-m", "three docs"])
+            .status
+            .success()
+    );
+
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    // At the old version: two docs. The workspace: three.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query", "params": {
+            "cypher": "MATCH (d:Doc) RETURN count(d)", "at": c1,
+        }}),
+    );
+    let then = read_frame(&mut s);
+    assert_eq!(then["row"]["values"][0], 2, "the past version: {then}");
+    let _ = read_frame(&mut s); // terminal ok
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "query", "params": {
+            "cypher": "MATCH (d:Doc) RETURN count(d)",
+        }}),
+    );
+    let now = read_frame(&mut s);
+    assert_eq!(now["row"]["values"][0], 3, "the workspace: {now}");
+    let _ = read_frame(&mut s); // terminal ok
+
+    // A write at a version is refused typed, exactly as the CLI refuses —
+    // and even with autodeclare set, the refusal is structurally prior to
+    // any coinage (PR #282 review): the schema is untouched afterwards.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 3, "verb": "query", "params": {
+            "cypher": "CREATE (:Doc)-[:NEVER_COINED]->(:Doc)",
+            "at": c1, "autodeclare": true,
+        }}),
+    );
+    let e = read_frame(&mut s);
+    assert_eq!(e["error"]["kind"], "write-at-version", "{e}");
+    write_frame(&mut s, &serde_json::json!({"id": 30, "verb": "status"}));
+    let st = read_frame(&mut s);
+    assert_eq!(
+        st["ok"]["schema_entries"], 1,
+        "no rel-type was coined by the refused write: {st}"
+    );
+
+    // A non-string at is a bad request, and the connection survives.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 4, "verb": "query", "params": {
+            "cypher": "MATCH (d:Doc) RETURN count(d)", "at": 7,
+        }}),
+    );
+    let e = read_frame(&mut s);
+    assert_eq!(e["error"]["kind"], "bad-request", "{e}");
+
+    // A bad refspec is a typed graph error naming it.
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 5, "verb": "query", "params": {
+            "cypher": "MATCH (d:Doc) RETURN count(d)", "at": "nonesuch",
+        }}),
+    );
+    let e = read_frame(&mut s);
+    assert_eq!(e["error"]["kind"], "graph", "{e}");
+    assert!(
+        e["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("nonesuch"),
+        "the refusal names the refspec: {e}"
+    );
+}
