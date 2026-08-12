@@ -3810,7 +3810,7 @@ fn attach_reattaches_a_cloned_co_tenant_graph() {
     let git = |args: &[&str]| {
         let out = Command::new("git")
             .arg("-C")
-            .arg(&dir.path())
+            .arg(dir.path())
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args(args)
             .output()
