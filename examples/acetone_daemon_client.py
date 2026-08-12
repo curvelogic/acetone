@@ -63,6 +63,21 @@ class AcetoneClient:
             params["at"] = at
         return self._request({"verb": "query", "params": params})
 
+    def schema(self, at=None):
+        """The declared schema — the same document `acetone schema --json`
+        prints (labels, relationship_types, indexes); `at="<refspec>"` reads
+        a past version's schema. Feed a modified copy to schema_apply() —
+        serialised with json.dumps(), since schema_apply takes JSON text —
+        for incremental evolution."""
+        params = {}
+        if at is not None:
+            params["at"] = at
+        req = {"verb": "schema"}
+        if params:
+            req["params"] = params
+        _, _, doc = self._request(req)
+        return doc
+
     def status(self):
         """The workspace state — the same document `acetone status --json`
         prints: branch, head, workspace clean/dirty, node/edge counts,

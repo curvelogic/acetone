@@ -378,6 +378,23 @@ unlinks its socket on clean exit, and drains gracefully on SIGTERM
 forces an immediate exit). A stdio daemon's shutdown is the parent
 closing stdin.
 
+**Schema over the socket.** The `schema` verb returns the same document
+`acetone schema --json` prints (optionally at a past version with
+`params.at`), and `schema-apply` applies one — together they close the
+read-modify-apply loop, which **is** the daemon's incremental schema
+path: read the current document, add your declaration, apply. Applying
+a hand-maintained document instead risks dropping facets someone else
+declared (apply is diff-and-apply: an omitted facet within an entry is
+removed), which reading first avoids by construction. For the common
+ensure-a-relationship-type case, `params.autodeclare` on a write coins
+the type idempotently without touching the schema document at all
+(ADR-0060). There are deliberately no `declare-label`/`declare-rel-type`
+verbs — the loop above covers incremental evolution; they would be
+added only on a demonstrated need it cannot meet. `schema-apply`
+refusing while a merge is unresolved is by design: schema mutation
+mid-merge would interact with conflict resolution and completion
+re-validation; resolve or abort the merge first.
+
 ### `acetone shell [--timeout <SECONDS>]`
 
 Start an interactive Cypher shell (readline REPL). Enter queries — read or
