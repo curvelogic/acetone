@@ -11,8 +11,8 @@ use clap::{Parser, Subcommand};
 /// inline on each variant.
 const AFTER_HELP: &str = "\
 Command groups:
-  Everyday      init, status, commit, log, blame, branch, tag, checkout, diff,
-                report, merge, resolve
+  Everyday      init, attach, status, commit, log, blame, branch, tag, checkout,
+                diff, report, merge, resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate
@@ -80,6 +80,15 @@ pub enum Command {
         /// Directory to create the repository in (default: --repo, or `.`).
         path: Option<PathBuf>,
     },
+    /// Reattach a cloned co-tenant graph.
+    ///
+    /// A `git clone` does not transfer a co-tenant graph's local-only
+    /// state (its marker, its HEAD pointer, local branches). `attach`
+    /// recreates them from the remote-tracking refs — idempotent, safe to
+    /// re-run — so `clone` + `attach` is the whole dance. This is also the
+    /// blessed alternative to running `init` in a clone. With several
+    /// attachable graphs, pick one with the global `--graph` flag.
+    Attach,
     /// Show the current branch, head commit and workspace state.
     Status {
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and

@@ -8,6 +8,7 @@ Usage: acetone [OPTIONS] <COMMAND>
 
 Commands:
   init              Create a new acetone repository
+  attach            Reattach a cloned co-tenant graph
   status            Show the current branch, head commit and workspace state
   commit            Turn the workspace's staged changes into a commit
   log               Show commit history, newest first
@@ -57,8 +58,8 @@ Options:
           Print version
 
 Command groups:
-  Everyday      init, status, commit, log, blame, branch, tag, checkout, diff,
-                report, merge, resolve
+  Everyday      init, attach, status, commit, log, blame, branch, tag, checkout,
+                diff, report, merge, resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate

@@ -169,6 +169,23 @@ pub struct LogEntry {
     pub parents: Vec<Hash>,
 }
 
+/// What [`Repository::attach_co_tenant`] created — all-false/empty on an
+/// idempotent re-run, so callers can narrate honestly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachOutcome {
+    /// The graph that was attached.
+    pub graph: String,
+    /// The remote whose view was attached (`None` on an already-attached
+    /// no-op where no remote carries the graph any more).
+    pub remote: Option<String>,
+    /// Local branch short names created from remote-tracking refs.
+    pub branches_created: Vec<String>,
+    /// Whether the graph marker was written (false: already present).
+    pub marker_written: bool,
+    /// Whether the graph `HEAD` was created (false: already present).
+    pub head_set: bool,
+}
+
 /// An acetone repository: a bare git repository plus acetone's workspace
 /// and lock conventions. See the module docs.
 #[derive(Debug)]
@@ -300,6 +317,230 @@ impl Repository {
             store,
             workspace: DEFAULT_WORKSPACE.to_owned(),
             namespace,
+        })
+    }
+
+    /// Reattach a cloned co-tenant graph (acetone-gufe): recreate the
+    /// LOCAL-ONLY state a `git clone` does not transfer — the graph marker,
+    /// the graph's `HEAD` symref, and local branches from their
+    /// remote-tracking refs — so graph tooling works after
+    /// `clone` + `attach` with no git plumbing. The ref shape comes from
+    /// [`GraphRefNamespace`], the same source of truth `init`/`open` use.
+    ///
+    /// Idempotent: an existing local branch is never moved, an existing
+    /// marker is left alone, and an existing graph `HEAD` — wherever the
+    /// user has since pointed it — is never reset; the returned
+    /// [`AttachOutcome`] reports exactly what was created. With `graph`
+    /// omitted, exactly one attachable candidate attaches; several refuse
+    /// with [`GraphError::AmbiguousAttach`] naming them; none — or a named
+    /// graph with no remote-tracking branches — refuses with
+    /// [`GraphError::NoAttachableGraph`]. Candidate names are the
+    /// union across remotes; the chosen graph's branches come from
+    /// `origin` where it carries the graph (**origin takes precedence**,
+    /// even over a disagreeing second remote — git's own centre of
+    /// gravity), else from the sole carrying remote, else from several
+    /// remotes only when they agree byte-for-byte — disagreement without
+    /// an origin refuses ([`GraphError::DisagreeingRemotes`]) rather than
+    /// guessing.
+    ///
+    /// Deliberately does NOT provision a workspace ref: the graph's
+    /// committed state reads through the virtual-workspace fallback, and
+    /// the first write materialises the per-worktree workspace — an empty
+    /// provision (what `init` seeds) would be wrong for a graph with
+    /// history.
+    pub fn attach_co_tenant(path: &Path, graph: Option<&str>) -> Result<AttachOutcome, GraphError> {
+        let store = GitStore::open_discovering(path)?;
+        // Candidate branches by (remote, graph, branch short name).
+        let remote_refs = store.list_refs("refs/remotes/")?;
+        let mut by_remote: BTreeMap<String, BTreeMap<String, Vec<(String, Hash)>>> =
+            BTreeMap::new();
+        for (name, hash) in &remote_refs {
+            let Some(rest) = name.strip_prefix("refs/remotes/") else {
+                continue;
+            };
+            let Some((remote, rest)) = rest.split_once('/') else {
+                continue;
+            };
+            let Some(rest) = rest.strip_prefix("acetone/") else {
+                continue;
+            };
+            let Some((g, branch)) = rest.split_once('/') else {
+                continue;
+            };
+            if validate_graph_name(g).is_err() || branch.is_empty() {
+                continue;
+            }
+            by_remote
+                .entry(remote.to_owned())
+                .or_default()
+                .entry(g.to_owned())
+                .or_default()
+                .push((branch.to_owned(), *hash));
+        }
+        // Attach must not layer a graph onto a STANDALONE acetone
+        // repository — init's ExistingAcetoneWorkspace guard, mirrored
+        // (PR #285 review F1): the co-tenant legacy fallback would read the
+        // standalone repository's workspace as the attached graph's own,
+        // cross-wiring two graphs' data.
+        let existing_markers = store.list_refs(GRAPHS_REF_PREFIX)?;
+        if existing_markers.is_empty()
+            && (store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some()
+                || store.read_ref(&workspace_ref(DEFAULT_WORKSPACE))?.is_some())
+        {
+            return Err(GraphError::ExistingAcetoneWorkspace);
+        }
+
+        // Choose the graph NAME first — the union of names across remotes —
+        // then the remote view of that graph, so `--graph` works in every
+        // remote configuration (PR #285 review F3b).
+        let all_graphs: std::collections::BTreeSet<String> = by_remote
+            .values()
+            .flat_map(|graphs| graphs.keys().cloned())
+            .collect();
+        let graph = match graph {
+            Some(name) => {
+                validate_graph_name(name)?;
+                name.to_owned()
+            }
+            None => {
+                let names: Vec<String> = all_graphs.iter().cloned().collect();
+                match names.as_slice() {
+                    [] => {
+                        return Err(GraphError::NoAttachableGraph {
+                            reason: "no remote-tracking acetone branches were found \
+                                     (clone a repository that carries a co-tenant \
+                                     graph, or fetch one first)"
+                                .to_owned(),
+                        });
+                    }
+                    [only] => only.clone(),
+                    several => {
+                        return Err(GraphError::AmbiguousAttach {
+                            candidates: several.to_vec(),
+                        });
+                    }
+                }
+            }
+        };
+        let namespace = GraphRefNamespace::co_tenant(&graph);
+        let marker = format!("{GRAPHS_REF_PREFIX}{graph}");
+
+        // The remote view of the chosen graph: `origin` wins where it
+        // carries the graph (documented precedence — git's own centre of
+        // gravity); else the sole carrying remote; else remotes that agree
+        // byte-for-byte attach, and disagreeing ones refuse rather than
+        // guess (PR #285 review F3).
+        let mut views: Vec<(String, Vec<(String, Hash)>)> = by_remote
+            .iter()
+            .filter_map(|(remote, graphs)| {
+                graphs.get(&graph).map(|branches| {
+                    let mut sorted = branches.clone();
+                    sorted.sort();
+                    (remote.clone(), sorted)
+                })
+            })
+            .collect();
+        let (remote_used, branches) = if views.is_empty() {
+            // Fully attached locally already? Then the remote no longer
+            // carrying the graph is not an error — narrate the no-op.
+            let locally_complete = store.read_ref(&marker)?.is_some()
+                && store.read_head(namespace.head_ref())?.is_some()
+                && store
+                    .read_ref(&namespace.branch_ref(DEFAULT_BRANCH))?
+                    .is_some();
+            if locally_complete {
+                return Ok(AttachOutcome {
+                    graph,
+                    remote: None,
+                    branches_created: Vec::new(),
+                    marker_written: false,
+                    head_set: false,
+                });
+            }
+            return Err(GraphError::NoAttachableGraph {
+                reason: format!("graph {graph:?} has no remote-tracking branches"),
+            });
+        } else if let Some(pos) = views.iter().position(|(r, _)| r == "origin") {
+            views.swap_remove(pos)
+        } else if views.len() == 1 {
+            views.pop().expect("len 1")
+        } else if views.windows(2).all(|w| w[0].1 == w[1].1) {
+            // Several non-origin remotes in byte-for-byte agreement: any
+            // view will do; name the first for the record.
+            views.swap_remove(0)
+        } else {
+            return Err(GraphError::DisagreeingRemotes {
+                graph,
+                remotes: views.into_iter().map(|(r, _)| r).collect(),
+            });
+        };
+
+        // The default branch must exist on the chosen remote — it is what
+        // the graph HEAD will point at.
+        if !branches.iter().any(|(b, _)| b == DEFAULT_BRANCH) {
+            return Err(GraphError::NoAttachableGraph {
+                reason: format!(
+                    "graph {graph:?} lacks the default branch \
+                     {DEFAULT_BRANCH:?} on remote {remote_used:?}"
+                ),
+            });
+        }
+
+        // Before this attach makes the repository multi-graph, migrate a
+        // sole existing graph's workspace off the pre-split shared ref —
+        // init's PR #263 discipline, mirrored (PR #285 review F2): once a
+        // second marker exists, the shared-ref fallback stops firing and
+        // the sole graph's uncommitted work would be orphaned silently.
+        if let [(only, _)] = existing_markers.as_slice() {
+            let existing = only.strip_prefix(GRAPHS_REF_PREFIX).unwrap_or(only);
+            if existing != graph {
+                validate_graph_name(existing)?;
+                migrate_shared_worktree_refs(&store, &GraphRefNamespace::co_tenant(existing))?;
+            }
+        }
+
+        // Marker FIRST, inheriting init's crash-safety discipline: from the
+        // marker's existence onward the repository opens co-tenant and every
+        // later step touches only the graph's own namespace. A crash after
+        // the marker leaves a partial state a re-run heals (tested).
+        let marker_written = if store.read_ref(&marker)?.is_none() {
+            let filler = store.put(b"")?;
+            store.write_ref(&marker, None, &filler)?;
+            true
+        } else {
+            false
+        };
+
+        // Local branches from their remote-tracking values — never moving
+        // one that already exists (idempotence; the user's local state
+        // wins). Branch components are remote-controlled; the store's
+        // validated_ref_name rejects traversal and control bytes at the
+        // write, so a hostile name cannot escape the namespace.
+        let mut branches_created = Vec::new();
+        for (branch, hash) in &branches {
+            let local = namespace.branch_ref(branch);
+            if store.read_ref(&local)?.is_none() {
+                store.write_ref(&local, None, hash)?;
+                branches_created.push(branch.clone());
+            }
+        }
+        branches_created.sort();
+
+        // The graph HEAD, iff none exists — a re-attach never resets a
+        // pointer the user has since moved.
+        let head_set = if store.read_head(namespace.head_ref())?.is_none() {
+            store.set_head(namespace.head_ref(), &namespace.branch_ref(DEFAULT_BRANCH))?;
+            true
+        } else {
+            false
+        };
+
+        Ok(AttachOutcome {
+            graph,
+            remote: Some(remote_used),
+            branches_created,
+            marker_written,
+            head_set,
         })
     }
 
