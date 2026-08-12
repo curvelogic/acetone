@@ -650,6 +650,25 @@ fn run_query(
         .pointer("/params/autodeclare")
         .and_then(Json::as_bool)
         .unwrap_or(false);
+    // `params.at` (acetone-ghpf): whole-query time travel — a read against
+    // a past version via the library's query_at_with, exactly the CLI's
+    // `query --at`. Present-but-not-a-string is refused rather than
+    // silently ignored (ignoring it would answer from the WRONG version).
+    let at = match request.pointer("/params/at") {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some(refspec) => Some(refspec),
+            None => {
+                return write_frame(
+                    stream,
+                    &json!({"id": id, "error": {
+                        "kind": "bad-request",
+                        "message": "params.at must be a string refspec",
+                    }}),
+                );
+            }
+        },
+    };
     let session = Session::new(repo).autodeclare(autodeclare);
     // A daemon materialises the whole result before streaming it, and a
     // long-lived process does not hand back the peak the way
@@ -663,11 +682,18 @@ fn run_query(
     // a lock left by a SIGKILLed writer would otherwise crash-loop the daemon
     // — break a dead-pid lock and retry once (the same helper the ref verbs
     // use). The CLI never does this.
-    let outcome = with_lock_recovery(
-        repo,
-        |e: &QueryError| matches!(e, QueryError::Graph(GraphError::Locked { .. })),
-        || session.run_with(cypher, &BTreeMap::new(), &limits),
-    );
+    let outcome = match at {
+        // A versioned read takes no lock, so no recovery wrap; a write
+        // with `at` is refused inside the library (WriteAtVersion).
+        Some(refspec) => session
+            .query_at_with(cypher, refspec, &BTreeMap::new(), &limits)
+            .map(Outcome::Read),
+        None => with_lock_recovery(
+            repo,
+            |e: &QueryError| matches!(e, QueryError::Graph(GraphError::Locked { .. })),
+            || session.run_with(cypher, &BTreeMap::new(), &limits),
+        ),
+    };
     match outcome {
         // Both outcomes stream rows the same way (a write may RETURN);
         // the terminal `ok` frame carries the write-summary counts for a

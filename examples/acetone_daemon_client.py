@@ -49,14 +49,18 @@ class AcetoneClient:
         self._send_frame({"acetone": {"protocol": PROTOCOL}})
         self._next_id = 0
 
-    def query(self, cypher, autodeclare=False):
+    def query(self, cypher, autodeclare=False, at=None):
         """Run one openCypher query (read or write). Returns (columns, rows,
         summary): rows is a list of value-lists, summary is the terminal `ok`
         payload (with a `write` object for a write). `autodeclare=True` opts a
-        write into relationship-type coinage. Raises on a typed error."""
+        write into relationship-type coinage; `at="<refspec>"` reads against
+        that past version (a write with `at` is refused). Raises on a typed
+        error."""
         params = {"cypher": cypher}
         if autodeclare:
             params["autodeclare"] = True
+        if at is not None:
+            params["at"] = at
         return self._request({"verb": "query", "params": params})
 
     def status(self):

@@ -18,6 +18,12 @@ fine.)
 
 ### Added
 
+- **`params.at` on the daemon's `query` verb** — whole-query time
+  travel over the socket, exactly the CLI's `query --at`: a read runs
+  against the named past version; a write with `at` is refused typed
+  (`write-at-version`). The Python example client gains the matching
+  `at=` keyword.
+
 - **One daemon per worktree, enforced** (ADR-0077): `acetone serve` —
   socket or `--stdio` — takes a kernel lock at startup (released on
   process death, so a crashed daemon never wedges its successor); a
