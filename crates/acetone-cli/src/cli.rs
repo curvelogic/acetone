@@ -217,6 +217,25 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Produce a change report between two versions — the PR-style
+    /// artefact.
+    ///
+    /// Where `diff` lists what changed, `report` says how: property-level
+    /// before/after per node and relationship, commit metadata on both
+    /// endpoints, and — while a merge is in progress — the workspace's
+    /// conflicts with their three-way values. Renders as markdown by
+    /// default (paste it into a review); `--json` emits the structured
+    /// document a curation surface consumes.
+    Report {
+        /// The base version.
+        from: String,
+        /// The target version.
+        to: String,
+        /// Emit the structured JSON document instead of markdown. The JSON
+        /// shape is unstable pre-1.0 and may change at any minor release.
+        #[arg(long)]
+        json: bool,
+    },
     /// Merge another version into the current branch.
     ///
     /// Merges another version (spec §7). The workspace must be clean and a

@@ -565,6 +565,12 @@ fn connection(
                 let _permit = permits.acquire();
                 run_fsck(stream, repo_path, &id)?;
             }
+            // The change report (acetone-zavr.7): the same document/markdown
+            // the CLI produces, streamed as chunk frames.
+            "report" => {
+                let _permit = permits.acquire();
+                run_report(stream, repo, &request, &id)?;
+            }
             other => {
                 write_frame(
                     stream,
@@ -574,7 +580,7 @@ fn connection(
                             "verb {other:?} is not served (this build serves \"query\" \
                              (read and write), \"status\", \"schema-apply\", \"import\", \
                              \"commit\", \"branch\", \"checkout\", \"merge\", \"resolve\", \
-                             \"export\" and \"fsck\")"
+                             \"export\", \"fsck\" and \"report\")"
                         ),
                     }}),
                 )?;
@@ -910,6 +916,69 @@ fn run_fsck(stream: &mut dyn Transport, repo_path: &Path, id: &Json) -> Result<(
         Err(e) => write_frame(
             stream,
             &json!({"id": id, "error": {"kind": "graph", "message": e.to_string()}}),
+        ),
+    }
+}
+
+/// Serve the `report` verb (acetone-zavr.7): the change report between
+/// `params.from` and `params.to`, streamed as chunk frames — the JSON
+/// document (`params.json: true`, byte-identical to the CLI's `--json`
+/// output) or its markdown rendering (the default). Both come from the one
+/// builder the CLI uses, so the surfaces cannot drift; free text in the
+/// markdown is raw data the displaying peer sanitises at its own boundary
+/// (the fsck-findings precedent). The terminal `ok` carries the summary
+/// counts.
+fn run_report(
+    stream: &mut dyn Transport,
+    repo: &Repository,
+    request: &Json,
+    id: &Json,
+) -> Result<()> {
+    let Some(from) = request.pointer("/params/from").and_then(Json::as_str) else {
+        return write_frame(
+            stream,
+            &json!({"id": id, "error": {
+                "kind": "bad-request",
+                "message": "report needs params.from and params.to (refspecs)",
+            }}),
+        );
+    };
+    let Some(to) = request.pointer("/params/to").and_then(Json::as_str) else {
+        return write_frame(
+            stream,
+            &json!({"id": id, "error": {
+                "kind": "bad-request",
+                "message": "report needs params.from and params.to (refspecs)",
+            }}),
+        );
+    };
+    let as_json = request
+        .pointer("/params/json")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    match crate::report::build(repo, from, to) {
+        Ok(doc) => {
+            let text = if as_json {
+                crate::report::rendered_json(&doc)
+            } else {
+                crate::report::render_markdown(&doc)
+            };
+            send_chunks(stream, id, &text)?;
+            let nodes = doc["nodes"].as_array().map_or(0, Vec::len);
+            let edges = doc["edges"].as_array().map_or(0, Vec::len);
+            let conflicts = doc["conflicts"]["items"].as_array().map_or(0, Vec::len);
+            write_frame(
+                stream,
+                &json!({"id": id, "ok": {
+                    "nodes": nodes,
+                    "edges": edges,
+                    "conflicts": conflicts,
+                }}),
+            )
+        }
+        Err(e) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "report", "message": format!("{e:#}")}}),
         ),
     }
 }

@@ -51,7 +51,7 @@ fn is_residual_unsafe(c: char) -> bool {
 /// structure, so replacing them across the whole document is safe, keeps it
 /// valid, and round-trips (a parser reads `` back to the original character).
 /// The pretty-printer's structural newlines and indentation are untouched.
-fn escape_residual_controls(text: &str) -> String {
+pub(crate) fn escape_residual_controls(text: &str) -> String {
     if !text.chars().any(is_residual_unsafe) {
         return text.to_owned();
     }

@@ -145,6 +145,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             message,
         } => rename_rel_type(repo_path, graph, &old, &new, merge, &message),
         Command::Diff { from, to, json } => diff(repo_path, graph, &from, &to, json),
+        Command::Report { from, to, json } => report(repo_path, graph, &from, &to, json),
         Command::GetNode { label, key, json } => get_node(repo_path, graph, &label, &key, json),
         Command::PutEdge {
             src_label,
@@ -2015,6 +2016,30 @@ fn diff(repo_path: &Path, graph: Option<&str>, from: &str, to: &str, json: bool)
     }
     if diff.is_empty() {
         outln!("(no changes)");
+    }
+    Ok(())
+}
+
+/// `acetone report FROM TO` — the PR-style change report (acetone-zavr.7):
+/// the structured document with `--json`, its markdown rendering without.
+/// Both come from one builder (`report::build`), so the two renderings can
+/// never disagree about what changed.
+fn report(repo_path: &Path, graph: Option<&str>, from: &str, to: &str, json: bool) -> Result<()> {
+    let repo = open(repo_path, graph)?;
+    let doc = crate::report::build(&repo, from, to)?;
+    if json {
+        emit_json(&doc);
+    } else {
+        // The markdown embeds repository-controlled free text (commit
+        // subjects, labels, property names): sanitise line-wise at the
+        // terminal boundary, as every human path does. The daemon streams
+        // the raw artefact instead — it is data to the peer, and the
+        // displaying side owns its own boundary (the fsck-findings
+        // precedent).
+        let md = crate::report::render_markdown(&doc);
+        for line in md.trim_end().lines() {
+            outln!("{}", sanitise_line(line));
+        }
     }
     Ok(())
 }

@@ -9,6 +9,7 @@ mod import;
 mod json;
 mod output;
 mod query;
+mod report;
 mod serve;
 mod value;
 

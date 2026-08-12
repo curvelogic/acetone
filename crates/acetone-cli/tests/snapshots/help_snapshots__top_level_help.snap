@@ -16,6 +16,7 @@ Commands:
   tag               List tags, create one, or delete one
   checkout          Switch the checked-out branch
   diff              Show the graph-level difference between two versions
+  report            Produce a change report between two versions — the PR-style artefact
   merge             Merge another version into the current branch
   resolve           Resolve a merge in progress by taking one whole side
   declare-label     Declare a primary label's key and constraints (schema)

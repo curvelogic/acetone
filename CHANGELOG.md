@@ -18,6 +18,17 @@ fine.)
 
 ### Added
 
+- **`acetone report FROM TO`** — the PR-style change report
+  (tenant-pulled, ADR-0072 decision 4): property-level before/after for
+  every node and relationship change, commit metadata on both
+  endpoints, and — while a merge is in progress — the workspace's
+  conflicts with their three-way base/ours/theirs values (the same rows
+  `CALL acetone.conflicts()` yields). Markdown by default (paste it
+  into a review), `--json` for the structured document a curation
+  surface consumes; the daemon serves the same artefact as a `report`
+  verb streaming chunk frames, so the report is buildable entirely over
+  the socket.
+
 - **`acetone blame LABEL KEY`** — "why is this fact here" as one line
   per commit (tenant-pulled, ADR-0072 decision 4): every commit that
   introduced, changed or deleted the node, newest first along the
