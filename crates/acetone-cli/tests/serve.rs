@@ -2074,13 +2074,53 @@ fn the_schema_verb_matches_the_cli_document_and_round_trips() {
             .expect("commit hash")
             .to_string()
     };
+    // A rich schema so the round trip guards every facet the document
+    // carries (PR #283 review F1): a typed/required/unique label, a
+    // discriminated rel type with a property type, and an index.
     assert!(
-        acetone(&repo, &["declare-label", "Extra", "--key", "id"])
-            .status
-            .success()
+        acetone(
+            &repo,
+            &[
+                "declare-label",
+                "Extra",
+                "--key",
+                "id",
+                "--type",
+                "name:string",
+                "--require",
+                "name",
+                "--unique",
+                "name",
+            ]
+        )
+        .status
+        .success()
     );
     assert!(
-        acetone(&repo, &["commit", "-m", "two labels"])
+        acetone(
+            &repo,
+            &["declare-rel-type", "LINKS", "--type", "weight:int"]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        acetone(
+            &repo,
+            &[
+                "declare-index",
+                "extra_name",
+                "--label",
+                "Extra",
+                "--property",
+                "name",
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        acetone(&repo, &["commit", "-m", "rich schema"])
             .status
             .success()
     );
@@ -2123,9 +2163,13 @@ fn the_schema_verb_matches_the_cli_document_and_round_trips() {
     write_frame(&mut s, &serde_json::json!({"id": 3, "chunk": document}));
     write_frame(&mut s, &serde_json::json!({"id": 3, "chunk_end": true}));
     let (_, terminal) = collect_stream(&mut s);
-    assert!(
-        terminal.get("ok").is_some(),
-        "the document round-trips: {terminal}"
+    // applied == 0 is the load-bearing assertion (PR #283 review F1): a
+    // lossy document would make diff-and-apply REWRITE entries — applied
+    // > 0 — and silently corrupt the schema through the very loop the
+    // manual advertises as safe.
+    assert_eq!(
+        terminal["ok"]["applied"], 0,
+        "the round trip must be a no-op: {terminal}"
     );
 
     // A non-string at is refused, the connection survives.
