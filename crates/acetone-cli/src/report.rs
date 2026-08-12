@@ -43,6 +43,14 @@ pub(crate) fn build(repo: &Repository, from: &str, to: &str) -> Result<Json> {
             "label": change.key.label(),
             "key": crate::json::key_tuple_to_json(change.key.key()),
             "properties": property_deltas(before, after),
+            // Null when the secondary-label set is unchanged. Without this
+            // a change touching ONLY secondary labels would report as
+            // "modified" with an empty properties map — invisible (PR #280
+            // review SF-2).
+            "labels": labels_delta(
+                change.before.as_ref().map(|r| r.secondary_labels()),
+                change.after.as_ref().map(|r| r.secondary_labels()),
+            ),
         }));
     }
     let mut edges = Vec::new();
@@ -85,8 +93,9 @@ pub(crate) fn build(repo: &Repository, from: &str, to: &str) -> Result<Json> {
     }))
 }
 
-/// Serialise the document exactly as `emit_json` prints it, so the CLI's
-/// stdout and the daemon's chunk stream carry identical bytes.
+/// Serialise the document as `emit_json` prints it (the caller appends the
+/// trailing newline `outln!` would), so the CLI's stdout and the daemon's
+/// chunk stream carry identical bytes.
 pub(crate) fn rendered_json(doc: &Json) -> String {
     let text = serde_json::to_string_pretty(doc).unwrap_or_else(|_| "null".into());
     crate::json::escape_residual_controls(&text)
@@ -156,6 +165,25 @@ fn property_deltas(
         out.insert(name.clone(), Json::Object(cell));
     }
     Json::Object(out)
+}
+
+/// The secondary-label delta: null when the sets are equal, else
+/// `{before?, after?}` sorted arrays following [`property_deltas`]'s
+/// conventions (an added node carries only `after`).
+fn labels_delta(before: Option<&[String]>, after: Option<&[String]>) -> Json {
+    // An absent record and an empty label set are the same "no labels":
+    // an added node with no secondary labels reports null, not `{after: []}`.
+    if before.unwrap_or(&[]) == after.unwrap_or(&[]) {
+        return Json::Null;
+    }
+    let mut cell = Map::new();
+    if let Some(before) = before {
+        cell.insert("before".into(), json!(before));
+    }
+    if let Some(after) = after {
+        cell.insert("after".into(), json!(after));
+    }
+    Json::Object(cell)
 }
 
 /// The conflicts section: null when no merge is in progress, else the rows
@@ -256,6 +284,15 @@ pub(crate) fn render_markdown(doc: &Json) -> String {
                 change["key"]
             ));
             props(change, &mut out);
+            if let Some(cell) = change["labels"].as_object() {
+                let arrow = match (cell.get("before"), cell.get("after")) {
+                    (Some(b), Some(a)) => format!("{b} \u{2192} {a}"),
+                    (None, Some(a)) => format!("{a}"),
+                    (Some(b), None) => format!("{b} \u{2192} (removed)"),
+                    (None, None) => String::new(),
+                };
+                out.push_str(&format!("    - labels: {arrow}\n"));
+            }
         }
     }
     if let Some(edges) = doc["edges"].as_array()
@@ -294,4 +331,33 @@ pub(crate) fn render_markdown(doc: &Json) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A change touching only secondary labels must be visible in the
+    /// report (PR #280 review SF-2). The delta follows property_deltas'
+    /// conventions, with absent-record ≡ empty-set so plain added nodes
+    /// stay null.
+    #[test]
+    fn labels_delta_reports_secondary_label_changes() {
+        let before = vec!["Legacy".to_owned()];
+        let after = vec!["Current".to_owned()];
+        let delta = labels_delta(Some(&before), Some(&after));
+        assert_eq!(delta["before"], json!(["Legacy"]));
+        assert_eq!(delta["after"], json!(["Current"]));
+
+        // Unchanged sets — including the absent-vs-empty equivalence —
+        // report null.
+        assert!(labels_delta(Some(&before), Some(&before)).is_null());
+        assert!(labels_delta(None, Some(&Vec::new())).is_null());
+        assert!(labels_delta(None, None).is_null());
+
+        // An added node with labels carries only afters.
+        let delta = labels_delta(None, Some(&after));
+        assert!(delta.get("before").is_none(), "{delta}");
+        assert_eq!(delta["after"], json!(["Current"]));
+    }
 }

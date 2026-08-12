@@ -1797,9 +1797,9 @@ fn the_report_verb_streams_the_cli_document() {
     let cli = acetone(&repo, &["report", &c1, "main", "--json"]);
     assert!(cli.status.success(), "{cli:?}");
     assert_eq!(
-        text.trim_end(),
-        String::from_utf8_lossy(&cli.stdout).trim_end(),
-        "the socket document must match the CLI's"
+        text,
+        String::from_utf8_lossy(&cli.stdout),
+        "the socket document is byte-identical to the CLI's stdout"
     );
 
     // The markdown artefact streams the same way when json is omitted.

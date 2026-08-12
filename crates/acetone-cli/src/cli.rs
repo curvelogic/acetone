@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 const AFTER_HELP: &str = "\
 Command groups:
   Everyday      init, status, commit, log, blame, branch, tag, checkout, diff,
-                merge, resolve
+                report, merge, resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate

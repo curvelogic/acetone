@@ -959,7 +959,10 @@ fn run_report(
     match crate::report::build(repo, from, to) {
         Ok(doc) => {
             let text = if as_json {
-                crate::report::rendered_json(&doc)
+                // The trailing newline the CLI's outln! appends: the chunk
+                // stream is byte-identical to `acetone report --json`
+                // stdout (PR #280 review N-1).
+                format!("{}\n", crate::report::rendered_json(&doc))
             } else {
                 crate::report::render_markdown(&doc)
             };
