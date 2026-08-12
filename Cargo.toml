@@ -69,7 +69,7 @@ acetone-core = { path = "crates/acetone-core", version = "0.6.0" }
 # keeps every crate's `#![forbid(unsafe_code)]` intact (the unsafe FFI lives
 # inside the vetted nix crate); already present transitively (gix). The
 # `signal` feature only. MIT.
-nix = { version = "0.29", default-features = false, features = ["signal"] }
+nix = { version = "0.29", default-features = false, features = ["signal", "fs"] }
 # thiserror: standard error-derive for library crates (CLAUDE.md conventions).
 thiserror = "2"
 # proptest: property testing for encoding/storage invariants (dev-only).

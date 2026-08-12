@@ -351,23 +351,32 @@ resolve the conflict with the empty definition; resolve the merge first.
 Declaration stays deliberate by default; this is the sanctioned fast path
 for experimentation and open-vocabulary ingestion.
 
-### `acetone serve --socket <PATH> [--max-concurrent <N>] [--timeout <SECONDS>]`
+### `acetone serve (--socket <PATH> | --stdio) [--max-concurrent <N>] [--timeout <SECONDS>]`
 
-Serve this repository over a **local unix domain socket** (ADR-0074) —
-the per-repository daemon for embedding acetone from any language. The
-socket is created mode `0600`: the kernel's ACL is the authentication;
-the daemon holds none and trusts every connected peer, treating only
-their *data* as untrusted (per-query budgets, frame caps). The protocol
-is length-prefixed JSON frames (4-byte big-endian length, 16 MiB cap):
-a versioned hello both ways, then requests (`{"id", "verb", "params"}`)
-answered by streamed `row` frames, `advisory` frames (the stderr
-channel), and one terminal `ok`/`error` frame. This build serves the
-read `query` verb; write verbs, streamed `import`/`schema apply` and
-further commands arrive against the same protocol. `--max-concurrent`
-(default 4) bounds simultaneously executing queries — each already
-carries the CLI's per-query budgets; this bounds their sum. A daemon
-refuses a socket path that already exists (no silent takeover), prints
-one readiness line to stdout, and unlinks its socket on clean exit.
+Serve this repository over a **local unix domain socket** — or, with
+`--stdio`, over stdin/stdout as an LSP-style child process — the
+per-worktree daemon for embedding acetone from any language (ADR-0074,
+ADR-0076). The socket is created mode `0600`: the kernel's ACL is the
+authentication; the daemon holds none and trusts every connected peer,
+treating only their *data* as untrusted (per-query budgets, frame
+caps). In stdio mode the pipe is private to the parent by construction
+and stdout carries nothing but frames. The protocol is length-prefixed
+JSON frames (4-byte big-endian length, 16 MiB cap): a versioned hello
+both ways, then requests (`{"id", "verb", "params"}`) answered by
+streamed `row`/`chunk`/`advisory` frames and one terminal `ok`/`error`
+frame. Verbs: `query` (read and write), `status`, `schema-apply`,
+`import`, `commit`, `branch`, `checkout`, `merge`, `resolve`, `export`,
+`fsck` and `report`. `--max-concurrent` (default 4) bounds
+simultaneously executing queries — each already carries the CLI's
+per-query budgets; this bounds their sum. **One daemon per worktree**,
+enforced by a kernel lock released on process death (ADR-0077): a
+second `serve` on the same worktree is refused at startup, naming the
+running holder. A socket daemon refuses a socket path that already
+exists (no silent takeover), prints one readiness line to stdout,
+unlinks its socket on clean exit, and drains gracefully on SIGTERM
+(stop accepting, finish in-flight requests, exit 0; a second SIGTERM
+forces an immediate exit). A stdio daemon's shutdown is the parent
+closing stdin.
 
 ### `acetone shell [--timeout <SECONDS>]`
 

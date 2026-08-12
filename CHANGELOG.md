@@ -18,6 +18,18 @@ fine.)
 
 ### Added
 
+- **One daemon per worktree, enforced** (ADR-0077): `acetone serve` —
+  socket or `--stdio` — takes a kernel lock at startup (released on
+  process death, so a crashed daemon never wedges its successor); a
+  second daemon on the same worktree is refused, naming the running
+  holder. This closes the double-writer window two daemons could
+  otherwise open through concurrent stale-lock recovery. Stale-lock
+  recovery itself now also covers the `schema-apply` and `import`
+  verbs, and detects **pid reuse** on Linux (the writer lock records
+  the holder's kernel start time; a live pid with a different start
+  time is positively stale) — macOS keeps the conservative
+  refuse-if-pid-live behaviour.
+
 - **`acetone report FROM TO`** — the PR-style change report
   (tenant-pulled, ADR-0072 decision 4): property-level before/after for
   every node and relationship change, commit metadata on both

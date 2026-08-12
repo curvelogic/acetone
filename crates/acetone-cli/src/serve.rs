@@ -37,21 +37,19 @@ use serde_json::{Value as Json, json};
 
 use acetone_core::cypher::session::{Outcome, QueryError, Session};
 use acetone_core::graph::GraphError;
-use acetone_core::graph::lock::{StaleLockOutcome, break_stale_lock};
+use acetone_core::graph::lock::{DaemonLock, StaleLockOutcome, break_stale_lock};
 use acetone_core::graph::repo::Repository;
 
 /// Serialises stale-writer-lock recovery across this daemon's connection
 /// threads (ADR-0074 §8): with at most one recoverer active in the process,
 /// the double-recoverer race — two threads each unlinking and recreating the
 /// lock — cannot occur, so no thread ever removes another's freshly-acquired
-/// lock. This holds **within one daemon process**. It relies on ADR-0074's
-/// one-daemon-per-repository model: two daemons on ONE repository (started on
-/// different sockets) share no mutex, and `remove_file` in `break_stale_lock`
-/// is unconditional, so they could reopen the double-writer window — that
-/// configuration is UNSUPPORTED and would need an enforced daemon-exclusivity
-/// lock or a stale-file-immune (flock-style) writer lock (ADR §8, a filed
-/// decision). A plain `()` mutex, held only for the brief break decision,
-/// never across a write.
+/// lock. This holds **within one daemon process** — and the one-daemon-
+/// per-worktree premise it needs is now ENFORCED, not assumed: `serve` and
+/// `serve --stdio` each take the kernel-held `DaemonLock` at startup
+/// (ADR-0077, acetone-pz0k.7), so a second daemon on the same worktree is
+/// refused before it can serve at all. A plain `()` mutex, held only for
+/// the brief break decision, never across a write.
 static LOCK_RECOVERY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Break a stale writer lock and report whether the caller should retry
@@ -69,11 +67,10 @@ fn recover_stale_writer_lock(repo: &Repository) -> bool {
 /// Run a write operation and, if it failed on the single-writer lock left by
 /// a dead writer, break that lock and retry ONCE (ADR-0074 §8). The `query`
 /// write path and the ref-advancing verbs (`commit`/`checkout`/`merge`/
-/// `resolve`) go through this, so a SIGKILLed writer's stale lock never
-/// crash-loops those verbs (PR #270 review). The `schema-apply`/`import`
-/// write paths do NOT yet — they surface the lock error through `anyhow`, not
-/// the typed `GraphError` this helper keys on; extending recovery to them is
-/// the deferred half (acetone-pz0k.7). A
+/// `resolve`) go through this, and the `schema-apply`/`import` cores do
+/// too via [`is_anyhow_locked`] (their errors arrive through `anyhow`;
+/// acetone-pz0k.7 closed that deferred half) — so a SIGKILLed writer's
+/// stale lock never crash-loops any write verb (PR #270 review). A
 /// *live* lock is NOT retried — `recover_stale_writer_lock` returns false and
 /// short-circuits the retry — so genuine contention returns its typed error
 /// to the client unchanged, and a live lock is never broken.
@@ -92,6 +89,18 @@ fn with_lock_recovery<T, E>(
 /// Whether a `GraphError` is the single-writer-lock conflict.
 fn is_graph_locked(e: &GraphError) -> bool {
     matches!(e, GraphError::Locked { .. })
+}
+
+/// Whether an `anyhow` error chain carries the single-writer-lock conflict
+/// anywhere — the `schema-apply`/`import` cores wrap their `GraphError`s in
+/// context layers, so the recovery helper keys on the chain, not the
+/// surface (acetone-pz0k.7).
+fn is_anyhow_locked(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<GraphError>()
+            .is_some_and(is_graph_locked)
+    })
 }
 
 /// The frame transport: any bidirectional byte stream. The frame protocol
@@ -190,7 +199,15 @@ pub fn serve(
     // the honest model anyway: concurrent connections behave exactly
     // like concurrent CLI processes (unlimited MVCC readers, one writer
     // via the existing lock).
-    drop(Repository::open(repo_path).context("opening repository")?);
+    let probe = Repository::open(repo_path).context("opening repository")?;
+    // The daemon-exclusivity lock (ADR-0077, acetone-pz0k.7): one daemon
+    // per worktree, enforced by a kernel flock held for this process's
+    // lifetime — the premise LOCK_RECOVERY's one-recoverer argument needs,
+    // now guaranteed rather than assumed. Taken before the socket binds so
+    // a refused daemon leaves no socket behind.
+    let _daemon_lock =
+        DaemonLock::acquire(probe.store().git_dir()).context("starting the daemon")?;
+    drop(probe);
     let repo_path = repo_path.to_path_buf();
 
     // Reclaim a stale socket: if the path exists but nothing accepts on
@@ -423,6 +440,10 @@ pub fn serve_stdio(repo_path: &Path, max_concurrent: usize, timeout_secs: u64) -
         bail!("--max-concurrent must be at least 1");
     }
     let repo = Repository::open(repo_path).context("opening repository")?;
+    // A stdio child is a daemon instance: the same exclusivity lock
+    // applies to it identically (ADR-0077; PR #278 review).
+    let _daemon_lock =
+        DaemonLock::acquire(repo.store().git_dir()).context("starting the daemon")?;
     let permits = Semaphore::new(max_concurrent);
     let draining = AtomicBool::new(false);
     let mut stream = StdioStream {
@@ -1098,7 +1119,14 @@ fn run_schema_apply(
         .unwrap_or(false);
     let text = read_payload(stream, id, payload_cap(SCHEMA_APPLY_MAX_BYTES))?;
     let mut plan = Vec::new();
-    let outcome = crate::commands::schema_apply_core(repo, &text, dry_run, |line| plan.push(line));
+    // Stale-lock recovery on the payload write path too (acetone-pz0k.7):
+    // a lock failure precedes any write, and a retry re-runs the whole
+    // apply over the already-received document. The plan is cleared on
+    // retry so advisory lines are not doubled.
+    let outcome = with_lock_recovery(repo, is_anyhow_locked, || {
+        plan.clear();
+        crate::commands::schema_apply_core(repo, &text, dry_run, |line| plan.push(line))
+    });
     for line in plan {
         write_frame(stream, &json!({"id": id, "advisory": line}))?;
     }
@@ -1193,20 +1221,25 @@ fn run_import(
         file.flush().ok();
     }
 
-    let outcome = crate::import::import_core(
-        repo,
-        format,
-        &source,
-        "(streamed over the acetone daemon socket)",
-        param("label"),
-        param("edge"),
-        param("from"),
-        param("to"),
-        param("disc"),
-        param("branch"),
-        param("message"),
-        batch_size,
-    );
+    // Stale-lock recovery on the streamed import too (acetone-pz0k.7): a
+    // lock failure precedes any write, and the staged file persists, so a
+    // retry re-reads the same bytes.
+    let outcome = with_lock_recovery(repo, is_anyhow_locked, || {
+        crate::import::import_core(
+            repo,
+            format,
+            &source,
+            "(streamed over the acetone daemon socket)",
+            param("label"),
+            param("edge"),
+            param("from"),
+            param("to"),
+            param("disc"),
+            param("branch"),
+            param("message"),
+            batch_size,
+        )
+    });
     match outcome {
         Ok(acetone_core::graph::import::ImportOutcome::NoChange) => {
             write_frame(stream, &json!({"id": id, "ok": {"imported": false}}))
