@@ -196,12 +196,13 @@ fn concurrent_connections_and_unknown_verb_and_over_cap_request() {
     let closed = matches!(s3.read(&mut probe), Ok(0) | Err(_));
     assert!(closed, "over-cap frame must close the connection");
 
-    // A second daemon on a LIVE socket refuses (connects, finds a live
-    // daemon there — distinct from the stale-reclaim path).
+    // A second daemon on the same worktree refuses — since ADR-0077 the
+    // exclusivity lock fires before the socket is even examined (the
+    // live-socket refusal remains for a cross-worktree path collision).
     let out = acetone(&repo, &["serve", "--socket", socket.to_str().unwrap()]);
     assert!(!out.status.success());
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("already served by a live daemon"),
+        String::from_utf8_lossy(&out.stderr).contains("already serving this worktree"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -1815,4 +1816,150 @@ fn the_report_verb_streams_the_cli_document() {
         .filter_map(|f| f["chunk"].as_str())
         .collect();
     assert!(md.contains("+ "), "the markdown artefact streams: {md}");
+}
+
+/// The ADR-0077 exclusivity lock: a second daemon on the same worktree —
+/// even on a DIFFERENT socket — is refused at startup, naming the running
+/// holder. Before this, two daemons on one repo could race stale-lock
+/// recovery into a double-writer window (acetone-pz0k.7).
+#[test]
+fn a_second_daemon_on_one_worktree_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket1 = dir.path().join("one.sock");
+    let _daemon = start_daemon(&repo, &socket1);
+
+    let socket2 = dir.path().join("two.sock");
+    let out = acetone(&repo, &["serve", "--socket", socket2.to_str().unwrap()]);
+    assert!(!out.status.success(), "a second daemon must be refused");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("daemon") || err.contains("lock"),
+        "the refusal names the conflict: {err}"
+    );
+}
+
+/// A stdio child is a daemon instance: it holds the same exclusivity lock
+/// (PR #278 review), and releases it on exit so a successor can start.
+#[test]
+fn a_stdio_child_excludes_a_socket_daemon_and_releases_on_exit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "serve", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdio daemon");
+    let mut stdout = child.stdout.take().expect("stdout");
+    // Wait until it is up (the server hello proves the lock is held).
+    let hello_frame = read_frame(&mut stdout);
+    assert_eq!(hello_frame["acetone"]["protocol"], 1);
+
+    let socket = dir.path().join("acetone.sock");
+    let out = acetone(&repo, &["serve", "--socket", socket.to_str().unwrap()]);
+    assert!(
+        !out.status.success(),
+        "a stdio child excludes a socket daemon"
+    );
+
+    // Close stdin: the child exits and the kernel releases the lock.
+    drop(child.stdin.take());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().expect("try_wait").is_none() {
+        assert!(std::time::Instant::now() < deadline, "child must exit");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let daemon = start_daemon(&repo, &socket);
+    drop(daemon);
+}
+
+/// The exclusivity lock dies with its daemon: after SIGKILL — no drop
+/// handlers, no drain — a successor starts immediately (the lock lives in
+/// the kernel, not in a file's existence; acetone-pz0k.7).
+#[test]
+fn the_exclusivity_lock_dies_with_its_daemon() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket1 = dir.path().join("one.sock");
+    let mut daemon = start_daemon(&repo, &socket1);
+    daemon.child.kill().expect("SIGKILL");
+    daemon.child.wait().expect("reap");
+
+    let socket2 = dir.path().join("two.sock");
+    let successor = start_daemon(&repo, &socket2);
+    drop(successor);
+}
+
+/// The payload verbs recover a stale writer lock exactly as query and the
+/// ref verbs do — the deferred half of ADR-0074 §8 (acetone-pz0k.7).
+#[test]
+fn the_schema_apply_verb_recovers_a_stale_writer_lock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let lock = repo.join("acetone-writer.lock");
+    let dead_pid = {
+        let mut child = Command::new("true").spawn().expect("spawn");
+        let pid = child.id();
+        child.wait().expect("reap");
+        pid
+    };
+    std::fs::write(&lock, format!("pid={dead_pid} unix-time=1\n")).expect("plant");
+
+    let mut s = hello(&socket);
+    let document =
+        r#"{"labels": [{"name": "Doc", "key": ["id"]}, {"name": "Extra", "key": ["id"]}]}"#;
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "schema-apply"}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk": document}));
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+    let (_, ok) = collect_stream(&mut s);
+    assert!(
+        ok.get("ok").is_some(),
+        "schema-apply recovered the stale lock: {ok}"
+    );
+    assert!(!lock.exists(), "the stale lock was removed");
+}
+
+/// As above, for the streamed import path.
+#[test]
+fn the_import_verb_recovers_a_stale_writer_lock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    // Import requires a clean workspace; commit the seed first.
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let lock = repo.join("acetone-writer.lock");
+    let dead_pid = {
+        let mut child = Command::new("true").spawn().expect("spawn");
+        let pid = child.id();
+        child.wait().expect("reap");
+        pid
+    };
+    std::fs::write(&lock, format!("pid={dead_pid} unix-time=1\n")).expect("plant");
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "import",
+            "params": {"format": "ndjson", "label": "Doc"}}),
+    );
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "chunk": "{\"id\": \"d9\"}\n"}),
+    );
+    write_frame(&mut s, &serde_json::json!({"id": 1, "chunk_end": true}));
+    let (_, terminal) = collect_stream(&mut s);
+    assert!(
+        terminal.get("ok").is_some(),
+        "import recovered the stale lock: {terminal}"
+    );
+    assert!(!lock.exists(), "the stale lock was removed");
 }

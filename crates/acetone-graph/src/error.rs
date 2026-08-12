@@ -59,6 +59,21 @@ pub enum GraphError {
         /// The lock file's path, for the manual-recovery instruction.
         path: PathBuf,
     },
+    /// Another daemon already holds this worktree's exclusivity lock
+    /// (ADR-0077). Deliberately NOT the [`GraphError::Locked`] advice: the
+    /// lock lives in the kernel, not in the file's existence — removing the
+    /// file would not release it, and WOULD let a second daemon lock a
+    /// fresh file at the same path, reopening the double-daemon window.
+    #[error(
+        "another acetone daemon is already serving this worktree ({holder}); \
+         stop it before starting a new one"
+    )]
+    DaemonExclusive {
+        /// Contents of the lock file (pid of the running daemon).
+        holder: String,
+        /// The lock file's path, for diagnostics.
+        path: PathBuf,
+    },
     /// The workspace ref moved underneath this transaction (another
     /// writer advanced it between load and save).
     #[error("workspace {name:?} changed concurrently; reload and retry")]
