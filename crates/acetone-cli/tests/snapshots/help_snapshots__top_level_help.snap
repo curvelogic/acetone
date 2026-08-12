@@ -11,6 +11,7 @@ Commands:
   status            Show the current branch, head commit and workspace state
   commit            Turn the workspace's staged changes into a commit
   log               Show commit history, newest first
+  blame             Show which commits made a node what it is — "why is this fact here" as one line per commit
   branch            List branches, create one, or delete one
   tag               List tags, create one, or delete one
   checkout          Switch the checked-out branch
@@ -55,8 +56,8 @@ Options:
           Print version
 
 Command groups:
-  Everyday      init, status, commit, log, branch, tag, checkout, diff, merge,
-                resolve
+  Everyday      init, status, commit, log, blame, branch, tag, checkout, diff,
+                merge, resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate

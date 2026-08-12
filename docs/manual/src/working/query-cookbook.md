@@ -925,19 +925,23 @@ $ acetone query 'CALL acetone.diff("7b7c4223b1d9161d0f1c1fbd573ad5738f83bd33", "
 
 **Blame.** Which commits touched an entity — `CALL acetone.blame(label,
 key)` walks history for one node (for the single-property keys used
-throughout this manual, pass the key value directly). Postgres was written
-by the seed commit and the 16.4 upgrade:
+throughout this manual, pass the key value directly), and the `subject`
+column answers "why is this fact here" in the same call. Postgres was
+written by the seed commit and the 16.4 upgrade:
 
 ```console
 $ acetone query 'CALL acetone.blame("Service", "postgres")'
-┌─────────┬──────────┬──────────────────────────────────────────┐
-│ label   │ key      │ commit                                   │
-├─────────┼──────────┼──────────────────────────────────────────┤
-│ Service │ postgres │ fd9fcdbbd81a7d4ad587682be2cc3cb10067747c │
-│ Service │ postgres │ 7b7c4223b1d9161d0f1c1fbd573ad5738f83bd33 │
-└─────────┴──────────┴──────────────────────────────────────────┘
+┌─────────┬──────────┬──────────────────────────────────────────┬───────────────────────────────────┐
+│ label   │ key      │ commit                                   │ subject                           │
+├─────────┼──────────┼──────────────────────────────────────────┼───────────────────────────────────┤
+│ Service │ postgres │ fd9fcdbbd81a7d4ad587682be2cc3cb10067747c │ postgres upgraded to 16.4         │
+│ Service │ postgres │ 7b7c4223b1d9161d0f1c1fbd573ad5738f83bd33 │ asset registry: initial inventory │
+└─────────┴──────────┴──────────────────────────────────────────┴───────────────────────────────────┘
 2 rows
 ```
+
+The same answer is a CLI one-liner — `acetone blame Service postgres`
+prints each commit as `log` prints it, provenance trailers included.
 
 **Conflicts.** During a merge that stopped on conflicts, `CALL
 acetone.conflicts()` lists each conflict: the `kind` column classifies it

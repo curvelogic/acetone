@@ -11,8 +11,8 @@ use clap::{Parser, Subcommand};
 /// inline on each variant.
 const AFTER_HELP: &str = "\
 Command groups:
-  Everyday      init, status, commit, log, branch, tag, checkout, diff, merge,
-                resolve
+  Everyday      init, status, commit, log, blame, branch, tag, checkout, diff,
+                merge, resolve
   Schema        declare-label, declare-rel-type, declare-index, reindex, schema
   Data & query  import, export, query, shell
   Maintenance   fsck, gc, migrate
@@ -118,6 +118,26 @@ pub enum Command {
         /// parent hashes.
         #[arg(long)]
         all: bool,
+        /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
+        /// may change at any minor release.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show which commits made a node what it is — "why is this fact
+    /// here" as one line per commit.
+    ///
+    /// Walks the current branch's first-parent chain and lists, newest
+    /// first, every commit that introduced, changed or deleted the node,
+    /// rendered as `log` renders: hash and subject, then any trailers
+    /// (import provenance) indented beneath. A change merged in through a
+    /// two-parent merge is attributed to the merge commit, as
+    /// `git blame --first-parent` would.
+    Blame {
+        /// The node's primary label.
+        label: String,
+        /// The node's key value (single-column keys; an integer-looking
+        /// value is treated as an integer, as `get-node` does).
+        key: String,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
         /// may change at any minor release.
         #[arg(long)]

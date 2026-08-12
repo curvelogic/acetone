@@ -37,6 +37,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             allow_empty,
         } => commit(repo_path, graph, &message, &trailer, allow_empty),
         Command::Log { all, json } => log(repo_path, graph, all, json),
+        Command::Blame { label, key, json } => blame(repo_path, graph, &label, &key, json),
         Command::Branch {
             name,
             refspec,
@@ -567,6 +568,105 @@ fn log(repo_path: &Path, graph: Option<&str>, all: bool, json: bool) -> Result<(
         }
         for (key, value) in &entry.trailers {
             outln!("    {}: {}", sanitise_line(key), sanitise_line(value));
+        }
+    }
+    Ok(())
+}
+
+/// `acetone blame LABEL KEY` — "why is this fact here" as one line per
+/// commit (acetone-zavr.6). Joins [`Repository::blame`]'s hash list with the
+/// same first-parent [`Repository::log`] walk (both are newest-first over
+/// the identical chain, so the join preserves order and needs no new
+/// library surface), then renders exactly as `log` does: hash + sanitised
+/// subject, trailers indented — import provenance trailers ARE the why.
+fn blame(repo_path: &Path, graph: Option<&str>, label: &str, key: &str, json: bool) -> Result<()> {
+    let repo = open(repo_path, graph)?;
+    let node_key = single_key(label, key)?;
+    let commits = repo.blame(&node_key)?;
+    if commits.is_empty() {
+        // Distinguish "never existed" (the get-node precedent: not found,
+        // nonzero) from "exists only uncommitted in the workspace" (a real
+        // fact with no history yet — say so, exit 0).
+        let exists = repo.workspace_snapshot()?.get_node(&node_key)?.is_some();
+        if !exists {
+            if json {
+                emit_json(&Json::Null);
+            }
+            bail!("not found");
+        }
+        if json {
+            emit_json(&Json::Array(Vec::new()));
+        } else {
+            // Echo the key actually probed, not the raw argument — a value
+            // the int-or-string heuristic reinterpreted ('007' -> 7) must
+            // not echo a key that was never looked up (the get-node and
+            // acetone.blame conventions).
+            outln!(
+                "no committed history: {} exists only in the uncommitted workspace",
+                sanitise_line(&format_node_key(&node_key))
+            );
+        }
+        return Ok(());
+    }
+    // Map-join rather than filter-join: every blame hash keeps its row even
+    // if a concurrent commit moved the head between the two walks (the
+    // subject degrades to just the hash, as the CALL surface degrades to an
+    // empty subject — PR #279 review).
+    let by_id: BTreeMap<_, _> = repo
+        .log(None)?
+        .into_iter()
+        .map(|entry| (entry.id, entry))
+        .collect();
+    if json {
+        // serde_json escapes control characters, so hostile-clone messages
+        // and trailers cannot inject raw terminal escapes on this path.
+        let rows: Vec<Json> = commits
+            .iter()
+            .map(|id| match by_id.get(id) {
+                Some(entry) => {
+                    let subject = entry.message.lines().next().unwrap_or("");
+                    let trailers: Vec<Json> = entry
+                        .trailers
+                        .iter()
+                        .map(|(k, v)| json!({ "key": k, "value": v }))
+                        .collect();
+                    let parents: Vec<Json> = entry
+                        .parents
+                        .iter()
+                        .map(|p| Json::String(p.to_hex()))
+                        .collect();
+                    json!({
+                        "hash": entry.id.to_hex(),
+                        "subject": subject,
+                        "message": entry.message,
+                        "trailers": trailers,
+                        "parents": parents,
+                    })
+                }
+                None => json!({
+                    "hash": id.to_hex(),
+                    "subject": "",
+                    "message": "",
+                    "trailers": [],
+                    "parents": [],
+                }),
+            })
+            .collect();
+        emit_json(&Json::Array(rows));
+        return Ok(());
+    }
+    for id in &commits {
+        match by_id.get(id) {
+            // Commit messages and trailers are raw bytes from potentially
+            // hostile clones: sanitise before the terminal, as `log` does.
+            Some(entry) => {
+                let subject = entry.message.lines().next().unwrap_or("");
+                outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
+                for (key, value) in &entry.trailers {
+                    outln!("    {}: {}", sanitise_line(key), sanitise_line(value));
+                }
+            }
+            None => outln!("{}", id.to_hex()),
         }
     }
     Ok(())

@@ -1724,3 +1724,31 @@ fn serve_requires_exactly_one_transport() {
         "the error names both transports: {err}"
     );
 }
+
+/// The one-line blame answer is buildable entirely over the socket
+/// (acetone-zavr.6, gate criterion 2): `CALL acetone.blame` now yields the
+/// commit subject alongside the hash.
+#[test]
+fn blame_subject_reaches_the_socket() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+
+    let mut s = hello(&socket);
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 1, "verb": "query", "params": {
+            "cypher": "CALL acetone.blame('Doc', 'd1') YIELD commit, subject RETURN commit, subject"
+        }}),
+    );
+    let row = read_frame(&mut s);
+    assert!(row["row"]["values"][0].is_string(), "{row}");
+    assert_eq!(
+        row["row"]["values"][1], "seed",
+        "the subject arrives over the socket: {row}"
+    );
+    let done = read_frame(&mut s);
+    assert_eq!(done["ok"]["rows"], 1, "{done}");
+}
