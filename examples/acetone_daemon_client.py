@@ -66,8 +66,9 @@ class AcetoneClient:
     def schema(self, at=None):
         """The declared schema — the same document `acetone schema --json`
         prints (labels, relationship_types, indexes); `at="<refspec>"` reads
-        a past version's schema. Feed a modified copy to schema_apply() for
-        incremental evolution."""
+        a past version's schema. Feed a modified copy to schema_apply() —
+        serialised with json.dumps(), since schema_apply takes JSON text —
+        for incremental evolution."""
         params = {}
         if at is not None:
             params["at"] = at
