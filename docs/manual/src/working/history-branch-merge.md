@@ -483,20 +483,26 @@ not yet resolved.)
 ### Who changed this? `acetone.blame`
 
 For a single entity, `acetone.blame` walks history and lists every commit
-that changed it — identity's trail through this chapter reads like a
-changelog:
+that changed it, each with its subject — identity's trail through this
+chapter reads like a changelog:
 
 ```console
 $ acetone query "CALL acetone.blame('Service', 'identity')"
-┌─────────┬──────────┬──────────────────────────────────────────┐
-│ label   │ key      │ commit                                   │
-├─────────┼──────────┼──────────────────────────────────────────┤
-│ Service │ identity │ beaae79967b545ac82fc27c2f812d4702b39e958 │
-│ Service │ identity │ f0f5b30d664e6dfabbaf61f9c8efa315e9681de6 │
-│ Service │ identity │ 4e04e05af4c92472342ade7ba874e9a2994d44cb │
-└─────────┴──────────┴──────────────────────────────────────────┘
+┌─────────┬──────────┬──────────────────────────────────────────┬───────────────────────────────────┐
+│ label   │ key      │ commit                                   │ subject                           │
+├─────────┼──────────┼──────────────────────────────────────────┼───────────────────────────────────┤
+│ Service │ identity │ beaae79967b545ac82fc27c2f812d4702b39e958 │ merge bump-identity               │
+│ Service │ identity │ f0f5b30d664e6dfabbaf61f9c8efa315e9681de6 │ identity patch release 2.4.2      │
+│ Service │ identity │ 4e04e05af4c92472342ade7ba874e9a2994d44cb │ asset registry: initial inventory │
+└─────────┴──────────┴──────────────────────────────────────────┴───────────────────────────────────┘
 3 rows
 ```
+
+The CLI wraps this as `acetone blame Service identity` — the same trail
+rendered as `log` renders it, hash and subject per line with any
+provenance trailers indented beneath. A change merged in through a
+two-parent merge is attributed to the merge commit (first-parent
+semantics, as above).
 
 And `acetone.diff` is the in-query counterpart of the CLI's `diff`, yielding
 one row per change with `_Added`/`_Removed`/`_Modified` virtual elements you

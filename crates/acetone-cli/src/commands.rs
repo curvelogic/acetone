@@ -597,56 +597,76 @@ fn blame(repo_path: &Path, graph: Option<&str>, label: &str, key: &str, json: bo
         if json {
             emit_json(&Json::Array(Vec::new()));
         } else {
+            // Echo the key actually probed, not the raw argument — a value
+            // the int-or-string heuristic reinterpreted ('007' -> 7) must
+            // not echo a key that was never looked up (the get-node and
+            // acetone.blame conventions).
             outln!(
-                "no committed history: {} {} exists only in the uncommitted workspace",
-                sanitise_identifier(label),
-                sanitise_identifier(key)
+                "no committed history: {} exists only in the uncommitted workspace",
+                sanitise_line(&format_node_key(&node_key))
             );
         }
         return Ok(());
     }
-    let touched: std::collections::BTreeSet<_> = commits.into_iter().collect();
-    let entries: Vec<_> = repo
+    // Map-join rather than filter-join: every blame hash keeps its row even
+    // if a concurrent commit moved the head between the two walks (the
+    // subject degrades to just the hash, as the CALL surface degrades to an
+    // empty subject — PR #279 review).
+    let by_id: BTreeMap<_, _> = repo
         .log(None)?
         .into_iter()
-        .filter(|entry| touched.contains(&entry.id))
+        .map(|entry| (entry.id, entry))
         .collect();
     if json {
         // serde_json escapes control characters, so hostile-clone messages
         // and trailers cannot inject raw terminal escapes on this path.
-        let rows: Vec<Json> = entries
+        let rows: Vec<Json> = commits
             .iter()
-            .map(|entry| {
-                let subject = entry.message.lines().next().unwrap_or("");
-                let trailers: Vec<Json> = entry
-                    .trailers
-                    .iter()
-                    .map(|(k, v)| json!({ "key": k, "value": v }))
-                    .collect();
-                let parents: Vec<Json> = entry
-                    .parents
-                    .iter()
-                    .map(|p| Json::String(p.to_hex()))
-                    .collect();
-                json!({
-                    "hash": entry.id.to_hex(),
-                    "subject": subject,
-                    "message": entry.message,
-                    "trailers": trailers,
-                    "parents": parents,
-                })
+            .map(|id| match by_id.get(id) {
+                Some(entry) => {
+                    let subject = entry.message.lines().next().unwrap_or("");
+                    let trailers: Vec<Json> = entry
+                        .trailers
+                        .iter()
+                        .map(|(k, v)| json!({ "key": k, "value": v }))
+                        .collect();
+                    let parents: Vec<Json> = entry
+                        .parents
+                        .iter()
+                        .map(|p| Json::String(p.to_hex()))
+                        .collect();
+                    json!({
+                        "hash": entry.id.to_hex(),
+                        "subject": subject,
+                        "message": entry.message,
+                        "trailers": trailers,
+                        "parents": parents,
+                    })
+                }
+                None => json!({
+                    "hash": id.to_hex(),
+                    "subject": "",
+                    "message": "",
+                    "trailers": [],
+                    "parents": [],
+                }),
             })
             .collect();
         emit_json(&Json::Array(rows));
         return Ok(());
     }
-    for entry in &entries {
-        // Commit messages and trailers are raw bytes from potentially
-        // hostile clones: sanitise before the terminal, as `log` does.
-        let subject = entry.message.lines().next().unwrap_or("");
-        outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
-        for (key, value) in &entry.trailers {
-            outln!("    {}: {}", sanitise_line(key), sanitise_line(value));
+    for id in &commits {
+        match by_id.get(id) {
+            // Commit messages and trailers are raw bytes from potentially
+            // hostile clones: sanitise before the terminal, as `log` does.
+            Some(entry) => {
+                let subject = entry.message.lines().next().unwrap_or("");
+                outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
+                for (key, value) in &entry.trailers {
+                    outln!("    {}: {}", sanitise_line(key), sanitise_line(value));
+                }
+            }
+            None => outln!("{}", id.to_hex()),
         }
     }
     Ok(())
