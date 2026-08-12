@@ -661,8 +661,10 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         // A label declared in the workspace schema is arity-checked against
         // the key argument (a mismatch is a typed error, acetone-596); an
         // *undeclared* label is probed schema-free and simply yields no rows
-        // when nothing matches.
-        yields: &["label", "key", "commit"],
+        // when nothing matches. `subject` is the commit's first message
+        // line, so "why is this fact here" is answerable in one call
+        // (acetone-zavr.6).
+        yields: &["label", "key", "commit", "subject"],
         identifier_yields: &["label"],
     },
     ProcedureDef {

@@ -593,6 +593,20 @@ impl ProcedureProvider for RepoProcedures<'_> {
                 let node_key =
                     NodeKey::new(label.as_str(), vec![key_value]).map_err(|e| e.to_string())?;
                 let commits = self.repo.blame(&node_key).map_err(|e| e.to_string())?;
+                // Subjects come from the same first-parent walk blame
+                // performed (both are newest-first over the identical
+                // chain), so "why is this fact here" is one call
+                // (acetone-zavr.6).
+                let subjects: std::collections::BTreeMap<_, _> = self
+                    .repo
+                    .log(None)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|entry| {
+                        let subject = entry.message.lines().next().unwrap_or("").to_string();
+                        (entry.id, subject)
+                    })
+                    .collect();
                 Ok(commits
                     .into_iter()
                     .map(|commit| {
@@ -600,6 +614,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                             Value::String(label.clone()),
                             Value::String(key_display.clone()),
                             Value::String(commit.to_hex()),
+                            Value::String(subjects.get(&commit).cloned().unwrap_or_default()),
                         ]
                     })
                     .collect())

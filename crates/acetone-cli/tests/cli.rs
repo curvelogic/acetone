@@ -3514,3 +3514,113 @@ fn call_conflicts_surfaces_a_merged_rel_type_breach() {
         "fsck names the relationship type violation: {report}"
     );
 }
+
+/// `acetone blame LABEL KEY` — the one-line "why is this fact here"
+/// (acetone-zavr.6): one line per commit that touched the node, newest
+/// first, rendered exactly as `log` renders (hash + sanitised subject,
+/// then indented trailers — import provenance trailers ARE the why).
+#[test]
+fn blame_answers_why_is_this_fact_here() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=alice"])
+            .status
+            .success()
+    );
+    let c1 = commit_hex(&acetone(
+        &repo,
+        &[
+            "commit",
+            "-m",
+            "add 1",
+            "--trailer",
+            "source=registry-import",
+        ],
+    ));
+    assert!(acetone(&repo, &["put-node", "N", "2"]).status.success());
+    let c2 = commit_hex(&acetone(&repo, &["commit", "-m", "add 2"]));
+    assert!(
+        acetone(&repo, &["put-node", "N", "1", "--prop", "name=alice2"])
+            .status
+            .success()
+    );
+    let c3 = commit_hex(&acetone(&repo, &["commit", "-m", "rename 1"]));
+
+    let out = acetone(&repo, &["blame", "N", "1"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].starts_with(&c3) && lines[0].ends_with("rename 1"),
+        "newest first, one line: {text}"
+    );
+    assert!(
+        text.contains(&format!("{c1} add 1")),
+        "the introducing commit: {text}"
+    );
+    assert!(!text.contains(&c2), "unrelated commits are skipped: {text}");
+    assert!(
+        text.contains("    source: registry-import"),
+        "provenance trailers render indented, as log does: {text}"
+    );
+}
+
+/// `blame --json` mirrors `log --json`'s row shape.
+#[test]
+fn blame_json_mirrors_log_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["put-node", "N", "1"]).status.success());
+    let c1 = commit_hex(&acetone(&repo, &["commit", "-m", "add 1"]));
+
+    let out = acetone(&repo, &["blame", "N", "1", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rows: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(rows.as_array().expect("array").len(), 1, "{rows}");
+    assert_eq!(rows[0]["hash"], serde_json::json!(c1), "{rows}");
+    assert_eq!(rows[0]["subject"], "add 1", "{rows}");
+    assert!(rows[0]["trailers"].is_array(), "{rows}");
+    assert!(rows[0]["parents"].is_array(), "{rows}");
+}
+
+/// A node that never existed is "not found" (the get-node precedent); a
+/// node that exists only uncommitted says so and exits 0.
+#[test]
+fn blame_distinguishes_absent_from_uncommitted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    assert!(
+        acetone(&repo, &["declare-label", "N", "--key", "id"])
+            .status
+            .success()
+    );
+    assert!(acetone(&repo, &["put-node", "N", "1"]).status.success());
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+
+    let absent = acetone(&repo, &["blame", "N", "99"]);
+    assert!(!absent.status.success(), "absent node is not found");
+    assert!(stderr(&absent).contains("not found"), "{}", stderr(&absent));
+
+    assert!(acetone(&repo, &["put-node", "N", "3"]).status.success());
+    let uncommitted = acetone(&repo, &["blame", "N", "3"]);
+    assert!(uncommitted.status.success(), "{}", stderr(&uncommitted));
+    assert!(
+        stdout(&uncommitted).contains("uncommitted"),
+        "an uncommitted-only node is explained, not 'not found': {}",
+        stdout(&uncommitted)
+    );
+}

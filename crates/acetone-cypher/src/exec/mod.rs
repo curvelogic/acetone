@@ -1594,6 +1594,7 @@ mod tests {
             Value::String("N".into()),
             Value::String("k1".into()),
             Value::String("abc123".into()),
+            Value::String("a subject".into()),
         ]]);
         // Through YIELD + RETURN of the bound variables.
         let result = call_with(

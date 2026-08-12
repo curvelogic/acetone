@@ -18,6 +18,16 @@ fine.)
 
 ### Added
 
+- **`acetone blame LABEL KEY`** — "why is this fact here" as one line
+  per commit (tenant-pulled, ADR-0072 decision 4): every commit that
+  introduced, changed or deleted the node, newest first along the
+  first-parent chain, rendered as `log` renders — hash and subject,
+  import provenance trailers indented beneath — with `--json` mirroring
+  `log --json`'s row shape. An absent node is "not found"; a node that
+  exists only uncommitted says so. **Breaking (CALL surface):**
+  `CALL acetone.blame` now yields a fourth column, `subject`, so the
+  same one-line answer is buildable entirely over the daemon socket.
+
 - **`acetone serve --stdio`** — the frame protocol over stdin/stdout
   (the LSP child-process pattern; ADR-0076's companion feature): the
   host spawns the daemon and owns the pipe, so there is no socket path,
