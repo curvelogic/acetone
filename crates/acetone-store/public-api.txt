@@ -285,6 +285,7 @@ impl<T> typenum::type_operators::Same for acetone_store::ConsolidateStats
 pub type acetone_store::ConsolidateStats::Output = T
 pub struct acetone_store::GitStore
 impl acetone_store::GitStore
+pub fn acetone_store::GitStore::any_worktree_has_ref(&self, &[&str]) -> core::result::Result<bool, acetone_store::StoreError>
 pub fn acetone_store::GitStore::commit_anchors(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<alloc::collections::btree::set::BTreeSet<acetone_store::Hash>>, acetone_store::StoreError>
 pub fn acetone_store::GitStore::commit_manifest_id(&self, &acetone_store::Hash) -> core::result::Result<core::option::Option<acetone_store::Hash>, acetone_store::StoreError>
 pub fn acetone_store::GitStore::common_dir(&self) -> &std::path::Path

@@ -344,3 +344,45 @@ fn attach_multi_remote_precedence_and_refusal() {
         other => panic!("disagreeing non-origin remotes must refuse: {other:?}"),
     }
 }
+
+/// The standalone guard must see the workspace from ANY worktree
+/// (acetone-zavr.9, PR #287 review F3): from a linked worktree of a
+/// standalone repo, the per-worktree probe alone is blind to the main
+/// worktree's workspace — both attach and init --co-tenant must still
+/// refuse.
+#[test]
+fn the_standalone_guard_sees_across_worktrees() {
+    let (dir, _clone) = cloned_co_tenant();
+    let origin = dir.path().join("origin");
+
+    // A standalone repo with uncommitted work in its MAIN worktree.
+    let standalone = dir.path().join("standalone-wt");
+    let repo = Repository::init(&standalone, InitOptions::default()).expect("init standalone");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(5), &NodeRecord::new([], Default::default()))
+        .expect("put");
+    tx.commit("base", &[], None).expect("commit");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(6), &NodeRecord::new([], Default::default()))
+        .expect("put");
+    tx.save().expect("stage");
+    drop(repo);
+
+    // A linked worktree; the co-tenant remote fetched from THERE.
+    let wt = dir.path().join("standalone-linked");
+    git(
+        &standalone,
+        &["worktree", "add", "--detach", wt.to_str().unwrap(), "HEAD"],
+    );
+    git(&wt, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(&wt, &["fetch", "origin"]);
+
+    match Repository::attach_co_tenant(&wt, None) {
+        Err(GraphError::ExistingAcetoneWorkspace) => {}
+        other => panic!("attach from a linked worktree must still refuse: {other:?}"),
+    }
+    match Repository::init_co_tenant(&wt, "layered", InitOptions::default()) {
+        Err(GraphError::ExistingAcetoneWorkspace) => {}
+        other => panic!("init --co-tenant from a linked worktree must refuse: {other:?}"),
+    }
+}

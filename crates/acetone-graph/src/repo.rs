@@ -274,10 +274,15 @@ impl Repository {
         //     exists the repo is already co-tenant, and a global workspace
         //     ref there is a first co-tenant graph's not-yet-migrated
         //     workspace (acetone-42d), not a standalone one — so only guard
-        //     when there is no marker at all.
+        //     when there is no marker at all. The probe scans EVERY
+        //     worktree (acetone-zavr.9): per-worktree refs are invisible
+        //     across worktree boundaries, so a single-store read from a
+        //     linked worktree would miss the main worktree's workspace.
         if existing_markers.is_empty()
-            && (store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some()
-                || store.read_ref(&workspace_ref(DEFAULT_WORKSPACE))?.is_some())
+            && store.any_worktree_has_ref(&[
+                WORKTREE_WORKSPACE_REF,
+                &workspace_ref(DEFAULT_WORKSPACE),
+            ])?
         {
             return Err(GraphError::ExistingAcetoneWorkspace);
         }
@@ -390,8 +395,10 @@ impl Repository {
         // cross-wiring two graphs' data.
         let existing_markers = store.list_refs(GRAPHS_REF_PREFIX)?;
         if existing_markers.is_empty()
-            && (store.read_ref(WORKTREE_WORKSPACE_REF)?.is_some()
-                || store.read_ref(&workspace_ref(DEFAULT_WORKSPACE))?.is_some())
+            && store.any_worktree_has_ref(&[
+                WORKTREE_WORKSPACE_REF,
+                &workspace_ref(DEFAULT_WORKSPACE),
+            ])?
         {
             return Err(GraphError::ExistingAcetoneWorkspace);
         }

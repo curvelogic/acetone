@@ -1765,6 +1765,7 @@ pub fn acetone_graph::refns::GraphRefNamespace::tag_name<'r>(&self, &'r str) -> 
 pub fn acetone_graph::refns::GraphRefNamespace::tag_prefix(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::tag_ref(&self, &str) -> alloc::string::String
 pub fn acetone_graph::refns::GraphRefNamespace::workspace_ref(&self) -> &str
+pub fn acetone_graph::refns::GraphRefNamespace::worktree_anchor_ref(&self, &str) -> alloc::string::String
 impl core::clone::Clone for acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::refns::GraphRefNamespace::clone(&self) -> acetone_graph::refns::GraphRefNamespace
 impl core::cmp::Eq for acetone_graph::refns::GraphRefNamespace
@@ -2192,6 +2193,7 @@ pub const acetone_graph::repo::GRAPHS_REF_PREFIX: &str
 pub const acetone_graph::repo::TAG_REF_PREFIX: &str
 pub const acetone_graph::repo::WORKSPACE_REF_PREFIX: &str
 pub const acetone_graph::repo::WORKTREE_ANCHOR_PREFIX: &str
+pub const acetone_graph::repo::WORKTREE_GRAPH_ANCHOR_PREFIX: &str
 pub const acetone_graph::repo::WORKTREE_MERGE_HEAD_REF: &str
 pub const acetone_graph::repo::WORKTREE_WORKSPACE_REF: &str
 pub fn acetone_graph::repo::default_chunk_params() -> acetone_prolly::chunker::ChunkParams
@@ -2862,6 +2864,7 @@ pub fn acetone_graph::refns::GraphRefNamespace::tag_name<'r>(&self, &'r str) -> 
 pub fn acetone_graph::refns::GraphRefNamespace::tag_prefix(&self) -> &str
 pub fn acetone_graph::refns::GraphRefNamespace::tag_ref(&self, &str) -> alloc::string::String
 pub fn acetone_graph::refns::GraphRefNamespace::workspace_ref(&self) -> &str
+pub fn acetone_graph::refns::GraphRefNamespace::worktree_anchor_ref(&self, &str) -> alloc::string::String
 impl core::clone::Clone for acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::refns::GraphRefNamespace::clone(&self) -> acetone_graph::refns::GraphRefNamespace
 impl core::cmp::Eq for acetone_graph::refns::GraphRefNamespace

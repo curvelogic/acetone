@@ -844,6 +844,46 @@ impl GitStore {
 
     /// The underlying repository — crate-internal, for the consolidation
     /// module (ADR-0011), which walks objects and installs packs directly.
+    /// Whether ANY worktree of this repository — the current one, every
+    /// linked one, and (when running from a linked worktree) the main one —
+    /// carries a ref of one of the given names (acetone-zavr.9). Per-worktree
+    /// refs (`refs/worktree/*`) are invisible across worktree boundaries
+    /// through a single ref store, so guards that must detect another
+    /// worktree's state scan them all — the consolidation enumeration's
+    /// pattern, at the same reduced-trust posture (ADR-0034).
+    pub fn any_worktree_has_ref(&self, names: &[&str]) -> Result<bool, StoreError> {
+        for name in names {
+            if self.repo.find_reference(*name).is_ok() {
+                return Ok(true);
+            }
+        }
+        let check = |wt_repo: gix::Repository| -> bool {
+            names
+                .iter()
+                .any(|name| wt_repo.find_reference(*name).is_ok())
+        };
+        for proxy in self
+            .repo
+            .worktrees()
+            .map_err(|e| StoreError::backend("listing worktrees", e))?
+        {
+            let wt_repo = proxy
+                .into_repo_with_possibly_inaccessible_worktree()
+                .map_err(|e| StoreError::backend("opening worktree", e))?;
+            if check(wt_repo) {
+                return Ok(true);
+            }
+        }
+        if self.repo.common_dir() != self.repo.git_dir() {
+            let main = gix::open_opts(self.repo.common_dir(), Self::isolated_open_options())
+                .map_err(|e| StoreError::backend("opening main worktree", e))?;
+            if check(main) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn repo(&self) -> &gix::Repository {
         &self.repo
     }
