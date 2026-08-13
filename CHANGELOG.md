@@ -108,6 +108,11 @@ fine.)
 
 ### Fixed
 
+- **The standalone-workspace guard sees every worktree**: `init
+  --co-tenant` and `attach` refused to layer a graph onto a standalone
+  acetone repository, but probed only the invoking worktree's refs —
+  from a linked worktree they were blind to the main worktree's
+  workspace. The guard now scans all worktrees.
 - **`fsck` of a multi-graph repository checks every graph** (the
   auto-detecting path, no `--graph`): it now scopes to the union of the
   graph namespaces instead of falling back to the whole-store walk that

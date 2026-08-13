@@ -842,6 +842,54 @@ impl GitStore {
         Ok(Hash::from_oid(id.detach()))
     }
 
+    /// Whether ANY worktree of this repository — the current one, every
+    /// linked one, and (when running from a linked worktree) the main one —
+    /// carries a ref of one of the given names (acetone-zavr.9). Per-worktree
+    /// refs (`refs/worktree/*`) are invisible across worktree boundaries
+    /// through a single ref store, so guards that must detect another
+    /// worktree's state scan them all — the consolidation enumeration's
+    /// pattern, at the same reduced-trust posture (ADR-0034). Read errors
+    /// propagate (a guard must not fail open on a damaged ref); a worktree
+    /// whose checkout was deleted still scans (its admin dir holds the
+    /// refs).
+    pub fn any_worktree_has_ref(&self, names: &[&str]) -> Result<bool, StoreError> {
+        let check = |wt_repo: &gix::Repository| -> Result<bool, StoreError> {
+            for name in names {
+                if wt_repo
+                    .try_find_reference(*name)
+                    .map_err(|e| StoreError::backend("probing worktree ref", e))?
+                    .is_some()
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
+        if check(&self.repo)? {
+            return Ok(true);
+        }
+        for proxy in self
+            .repo
+            .worktrees()
+            .map_err(|e| StoreError::backend("listing worktrees", e))?
+        {
+            let wt_repo = proxy
+                .into_repo_with_possibly_inaccessible_worktree()
+                .map_err(|e| StoreError::backend("opening worktree", e))?;
+            if check(&wt_repo)? {
+                return Ok(true);
+            }
+        }
+        if self.repo.common_dir() != self.repo.git_dir() {
+            let main = gix::open_opts(self.repo.common_dir(), Self::isolated_open_options())
+                .map_err(|e| StoreError::backend("opening main worktree", e))?;
+            if check(&main)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// The underlying repository — crate-internal, for the consolidation
     /// module (ADR-0011), which walks objects and installs packs directly.
     pub(crate) fn repo(&self) -> &gix::Repository {
