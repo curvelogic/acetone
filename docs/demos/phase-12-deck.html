@@ -1,0 +1,168 @@
+<title>Phase 12 — The daemon in service</title>
+<style>
+:root {
+  --ink: #22252c; --paper: #f7f6f2; --card: #ffffff; --line: #ddd8cd;
+  --accent: #b3762a; --steel: #4a6b8a; --alarm: #a33b2e; --dim: #6d685e;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #e8e4da; --paper: #16181d; --card: #1e2128; --line: #33363e;
+          --accent: #d99a4e; --steel: #7fa3c4; --alarm: #d0705d; --dim: #9a958a; }
+}
+:root[data-theme="dark"] { --ink: #e8e4da; --paper: #16181d; --card: #1e2128; --line: #33363e;
+  --accent: #d99a4e; --steel: #7fa3c4; --alarm: #d0705d; --dim: #9a958a; }
+:root[data-theme="light"] { --ink: #22252c; --paper: #f7f6f2; --card: #ffffff; --line: #ddd8cd;
+  --accent: #b3762a; --steel: #4a6b8a; --alarm: #a33b2e; --dim: #6d685e; }
+body { background: var(--paper); color: var(--ink);
+  font: 17px/1.6 "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  margin: 0; padding: 3rem 1.5rem 5rem; }
+.deck { max-width: 60rem; margin: 0 auto; display: flex; flex-direction: column; gap: 2.5rem; }
+.slide { background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+  padding: 2.2rem 2.6rem; }
+.eyebrow { font-size: .72rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); font-weight: 600; margin: 0 0 .4rem; }
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 .5rem; text-wrap: balance; font-weight: 700; }
+h2 { font-size: 1.35rem; margin: 0 0 1rem; text-wrap: balance; font-weight: 700; }
+p, li { max-width: 65ch; }
+.lede { font-size: 1.06rem; color: var(--dim); margin: 0; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th { text-align: left; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--dim); border-bottom: 2px solid var(--line); padding: .4rem .6rem; }
+td { border-bottom: 1px solid var(--line); padding: .45rem .6rem; vertical-align: top; }
+td.pr, code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+td.pr { color: var(--steel); white-space: nowrap; font-variant-numeric: tabular-nums; }
+code { font-size: .88em; background: color-mix(in srgb, var(--line) 40%, transparent);
+  padding: .08em .35em; border-radius: 3px; }
+pre { background: color-mix(in srgb, var(--line) 30%, transparent); border: 1px solid var(--line);
+  border-radius: 5px; padding: 1rem 1.2rem; overflow-x: auto; font-size: .85rem; line-height: 1.55; }
+.stat-row { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: 1.2rem 0 0; }
+.stat { flex: 1 1 9rem; border: 1px solid var(--line); border-radius: 5px; padding: .9rem 1.1rem; }
+.stat b { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; color: var(--accent); }
+.stat span { font-size: .78rem; color: var(--dim); letter-spacing: .05em; text-transform: uppercase; }
+.breach { border-left: 4px solid var(--alarm); }
+.breach .eyebrow { color: var(--alarm); }
+ul { padding-left: 1.2rem; margin: .6rem 0; }
+li { margin: .35rem 0; }
+li::marker { color: var(--accent); }
+.agenda li::marker { content: "→ "; color: var(--steel); }
+footer { color: var(--dim); font-size: .8rem; text-align: center; margin-top: 1rem; }
+</style>
+<div class="deck">
+
+<section class="slide">
+  <p class="eyebrow">Phase 12 boundary · slide 1 of 8</p>
+  <h1>The daemon in service</h1>
+  <p class="lede">Phase 11 shipped the daemon; Phase 12 makes it the surface a
+  host can live on. Opened by Greg on 11&nbsp;August with both queued
+  decisions ruled in-session; seventeen PRs later, every implementation
+  bead is closed and the gate bead awaits your review.</p>
+  <div class="stat-row">
+    <div class="stat"><b>17</b><span>PRs, all adversarially reviewed</span></div>
+    <div class="stat"><b>13</b><span>daemon verbs at CLI parity</span></div>
+    <div class="stat"><b>0</b><span>security blockers open</span></div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 2 · What shipped — daemon completion</p>
+  <h2>Gate criterion 1: every assessment gap, closed through the shipped interface</h2>
+  <table>
+    <tr><th>Item</th><th>PR</th></tr>
+    <tr><td><code>status</code> frame ≡ the <code>status --json</code> document (breaking, CHANGELOG'd)</td><td class="pr">#275</td></tr>
+    <tr><td>Graceful SIGTERM drain, second-SIGTERM escalation</td><td class="pr">#276</td></tr>
+    <tr><td><code>export</code> + <code>fsck</code> verbs — streamed, no paths on the wire</td><td class="pr">#277</td></tr>
+    <tr><td><code>serve --stdio</code> — the LSP child-process transport</td><td class="pr">#278</td></tr>
+    <tr><td><code>params.at</code> — whole-query time travel over the socket</td><td class="pr">#282</td></tr>
+    <tr><td><code>schema</code> verb + the documented read-modify-apply path</td><td class="pr">#283</td></tr>
+  </table>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 3 · What shipped — history &amp; locks</p>
+  <h2>Criteria 2 and 3: the tenant's features, and one daemon per worktree</h2>
+  <ul>
+    <li><b>Blame surfaced</b> (#279): <code>acetone blame</code> answers “why is this
+    fact here” one line per commit; <code>CALL acetone.blame</code> gains the subject column.</li>
+    <li><b>The change report</b> (#280): property-level before/after, merge conflicts
+    with three-way values, markdown or byte-stable JSON — over the socket as the
+    <code>report</code> verb.</li>
+    <li><b>Ancestry refspecs</b> (#284): <code>main~1</code>, <code>HEAD^</code>, <code>^N</code>
+    everywhere a refspec resolves.</li>
+    <li><b>ADR-0077 delivered</b> (#281): the exclusivity flock (per-worktree, both
+    transports, kernel-released on death), pid-reuse detection, payload-verb lock
+    recovery.</li>
+    <li><b>Multi-graph residuals</b> (#286–#288): per-graph durability anchors,
+    shared-ref cleanup, union fsck.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 4 · Beyond the plan</p>
+  <h2><code>clone</code> + <code>acetone attach</code> is now the whole dance</h2>
+  <p>Your mid-phase ask (#285): a first-class, idempotent command replacing the
+  three-command git plumbing every consumer README embedded. Discovery when
+  <code>--graph</code> is omitted; clean refusals; never moves a branch or resets
+  a HEAD the user touched; Sift's README shrinks to two lines.</p>
+  <p>The review round demonstrated two blocker-class co-tenancy hazards in my
+  first cut — layering onto a standalone repo, and orphaning a sole graph's
+  shared-ref workspace — both now guarded exactly as <code>init</code> guards,
+  with empirical regression tests.</p>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 5 · The protocol, documented and measured</p>
+  <h2><code>docs/protocol.md</code> — protocol 1, ADR-0076's deliverable</h2>
+  <p>Transports and lifecycle, framing, the per-verb frame vocabulary for all
+  thirteen verbs, the complete error-kind registry, budgets, compatibility policy.
+  And the measurement ADR-0074 promised, at last:</p>
+  <pre>N=50 medians, release binary, warm connection vs process spawn
+status : wire 0.52 ms | process 5.00 ms | ~10×
+query  : wire 0.26 ms | process 4.92 ms | ~19×</pre>
+  <p>Independently re-run by the reviewer, corroborated within noise.</p>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 6 · The review gate, earning its keep</p>
+  <h2>What fresh adversarial reviewers caught this phase</h2>
+  <ul>
+    <li>A <b>panic on untrusted daemon input</b> (multibyte ancestry suffix) — and
+    then the proof that my regression test for it was vacuous.</li>
+    <li>Two <b>blocker-class attach hazards</b>, demonstrated live, not argued.</li>
+    <li>The union fsck <b>aborting the whole diagnostic</b> on one invalid marker.</li>
+    <li>A durability design made <b>impossible by git's D/F rule</b> — found by the
+    unit's own red test, redesigned to a separate namespace.</li>
+    <li>Eight missing kinds in the protocol document's error registry.</li>
+  </ul>
+</section>
+
+<section class="slide breach">
+  <p class="eyebrow">Slide 7 · Process — a breach, disclosed</p>
+  <h2>“Main is always green” was broken for three merges</h2>
+  <p>I merged #286 while its public-API freeze job was red (a misread check
+  count), and my next two merge chains joined watch-and-merge with
+  <code>;</code> instead of <code>&amp;&amp;</code>, so failed watches did not
+  gate. #289's bless repaired main. No wrong code — the symbols were deliberate,
+  reviewed API; the snapshot ratification was missing.</p>
+  <p><b>Proposal:</b> make the freeze job and build-and-test <i>required
+  checks</i>, so a red gate blocks merges mechanically rather than by agent
+  discipline. Merge chains are <code>&amp;&amp;</code>-only from here.</p>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 8 · Boundary agenda</p>
+  <h2>Queued for your ruling</h2>
+  <ul class="agenda">
+    <li>Ratify the recorded ADR deviations: per-worktree exclusivity;
+    <code>DaemonExclusive</code>; the anchors' separate namespace.</li>
+    <li>The required-checks proposal (slide 7).</li>
+    <li>Spec §5.2's stale “not yet resolved” parenthetical — a governing-doc
+    edit now ancestry refspecs shipped.</li>
+    <li>Ratify the <code>attach</code> mid-phase scope addition (your direction,
+    ADR-0073-style).</li>
+    <li>Security review: GATE-READY, six accepted-risk notes, none warranting a
+    bead. Full detail in <code>docs/reports/phase-12.md</code>.</li>
+  </ul>
+  <p class="lede">Then: the live demo, one step per turn, whenever you're ready.</p>
+</section>
+
+<footer>Phase 12 boundary deck · acetone · prepared 2026-08-13 · archived at docs/demos/phase-12-deck.html</footer>
+</div>
