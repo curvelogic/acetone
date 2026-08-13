@@ -1505,3 +1505,137 @@ fn per_graph_wins_while_a_stale_shared_ref_coexists() {
         );
     }
 }
+
+/// A MULTI-graph repository's auto-detecting `check_path` scopes to the
+/// UNION of the graph namespaces (acetone-j6ui.1) — every graph's refs
+/// are verified, the user's code branches are excluded by construction —
+/// with a POSITIVE assertion (planted damage IS flagged) so a
+/// walk-nothing regression cannot pass vacuously.
+#[test]
+fn multi_graph_check_path_walks_the_union_not_the_users_branches() {
+    let (project, _dir, code_commit, _code_blob) = code_repo();
+    for graph in ["g", "h"] {
+        let repo = Repository::init_co_tenant(&project, graph, InitOptions::default())
+            .expect("init_co_tenant");
+        seed_graph(&repo, 3);
+    }
+
+    // Plant damage in g's namespace: a branch tip that is a PLAIN GIT
+    // commit (no acetone manifest in its tree) — inside a graph namespace
+    // that is genuine damage the tip walk must flag.
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .args(["update-ref", "refs/heads/acetone/g/broken", &code_commit])
+        .status()
+        .expect("git update-ref");
+    assert!(out.success());
+    // Advance the user's main past the planted commit, so the two plain
+    // git tips are DISTINCT — otherwise the tip walk's commit-id dedup
+    // masks whether the user's branch was walked at all.
+    std::fs::write(project.join("more.txt"), "more").expect("write");
+    git(&project, &["add", "more.txt"]);
+    git(&project, &["commit", "-m", "code: more"]);
+    // And plant distinct damage in h — which sorts LAST — so a
+    // first-graph-only union cannot pass (PR #288 review F3).
+    let h_damage = ref_value(&project, "refs/heads/main").expect("main tip");
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .args(["update-ref", "refs/heads/acetone/h/broken", &h_damage])
+        .status()
+        .expect("git update-ref");
+    assert!(out.success());
+
+    // The auto-detecting entry (no --graph) on a MULTI-graph repo.
+    let report = acetone_graph::fsck::check_path(&project).expect("fsck runs");
+
+    // POSITIVE: BOTH graphs' planted damage is flagged (no vacuous pass,
+    // and no first-graph-only union — h sorts last).
+    for graph in ["g", "h"] {
+        assert!(
+            report.findings.iter().any(|f| match &f.origin {
+                acetone_graph::fsck::Origin::Commit { reference, .. } =>
+                    reference.contains(&format!("acetone/{graph}/")),
+                _ => false,
+            }),
+            "the union scope must flag {graph}'s planted damage: {:?}",
+            report.findings
+        );
+    }
+    // … and NO finding walks the user's code branches: every commit-origin
+    // finding names an acetone namespace.
+    assert!(
+        report.findings.iter().all(|f| match &f.origin {
+            acetone_graph::fsck::Origin::Commit { reference, .. } =>
+                reference.contains("refs/heads/acetone/")
+                    || reference.contains("refs/tags/acetone/"),
+            _ => true,
+        }),
+        "the union scope must exclude the user's branches: {:?}",
+        report.findings
+    );
+
+    // Scoping away still works: h's view is clean of g's damage.
+    let scoped = acetone_graph::fsck::check_path_graph(&project, Some("h")).expect("scoped");
+    assert!(
+        scoped.findings.iter().all(|f| match &f.origin {
+            acetone_graph::fsck::Origin::Commit { reference, .. } =>
+                !reference.contains("acetone/g/"),
+            _ => true,
+        }),
+        "--graph h must not report g's damage: {:?}",
+        scoped.findings
+    );
+}
+
+/// An invalid graph marker must not abort the union diagnostic (PR #288
+/// review F1 — the acetone-zhp discipline): the valid graphs are still
+/// checked and the unverifiable namespace is NAMED as a finding.
+#[test]
+fn an_invalid_marker_does_not_abort_the_union_fsck() {
+    let (project, _dir, code_commit, _blob) = code_repo();
+    for graph in ["g", "h"] {
+        let repo = Repository::init_co_tenant(&project, graph, InitOptions::default())
+            .expect("init_co_tenant");
+        seed_graph(&repo, 3);
+    }
+    // Real damage in g, and a hand-crafted INVALID marker (a legal git
+    // ref whose stripped graph name "x/y" fails validation).
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .args(["update-ref", "refs/heads/acetone/g/broken", &code_commit])
+        .status()
+        .expect("git update-ref");
+    assert!(out.success());
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .args(["update-ref", "refs/acetone/graphs/x/y", &code_commit])
+        .status()
+        .expect("git update-ref");
+    assert!(out.success());
+
+    let report = acetone_graph::fsck::check_path(&project)
+        .expect("the diagnostic must RUN despite the invalid marker");
+    assert!(
+        report.findings.iter().any(|f| match &f.origin {
+            acetone_graph::fsck::Origin::Commit { reference, .. } =>
+                reference.contains("acetone/g/"),
+            _ => false,
+        }),
+        "the valid graphs are still checked: {:?}",
+        report.findings
+    );
+    assert!(
+        report.findings.iter().any(|f| match &f.origin {
+            acetone_graph::fsck::Origin::Ref { reference } =>
+                reference.contains("x/y")
+                    && matches!(f.kind, acetone_graph::fsck::FindingKind::Unverified),
+            _ => false,
+        }),
+        "the unverifiable marker is named, not silently skipped: {:?}",
+        report.findings
+    );
+}
