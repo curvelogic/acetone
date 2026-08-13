@@ -87,6 +87,12 @@ pub const WORKSPACE_REF_PREFIX: &str = "refs/acetone/workspaces/";
 /// common store, which git enumerates globally — closes that gap. Local-only,
 /// like all `refs/acetone/*` (never transferred; operational-constraints).
 pub const WORKTREE_ANCHOR_PREFIX: &str = "refs/acetone/worktree-anchors/";
+/// Per-graph linked-worktree durability anchors (acetone-j6ui.4):
+/// `<worktree>/<graph>`, on a prefix of their own because a legacy flat
+/// anchor is a ref FILE at `<worktree>` and git's D/F rule would forbid
+/// creating `<worktree>/…` beneath it — a separate namespace lets legacy
+/// and per-graph anchors genuinely coexist with no migration step.
+pub const WORKTREE_GRAPH_ANCHOR_PREFIX: &str = "refs/acetone/worktree-graph-anchors/";
 /// Direct marker refs recording each co-tenant graph hosted in a repository
 /// (ADR-0050). `refs/acetone/graphs/<name>` exists iff the repository hosts a
 /// co-tenant graph `<name>`; `open` enumerates this prefix to detect the mode
@@ -1830,14 +1836,20 @@ impl Repository {
         // make the existence check succeed, i.e. keep the anchor;
         // deletion goes through the ref store, never a raw path.)
         let worktrees_dir = self.store.common_dir().join("worktrees");
-        for (anchor, _) in self.store.list_refs(WORKTREE_ANCHOR_PREFIX)? {
-            let id = anchor
-                .strip_prefix(WORKTREE_ANCHOR_PREFIX)
-                .unwrap_or(&anchor);
-            if worktrees_dir.join(id).exists() {
-                continue; // a worktree appeared mid-gc: its anchor is live
+        // Both anchor namespaces, one staleness rule (acetone-j6ui.4): the
+        // worktree id is the FIRST path component of the suffix — flat
+        // legacy/standalone anchors are `<worktree>`, per-graph co-tenant
+        // ones `<worktree>/<graph>` — in lock-step with fsck's coverage
+        // scan.
+        for prefix in [WORKTREE_ANCHOR_PREFIX, WORKTREE_GRAPH_ANCHOR_PREFIX] {
+            for (anchor, _) in self.store.list_refs(prefix)? {
+                let suffix = anchor.strip_prefix(prefix).unwrap_or(&anchor);
+                let id = suffix.split('/').next().unwrap_or(suffix);
+                if worktrees_dir.join(id).exists() {
+                    continue; // a worktree appeared mid-gc: its anchor is live
+                }
+                self.store.delete_ref(&anchor)?;
             }
-            self.store.delete_ref(&anchor)?;
         }
         // Reading B (ADR-0051): pack only objects reachable from refs this graph
         // owns; a co-tenant's code refs form a prune guard so their objects are
@@ -2210,7 +2222,7 @@ impl Repository {
             return Ok(None); // main worktree — no anchor needed
         }
         match git_dir.file_name().and_then(|id| id.to_str()) {
-            Some(id) => Ok(Some(format!("{WORKTREE_ANCHOR_PREFIX}{id}"))),
+            Some(id) => Ok(Some(self.namespace.worktree_anchor_ref(id))),
             None => Err(GraphError::WorktreeAnchorUnnameable {
                 id: git_dir
                     .file_name()

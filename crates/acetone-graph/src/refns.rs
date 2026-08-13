@@ -20,7 +20,7 @@
 
 use crate::repo::{
     BRANCH_REF_PREFIX, GRAPHS_REF_PREFIX, TAG_REF_PREFIX, WORKTREE_ANCHOR_PREFIX,
-    WORKTREE_MERGE_HEAD_REF, WORKTREE_WORKSPACE_REF,
+    WORKTREE_GRAPH_ANCHOR_PREFIX, WORKTREE_MERGE_HEAD_REF, WORKTREE_WORKSPACE_REF,
 };
 
 /// The physical ref layout of one graph: where its branches and tags live and
@@ -75,6 +75,13 @@ pub struct GraphRefNamespace {
     /// `Some((workspace, merge_head))` for co-tenant, `None` for
     /// standalone (whose names never changed).
     legacy_worktree_refs: Option<(String, String)>,
+    /// The graph component of this graph's linked-worktree durability
+    /// anchors (acetone-j6ui.4): `Some(graph)` for co-tenant — anchors keyed
+    /// `refs/acetone/worktree-anchors/<worktree>/<graph>`, so two co-tenant
+    /// graphs saved from one linked worktree no longer clobber one shared
+    /// anchor — `None` for standalone, which keeps the original flat
+    /// `<worktree>` key (one graph; back-compatible by construction).
+    anchor_graph: Option<String>,
 }
 
 impl GraphRefNamespace {
@@ -95,6 +102,7 @@ impl GraphRefNamespace {
             workspace_ref: WORKTREE_WORKSPACE_REF.to_owned(),
             merge_head_ref: WORKTREE_MERGE_HEAD_REF.to_owned(),
             legacy_worktree_refs: None,
+            anchor_graph: None,
         }
     }
 
@@ -125,19 +133,21 @@ impl GraphRefNamespace {
                 // The graph's own private namespace: its head pointer and any
                 // future per-graph state.
                 format!("refs/acetone/{graph}/"),
-                // Linked-worktree durability anchors (ADR-0044). Shared, not
-                // per-graph, and keyed on the worktree id alone. KNOWN
-                // LIMITATION (acetone-j6ui.4, PR #263 review): two co-tenant
-                // graphs written from the SAME linked (non-main) worktree
-                // share one anchor and clobber each other's, so the
-                // non-last-writer's UNCOMMITTED state loses ADR-0044
-                // protection against a *foreign* `git gc` of that worktree.
-                // Contained: committed data is branch-protected, acetone's
-                // own gc enumerates every worktree's refs and preserves both,
-                // and the main worktree writes no anchor. A per-(worktree,
-                // graph) anchor is the fix (it must keep gc/fsck's
-                // worktree-id staleness parse correct — acetone-j6ui.4).
+                // Linked-worktree durability anchors (ADR-0044): since
+                // acetone-j6ui.4 a co-tenant graph writes per-graph anchors
+                // under worktree-graph-anchors/<worktree>/<graph> (its own
+                // prefix — a legacy flat anchor is a ref FILE whose name
+                // git's D/F rule would forbid writing beneath), so two
+                // graphs saved from one linked worktree each keep their own
+                // foreign-gc protection. The OLD flat prefix stays in the
+                // allow-list: a legacy anchor from before the split is
+                // deliberately left until its worktree disappears — the
+                // other graph may not have re-saved since upgrading and may
+                // still rely on its coverage; gc's staleness sweep and
+                // fsck's coverage scan parse the worktree id as the FIRST
+                // path component, which reads both key forms identically.
                 WORKTREE_ANCHOR_PREFIX.to_owned(),
+                WORKTREE_GRAPH_ANCHOR_PREFIX.to_owned(),
                 // Per-worktree acetone state (`refs/worktree/acetone/*`:
                 // workspace and merge refs, ADR-0014). Same single-graph
                 // sharing caveat as the anchors. Without this, gc's
@@ -164,6 +174,22 @@ impl GraphRefNamespace {
                 WORKTREE_WORKSPACE_REF.to_owned(),
                 WORKTREE_MERGE_HEAD_REF.to_owned(),
             )),
+            anchor_graph: Some(graph.to_owned()),
+        }
+    }
+
+    /// The durability-anchor ref for linked worktree `worktree_id`
+    /// (ADR-0044, acetone-j6ui.4): flat `<worktree>` for standalone,
+    /// `<worktree>/<graph>` for co-tenant. Both prune-decision sites (gc
+    /// staleness, fsck coverage) parse the worktree id back as the FIRST
+    /// path component of the suffix, which reads both forms identically.
+    pub fn worktree_anchor_ref(&self, worktree_id: &str) -> String {
+        match &self.anchor_graph {
+            // A prefix of its own: a legacy flat anchor is a ref FILE at
+            // `<worktree>`, and git's D/F rule would forbid `<worktree>/…`
+            // beneath it — separate namespaces coexist with no migration.
+            Some(graph) => format!("{WORKTREE_GRAPH_ANCHOR_PREFIX}{worktree_id}/{graph}"),
+            None => format!("{WORKTREE_ANCHOR_PREFIX}{worktree_id}"),
         }
     }
 

@@ -491,3 +491,140 @@ fn gc_from_a_linked_worktree_packs_the_main_worktrees_state() {
         "main workspace root chunk still loose — never packed by the linked-worktree gc"
     );
 }
+
+/// Per-graph worktree durability anchors (acetone-j6ui.4): two co-tenant
+/// graphs saved from ONE linked worktree must each keep their own anchor —
+/// pre-fix they shared `refs/acetone/worktree-anchors/<id>` and the second
+/// save clobbered the first graph's foreign-gc protection (the known
+/// limitation recorded at the Phase 11 boundary). gc's staleness sweep and
+/// a planted legacy flat anchor must both keep working through the key
+/// change.
+#[test]
+fn per_graph_anchors_do_not_clobber_and_sweep_together() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let host = dir.path().join("host");
+    std::fs::create_dir(&host).expect("mkdir");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&host)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["-c", "init.defaultBranch=main", "init"]);
+    std::fs::write(host.join("code.txt"), "code").expect("write");
+    git(&["add", "code.txt"]);
+    git(&["commit", "-m", "code"]);
+
+    // Two co-tenant graphs, each with a committed base.
+    for graph in ["g", "h"] {
+        let repo = Repository::init_co_tenant(&host, graph, InitOptions::default()).expect("init");
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.commit("schema", &[], None).expect("commit");
+    }
+
+    // A linked worktree; save UNCOMMITTED state in BOTH graphs from it.
+    let wt = dir.path().join("wt");
+    git(&["worktree", "add", "--detach", wt.to_str().unwrap(), "HEAD"]);
+    for (graph, base) in [("g", 10i64), ("h", 20i64)] {
+        let repo = Repository::open_graph(&wt, graph).expect("open in worktree");
+        let mut tx = repo.begin_write().expect("begin");
+        for i in 0..3 {
+            let key = NodeKey::new("N", vec![Value::Int(base + i)]).expect("k");
+            tx.put_node(&key, &NodeRecord::new([], BTreeMap::new()))
+                .expect("n");
+        }
+        tx.save().expect("save uncommitted");
+    }
+
+    // THE FIX'S LOAD-BEARING ASSERTION: two distinct anchors, one per
+    // graph, under the worktree's id — not one clobbered ref.
+    let main_repo = Repository::open_graph(&host, "g").expect("open main");
+    let anchors: Vec<String> = main_repo
+        .store()
+        .list_refs("refs/acetone/worktree-graph-anchors/")
+        .expect("list")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(anchors.len(), 2, "one anchor per graph: {anchors:?}");
+    assert!(
+        anchors.iter().any(|a| a.ends_with("/g")) && anchors.iter().any(|a| a.ends_with("/h")),
+        "anchors are keyed <worktree>/<graph>: {anchors:?}"
+    );
+
+    // A planted legacy FLAT anchor under the OLD prefix (a pre-upgrade
+    // leftover for this worktree) coexists — the D/F conflict that forced
+    // the separate prefix — and is judged by the same worktree-existence
+    // rule.
+    let wt_id = anchors[0]
+        .strip_prefix("refs/acetone/worktree-graph-anchors/")
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (_, some_hash) = main_repo
+        .store()
+        .list_refs("refs/acetone/worktree-graph-anchors/")
+        .expect("list")[0]
+        .clone();
+    main_repo
+        .store()
+        .write_ref(
+            &format!("refs/acetone/worktree-anchors/{wt_id}"),
+            None,
+            &some_hash,
+        )
+        .expect("plant legacy");
+
+    // While the worktree lives, gc keeps all three anchors (both forms).
+    main_repo.gc().expect("gc");
+    let live = main_repo
+        .store()
+        .list_refs("refs/acetone/worktree-graph-anchors/")
+        .expect("list")
+        .len()
+        + main_repo
+            .store()
+            .list_refs("refs/acetone/worktree-anchors/")
+            .expect("list")
+            .len();
+    assert_eq!(live, 3, "a live worktree keeps every anchor form");
+    // Both graphs' uncommitted state is intact after gc.
+    for (graph, base) in [("g", 10i64), ("h", 20i64)] {
+        let repo = Repository::open_graph(&wt, graph).expect("reopen");
+        let snapshot = repo.workspace_snapshot().expect("snap");
+        let key = NodeKey::new("N", vec![Value::Int(base)]).expect("k");
+        assert!(
+            snapshot.get_node(&key).expect("get").is_some(),
+            "graph {graph}'s uncommitted save survives gc"
+        );
+    }
+
+    // Remove the worktree: the sweep takes every anchor form with it.
+    git(&["worktree", "remove", "--force", wt.to_str().unwrap()]);
+    main_repo.gc().expect("gc after removal");
+    let remaining = main_repo
+        .store()
+        .list_refs("refs/acetone/worktree-graph-anchors/")
+        .expect("list")
+        .len()
+        + main_repo
+            .store()
+            .list_refs("refs/acetone/worktree-anchors/")
+            .expect("list")
+            .len();
+    assert_eq!(
+        remaining, 0,
+        "a removed worktree's anchors — per-graph and legacy — are swept"
+    );
+}

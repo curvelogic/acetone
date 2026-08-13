@@ -51,7 +51,10 @@ use acetone_prolly::{BatchOp, ChunkFaultKind, apply_batch, empty, scan, verify_r
 use acetone_store::{ChunkStore, CommitStore, GitStore, Hash, RefStore, StoreError};
 
 use crate::error::GraphError;
-use crate::repo::{Repository, Snapshot, WORKSPACE_REF_PREFIX, WORKTREE_ANCHOR_PREFIX};
+use crate::repo::{
+    Repository, Snapshot, WORKSPACE_REF_PREFIX, WORKTREE_ANCHOR_PREFIX,
+    WORKTREE_GRAPH_ANCHOR_PREFIX,
+};
 use acetone_store::WorkspaceAnchors;
 
 /// How serious a [`Finding`] is.
@@ -492,16 +495,21 @@ fn check_workspaces(
     // enumerating them closes fsck's cross-worktree blind spot (PR #217
     // review finding 4). Symbolic ones are resolved like workspace refs:
     // silence is the sin fsck must avoid.
-    let mut anchor_refs: Vec<(String, Hash)> = store.list_refs(WORKTREE_ANCHOR_PREFIX)?;
-    for (reference, target) in store.list_symbolic_refs(WORKTREE_ANCHOR_PREFIX)? {
-        push_resolved_symref(
-            store,
-            reference,
-            &target,
-            FindingKind::Manifest,
-            &mut anchor_refs,
-            report,
-        );
+    // Both anchor namespaces (acetone-j6ui.4): legacy/standalone flat
+    // anchors and co-tenant per-graph ones.
+    let mut anchor_refs: Vec<(String, Hash)> = Vec::new();
+    for prefix in [WORKTREE_ANCHOR_PREFIX, WORKTREE_GRAPH_ANCHOR_PREFIX] {
+        anchor_refs.extend(store.list_refs(prefix)?);
+        for (reference, target) in store.list_symbolic_refs(prefix)? {
+            push_resolved_symref(
+                store,
+                reference,
+                &target,
+                FindingKind::Manifest,
+                &mut anchor_refs,
+                report,
+            );
+        }
     }
 
     // Coverage (ADR-0063) exists for exactly ONE shape: a superseded
@@ -531,9 +539,15 @@ fn check_workspaces(
             .iter()
             .filter(|(reference, _)| reference == workspace_ref)
             .chain(anchor_refs.iter().filter(|(reference, _)| {
-                let id = reference
+                // First path component = the worktree id — per-graph
+                // anchors (`<worktree>/<graph>` on their own prefix,
+                // acetone-j6ui.4) and legacy flat anchors parse
+                // identically, in lock-step with gc's sweep.
+                let suffix = reference
                     .strip_prefix(WORKTREE_ANCHOR_PREFIX)
+                    .or_else(|| reference.strip_prefix(WORKTREE_GRAPH_ANCHOR_PREFIX))
                     .unwrap_or(reference);
+                let id = suffix.split('/').next().unwrap_or(suffix);
                 // A removed worktree's anchor: gc will sweep it, so it
                 // guarantees nothing.
                 worktrees_dir.join(id).exists()
