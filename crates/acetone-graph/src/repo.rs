@@ -2205,6 +2205,22 @@ impl Repository {
         if let Some(anchor) = self.worktree_anchor_ref()? {
             self.store.overwrite_ref(&anchor, new)?;
         }
+        // Litter cleanup (acetone-j6ui.3): a sole co-tenant graph that read
+        // its workspace through the pre-split shared ref has just
+        // materialised (or advanced) its per-graph ref — the shared ref is
+        // now dead, never read again (the per-graph ref always wins), so
+        // delete it under the SAME sole-graph condition the fallback read
+        // it (unambiguously ours). `migrate_shared_worktree_refs` also
+        // migrates-then-deletes a shared merge-head, the same litter class.
+        // Cost on the hot path: nothing for standalone (no legacy name),
+        // one read_ref miss for an already-clean co-tenant repo. Not sole:
+        // leave it alone — when in doubt, never delete.
+        if let Some(shared) = self.namespace.legacy_workspace_ref()
+            && self.store.read_ref(shared)?.is_some()
+            && self.is_sole_graph()?
+        {
+            migrate_shared_worktree_refs(&self.store, &self.namespace)?;
+        }
         Ok(())
     }
 

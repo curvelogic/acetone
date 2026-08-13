@@ -108,6 +108,10 @@ fine.)
 
 ### Fixed
 
+- **The pre-split shared workspace ref is cleaned up** by the first
+  write after a sole co-tenant graph migrates to its per-graph ref —
+  previously it lingered as a dead ref (harmless: the per-graph ref
+  always wins; the correctness hazard was closed in 0.6.0).
 - **Per-graph linked-worktree durability anchors** (the known limitation
   recorded at the Phase 11 boundary): two co-tenant graphs saved from
   one linked worktree no longer clobber a single shared anchor — each
