@@ -4,7 +4,7 @@
 speaking this protocol to `acetone serve`, over a unix socket or stdio.
 The Python example client (`examples/acetone_daemon_client.py`) is the
 reference implementation. This document describes protocol major
-**1** as shipped in acetone 0.7; the governing design record is ADR-0074,
+**1** as of the 0.7 development head (the next release); the governing design record is ADR-0074,
 with ADR-0076 (protocol-first strategy) and ADR-0077 (daemon
 exclusivity).*
 
@@ -32,8 +32,10 @@ line to stdout — `{"ready": true, "pid": <n>, "protocol": 1}` — then
 serves. A socket path that is already served by a live daemon is
 refused; a dead daemon's leftover socket is reclaimed. On SIGTERM the
 daemon drains: stops accepting, unlinks the socket, completes each
-connection's in-flight request, then exits 0 (a second SIGTERM forces
-an immediate nonzero exit). On clean exit the socket is unlinked.
+connection's in-flight request, then exits 0 — waiting up to a grace
+period (default 30 s, `ACETONE_SERVE_DRAIN_GRACE_SECS`) for handlers,
+after which stragglers are abandoned and the exit is still 0. A second
+SIGTERM forces an immediate nonzero exit. On clean exit the socket is unlinked.
 
 **Stdio** — `acetone serve --stdio`, the LSP child-process pattern: the
 host spawns the daemon and owns the pipe. Stdout carries **nothing but
@@ -51,7 +53,10 @@ Every frame is a 4-byte **big-endian length** followed by that many
 bytes of **UTF-8 JSON** (one object). Frames above **16 MiB** are
 refused at the framing layer; an oversized inbound frame closes the
 connection. Requests and responses are JSON objects; responses echo the
-request's `id` verbatim.
+request's `id` verbatim. Three error frames can arrive **without** an
+`id`: `busy` (sent in place of the hello by a daemon at its connection
+cap), `protocol-mismatch`, and a connection-setup `internal` error — a
+client must tolerate an id-less error as its first frame.
 
 ## Hello
 
@@ -121,20 +126,29 @@ Streamed frame vocabulary (each carries the request's `id`):
   daemon-private file the peer never names; terminal `ok` carries
   `{"imported": true, "commit", "nodes", "edges"}` or
   `{"imported": false}` for a no-change import.
-- **`commit`** `{message, allow_empty?}` → `ok {"commit": <hex>}`.
-- **`branch`** `{name?, refspec?}` — with `name` creates (→
-  `ok {"created"}`); without, lists (→ `ok {"branches": [{name, …}]}`).
+- **`commit`** `{message, trailer?, allow_empty?}` → `ok {"commit":
+  <hex>}`. `trailer` is an array of `"Key=value"` strings recorded as
+  commit trailers.
+- **`branch`** `{name?, refspec?, delete?}` — with `name` creates (→
+  `ok {"created": <name>, "at": <hex>}`); with `delete` removes (→
+  `ok {"deleted": <name>, "was": <hex>}`); with neither, lists (→
+  `ok {"branches": [{"name", "head"}]}`).
 - **`checkout`** `{branch}` → `ok {"checked_out"}`.
-- **`merge`** `{refspec}` or `{abort: true}` → `ok {"outcome":
-  "merged"|"fast-forward"|"up-to-date"|"conflicts", …}`; conflicts are
-  **data**, not errors, resolved via `resolve`/writes then `commit`.
+- **`merge`** `{refspec, message?}` or `{abort: true}` → `ok
+  {"outcome": "merged"|"fast-forward"|"up-to-date"|"conflicts"}` plus,
+  for conflicts, `{"count", "conflicts": [<rendered strings>]}`; an
+  abort answers `ok {"aborted": true}`. Conflicts are **data**, not
+  errors, resolved via `resolve`/writes then `commit` (`message`
+  defaults to `"merge"`).
 - **`resolve`** `{all_ours|all_theirs}` → `ok {"resolved": n}`.
 - **`export`** `{format, label?|edge?}` — one table's rendered text
   streams as outbound `chunk` frames (terminal `ok {"rows": n}`); with
   neither `label` nor `edge`, every table streams, each announced by a
   `table` frame (terminal `ok {"tables": n}`). The text is rendered by
-  the same code as `acetone export`; the peer names its own files. A
-  label the CLI would refuse a filename for is refused on the wire too.
+  the same code as `acetone export`; the peer names its own files. In
+  the whole-graph mode, a label the CLI would refuse a filename for is
+  refused on the wire too (an explicitly named single-table export is
+  the escape hatch, as in the CLI).
 - **`fsck`** `{}` — findings stream as `finding` frames (raw strings —
   sanitising for a terminal is the displaying side's job); terminal
   `ok {"clean", "errors", "advisories"}`. Integrity errors are data.
@@ -152,10 +166,19 @@ the connection survives every typed refusal.
 
 `bad-request`, `unknown-verb`, `protocol-mismatch`, `parse`, `bind`,
 `exec`, `persist`, `graph`, `locked` (the single-writer conflict —
-retriable), `write-at-version`, `result-too-large`, `schema-apply`,
-`import`, `export`, `report`, `busy` (the connection cap), `internal`.
-New kinds may be added; clients should treat unknown kinds as terminal
-errors.
+retriable), `write-at-version`, `result-too-large`, `payload-too-large`,
+`schema-apply`, `import`, `export`, `report`, `busy` (the connection
+cap), `internal`, and the ref-verb refusals mapped from typed graph
+errors: `dirty-workspace`, `no-such-branch`, `branch-exists`,
+`no-current-branch`, `nothing-to-commit`, `merge-in-progress`,
+`concurrent-modification`. New kinds may be added; clients should treat
+unknown kinds as terminal errors.
+
+A **payload-protocol violation** — an over-cap stream, a non-chunk
+frame inside a payload, or EOF before `chunk_end` — answers its typed
+error and then **closes the connection**: the chunk stream is
+desynchronised and cannot be resumed. Every other typed refusal leaves
+the connection usable.
 
 ## Budgets and bounds
 
@@ -163,8 +186,10 @@ Per-query budgets are the CLI's (wall-clock via `--timeout`, the
 governed scan budgets); the daemon additionally caps result rows at
 100,000 (it materialises results before streaming, and the peak sums
 across `--max-concurrent`, default 4). A separate cap bounds open
-connections (256, socket transport); read/write idle timeouts (default
-30 s) close stalled peers. Payload verbs cap inbound streams
+connections (256, socket transport); on the socket transport,
+read/write idle timeouts (default 30 s) close stalled peers — the
+stdio transport sets none (the pipe peer is the parent by
+construction). Payload verbs cap inbound streams
 (schema-apply 16 MiB, import 1 GiB). Writes serialise on the
 single-writer lock: a concurrent write returns `locked` to retry,
 exactly as two CLI processes would; a stale lock left by a killed
