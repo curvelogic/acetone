@@ -1505,3 +1505,73 @@ fn per_graph_wins_while_a_stale_shared_ref_coexists() {
         );
     }
 }
+
+/// A MULTI-graph repository's auto-detecting `check_path` scopes to the
+/// UNION of the graph namespaces (acetone-j6ui.1) — every graph's refs
+/// are verified, the user's code branches are excluded by construction —
+/// with a POSITIVE assertion (planted damage IS flagged) so a
+/// walk-nothing regression cannot pass vacuously.
+#[test]
+fn multi_graph_check_path_walks_the_union_not_the_users_branches() {
+    let (project, _dir, code_commit, _code_blob) = code_repo();
+    for graph in ["g", "h"] {
+        let repo = Repository::init_co_tenant(&project, graph, InitOptions::default())
+            .expect("init_co_tenant");
+        seed_graph(&repo, 3);
+    }
+
+    // Plant damage in g's namespace: a branch tip that is a PLAIN GIT
+    // commit (no acetone manifest in its tree) — inside a graph namespace
+    // that is genuine damage the tip walk must flag.
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .args(["update-ref", "refs/heads/acetone/g/broken", &code_commit])
+        .status()
+        .expect("git update-ref");
+    assert!(out.success());
+    // Advance the user's main past the planted commit, so the two plain
+    // git tips are DISTINCT — otherwise the tip walk's commit-id dedup
+    // masks whether the user's branch was walked at all.
+    std::fs::write(project.join("more.txt"), "more").expect("write");
+    git(&project, &["add", "more.txt"]);
+    git(&project, &["commit", "-m", "code: more"]);
+
+    // The auto-detecting entry (no --graph) on a MULTI-graph repo.
+    let report = acetone_graph::fsck::check_path(&project).expect("fsck runs");
+
+    // POSITIVE: g's planted damage is flagged (no vacuous pass) …
+    assert!(
+        report.findings.iter().any(|f| match &f.origin {
+            acetone_graph::fsck::Origin::Commit { reference, .. } =>
+                reference.contains("acetone/g/"),
+            _ => false,
+        }),
+        "the union scope must flag g's planted damage: {:?}",
+        report.findings
+    );
+    // … and NO finding walks the user's code branches: every commit-origin
+    // finding names an acetone namespace.
+    assert!(
+        report.findings.iter().all(|f| match &f.origin {
+            acetone_graph::fsck::Origin::Commit { reference, .. } =>
+                reference.contains("refs/heads/acetone/")
+                    || reference.contains("refs/tags/acetone/"),
+            _ => true,
+        }),
+        "the union scope must exclude the user's branches: {:?}",
+        report.findings
+    );
+
+    // Scoping away still works: h's view is clean of g's damage.
+    let scoped = acetone_graph::fsck::check_path_graph(&project, Some("h")).expect("scoped");
+    assert!(
+        scoped.findings.iter().all(|f| match &f.origin {
+            acetone_graph::fsck::Origin::Commit { reference, .. } =>
+                !reference.contains("acetone/g/"),
+            _ => true,
+        }),
+        "--graph h must not report g's damage: {:?}",
+        scoped.findings
+    );
+}

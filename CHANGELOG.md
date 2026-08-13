@@ -108,6 +108,10 @@ fine.)
 
 ### Fixed
 
+- **`fsck` of a multi-graph repository checks every graph** (the
+  auto-detecting path, no `--graph`): it now scopes to the union of the
+  graph namespaces instead of falling back to the whole-store walk that
+  reported the user's own code commits as findings.
 - **The pre-split shared workspace ref is cleaned up** by the first
   write after a sole co-tenant graph migrates to its per-graph ref —
   previously it lingered as a dead ref (harmless: the per-graph ref
