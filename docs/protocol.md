@@ -160,7 +160,8 @@ Streamed frame vocabulary (each carries the request's `id`):
   "conflicts"}` counts.
 
 An unknown verb is a typed `unknown-verb` error naming the served set;
-the connection survives every typed refusal.
+the connection survives every typed refusal except a payload-protocol
+violation (see the error-kinds section).
 
 ## Error kinds
 
