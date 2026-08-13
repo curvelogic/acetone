@@ -534,6 +534,28 @@ fn per_graph_anchors_do_not_clobber_and_sweep_together() {
     // A linked worktree; save UNCOMMITTED state in BOTH graphs from it.
     let wt = dir.path().join("wt");
     git(&["worktree", "add", "--detach", wt.to_str().unwrap(), "HEAD"]);
+
+    // Plant a LEGACY flat anchor for this worktree BEFORE any save — the
+    // D/F regression pin (PR #286 review F4b): a post-upgrade save must
+    // succeed beside a live pre-upgrade ref FILE, which is exactly what
+    // forced the per-graph anchors onto their own prefix.
+    let main_probe = Repository::open_graph(&host, "g").expect("open for plant");
+    let (_, marker_blob) = main_probe
+        .store()
+        .list_refs("refs/acetone/graphs/")
+        .expect("list markers")[0]
+        .clone();
+    let wt_id = wt.file_name().unwrap().to_str().unwrap().to_owned();
+    main_probe
+        .store()
+        .write_ref(
+            &format!("refs/acetone/worktree-anchors/{wt_id}"),
+            None,
+            &marker_blob,
+        )
+        .expect("plant legacy flat anchor");
+    drop(main_probe);
+
     for (graph, base) in [("g", 10i64), ("h", 20i64)] {
         let repo = Repository::open_graph(&wt, graph).expect("open in worktree");
         let mut tx = repo.begin_write().expect("begin");
@@ -560,31 +582,6 @@ fn per_graph_anchors_do_not_clobber_and_sweep_together() {
         anchors.iter().any(|a| a.ends_with("/g")) && anchors.iter().any(|a| a.ends_with("/h")),
         "anchors are keyed <worktree>/<graph>: {anchors:?}"
     );
-
-    // A planted legacy FLAT anchor under the OLD prefix (a pre-upgrade
-    // leftover for this worktree) coexists — the D/F conflict that forced
-    // the separate prefix — and is judged by the same worktree-existence
-    // rule.
-    let wt_id = anchors[0]
-        .strip_prefix("refs/acetone/worktree-graph-anchors/")
-        .unwrap()
-        .split('/')
-        .next()
-        .unwrap()
-        .to_owned();
-    let (_, some_hash) = main_repo
-        .store()
-        .list_refs("refs/acetone/worktree-graph-anchors/")
-        .expect("list")[0]
-        .clone();
-    main_repo
-        .store()
-        .write_ref(
-            &format!("refs/acetone/worktree-anchors/{wt_id}"),
-            None,
-            &some_hash,
-        )
-        .expect("plant legacy");
 
     // While the worktree lives, gc keeps all three anchors (both forms).
     main_repo.gc().expect("gc");
@@ -627,4 +624,75 @@ fn per_graph_anchors_do_not_clobber_and_sweep_together() {
         remaining, 0,
         "a removed worktree's anchors — per-graph and legacy — are swept"
     );
+}
+
+/// ADR-0044's actual promise, end-to-end for the per-graph key shape
+/// (PR #286 review F4a): BOTH co-tenant graphs' saved-but-uncommitted
+/// linked-worktree state survives an aggressive foreign
+/// `git gc --prune=now` run from the host's main worktree — because each
+/// graph's common-store anchor is a gc root git enumerates.
+#[test]
+fn per_graph_anchors_survive_a_foreign_git_gc() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let host = dir.path().join("host");
+    std::fs::create_dir(&host).expect("mkdir");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&host)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["-c", "init.defaultBranch=main", "init"]);
+    std::fs::write(host.join("code.txt"), "code").expect("write");
+    git(&["add", "code.txt"]);
+    git(&["commit", "-m", "code"]);
+    for graph in ["g", "h"] {
+        let repo = Repository::init_co_tenant(&host, graph, InitOptions::default()).expect("init");
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("schema");
+        tx.commit("schema", &[], None).expect("commit");
+    }
+
+    let wt = dir.path().join("wt-foreign");
+    git(&["worktree", "add", "--detach", wt.to_str().unwrap(), "HEAD"]);
+    for (graph, base) in [("g", 100i64), ("h", 200i64)] {
+        let repo = Repository::open_graph(&wt, graph).expect("open in worktree");
+        let mut tx = repo.begin_write().expect("begin");
+        for i in 0..200 {
+            let key = NodeKey::new("N", vec![Value::Int(base + i)]).expect("k");
+            tx.put_node(
+                &key,
+                &NodeRecord::new([], BTreeMap::from([("v".to_owned(), Value::Int(i))])),
+            )
+            .expect("n");
+        }
+        tx.save().expect("save uncommitted");
+    }
+
+    // The aggressive foreign gc, from the host's main worktree.
+    git(&["gc", "--prune=now"]);
+
+    // Cold re-open: both graphs' uncommitted state is fully intact.
+    for (graph, base) in [("g", 100i64), ("h", 200i64)] {
+        let repo = Repository::open_graph(&wt, graph).expect("reopen after foreign gc");
+        let snapshot = repo.workspace_snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.nodes().expect("nodes").len(),
+            200,
+            "graph {graph}'s saved state survives a foreign git gc --prune=now"
+        );
+        let key = NodeKey::new("N", vec![Value::Int(base + 199)]).expect("k");
+        assert!(
+            snapshot.get_node(&key).expect("get").is_some(),
+            "graph {graph}'s last node reads back"
+        );
+    }
 }

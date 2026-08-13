@@ -18,18 +18,6 @@ fine.)
 
 ### Added
 
-### Fixed
-
-- **Per-graph linked-worktree durability anchors** (the known limitation
-  recorded at the Phase 11 boundary): two co-tenant graphs saved from
-  one linked worktree no longer clobber a single shared anchor — each
-  keeps its own foreign-`git gc` protection, under a new
-  `refs/acetone/worktree-graph-anchors/<worktree>/<graph>` namespace
-  (separate from the legacy flat one, whose ref files git's D/F rule
-  would forbid writing beneath). Legacy and standalone anchors keep
-  their exact lifecycle; gc's staleness sweep and fsck's coverage scan
-  handle both forms with one rule.
-
 - **`acetone attach`** — reattach a cloned co-tenant graph in one
   command (tenant-pulled): recreates the local-only state a `git clone`
   does not transfer (the graph marker, the graph's HEAD, local branches
@@ -117,6 +105,18 @@ fine.)
   grace period (default 30 s, `ACETONE_SERVE_DRAIN_GRACE_SECS`) for
   handlers to finish, and exits 0. A second SIGTERM during the drain
   forces an immediate exit (nonzero).
+
+### Fixed
+
+- **Per-graph linked-worktree durability anchors** (the known limitation
+  recorded at the Phase 11 boundary): two co-tenant graphs saved from
+  one linked worktree no longer clobber a single shared anchor — each
+  keeps its own foreign-`git gc` protection, under a new
+  `refs/acetone/worktree-graph-anchors/<worktree>/<graph>` namespace
+  (separate from the legacy flat one, whose ref files git's D/F rule
+  would forbid writing beneath). Legacy and standalone anchors keep
+  their exact lifecycle; gc's staleness sweep and fsck's coverage scan
+  handle both forms with one rule.
 
 ### Changed
 

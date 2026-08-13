@@ -1826,7 +1826,7 @@ impl Repository {
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         after_lock();
         after_recheck();
-        // `refs/acetone/worktree-anchors/*` whose worktree directory no
+        // Anchors (both namespaces) whose worktree directory no
         // longer exists are leftovers from removed worktrees — pinning
         // chunks nothing live needs (ADR-0044). Delete them before
         // consolidating so their chunks are reclaimed. Each deletion is
@@ -2182,7 +2182,10 @@ impl Repository {
     /// transaction save, merge, abort, reindex), so this is also where a
     /// *linked* worktree renews its common-dir durability anchor (ADR-0044):
     /// once the per-worktree CAS has committed the new workspace tree, mirror
-    /// it into `refs/acetone/worktree-anchors/<id>` so a foreign `git gc` from
+    /// it into the namespace's anchor ref — flat
+    /// `refs/acetone/worktree-anchors/<id>` for standalone,
+    /// `refs/acetone/worktree-graph-anchors/<id>/<graph>` for co-tenant
+    /// (acetone-j6ui.4) — so a foreign `git gc` from
     /// the main worktree cannot prune the linked worktree's uncommitted chunks.
     /// The anchor merely follows the workspace tree, so it is force-written; a
     /// failure to anchor fails the save (durability is the whole point).

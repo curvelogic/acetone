@@ -77,10 +77,12 @@ pub struct GraphRefNamespace {
     legacy_worktree_refs: Option<(String, String)>,
     /// The graph component of this graph's linked-worktree durability
     /// anchors (acetone-j6ui.4): `Some(graph)` for co-tenant — anchors keyed
-    /// `refs/acetone/worktree-anchors/<worktree>/<graph>`, so two co-tenant
-    /// graphs saved from one linked worktree no longer clobber one shared
-    /// anchor — `None` for standalone, which keeps the original flat
-    /// `<worktree>` key (one graph; back-compatible by construction).
+    /// `refs/acetone/worktree-graph-anchors/<worktree>/<graph>` (a prefix of
+    /// their own; a legacy flat anchor is a ref FILE git's D/F rule forbids
+    /// writing beneath), so two co-tenant graphs saved from one linked
+    /// worktree no longer clobber one shared anchor — `None` for standalone,
+    /// which keeps the original flat `worktree-anchors/<worktree>` key (one
+    /// graph; back-compatible by construction).
     anchor_graph: Option<String>,
 }
 
@@ -385,6 +387,7 @@ mod tests {
             "refs/acetone/g/HEAD",
             "refs/acetone/graphs/g",
             "refs/acetone/worktree-anchors/abc",
+            "refs/acetone/worktree-graph-anchors/abc/g",
         ] {
             assert!(ns.owns_ref(r), "co-tenant should own {r}");
         }
