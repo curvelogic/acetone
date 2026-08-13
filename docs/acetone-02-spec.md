@@ -64,7 +64,7 @@ Write semantics interact with identity: `CREATE` of a node whose key already exi
 
 ### 5.2 Versioning surface
 
-Session state includes the checked-out ref; queries address that state by default. Time travel: `AT <refspec>` may suffix a `MATCH` clause group (`MATCH (n:Host) AT 'import/2026-06' RETURN n`), resolving a branch, tag, full ref name or commit hash. (Git *ancestry* refspecs — `main~5`, `HEAD^`, `^N` — resolve everywhere a refspec is accepted since 0.7, `acetone-bvq`.) History procedures: `CALL acetone.log([ref])`, `CALL acetone.diff(from, to)` (yielding change rows and, in graph form, `_Added`/`_Removed`/`_Modified` virtual elements), `CALL acetone.blame(label, key)`, `CALL acetone.conflicts()`. Procedures are read-only; repository mutations (branch, merge, commit) are CLI/library operations, not query-language operations, in v0.1.
+Session state includes the checked-out ref; queries address that state by default. Time travel: `AT <refspec>` may suffix a `MATCH` clause group (`MATCH (n:Host) AT 'import/2026-06' RETURN n`), resolving a branch, tag, full ref name or commit hash. (Git *ancestry* refspecs — `main~5`, `HEAD^`, `^N` — since 0.7 resolve everywhere a refspec is accepted, `acetone-bvq`.) History procedures: `CALL acetone.log([ref])`, `CALL acetone.diff(from, to)` (yielding change rows and, in graph form, `_Added`/`_Removed`/`_Modified` virtual elements), `CALL acetone.blame(label, key)`, `CALL acetone.conflicts()`. Procedures are read-only; repository mutations (branch, merge, commit) are CLI/library operations, not query-language operations, in v0.1.
 
 ### 5.3 Execution model
 
