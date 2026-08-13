@@ -18,6 +18,15 @@ fine.)
 
 ### Added
 
+- **The daemon protocol is a documented, versioned artefact**
+  (`docs/protocol.md`, protocol 1 — ADR-0076's deliverable): transports
+  and lifecycle, framing, the full per-verb frame vocabulary, the
+  error-kind registry, budgets, the compatibility policy with the
+  status-body history, and the measured wire-vs-process-per-command
+  comparison ADR-0074 promised (the daemon is ~10–19× faster per
+  operation on a warm connection). The Python example client is named
+  as the reference implementation.
+
 - **`acetone attach`** — reattach a cloned co-tenant graph in one
   command (tenant-pulled): recreates the local-only state a `git clone`
   does not transfer (the graph marker, the graph's HEAD, local branches
