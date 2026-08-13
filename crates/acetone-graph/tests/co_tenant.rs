@@ -1026,14 +1026,13 @@ fn a_pre_split_co_tenant_workspace_survives_the_upgrade_and_migrates_on_write() 
         "the post-upgrade node must be present"
     );
 
-    // (4) The crash-window invariant: even with BOTH refs present (a
-    //     migration that wrote per-graph but a stale shared lingers), the
-    //     per-graph ref wins, so no stale content is ever read.
+    // (4) Unit 3 (acetone-j6ui.3) landed: the write that materialised the
+    //     per-graph ref also cleans the stale shared one up — the
+    //     crash-window invariant (per-graph wins while both exist) still
+    //     holds in the instant between the CAS and the cleanup.
     assert!(
-        ref_value(&project, shared).is_some(),
-        "this build leaves the stale shared ref (its cleanup is unit 3's, \
-         where a second graph makes it matter); the per-graph-first order \
-         makes it harmless"
+        ref_value(&project, shared).is_none(),
+        "the migrating write cleans the stale shared ref up (acetone-j6ui.3)"
     );
     assert_eq!(
         ref_value(&project, per_graph).expect("per-graph present"),
@@ -1358,4 +1357,76 @@ fn adding_a_second_graph_preserves_the_first_graphs_shared_workspace() {
             .is_some(),
         "alpha's uncommitted node must survive adding a second graph"
     );
+}
+
+/// The pre-split shared workspace ref is litter once a sole graph's first
+/// write materialises the per-graph ref — the next write cleans it up
+/// (acetone-j6ui.3; the correctness hazard was closed in PR #263, this is
+/// the lingering dead ref).
+#[test]
+fn a_write_cleans_up_the_pre_split_shared_refs() {
+    let (project, _guard, _commit, _blob) = code_repo();
+    let repo = Repository::init_co_tenant(&project, "g", InitOptions::default()).expect("init g");
+    // Committed base + a staged (uncommitted) node.
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::Label {
+        name: "N".into(),
+        def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+    })
+    .expect("schema");
+    tx.commit("schema", &[], None).expect("commit");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(1), &NodeRecord::new([], BTreeMap::new()))
+        .expect("put");
+    tx.save().expect("stage");
+
+    // SIMULATE the pre-split layout: move the workspace onto the shared
+    // ref and plant a shared merge-head value too.
+    let store = repo.store();
+    let per_graph = "refs/worktree/acetone/g/workspace";
+    let shared = "refs/worktree/acetone/workspace";
+    let value = store
+        .read_ref(per_graph)
+        .expect("read")
+        .expect("workspace present");
+    store.write_ref(shared, None, &value).expect("plant shared");
+    store.delete_ref(per_graph).expect("drop per-graph");
+    store
+        .write_ref("refs/worktree/acetone/merge-head", None, &value)
+        .expect("plant shared merge-head");
+    drop(repo);
+
+    // Reopen (reads via the sole-graph fallback), then WRITE: the write
+    // must migrate the value and delete both shared refs.
+    let repo = Repository::open_graph(&project, "g").expect("reopen");
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    assert!(
+        snapshot.get_node(&node(1)).expect("get").is_some(),
+        "the fallback still reads the staged node"
+    );
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(2), &NodeRecord::new([], BTreeMap::new()))
+        .expect("put");
+    tx.save().expect("write");
+
+    let store = repo.store();
+    assert!(
+        store.read_ref(shared).expect("read").is_none(),
+        "the stale shared workspace ref is cleaned up"
+    );
+    assert!(
+        store
+            .read_ref("refs/worktree/acetone/merge-head")
+            .expect("read")
+            .is_none(),
+        "the stale shared merge-head is cleaned up"
+    );
+    assert!(
+        store.read_ref(per_graph).expect("read").is_some(),
+        "the per-graph ref carries the workspace"
+    );
+    // Content preserved: both nodes read.
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    assert!(snapshot.get_node(&node(1)).expect("get").is_some());
+    assert!(snapshot.get_node(&node(2)).expect("get").is_some());
 }
