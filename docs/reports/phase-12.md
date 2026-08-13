@@ -83,8 +83,9 @@ independently re-run by the reviewer within noise).
    their reviews' demanded regression tests. ✅
 
 TCK conformance is unchanged (the phase added no Cypher surface); the
-public-API freeze gate is green at head with three deliberate,
-re-blessed additions (attach, DaemonLock family, the worktree scan).
+public-API freeze gate is green at head with four deliberate,
+re-blessed additions (attach, the DaemonLock family, the per-graph
+anchor symbols, the worktree scan).
 
 ## ADRs taken
 
@@ -117,7 +118,9 @@ security review (below) found the whole surface sound.
 
 ## Milestone security review
 
-Fresh subagent over the entire `v0.6.0..main` diff; **no blocker-class
+Fresh subagent over the entire `v0.6.0..main` diff; the full verdict
+and per-finding triage are recorded verbatim on the phase epic
+(`acetone-zavr`, 2026-08-13) as the primary record. **No blocker-class
 or high-severity findings; GATE-READY.** Six low/note findings, all
 triaged accepted-risk with recorded rationale (drain-expiry is
 SIGKILL-equivalent by design; attach's lock-free ref surgery degrades
