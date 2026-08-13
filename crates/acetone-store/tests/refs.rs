@@ -530,3 +530,56 @@ fn write_refs_atomic_rejects_invalid_names_before_taking_locks() {
         other => panic!("expected InvalidRefName, got {other:?}"),
     }
 }
+
+/// `any_worktree_has_ref` sees a per-worktree ref that exists ONLY in a
+/// linked worktree, from the main worktree's store handle — the gix proxy
+/// direction (acetone-zavr.9; PR #289 review F4 pinned this against gix
+/// upgrades; the main-from-linked direction is pinned at the graph level).
+#[test]
+fn any_worktree_has_ref_sees_a_linked_worktrees_private_ref() {
+    let (dir, store) = new_store();
+    let path = repo_path(&dir);
+    const WT_REF: &str = "refs/worktree/acetone/workspace";
+
+    // A commit so `git worktree add` has a committish.
+    let value = store.put(b"payload").expect("put");
+    let commit = store
+        .create_commit(&NewCommit::new(b"m", "readme", "seed"))
+        .expect("commit");
+    git(&path, &["update-ref", "refs/heads/main", &commit.to_hex()]);
+
+    // Absent everywhere: false.
+    assert!(!store.any_worktree_has_ref(&[WT_REF]).expect("scan"));
+
+    // Written ONLY in a linked worktree (via that worktree's own store).
+    let wt = dir.path().join("wt");
+    git(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            wt.to_str().unwrap(),
+            &commit.to_hex(),
+        ],
+    );
+    let wt_store = GitStore::open(&wt).expect("open worktree store");
+    wt_store
+        .write_ref(WT_REF, None, &value)
+        .expect("write per-worktree ref");
+
+    // The MAIN store handle sees it through the proxy scan…
+    assert!(
+        store.any_worktree_has_ref(&[WT_REF]).expect("scan"),
+        "the proxy arm must see a linked worktree's private ref"
+    );
+    // …even after the checkout directory is deleted (the admin dir holds
+    // the refs; a stale worktree must not blind or break the scan).
+    std::fs::remove_dir_all(&wt).expect("delete checkout");
+    assert!(
+        store
+            .any_worktree_has_ref(&[WT_REF])
+            .expect("scan survives"),
+        "a deleted checkout neither errors nor hides the ref"
+    );
+}
