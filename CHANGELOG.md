@@ -729,7 +729,9 @@ diffs become change reports, and any git remote is backup and transport.
 The authoritative design record — data model, storage, encodings, query
 language, diff/merge, and the phased roadmap — lives in `docs/`.
 
-[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/curvelogic/acetone/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/curvelogic/acetone/releases/tag/v0.7.0
+[0.6.0]: https://github.com/curvelogic/acetone/releases/tag/v0.6.0
 [0.5.0]: https://github.com/curvelogic/acetone/releases/tag/v0.5.0
 [0.4.0]: https://github.com/curvelogic/acetone/releases/tag/v0.4.0
 [0.3.1]: https://github.com/curvelogic/acetone/releases/tag/v0.3.1
