@@ -409,7 +409,24 @@ pub fn check_path_graph(
             Err(GraphError::MultipleGraphs { names }) => {
                 let mut report = FsckReport::default();
                 for name in names {
-                    crate::repo::validate_graph_name(&name)?;
+                    // An invalid marker name must not abort the diagnostic
+                    // (the acetone-zhp discipline, PR #288 review F1): name
+                    // the unverifiable namespace as a finding and keep
+                    // checking the valid graphs — partial coverage beats
+                    // none, and the finding names the silence.
+                    if crate::repo::validate_graph_name(&name).is_err() {
+                        report.push(
+                            FindingKind::Unverified,
+                            &Origin::Ref {
+                                reference: format!("{}{name}", crate::repo::GRAPHS_REF_PREFIX),
+                            },
+                            None,
+                            "graph marker has an invalid graph name; its \
+                             namespace was not checked"
+                                .to_owned(),
+                        );
+                        continue;
+                    }
                     let ns = crate::refns::GraphRefNamespace::co_tenant(&name);
                     let one = check_store(
                         &store,
@@ -420,6 +437,25 @@ pub fn check_path_graph(
                     )?;
                     report.findings.extend(one.findings);
                 }
+                // Shared resources (the legacy shared workspace ref, the
+                // pre-split shared names, worktree anchors) are enumerated
+                // by every per-graph pass: drop byte-identical duplicates
+                // so counts are honest (PR #288 review F2).
+                let mut seen: Vec<Finding> = Vec::new();
+                report.findings.retain(|f| {
+                    if seen.contains(f) {
+                        false
+                    } else {
+                        seen.push(f.clone());
+                        true
+                    }
+                });
+                // Deliberate narrowing, documented (PR #288 review F4): an
+                // acetone namespace whose marker was hand-deleted is outside
+                // every graph's scope and is NOT walked here — matching the
+                // single-graph co-tenant scoping that shipped in 0.6.0. A
+                // future advisory could flag marker-less acetone/<name>/
+                // prefixes; today the marker IS the registry.
                 return Ok(report);
             }
             // Any other detection failure (a damaged marker store): the
