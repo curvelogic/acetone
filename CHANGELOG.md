@@ -16,6 +16,8 @@ fine.)
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-13
+
 ### Added
 
 - **The daemon protocol is a documented, versioned artefact**
