@@ -172,8 +172,9 @@ majors by ADR) — deliberate, documented, and now measured.
 
 ## Boundary review (2026-10-18)
 
-*Recorded after the sprint demo's live part (2), run against the v0.7.0
-release binary built from `main` (`cf41dbf`) in a scratch graph. The
+*Recorded after the sprint demo's live part (2), run against a release-profile
+build of `main` at `cf41dbf` (reporting `acetone 0.7.0`) in a scratch
+graph. The
 rulings below were relayed by the coordinating session and then
 **confirmed first-hand by Greg in the demo session**, in reply to the
 numbered list of the five queued items: "All ratified- start the demo".*
@@ -202,8 +203,8 @@ numbered list of the five queued items: "All ratified- start the demo".*
 and Phase 13 is not opened by it: both remain Greg's acts (CLAUDE.md →
 Phase boundary; ADR-0067).
 
-**What the live demo surfaced** — eleven steps covering every gate
-criterion; every shipped behaviour demonstrated as specified. Three
+**What the live demo surfaced** — eleven steps covering the four gate
+criteria. Three
 findings, handed to Greg as structured text for filing (the demo session
 could not reach the beads tracker — `refs/dolt/*` is refused by the
 cloud git proxy, per `docs/notes/operational-constraints.md`):
@@ -213,10 +214,11 @@ cloud git proxy, per `docs/notes/operational-constraints.md`):
   quotes escaped) where `nodes[].key` is the typed array; a consumer
   must parse a display string to correlate a conflict with its node,
   and the markdown renders the escaped form.
-- **bug, P3** — CLI help for every refspec-accepting argument (`branch`,
-  `tag`, `diff`, `merge`, `schema --at`, `query --at`) still lists
-  "branch/tag short name, full ref name or commit hash", omitting the
-  ancestry syntax #284 shipped (the CLI analogue of #292).
+- **bug, P3** — CLI help for the refspec-accepting arguments (`branch`,
+  `tag`, `merge`, `schema`, `schema --at`, `query --at`) describes them
+  as some form of "branch/tag short name, full ref name or commit hash"
+  (`diff` lists no syntax at all), omitting the ancestry syntax #284
+  shipped (the CLI analogue of #292).
 - **feature, P3** — `acetone log --oneline` (hash + subject); next
   grooming.
 
@@ -224,7 +226,10 @@ One measurement note: the wire-vs-process comparison re-run on the
 Linux cloud container (same shape: 20-node repo, N=50 medians, warm
 connection vs process spawn) gave ~6–8× (status 0.51–0.65 ms vs
 3.8–4.0 ms; query 0.46–0.52 ms vs 3.8–4.3 ms), against
-`docs/protocol.md`'s macOS ~10×/~19×. Same direction and order; the gap
-is mostly cheaper process spawn on Linux. The protocol document already
+`docs/protocol.md`'s macOS ~10×/~19×. Same direction and order of
+magnitude, but narrower: process spawn was somewhat cheaper here
+(~3.8–4.3 ms vs ~4.9–5.0 ms) and the small-query wire time higher
+(0.46–0.52 ms vs 0.26 ms; the demo's query need not match the
+document's); the causes were not investigated. The protocol document already
 names its platform, so it is not wrong; a Linux row would set
 expectations for Linux readers.
