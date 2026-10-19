@@ -2,7 +2,10 @@
 
 *Status: accepted — ruled by Greg at the Phase 12 opening (2026-08-11),
 selecting option (a) of the three recorded on the decision bead · Date:
-2026-08-11 · Bead: acetone-pz0k.8*
+2026-08-11 · Bead: acetone-pz0k.8 · Delivered in PR #281 with two
+deviations (per-worktree lock; a `DaemonExclusive` error, not `Locked`),
+ratified by Greg at the Phase 12 boundary (2026-10-18; see
+`docs/reports/phase-12.md` → Boundary review)*
 
 ## Context
 
