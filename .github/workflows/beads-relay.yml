@@ -1,0 +1,16 @@
+name: beads relay
+on:
+  workflow_dispatch:
+    inputs:
+      inbox-branch:
+        description: Inbox branch that dispatched this run; empty sweeps all
+        type: string
+        required: false
+jobs:
+  relay:
+    uses: curvelogic/curve-rig/.github/workflows/beads-relay.yml@ed3974307262bf88fe64a0ebabd956c1b6dab8e9
+    with:
+      rig-ref: ed3974307262bf88fe64a0ebabd956c1b6dab8e9
+      inbox-branch: ${{ inputs.inbox-branch }}
+    permissions:
+      contents: write

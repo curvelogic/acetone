@@ -1,0 +1,23 @@
+name: beads inbox
+on:
+  push:
+    branches: ["beads-inbox/**"]
+permissions: {}
+jobs:
+  dispatch:
+    if: github.event.deleted != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the beads relay on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INBOX: ${{ github.ref_name }}
+        run: >-
+          gh api --method POST
+          "repos/$REPO/actions/workflows/beads-relay.yml/dispatches"
+          -f ref="$DEFAULT_BRANCH" -f "inputs[inbox-branch]=$INBOX"
