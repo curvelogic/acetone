@@ -21,7 +21,8 @@ fetch them".
   qualifies; conflict state and import bookmarks must not rely on
   custom-namespace sync.
 - Beads sync (`refs/dolt/data`) fails in such environments — treat `bd`
-  Dolt sync as desktop-only for this repository.
+  Dolt sync as desktop-only for this repository; cloud sessions relay
+  their writes through CI instead (ADR-0078).
 
 ## Stock `git gc`/`git repack` on an acetone repo is safe-but-lossy (2026-07-04)
 
