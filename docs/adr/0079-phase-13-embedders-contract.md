@@ -161,11 +161,13 @@ ADR-0067. The final wording is ratified at the opening.
 - **Claiming before the opening.** With Phase 12's gate closed, the
   members already show in `bd ready`. Each carries a note that it must
   not be claimed before Greg opens the phase.
-- **Machine-interface changes.** There is one breaking change:
-  `report_version` 2 and the typed `merge` conflict payload. The new
-  fields, the procedure's columns and the `discard` verb are additive. All
-  of it is CHANGELOG'd under `STABILITY.md`'s pre-1.0 posture. The
-  protocol stays at version 1 unless review finds a breaking frame change.
+- **Machine-interface changes.** There are two breaking changes:
+  `report_version` 2, and the typed conflict payload in the `merge`
+  verb's reply. The new fields, the procedure's columns and the `discard`
+  verb are additive. All of it is CHANGELOG'd under `STABILITY.md`'s
+  pre-1.0 posture. The protocol's major version stays at 1, per
+  `docs/protocol.md`'s compatibility policy; 0.7's `status` reshape is
+  the precedent.
 - **Formats.** No on-disk format change is planned. If `acetone-7qw.26`
   adds a conflict kind, its implementer states the format impact. CHANGELOG
   0.5's `rel-wrong-type` was added at `format_version` 1 and is the
