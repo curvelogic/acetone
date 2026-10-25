@@ -807,7 +807,7 @@ fn run_query(
 /// as an f64, so `10000000000000000000` and `1e19` arrive identically.
 /// Rather than let an out-of-range integer silently become a Float, every
 /// integral number at or beyond ±2^63 is refused, whichever way it was
-/// written. A name may carry the query's `$` sigil, as with `--param`;
+/// written. For the same reason a negative zero (`-0` or `-0.0`) is refused. A name may carry the query's `$` sigil, as with `--param`;
 /// binding a name twice that way is refused. Errors name the parameter.
 fn json_params(v: &Json) -> std::result::Result<BTreeMap<String, QueryValue>, String> {
     let Some(object) = v.as_object() else {
@@ -848,6 +848,16 @@ fn json_param_value(v: &Json) -> std::result::Result<QueryValue, String> {
                 let f = n.as_f64().unwrap_or(f64::NAN);
                 if !f.is_finite() {
                     return Err(format!("number {n} is not finite"));
+                }
+                // serde_json reads a bare `-0` as the float -0.0, so `-0`
+                // and `-0.0` are indistinguishable here; `--param` binds the
+                // first as Int 0 and the second as Float -0.0. Refuse rather
+                // than guess, so neither spelling diverges from the CLI.
+                if f == 0.0 && f.is_sign_negative() {
+                    return Err(format!(
+                        "number {n} is a negative zero, which JSON parsing cannot type \
+                         (write 0 for an integer or 0.0 for a float); refused"
+                    ));
                 }
                 if f.fract() == 0.0 && f.abs() >= 9_223_372_036_854_775_808.0 {
                     return Err(format!(

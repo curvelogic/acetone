@@ -4,7 +4,7 @@
 speaking this protocol to `acetone serve`, over a unix socket or stdio.
 The Python example client (`examples/acetone_daemon_client.py`) is the
 reference implementation. This document describes protocol major
-**1** as of the 0.7 development head (the next release); the governing design record is ADR-0074,
+**1** as of the 0.8 development head (the next release); the governing design record is ADR-0074,
 with ADR-0076 (protocol-first strategy) and ADR-0077 (daemon
 exclusivity).*
 
@@ -120,7 +120,11 @@ Streamed frame vocabulary (each carries the request's `id`):
   cannot tell `10000000000000000000` from `1e19`, so an out-of-range
   integer is never silently a float (the cost is that floats of that
   magnitude cannot be bound; pass such a value as a string and convert
-  it in the query). Temporal and bytes values have no parameter form on
+  it in the query). For the same reason a negative zero (`-0` or
+  `-0.0`) is refused: `--param` types the two differently, and once
+  parsed they are the same number. A name given twice in one JSON
+  object is not detected (the parser keeps the last value), whereas
+  `--param` refuses a second binding. Temporal and bytes values have no parameter form on
   either channel. An ill-typed `parameters` is `bad-request`, naming
   the parameter, before the query runs; a `$name` the query uses but
   `parameters` does not bind is the CLI's `exec` error (`missing

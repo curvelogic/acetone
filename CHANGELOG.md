@@ -23,8 +23,8 @@ fine.)
   counterpart of `query --param`, so a client never interpolates
   untrusted input into Cypher. The JSON-to-value mapping is specified in
   `docs/protocol.md`; it matches `--param` on every type both can
-  express, and an integral number at or beyond ±2^63 is refused rather
-  than silently bound as a float. The Python example client takes a
+  express. Two numbers JSON parsing cannot type are refused rather than
+  guessed: an integral number at or beyond ±2^63, and negative zero. The Python example client takes a
   `parameters` argument.
 
 ## [0.7.0] - 2026-08-13

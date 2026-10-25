@@ -2450,6 +2450,7 @@ fn ill_typed_and_unbound_socket_parameters_are_typed_errors() {
         (serde_json::json!({"big": 1e19}), "big"),
         (serde_json::json!({"deep": [{"x": u64::MAX}]}), "deep"),
         (serde_json::json!({"": 1}), "empty"),
+        (serde_json::json!({"z": -0.0}), "negative zero"),
         (serde_json::json!({"p": 1, "$p": 2}), "bound twice"),
     ];
     for (parameters, needle) in refusals {
