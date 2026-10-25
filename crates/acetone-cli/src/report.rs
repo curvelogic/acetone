@@ -12,6 +12,7 @@
 
 use std::collections::BTreeSet;
 
+use acetone_core::cypher::exec::value::Value as QueryValue;
 use acetone_core::cypher::session::Session;
 use acetone_core::graph::Repository;
 use acetone_core::graph::diff::ChangeKind;
@@ -76,7 +77,7 @@ pub(crate) fn build(repo: &Repository, from: &str, to: &str) -> Result<Json> {
     }
 
     Ok(json!({
-        "report_version": 1,
+        "report_version": 2,
         "from": endpoint(repo, from)?,
         "to": endpoint(repo, to)?,
         "nodes": nodes,
@@ -186,41 +187,98 @@ fn labels_delta(before: Option<&[String]>, after: Option<&[String]>) -> Json {
     Json::Object(cell)
 }
 
-/// The conflicts section: null when no merge is in progress, else the rows
-/// of `CALL acetone.conflicts()` — kind, label, key, property, and the
-/// three-way base/ours/theirs values — serialised in yield order. Reuses
-/// the session procedure so the report and the query surface can never
-/// disagree about what is conflicted.
+/// The conflicts section: null when no merge is in progress, else one item
+/// per row of `CALL acetone.conflicts()` — see [`conflict_items`].
 fn conflicts_section(repo: &Repository) -> Result<Json> {
     if repo.merge_head()?.is_none() {
         return Ok(Json::Null);
     }
+    Ok(json!({ "in_progress": true, "items": conflict_items(repo)? }))
+}
+
+/// The workspace's merge conflicts as typed items (report_version 2,
+/// acetone-y629), from the rows of `CALL acetone.conflicts()` — reusing
+/// the session procedure so the report, the daemon's `merge` verb and the
+/// query surface can never disagree about what is conflicted. Each item
+/// carries `kind`, then the conflicted entity in exactly the shape the
+/// report's `nodes[]`/`edges[]` use (`label` + `key` for a node; `rel_type`,
+/// `src`, `dst` and `disc` for a relationship; `schema_key`, the encoded key
+/// in hex, for a schema-key conflict), then `property` and the three-way
+/// `base`/`ours`/`theirs`. Empty when no merge is in progress.
+pub(crate) fn conflict_items(repo: &Repository) -> Result<Vec<Json>> {
     let outcome = Session::new(repo)
         .run(
             "CALL acetone.conflicts() \
-             YIELD kind, label, key, property, base, ours, theirs \
-             RETURN kind, label, key, property, base, ours, theirs",
+             YIELD kind, key, entity, property, base, ours, theirs \
+             RETURN kind, key, entity, property, base, ours, theirs",
         )
         .context("deriving the merge's conflicts")?;
     let result = outcome.result();
-    let items: Vec<Json> = result
+    let col = |name: &str| result.columns.iter().position(|c| c == name);
+    let (Some(kind), Some(key), Some(entity), Some(property), Some(base), Some(ours), Some(theirs)) = (
+        col("kind"),
+        col("key"),
+        col("entity"),
+        col("property"),
+        col("base"),
+        col("ours"),
+        col("theirs"),
+    ) else {
+        anyhow::bail!("acetone.conflicts() did not yield its documented columns");
+    };
+    Ok(result
         .rows
         .iter()
         .map(|row| {
             let mut item = Map::new();
-            for (name, value) in result.columns.iter().zip(row) {
-                // The same JSON rendering `query --format json` uses, so
-                // the report and the query surface serialise identically.
-                let rendered = crate::query::json_value(value);
-                item.insert(
-                    name.clone(),
-                    serde_json::from_str(&rendered).unwrap_or(Json::Null),
-                );
+            item.insert("kind".into(), typed_json(&row[kind]));
+            match typed_json(&row[entity]) {
+                Json::Object(fields) if fields.contains_key("rel_type") => {
+                    // The edges[] field order: rel_type, src, dst, disc.
+                    for name in ["rel_type", "src", "dst", "disc"] {
+                        item.insert(name.into(), fields[name].clone());
+                    }
+                }
+                Json::Object(fields) => {
+                    for name in ["label", "key"] {
+                        item.insert(name.into(), fields[name].clone());
+                    }
+                }
+                // No entity: a schema-key conflict, named by its encoded key.
+                _ => {
+                    item.insert("schema_key".into(), typed_json(&row[key]));
+                }
+            }
+            for (name, at) in [
+                ("property", property),
+                ("base", base),
+                ("ours", ours),
+                ("theirs", theirs),
+            ] {
+                item.insert(name.into(), typed_json(&row[at]));
             }
             Json::Object(item)
         })
-        .collect();
-    Ok(json!({ "in_progress": true, "items": items }))
+        .collect())
+}
+
+/// A query value as report JSON. A stored carrier (a bytes or temporal
+/// value, ADR-0038) is unwrapped to its model value and rendered by
+/// [`value_to_json`], so a typed key component serialises exactly as it
+/// does in `nodes[]`/`edges[]`; every other value takes the rendering
+/// `query --format json` uses.
+fn typed_json(value: &QueryValue) -> Json {
+    match value {
+        QueryValue::Stored(model) => value_to_json(model),
+        QueryValue::List(items) => Json::Array(items.iter().map(typed_json).collect()),
+        QueryValue::Map(entries) => Json::Object(
+            entries
+                .iter()
+                .map(|(k, v)| (k.clone(), typed_json(v)))
+                .collect(),
+        ),
+        other => serde_json::from_str(&crate::query::json_value(other)).unwrap_or(Json::Null),
+    }
 }
 
 /// The human artefact: markdown a reviewer pastes into a PR or reads in a
@@ -317,11 +375,28 @@ pub(crate) fn render_markdown(doc: &Json) -> String {
         out.push_str("\n## Conflicts (merge in progress)\n\n");
         if let Some(items) = conflicts["items"].as_array() {
             for item in items {
+                // The entity renders as the Nodes/Edges sections render theirs.
+                let entity = if let Some(rtype) = item["rel_type"].as_str() {
+                    let disc = if item["disc"].is_null() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", item["disc"])
+                    };
+                    format!(
+                        "`{}` {} {rtype}{disc} \u{2192} `{}` {}",
+                        item["src"]["label"].as_str().unwrap_or(""),
+                        item["src"]["key"],
+                        item["dst"]["label"].as_str().unwrap_or(""),
+                        item["dst"]["key"],
+                    )
+                } else if let Some(label) = item["label"].as_str() {
+                    format!("`{label}` {}", item["key"])
+                } else {
+                    format!("schema {}", item["schema_key"].as_str().unwrap_or(""))
+                };
                 out.push_str(&format!(
-                    "- {} `{}` {}: `{}` base {} \u{00b7} ours {} \u{00b7} theirs {}\n",
+                    "- {} {entity}: `{}` base {} \u{00b7} ours {} \u{00b7} theirs {}\n",
                     item["kind"].as_str().unwrap_or(""),
-                    item["label"].as_str().unwrap_or(""),
-                    item["key"],
                     item["property"].as_str().unwrap_or("(record)"),
                     item["base"],
                     item["ours"],
@@ -336,6 +411,24 @@ pub(crate) fn render_markdown(doc: &Json) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stored carrier (a bytes or temporal key component, ADR-0038) in a
+    /// conflict item renders exactly as `value_to_json` renders it in
+    /// `nodes[]`, not as its query-surface string (acetone-y629).
+    #[test]
+    fn typed_json_unwraps_stored_carriers_like_the_change_list() {
+        let date = Value::Date(acetone_core::model::Date { days: 19_000 });
+        let bytes = Value::Bytes(vec![0xde, 0xad]);
+        let key = QueryValue::List(vec![
+            QueryValue::Stored(date.clone()),
+            QueryValue::Stored(bytes.clone()),
+            QueryValue::Int(3),
+        ]);
+        assert_eq!(
+            typed_json(&key),
+            crate::json::key_tuple_to_json(&[date, bytes, Value::Int(3)])
+        );
+    }
 
     /// A change touching only secondary labels must be visible in the
     /// report (PR #280 review SF-2). The delta follows property_deltas'

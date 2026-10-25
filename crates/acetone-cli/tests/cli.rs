@@ -3877,3 +3877,127 @@ fn attach_reattaches_a_cloned_co_tenant_graph() {
         stdout(&again)
     );
 }
+
+/// A repository mid-merge where both sides changed the same property of a
+/// composite-keyed node and of a relationship (acetone-y629; the Phase 12
+/// demo's step-8b repro, widened to a composite key and an edge).
+fn repo_with_node_and_edge_conflicts(repo: &Path) {
+    assert!(init(repo).status.success());
+    for args in [
+        &["declare-label", "Person", "--key", "org", "--key", "n"][..],
+        &["declare-rel-type", "KNOWS"][..],
+    ] {
+        let out = acetone(repo, args);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let q = |cypher: &str| {
+        let out = acetone(repo, &["query", cypher]);
+        assert!(out.status.success(), "{cypher}: {}", stderr(&out));
+    };
+    let commit = |m: &str| assert!(acetone(repo, &["commit", "-m", m]).status.success());
+    q(
+        "CREATE (:Person {org: 'acme', n: 7, team: 'core'})-[:KNOWS {since: 1}]->\
+       (:Person {org: 'acme', n: 8})",
+    );
+    commit("base");
+    assert!(acetone(repo, &["branch", "reorg"]).status.success());
+    q("MATCH (p:Person {org: 'acme', n: 7}) SET p.team = 'infra'");
+    q("MATCH (:Person {n: 7})-[r:KNOWS]->() SET r.since = 2");
+    commit("ours");
+    assert!(acetone(repo, &["checkout", "reorg"]).status.success());
+    q("MATCH (p:Person {org: 'acme', n: 7}) SET p.team = 'platform'");
+    q("MATCH (:Person {n: 7})-[r:KNOWS]->() SET r.since = 3");
+    commit("theirs");
+    assert!(acetone(repo, &["checkout", "main"]).status.success());
+    let merged = acetone(repo, &["merge", "reorg"]);
+    assert!(
+        String::from_utf8_lossy(&merged.stdout).contains("conflict")
+            || String::from_utf8_lossy(&merged.stderr).contains("conflict"),
+        "the merge must conflict: {merged:?}"
+    );
+}
+
+/// Conflict items carry the conflicted entity as typed data in the shape of
+/// `nodes[]`/`edges[]`, so a client matches a conflict to its change without
+/// parsing a display string; the report says so with report_version 2
+/// (acetone-y629).
+#[test]
+fn report_conflict_items_carry_typed_keys_matching_the_change_list() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    repo_with_node_and_edge_conflicts(&repo);
+
+    let out = acetone(&repo, &["report", "main", "reorg", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(doc["report_version"], 2, "{doc}");
+    let items = doc["conflicts"]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "{doc}");
+
+    let node_item = items
+        .iter()
+        .find(|i| i["label"] == "Person")
+        .expect("node conflict");
+    assert_eq!(node_item["key"], serde_json::json!(["acme", 7]), "{doc}");
+    assert_eq!(node_item["property"], "team");
+    assert_eq!(node_item["ours"], "infra");
+    assert_eq!(node_item["theirs"], "platform");
+    assert!(node_item.get("rel_type").is_none(), "{node_item}");
+    let node_change = doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["label"] == node_item["label"] && c["key"] == node_item["key"])
+        .expect("the conflict's typed key matches a nodes[] entry");
+    assert_eq!(node_change["kind"], "modified");
+
+    let edge_item = items
+        .iter()
+        .find(|i| i["rel_type"] == "KNOWS")
+        .expect("edge conflict");
+    assert_eq!(edge_item["property"], "since");
+    assert!(edge_item.get("label").is_none(), "{edge_item}");
+    let edge_change = doc["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| {
+            c["rel_type"] == edge_item["rel_type"]
+                && c["src"] == edge_item["src"]
+                && c["dst"] == edge_item["dst"]
+                && c["disc"] == edge_item["disc"]
+        })
+        .expect("the conflict's typed endpoints match an edges[] entry");
+    assert_eq!(edge_change["src"]["key"], serde_json::json!(["acme", 7]));
+    assert_eq!(edge_change["dst"]["key"], serde_json::json!(["acme", 8]));
+
+    // The query surface keeps its display `key` column and gains `entity`.
+    let out = acetone(
+        &repo,
+        &[
+            "query",
+            "CALL acetone.conflicts() YIELD key, entity \
+             WHERE entity.label = 'Person' RETURN key, entity.key AS k",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rows: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(rows[0]["k"], serde_json::json!(["acme", 7]), "{rows}");
+    assert!(rows[0]["key"].is_string(), "{rows}");
+
+    // The markdown renders from the typed key, without escaped display text.
+    let out = acetone(&repo, &["report", "main", "reorg"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let md = stdout(&out);
+    assert!(
+        md.contains("- cell `Person` [\"acme\",7]: `team` base \"core\""),
+        "{md}"
+    );
+    assert!(
+        md.contains("- cell `Person` [\"acme\",7] KNOWS \u{2192} `Person` [\"acme\",8]: `since`"),
+        "{md}"
+    );
+    assert!(!md.contains("\\\""), "no escaped quotes: {md}");
+}

@@ -2530,3 +2530,78 @@ fn socket_parameters_compose_with_at_and_work_over_stdio() {
     drop(stdin);
     let _ = child.wait();
 }
+
+/// The `merge` verb lists its conflicts as the change report's typed items
+/// (acetone-y629), identical to the report's `conflicts.items[]`, and the
+/// daemon's report stays byte-identical to the CLI's.
+#[test]
+fn the_merge_verb_lists_typed_conflict_items_matching_the_report() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    assert!(
+        Command::new(bin)
+            .args(["init", repo.to_str().unwrap()])
+            .output()
+            .expect("init")
+            .status
+            .success()
+    );
+    let run = |args: &[&str]| {
+        let out = acetone(&repo, args);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    run(&["declare-label", "Person", "--key", "org", "--key", "n"]);
+    run(&[
+        "query",
+        "CREATE (:Person {org: 'acme', n: 7, team: 'core'})",
+    ]);
+    run(&["commit", "-m", "base"]);
+    run(&["branch", "reorg"]);
+    run(&["query", "MATCH (p:Person) SET p.team = 'infra'"]);
+    run(&["commit", "-m", "ours"]);
+    run(&["checkout", "reorg"]);
+    run(&["query", "MATCH (p:Person) SET p.team = 'platform'"]);
+    run(&["commit", "-m", "theirs"]);
+    run(&["checkout", "main"]);
+
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+    let merged = verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "merge", "params": {"refspec": "reorg"}}),
+    );
+    assert_eq!(merged["ok"]["outcome"], "conflicts", "{merged}");
+    assert_eq!(merged["ok"]["count"], 1, "{merged}");
+    let item = &merged["ok"]["conflicts"][0];
+    assert_eq!(item["kind"], "cell", "{merged}");
+    assert_eq!(item["label"], "Person");
+    assert_eq!(item["key"], serde_json::json!(["acme", 7]));
+    assert_eq!(item["property"], "team");
+
+    write_frame(
+        &mut s,
+        &serde_json::json!({"id": 2, "verb": "report",
+            "params": {"from": "main", "to": "reorg", "json": true}}),
+    );
+    let (streamed, terminal) = collect_stream(&mut s);
+    assert_eq!(terminal["ok"]["conflicts"], 1, "{terminal}");
+    let text: String = streamed
+        .iter()
+        .map(|f| f["chunk"].as_str().expect("chunk"))
+        .collect();
+    let cli = acetone(&repo, &["report", "main", "reorg", "--json"]);
+    assert!(cli.status.success(), "{cli:?}");
+    assert_eq!(
+        text.as_bytes(),
+        &cli.stdout[..],
+        "byte-identical to the CLI"
+    );
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(doc["report_version"], 2);
+    assert_eq!(
+        doc["conflicts"]["items"], merged["ok"]["conflicts"],
+        "the merge verb's items are the report's"
+    );
+}

@@ -1650,19 +1650,25 @@ fn run_merge(
             stream,
             &json!({"id": id, "ok": {"outcome": "merged", "commit": commit.to_hex()}}),
         ),
-        Ok(acetone_core::graph::merge::MergeOutcome::Conflicts(conflicts)) => {
-            let rendered: Vec<String> = conflicts
-                .iter()
-                .map(crate::commands::render_conflict)
-                .collect();
-            write_frame(
-                stream,
-                &json!({"id": id, "ok": {
-                    "outcome": "conflicts",
-                    "count": rendered.len(),
-                    "conflicts": rendered,
-                }}),
-            )
+        Ok(acetone_core::graph::merge::MergeOutcome::Conflicts(_)) => {
+            // The merge is now in progress, so its conflicts are the
+            // workspace's: list them as the change report's typed items
+            // (acetone-y629), derived the same way, so a client matches a
+            // conflict to its node or edge without parsing a display string.
+            match crate::report::conflict_items(repo) {
+                Ok(items) => write_frame(
+                    stream,
+                    &json!({"id": id, "ok": {
+                        "outcome": "conflicts",
+                        "count": items.len(),
+                        "conflicts": items,
+                    }}),
+                ),
+                Err(e) => write_frame(
+                    stream,
+                    &json!({"id": id, "error": {"kind": "report", "message": format!("{e:#}")}}),
+                ),
+            }
         }
         Err(e) => graph_error_frame(stream, id, &e),
     }

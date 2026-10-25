@@ -738,6 +738,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                         Value::Null,
                                         Value::Null,
                                         Value::Null,
+                                        edge_entity(&edge_key),
                                     ]);
                                 }
                                 GraphViolation::MissingRequired { node, property } => {
@@ -755,6 +756,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                         Value::Null,
                                         Value::Null,
                                         node_col,
+                                        node_entity(&node_key),
                                     ]);
                                 }
                                 GraphViolation::WrongType {
@@ -783,6 +785,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                         Value::String(actual.as_str().to_string()),
                                         Value::Null,
                                         node_col,
+                                        node_entity(&node_key),
                                     ]);
                                 }
                                 GraphViolation::EdgeWrongType {
@@ -807,6 +810,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                         Value::String(actual.as_str().to_string()),
                                         Value::Null,
                                         Value::Null,
+                                        edge_entity(&edge_key),
                                     ]);
                                 }
                                 GraphViolation::UniqueViolation {
@@ -830,6 +834,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                             Value::Null,
                                             Value::Null,
                                             node_col,
+                                            node_entity(&node_key),
                                         ]);
                                     }
                                 }
@@ -884,6 +889,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                 ours_v,
                                 theirs_v,
                                 node,
+                                node_entity(&node_key),
                             ]
                         }
                         ConflictMap::Edges => {
@@ -899,6 +905,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                 Value::Null,
                                 Value::Null,
                                 Value::Null,
+                                edge_entity(&edge_key),
                             ]
                         }
                         ConflictMap::Schema => vec![
@@ -906,6 +913,7 @@ impl ProcedureProvider for RepoProcedures<'_> {
                             Value::String("schema".to_string()),
                             Value::String(key.iter().map(|b| format!("{b:02x}")).collect()),
                             property_col,
+                            Value::Null,
                             Value::Null,
                             Value::Null,
                             Value::Null,
@@ -950,6 +958,45 @@ fn change_kind(kind: acetone_graph::diff::ChangeKind) -> &'static str {
         ChangeKind::Removed => "removed",
         ChangeKind::Modified => "modified",
     }
+}
+
+/// A node key as the `entity` yield of `acetone.conflicts` (acetone-y629):
+/// `{label, key}` with the key components as typed values, so a client
+/// matches a conflict to its node without parsing the display string.
+fn node_entity(key: &NodeKey) -> Value {
+    Value::Map(node_ref(key))
+}
+
+fn node_ref(key: &NodeKey) -> std::collections::BTreeMap<String, Value> {
+    std::collections::BTreeMap::from([
+        ("label".to_string(), Value::String(key.label().to_string())),
+        (
+            "key".to_string(),
+            Value::List(
+                key.key()
+                    .iter()
+                    .map(crate::exec::adapter::convert_value)
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+/// An edge key as the `entity` yield of `acetone.conflicts`: `{rel_type,
+/// src: {label, key}, dst: {label, key}, disc}`.
+fn edge_entity(key: &EdgeKey) -> Value {
+    Value::Map(std::collections::BTreeMap::from([
+        (
+            "rel_type".to_string(),
+            Value::String(key.rtype().to_string()),
+        ),
+        ("src".to_string(), Value::Map(node_ref(key.src()))),
+        ("dst".to_string(), Value::Map(node_ref(key.dst()))),
+        (
+            "disc".to_string(),
+            crate::exec::adapter::convert_value(key.disc()),
+        ),
+    ]))
 }
 
 /// `src -RTYPE-> dst`, escaped, with a discriminator shown when set (so two

@@ -22,6 +22,9 @@ only by ADR. History of note within major 1:
   reading `dirty` must read `workspace` instead.
 - **0.7**: `CALL acetone.blame` yields a fourth column, `subject`.
 - **0.8**: the `query` verb accepts `parameters` (additive).
+- **0.8**: the `merge` verb's `conflicts` are typed items, not
+  rendered strings, and the change report is `report_version` 2
+  (breaking; see "The change report").
 
 ## Transports and lifecycle
 
@@ -161,7 +164,9 @@ Streamed frame vocabulary (each carries the request's `id`):
 - **`checkout`** `{branch}` → `ok {"checked_out"}`.
 - **`merge`** `{refspec, message?}` or `{abort: true}` → `ok
   {"outcome": "merged"|"fast-forward"|"up-to-date"|"conflicts"}` plus,
-  for conflicts, `{"count", "conflicts": [<rendered strings>]}`; an
+  for conflicts, `{"count", "conflicts": [<conflict items>]}`, the
+  items exactly as the `report` verb's `conflicts.items[]` (see
+  "The change report" below), and `count` is their number; an
   abort answers `ok {"aborted": true}`. Conflicts are **data**, not
   errors, resolved via `resolve`/writes then `commit` (`message`
   defaults to `"merge"`).
@@ -183,6 +188,31 @@ Streamed frame vocabulary (each carries the request's `id`):
   `json: true` (byte-identical to `acetone report --json` stdout), the
   markdown artefact otherwise. Terminal `ok {"nodes", "edges",
   "conflicts"}` counts.
+
+## The change report
+
+The `report` verb's JSON document (and `acetone report --json`) carries
+`report_version`, currently **2**. It holds `from` and `to` (each
+`{refspec, commit, subject}`), `nodes[]` (`{kind, label, key,
+properties, labels}`), `edges[]` (`{kind, rel_type, src: {label, key},
+dst: {label, key}, disc, properties}`), `summary`, and `conflicts`:
+null with no merge in progress, else `{"in_progress": true, "items":
+[…]}`. Keys are typed JSON arrays, never display strings. Each conflict
+item is `kind`, then the conflicted entity in the change list's own
+shape, then `property`, `base`, `ours` and `theirs`:
+
+- a node (`cell` on a node, `missing-required`, `wrong-type`,
+  `unique`): `label` and `key`, matching that node's `nodes[]` entry;
+- a relationship (`cell` on an edge, `dangling-edge`,
+  `rel-wrong-type`): `rel_type`, `src`, `dst` and `disc`, matching
+  its `edges[]` entry;
+- a schema-key conflict: `schema_key`, the encoded key in hex.
+
+The items are derived from `CALL acetone.conflicts()`, whose `entity`
+column carries the same entity as a map, so the report, the `merge`
+verb and the query surface agree. Version history: **2** (0.8) replaced
+each item's display-string `key` (and, for a relationship, the type in
+`label`) with the typed fields above.
 
 An unknown verb is a typed `unknown-verb` error naming the served set;
 the connection survives every typed refusal except a payload-protocol

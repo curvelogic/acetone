@@ -694,8 +694,13 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         // labels(node)` queries the merge's conflicts as a graph. Null for a
         // relationship or schema conflict; for a graph violation it is the
         // violating node's *workspace* record.
+        // `entity` (acetone-y629) is the conflicted entity as typed data,
+        // so a client matches a conflict to its node or edge without parsing
+        // the display `key`: `{label, key}` for a node, `{rel_type, src:
+        // {label, key}, dst: {label, key}, disc}` for a relationship, null for
+        // a schema-key conflict.
         yields: &[
-            "kind", "label", "key", "property", "base", "ours", "theirs", "node",
+            "kind", "label", "key", "property", "base", "ours", "theirs", "node", "entity",
         ],
         // `kind` is a fixed vocabulary (cell / dangling-edge / missing-required
         // / wrong-type / rel-wrong-type / unique), not repository text, so it

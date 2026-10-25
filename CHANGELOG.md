@@ -16,7 +16,25 @@ fine.)
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: typed conflict keys in the change report and the daemon's
+  `merge` reply.** `acetone report --json` (and the daemon's `report`
+  verb) is now `report_version` 2: each `conflicts.items[]` entry names
+  its entity in the same typed shape as `nodes[]`/`edges[]` (`label` +
+  `key` for a node; `rel_type`, `src`, `dst`, `disc` for a
+  relationship; `schema_key` for a schema-key conflict) instead of a
+  display string, so a consumer matches a conflict to its change without
+  parsing. The markdown report renders from those fields and no longer
+  shows escaped quotes. The daemon's `merge` verb lists the same items
+  in place of rendered strings. See `docs/protocol.md`.
+
 ### Added
+
+- **`CALL acetone.conflicts()` yields `entity`**, the conflicted node or
+  relationship as a typed map (`{label, key}` or `{rel_type, src, dst,
+  disc}`; null for a schema-key conflict). Additive: the display `key`
+  column stays.
 
 - **Parameterised queries over the daemon**: the `query` verb accepts
   `params.parameters`, a JSON object bound as `$name` — the socket's
