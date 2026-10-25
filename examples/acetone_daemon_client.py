@@ -49,14 +49,18 @@ class AcetoneClient:
         self._send_frame({"acetone": {"protocol": PROTOCOL}})
         self._next_id = 0
 
-    def query(self, cypher, autodeclare=False, at=None):
+    def query(self, cypher, parameters=None, autodeclare=False, at=None):
         """Run one openCypher query (read or write). Returns (columns, rows,
         summary): rows is a list of value-lists, summary is the terminal `ok`
-        payload (with a `write` object for a write). `autodeclare=True` opts a
-        write into relationship-type coinage; `at="<refspec>"` reads against
-        that past version (a write with `at` is refused). Raises on a typed
-        error."""
+        payload (with a `write` object for a write). `parameters` is a dict
+        bound as `$name` (None, bool, int, float, str, list, dict) — pass
+        untrusted input this way, never by formatting it into `cypher`.
+        `autodeclare=True` opts a write into relationship-type coinage;
+        `at="<refspec>"` reads against that past version (a write with `at`
+        is refused). Raises on a typed error."""
         params = {"cypher": cypher}
+        if parameters is not None:
+            params["parameters"] = parameters
         if autodeclare:
             params["autodeclare"] = True
         if at is not None:
@@ -209,6 +213,15 @@ def main():
         # A read: the write is visible on the same live workspace.
         columns, rows, _ = client.query("MATCH (d:Demo) RETURN d.id")
         print("read:", columns, "->", rows)
+
+        # Parameters: untrusted input binds as $name, literally — this
+        # injection-shaped id creates one node and deletes nothing.
+        hostile = "x' }) DETACH DELETE (d) //"
+        client.query("CREATE (:Demo {id: $id})", parameters={"id": hostile})
+        _, rows, _ = client.query(
+            "MATCH (d:Demo {id: $id}) RETURN d.id", parameters={"id": hostile}
+        )
+        print("parameterised:", rows)
 
         # A payload verb: apply a schema document streamed as chunk frames.
         applied = client.schema_apply('{"labels": [{"name": "Note", "key": ["id"]}]}')

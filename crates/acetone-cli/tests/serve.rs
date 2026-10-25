@@ -560,6 +560,10 @@ fn a_non_rust_python_client_drives_a_full_session() {
         "the client must write then read on the live workspace: {stdout}"
     );
     assert!(
+        stdout.contains(r#"parameterised: [["x' }) DETACH DELETE (d) //"]]"#),
+        "the client must bind a parameter literally: {stdout}"
+    );
+    assert!(
         stdout.contains("coined+wrote") && stdout.contains("relationships_created"),
         "the client must coin a relationship type: {stdout}"
     );
@@ -2245,4 +2249,283 @@ fn params_at_accepts_ancestry_and_survives_hostile_suffixes() {
     write_frame(&mut s, &serde_json::json!({"id": 3, "verb": "status"}));
     let st = read_frame(&mut s);
     assert!(st["ok"]["nodes"].is_number(), "connection survives: {st}");
+}
+
+/// Run one `query` request carrying `params.parameters` and return the row
+/// values (one Vec per row) and the terminal frame.
+fn param_query(
+    s: &mut UnixStream,
+    cypher: &str,
+    parameters: serde_json::Value,
+) -> (Vec<Vec<serde_json::Value>>, serde_json::Value) {
+    write_frame(
+        s,
+        &serde_json::json!({"id": 7, "verb": "query", "params": {
+            "cypher": cypher, "parameters": parameters,
+        }}),
+    );
+    let (streamed, terminal) = collect_stream(s);
+    let rows = streamed
+        .iter()
+        .filter_map(|f| f.get("row"))
+        .map(|r| r["values"].as_array().expect("values").clone())
+        .collect();
+    (rows, terminal)
+}
+
+/// The CLI's `--format json` rows for a query, parsed.
+fn cli_json_rows(repo: &Path, cypher: &str, params: &[&str]) -> Vec<serde_json::Value> {
+    let mut args = vec!["query", cypher, "--format", "json"];
+    for p in params {
+        args.push("--param");
+        args.push(p);
+    }
+    let out = acetone(repo, &args);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout).expect("cli json")
+}
+
+/// Socket parameters bind exactly as the CLI's `--param` does, over every
+/// type both channels can express (acetone-d5is.1): the same parameterised
+/// read through both channels returns the same value, and the socket's
+/// JSON mapping types each value as protocol.md documents.
+#[test]
+fn socket_parameters_match_the_cli_param_on_every_shared_type() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    // (CLI literal, JSON value). The round trip compares serde_json values,
+    // whose numbers keep integer and float apart (`1` != `1.0`), so it
+    // checks the typing as well as the value.
+    let cases: &[(&str, serde_json::Value)] = &[
+        ("null", serde_json::json!(null)),
+        ("true", serde_json::json!(true)),
+        ("false", serde_json::json!(false)),
+        ("42", serde_json::json!(42)),
+        ("-9223372036854775808", serde_json::json!(i64::MIN)),
+        ("9223372036854775807", serde_json::json!(i64::MAX)),
+        ("1.0", serde_json::json!(1.0)),
+        ("-2.5e-3", serde_json::json!(-2.5e-3)),
+        ("'billing'", serde_json::json!("billing")),
+        // A temporal-looking string stays a string.
+        ("'2024-01-01'", serde_json::json!("2024-01-01")),
+        ("''", serde_json::json!("")),
+        (
+            "[1, 'x', null, [true]]",
+            serde_json::json!([1, "x", null, [true]]),
+        ),
+        (
+            "{a: 1, b: {c: 'd'}, e: [2.5]}",
+            serde_json::json!({"a": 1, "b": {"c": "d"}, "e": [2.5]}),
+        ),
+    ];
+    let cypher = "RETURN $p AS p";
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+    for (literal, value) in cases {
+        let binding = format!("p={literal}");
+        let cli = cli_json_rows(&repo, cypher, &[&binding]);
+        let (rows, terminal) = param_query(&mut s, cypher, serde_json::json!({"p": value}));
+        assert_eq!(terminal["ok"]["rows"], 1, "{literal}: {terminal}");
+        assert_eq!(rows[0][0], cli[0]["p"], "{literal}: socket vs CLI");
+        assert_eq!(&rows[0][0], value, "{literal}: round trip");
+    }
+    // Typing reaches the engine, not just the output: an Int and a Float
+    // with the same value differ in Cypher's integer arithmetic.
+    let (rows, _) = param_query(
+        &mut s,
+        "RETURN $i / 2 AS i, $f / 2 AS f",
+        serde_json::json!({"i": 3, "f": 3.0}),
+    );
+    let cli = cli_json_rows(&repo, "RETURN $i / 2 AS i, $f / 2 AS f", &["i=3", "f=3.0"]);
+    assert_eq!(rows[0][0], cli[0]["i"]);
+    assert_eq!(rows[0][1], cli[0]["f"]);
+    assert_eq!(rows[0][0], 1);
+    assert_eq!(rows[0][1], 1.5);
+}
+
+/// A parameterised write over the socket lands the same graph as the CLI's
+/// `--param`, and injection-shaped strings bind literally — as data, never
+/// as Cypher (acetone-d5is.1).
+#[test]
+fn socket_parameters_bind_injection_shaped_input_literally_in_writes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let hostile = [
+        "x' OR 1=1",
+        "d1'}) DETACH DELETE (n) //",
+        "\") MATCH (n) DETACH DELETE n //",
+        "$id",
+    ];
+    let write = "CREATE (:Doc {id: $id, title: $title})";
+
+    // The CLI writes one copy under an `cli-` prefix...
+    for (i, h) in hostile.iter().enumerate() {
+        let id = format!("id=\"cli-{i}\"");
+        let title = format!("title={}", serde_json::to_string(h).unwrap());
+        let out = acetone(&repo, &["query", write, "--param", &id, "--param", &title]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // ...and the socket the same under `sock-`.
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+    for (i, h) in hostile.iter().enumerate() {
+        let (_, terminal) = param_query(
+            &mut s,
+            write,
+            serde_json::json!({"id": format!("sock-{i}"), "$title": h}),
+        );
+        assert_eq!(terminal["ok"]["write"]["nodes_created"], 1, "{terminal}");
+    }
+    // Nothing was deleted, and each hostile string is stored verbatim,
+    // identically through both channels.
+    let (rows, terminal) = param_query(
+        &mut s,
+        "MATCH (d:Doc) RETURN count(d) AS n",
+        serde_json::json!({}),
+    );
+    assert_eq!(terminal["ok"]["rows"], 1);
+    assert_eq!(rows[0][0], 2 + 2 * hostile.len() as i64);
+    for (i, h) in hostile.iter().enumerate() {
+        let (rows, _) = param_query(
+            &mut s,
+            "MATCH (a:Doc {id: $a}), (b:Doc {id: $b}) RETURN a.title, b.title",
+            serde_json::json!({"a": format!("cli-{i}"), "b": format!("sock-{i}")}),
+        );
+        assert_eq!(rows.len(), 1, "{h}");
+        assert_eq!(rows[0][0], serde_json::json!(h));
+        assert_eq!(rows[0][1], serde_json::json!(h));
+    }
+    // A hostile string used to look a node up matches nothing rather than
+    // everything.
+    let (rows, terminal) = param_query(
+        &mut s,
+        "MATCH (d:Doc) WHERE d.id = $id RETURN d.id",
+        serde_json::json!({"id": "x' OR 1=1"}),
+    );
+    assert!(rows.is_empty(), "{rows:?}");
+    assert_eq!(terminal["ok"]["rows"], 0);
+}
+
+/// Ill-typed and unbound parameters give the documented errors, and the
+/// connection survives each (acetone-d5is.1).
+#[test]
+fn ill_typed_and_unbound_socket_parameters_are_typed_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    // An unbound $name: the same kind and message as the CLI's.
+    let cli = acetone(&repo, &["query", "RETURN $zz"]);
+    assert!(!cli.status.success());
+    let cli_err = String::from_utf8_lossy(&cli.stderr).into_owned();
+    let (_, terminal) = param_query(&mut s, "RETURN $zz", serde_json::json!({"a": 1}));
+    assert_eq!(terminal["error"]["kind"], "exec", "{terminal}");
+    let message = terminal["error"]["message"].as_str().expect("message");
+    assert!(message.contains("missing parameter 'zz'"), "{message}");
+    assert!(
+        cli_err.contains(message),
+        "CLI {cli_err:?} vs socket {message:?}"
+    );
+
+    // Refused before the query runs, naming the parameter.
+    let refusals = [
+        (
+            serde_json::json!(["not", "an", "object"]),
+            "must be a JSON object",
+        ),
+        (serde_json::json!(5), "must be a JSON object"),
+        (serde_json::json!({"big": 9223372036854775808u64}), "big"),
+        (serde_json::json!({"big": 1e19}), "big"),
+        (serde_json::json!({"deep": [{"x": u64::MAX}]}), "deep"),
+        (serde_json::json!({"": 1}), "empty"),
+        (serde_json::json!({"p": 1, "$p": 2}), "bound twice"),
+    ];
+    for (parameters, needle) in refusals {
+        let (rows, terminal) = param_query(&mut s, "RETURN 1", parameters.clone());
+        assert!(rows.is_empty(), "{parameters}: nothing runs");
+        assert_eq!(
+            terminal["error"]["kind"], "bad-request",
+            "{parameters}: {terminal}"
+        );
+        let message = terminal["error"]["message"].as_str().unwrap();
+        assert!(message.contains(needle), "{parameters}: {message}");
+    }
+
+    // A float below 2^63 in magnitude binds as a Float even when integral;
+    // at or beyond it every float is integral and so refused (documented).
+    let (rows, _) = param_query(&mut s, "RETURN $f", serde_json::json!({"f": 1.5e18}));
+    assert_eq!(rows[0][0].as_f64(), Some(1.5e18), "{rows:?}");
+    let (_, terminal) = param_query(&mut s, "RETURN $f", serde_json::json!({"f": -1.5e300}));
+    assert_eq!(terminal["error"]["kind"], "bad-request", "{terminal}");
+    // The connection is still usable after every refusal.
+    let (rows, terminal) = param_query(&mut s, "RETURN $n + 1", serde_json::json!({"n": 1}));
+    assert_eq!(terminal["ok"]["rows"], 1);
+    assert_eq!(rows[0][0], 2);
+}
+
+/// Parameters compose with `params.at` (a past version) and travel over
+/// the stdio transport unchanged (acetone-d5is.1).
+#[test]
+fn socket_parameters_compose_with_at_and_work_over_stdio() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(
+        acetone(
+            &repo,
+            &["query", "MATCH (d:Doc {id: 'd1'}) SET d.title = 'one'"]
+        )
+        .status
+        .success()
+    );
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    assert!(
+        acetone(
+            &repo,
+            &["query", "MATCH (d:Doc {id: 'd1'}) SET d.title = 'two'"]
+        )
+        .status
+        .success()
+    );
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    let mut child = Command::new(bin)
+        .args(["--repo", repo.to_str().unwrap(), "serve", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdio daemon");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut stdout = child.stdout.take().expect("stdout");
+    let _ = read_frame(&mut stdout);
+    write_frame(&mut stdin, &serde_json::json!({"acetone": {"protocol": 1}}));
+
+    let cypher = "MATCH (d:Doc {id: $id}) RETURN d.title";
+    for (at, expected) in [(Some("main"), "one"), (None, "two")] {
+        let mut params = serde_json::json!({"cypher": cypher, "parameters": {"id": "d1"}});
+        if let Some(at) = at {
+            params["at"] = serde_json::json!(at);
+        }
+        write_frame(
+            &mut stdin,
+            &serde_json::json!({"id": 1, "verb": "query", "params": params}),
+        );
+        let row = read_frame(&mut stdout);
+        assert_eq!(row["row"]["values"][0], expected, "at {at:?}: {row}");
+        let ok = read_frame(&mut stdout);
+        assert_eq!(ok["ok"]["rows"], 1, "{ok}");
+    }
+    drop(stdin);
+    let _ = child.wait();
 }

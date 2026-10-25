@@ -16,6 +16,17 @@ fine.)
 
 ## [Unreleased]
 
+### Added
+
+- **Parameterised queries over the daemon**: the `query` verb accepts
+  `params.parameters`, a JSON object bound as `$name` — the socket's
+  counterpart of `query --param`, so a client never interpolates
+  untrusted input into Cypher. The JSON-to-value mapping is specified in
+  `docs/protocol.md`; it matches `--param` on every type both can
+  express, and an integral number at or beyond ±2^63 is refused rather
+  than silently bound as a float. The Python example client takes a
+  `parameters` argument.
+
 ## [0.7.0] - 2026-08-13
 
 ### Added

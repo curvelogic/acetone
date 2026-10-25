@@ -35,6 +35,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value as Json, json};
 
+use acetone_core::cypher::exec::value::Value as QueryValue;
 use acetone_core::cypher::session::{Outcome, QueryError, Session};
 use acetone_core::graph::GraphError;
 use acetone_core::graph::lock::{DaemonLock, StaleLockOutcome, break_stale_lock};
@@ -676,6 +677,22 @@ fn run_query(
             }
         },
     };
+    // `params.parameters` (acetone-d5is.1): Cypher parameter binding, the
+    // socket's counterpart of the CLI's `--param`, so a client never has to
+    // interpolate untrusted text into the query. A JSON object `{name:
+    // value}`; anything ill-typed is refused before the query runs.
+    let params = match request.pointer("/params/parameters") {
+        None => BTreeMap::new(),
+        Some(v) => match json_params(v) {
+            Ok(params) => params,
+            Err(message) => {
+                return write_frame(
+                    stream,
+                    &json!({"id": id, "error": {"kind": "bad-request", "message": message}}),
+                );
+            }
+        },
+    };
     let session = Session::new(repo).autodeclare(autodeclare);
     // A daemon materialises the whole result before streaming it, and a
     // long-lived process does not hand back the peak the way
@@ -693,12 +710,12 @@ fn run_query(
         // A versioned read takes no lock, so no recovery wrap; a write
         // with `at` is refused inside the library (WriteAtVersion).
         Some(refspec) => session
-            .query_at_with(cypher, refspec, &BTreeMap::new(), &limits)
+            .query_at_with(cypher, refspec, &params, &limits)
             .map(Outcome::Read),
         None => with_lock_recovery(
             repo,
             |e: &QueryError| matches!(e, QueryError::Graph(GraphError::Locked { .. })),
-            || session.run_with(cypher, &BTreeMap::new(), &limits),
+            || session.run_with(cypher, &params, &limits),
         ),
     };
     match outcome {
@@ -777,6 +794,83 @@ fn run_query(
             )
         }
     }
+}
+
+/// Map the `query` verb's `params.parameters` object to the parameter map
+/// the session binds as `$name` (acetone-d5is.1). The mapping, as
+/// protocol.md documents it: `null` → Null, a boolean → Bool, a string →
+/// String (never parsed as a temporal), an array → List, an object → Map
+/// (recursively), and a number → Int when it is written without a fraction
+/// or exponent and fits i64, Float otherwise (so `1.0` is a Float).
+///
+/// One wrinkle: serde_json reads an integer literal too large for 64 bits
+/// as an f64, so `10000000000000000000` and `1e19` arrive identically.
+/// Rather than let an out-of-range integer silently become a Float, every
+/// integral number at or beyond ±2^63 is refused, whichever way it was
+/// written. A name may carry the query's `$` sigil, as with `--param`;
+/// binding a name twice that way is refused. Errors name the parameter.
+fn json_params(v: &Json) -> std::result::Result<BTreeMap<String, QueryValue>, String> {
+    let Some(object) = v.as_object() else {
+        return Err("params.parameters must be a JSON object {name: value}".into());
+    };
+    let mut params = BTreeMap::new();
+    for (raw, value) in object {
+        let name = raw.strip_prefix('$').unwrap_or(raw);
+        if name.is_empty() {
+            return Err("params.parameters: a parameter name is empty".into());
+        }
+        let shown = crate::value::sanitise_identifier(name);
+        let value =
+            json_param_value(value).map_err(|e| format!("params.parameters.{shown}: {e}"))?;
+        if params.insert(name.to_string(), value).is_some() {
+            return Err(format!(
+                "params.parameters.{shown}: bound twice (with and without the '$' sigil)"
+            ));
+        }
+    }
+    Ok(params)
+}
+
+/// One JSON value as a query value (see [`json_params`]). Recursion is
+/// bounded by serde_json's own nesting limit on the frame it parsed.
+fn json_param_value(v: &Json) -> std::result::Result<QueryValue, String> {
+    Ok(match v {
+        Json::Null => QueryValue::Null,
+        Json::Bool(b) => QueryValue::Bool(*b),
+        Json::String(s) => QueryValue::String(s.clone()),
+        Json::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                QueryValue::Int(i)
+            } else if n.is_u64() {
+                return Err(format!("integer {n} is outside the 64-bit signed range"));
+            } else {
+                // `as_f64` is always Some for a non-integer Number.
+                let f = n.as_f64().unwrap_or(f64::NAN);
+                if !f.is_finite() {
+                    return Err(format!("number {n} is not finite"));
+                }
+                if f.fract() == 0.0 && f.abs() >= 9_223_372_036_854_775_808.0 {
+                    return Err(format!(
+                        "number {n} is an integer outside the 64-bit signed range \
+                         (or a float too large to tell from one); refused"
+                    ));
+                }
+                QueryValue::Float(f)
+            }
+        }
+        Json::Array(items) => QueryValue::List(
+            items
+                .iter()
+                .map(json_param_value)
+                .collect::<Result<_, _>>()?,
+        ),
+        Json::Object(entries) => QueryValue::Map(
+            entries
+                .iter()
+                .map(|(k, v)| json_param_value(v).map(|v| (k.clone(), v)))
+                .collect::<Result<_, _>>()?,
+        ),
+    })
 }
 
 /// Serve the `status` verb: a read-only snapshot of the workspace state, as

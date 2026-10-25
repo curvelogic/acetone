@@ -21,6 +21,7 @@ only by ADR. History of note within major 1:
   branch by short name, and dropped the `dirty` boolean. 0.6.0 clients
   reading `dirty` must read `workspace` instead.
 - **0.7**: `CALL acetone.blame` yields a fourth column, `subject`.
+- **0.8**: the `query` verb accepts `parameters` (additive).
 
 ## Transports and lifecycle
 
@@ -94,7 +95,7 @@ Streamed frame vocabulary (each carries the request's `id`):
 
 ## Verbs
 
-- **`query`** `{cypher, autodeclare?, at?}` — read or write.
+- **`query`** `{cypher, parameters?, autodeclare?, at?}` — read or write.
   Rows stream as `row` frames, advisories as `advisory` frames; the
   terminal `ok` carries `{"rows": n}` plus, for a write, a `write`
   object with the summary counts (`nodes_created`,
@@ -105,6 +106,26 @@ Streamed frame vocabulary (each carries the request's `id`):
   (git ancestry syntax accepted, e.g. `main~1`); a write with `at` is
   refused (`write-at-version`). The `CALL acetone.log/diff/blame/
   conflicts` procedures are reachable through this verb.
+  `parameters` is a JSON object `{name: value}` bound as `$name`, the
+  socket's counterpart of the CLI's `query --param` — pass untrusted
+  input this way rather than interpolating it into `cypher`; it binds as
+  data, never as Cypher. A name may carry the `$` sigil, as with
+  `--param`; binding one name both ways is refused. Values map as:
+  `null` → `NULL`; a boolean → `BOOLEAN`; a string → `STRING` (never
+  parsed as a temporal); an array → `LIST`; an object → `MAP`
+  (recursively); a number written without a fraction or exponent and
+  within the 64-bit signed range → `INTEGER`, and any other number →
+  `FLOAT` (so `1.0` is a float). A number whose value is integral and
+  at or beyond ±2^63 is refused however it is written: JSON parsing
+  cannot tell `10000000000000000000` from `1e19`, so an out-of-range
+  integer is never silently a float (the cost is that floats of that
+  magnitude cannot be bound; pass such a value as a string and convert
+  it in the query). Temporal and bytes values have no parameter form on
+  either channel. An ill-typed `parameters` is `bad-request`, naming
+  the parameter, before the query runs; a `$name` the query uses but
+  `parameters` does not bind is the CLI's `exec` error (`missing
+  parameter 'name'`). Parameters compose with `at` and `autodeclare`,
+  and count toward the request frame's cap.
 - **`status`** `{}` — terminal `ok` body is exactly the
   `acetone status --json` document: `{branch, head, workspace, nodes,
   edges, schema_entries, merge}` (`merge` is
