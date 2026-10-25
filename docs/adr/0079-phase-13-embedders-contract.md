@@ -1,8 +1,10 @@
 # ADR-0079: Phase 13 — the embedder's contract
 
-*Status: proposed — drafted by the define-the-next-phase grooming session
-for Greg's review; the phase opens only on his explicit instruction ·
-Date: 2026-10-24 · Bead: acetone-15ym (epic acetone-d5is)*
+*Status: accepted — drafted by the define-the-next-phase grooming session
+(2026-10-24, PR #296); the phase opened by Greg first-hand in session on
+2026-10-25: "Confirm. Open the phase." The open questions were ruled at
+the opening (see *Rulings at the opening*) · Date: 2026-10-24, accepted
+2026-10-25 · Bead: acetone-15ym (epic acetone-d5is)*
 
 ## Context
 
@@ -114,23 +116,20 @@ Parameters arrive as a JSON object.
 - The Phase 12 demo's two CLI findings: `acetone-00wh` (help text) and
   `acetone-7ldo` (`log --oneline`).
 
-### Housekeeping and options
+### Housekeeping
 
-The phase also carries two housekeeping items. They are not gate-bearing,
-but under ADR-0054 they still close within the phase.
+The phase also carries one housekeeping item. It is not gate-bearing,
+but under ADR-0054 it still closes within the phase: **a Linux row** for
+the protocol document's wire-vs-process measurement (`acetone-d5is.5`).
 
-- **The beads relay re-pin** to curve-rig `v0.1.1` (`83005c8`,
-  `acetone-d5is.4`). It is a governing change, so it gets its own ADR and
-  full review, and Greg merges it.
-- **A Linux row** for the protocol document's wire-vs-process measurement
-  (`acetone-d5is.5`).
+The beads relay re-pin (`acetone-d5is.4`) and `EXPLAIN` (`acetone-a9m`)
+were proposed for the phase and left out of it at the opening (rulings 5
+and 7 below).
 
-`EXPLAIN` (`acetone-a9m`) is optional.
-
-### Proposed exit criteria
+### Exit criteria
 
 Gate bead `acetone-d5is.6`, closed by Greg or by explicit delegation per
-ADR-0067. The final wording is ratified at the opening.
+ADR-0067. Ratified as written at the opening (ruling 6).
 
 1. Parameterised queries over the socket match the CLI's `--param` on
    every type both can express, and injection-shaped input binds
@@ -146,7 +145,8 @@ ADR-0067. The final wording is ratified at the opening.
 
 ## Consequences
 
-- **Roadmap.** The roadmap gains a Phase 13 section marked *proposed*.
+- **Roadmap.** The roadmap gains a Phase 13 section, marked *proposed*
+  until the opening and *open* from 2026-10-25.
   Its stale open-questions sentence on parallel edges is corrected.
   Nothing leaves the unscheduled list: no item there passed the
   second-tenant test ahead of the contract gaps above.
@@ -156,11 +156,13 @@ ADR-0067. The final wording is ratified at the opening.
   - `acetone-7qw.26` stays under `acetone-7qw`.
 
   They carry the `phase-13` label instead. `acetone-omk` and
-  `acetone-7qw.26` are also dependencies of the gate. `acetone-a9m`, being
-  optional, is joined by the label alone.
-- **Claiming before the opening.** With Phase 12's gate closed, the
-  members already show in `bd ready`. Each carries a note that it must
-  not be claimed before Greg opens the phase.
+  `acetone-7qw.26` are also dependencies of the gate. `acetone-a9m` was
+  joined by the label alone and left the phase at the opening (ruling 5);
+  a cloud session's relay cannot remove the label, so a local session
+  removes it.
+- **Claiming.** Before the opening, each member carried a note that it
+  must not be claimed until Greg opened the phase. The members are
+  claimable from the opening on.
 - **Machine-interface changes.** There are two breaking changes:
   `report_version` 2, and the typed conflict payload in the `merge`
   verb's reply. The new fields, the procedure's columns and the `discard`
@@ -172,11 +174,29 @@ ADR-0067. The final wording is ratified at the opening.
   adds a conflict kind, its implementer states the format impact. CHANGELOG
   0.5's `rel-wrong-type` was added at `format_version` 1 and is the
   precedent.
-- **Open questions for the opening:**
-  - whether the CLI should honour `GIT_AUTHOR_*` at all (proposed: yes,
-    CLI only);
-  - whether the global git config stays deferred (proposed: yes);
-  - whether a daemon `tag` verb joins the phase (proposed: no);
-  - whether checking out the current branch while the workspace is dirty
-    stays refused once `discard` exists (proposed: yes);
-  - whether `EXPLAIN` is in or out.
+- **Re-pins.** Without `acetone-d5is.4`, the relay stays pinned to
+  curve-rig `v0.1.0` (ADR-0078). A re-pin is made only when a rig change
+  matters to acetone, as its own governing change.
+
+## Rulings at the opening
+
+Greg ruled the open questions on 2026-10-25. The rulings were relayed by
+the coordinating agent and recorded on PR #296
+(https://github.com/curvelogic/acetone/pull/296#issuecomment-6396888196);
+Greg then opened the phase first-hand in session.
+
+1. **The CLI honours `GIT_AUTHOR_*`** when no author is given: yes, in
+   the CLI only. The daemon and the library never read ambient identity
+   (`acetone-gid`).
+2. **Reading the global git config stays deferred**: yes.
+3. **A daemon `tag` verb**: no. Tags take an author through the CLI and
+   the library only.
+4. **Checking out the current branch over a dirty workspace stays
+   refused** once `discard` exists: yes. `discard` is the explicit verb
+   (`acetone-omk`).
+5. **`EXPLAIN`**: out of this phase. `acetone-a9m` returns to the
+   unscheduled backlog under its existing parent.
+6. **Exit criteria**: ratified as written.
+7. **The relay re-pin** (`acetone-d5is.4`): dropped from the phase and
+   closed as out of phase. Re-pin only when a rig change matters to
+   acetone.
