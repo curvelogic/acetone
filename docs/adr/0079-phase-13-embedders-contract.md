@@ -146,7 +146,7 @@ ADR-0067. Ratified as written at the opening (ruling 6).
 ## Consequences
 
 - **Roadmap.** The roadmap gains a Phase 13 section, marked *proposed*
-  until the opening and *open* from 2026-10-25.
+  until the opening; from 2026-10-25 it records the opening.
   Its stale open-questions sentence on parallel edges is corrected.
   Nothing leaves the unscheduled list: no item there passed the
   second-tenant test ahead of the contract gaps above.
@@ -177,26 +177,35 @@ ADR-0067. Ratified as written at the opening (ruling 6).
 - **Re-pins.** Without `acetone-d5is.4`, the relay stays pinned to
   curve-rig `v0.1.0` (ADR-0078). A re-pin is made only when a rig change
   matters to acetone, as its own governing change.
+  ADR-0078's repository-settings confirmation remains open there.
 
 ## Rulings at the opening
 
 Greg ruled the open questions on 2026-10-25. The rulings were relayed by
 the coordinating agent and recorded on PR #296
-(https://github.com/curvelogic/acetone/pull/296#issuecomment-6396888196);
-Greg then opened the phase first-hand in session.
+(https://github.com/curvelogic/acetone/pull/296#issuecomment-6396888196).
+That comment also said that merging #296 would open the phase; the
+correction after it
+(https://github.com/curvelogic/acetone/pull/296#issuecomment-6397237940)
+withdrew this. Greg then
+confirmed first-hand in session, "Confirm. Open the phase.", the
+permission to open the phase that the coordinating agent had relayed.
+The full chain is quoted verbatim on the `acetone-d5is` epic.
 
-1. **The CLI honours `GIT_AUTHOR_*`** when no author is given: yes, in
-   the CLI only. The daemon and the library never read ambient identity
-   (`acetone-gid`).
-2. **Reading the global git config stays deferred**: yes.
-3. **A daemon `tag` verb**: no. Tags take an author through the CLI and
-   the library only.
-4. **Checking out the current branch over a dirty workspace stays
-   refused** once `discard` exists: yes. `discard` is the explicit verb
-   (`acetone-omk`).
-5. **`EXPLAIN`**: out of this phase. `acetone-a9m` returns to the
-   unscheduled backlog under its existing parent.
-6. **Exit criteria**: ratified as written.
-7. **The relay re-pin** (`acetone-d5is.4`): dropped from the phase and
-   closed as out of phase. Re-pin only when a rig change matters to
-   acetone.
+The rulings, in the owner's terms:
+
+1. Default the author from `GIT_AUTHOR_*` when none is given: yes, in
+   the CLI only.
+2. Keep reading the global git config deferred: yes.
+3. Add a daemon `tag` verb: no.
+4. Keep refusing a checkout over a dirty workspace now that `discard`
+   exists: yes.
+5. `EXPLAIN`: out of this phase.
+6. Exit criteria: ratified as written.
+7. Open the phase: yes, without `acetone-d5is.4` (the relay re-pin). Drop it
+   from the phase. Re-pin only when a rig change matters to acetone.
+
+Each ruling confirms or narrows *Decision* above: rulings 1–3 match
+§1's author design and ruling 4 matches `acetone-omk`'s design. As
+bookkeeping, `acetone-d5is.4` was closed as out of phase, and
+`acetone-a9m` stays under `acetone-2ck`, outside any numbered phase.
