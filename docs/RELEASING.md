@@ -69,7 +69,7 @@ bd mol squash <molecule-root>                 # digest it when done
 ```
 
 The `publish` step carries a human gate: the molecule parks until the draft
-is published — by Greg, or by delegation per ADR-0067 — and the gate is
+is published — by the owner, or by delegation per ADR-0067 — and the gate is
 resolved (`bd gate resolve`). This document remains the narrative authority
 — the formula deliberately contains
 pointers and acceptance criteria, not commands, so it cannot drift from what
@@ -99,10 +99,10 @@ fails with instructions (everything before it runs read-only).
 
 ## The library crates (held)
 
-**crates.io publication is on hold as standing policy** (Greg, 2026-07-21;
-ADR-0047 point 5): the crates are not published until Greg judges the project
+**crates.io publication is on hold as standing policy** (the owner, 2026-07-21;
+ADR-0047 point 5): the crates are not published until the owner judges the project
 mature enough, or an external need forces it. Publication was originally
-deferred past 0.1 (Greg, 2026-07-10) to keep the Phase-7 seam fixes free to
+deferred past 0.1 (the owner, 2026-07-10) to keep the Phase-7 seam fixes free to
 change; the `acetone-core` API has since **frozen at the 0.2 gate** (ADR-0046,
 see `STABILITY.md`), so the hold — not API stability — is now what keeps the
 crates internal.

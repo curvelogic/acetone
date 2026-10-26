@@ -14,7 +14,7 @@
 #   bd mol squash <root>                     # condense to a digest afterwards
 
 formula = "release"
-description = "Cut an acetone release: preflight, prep, land, build draft, Greg publishes, post-publish"
+description = "Cut an acetone release: preflight, prep, land, build draft, the owner publishes, post-publish"
 version = 1
 type = "workflow"
 phase = "vapor"
@@ -99,15 +99,15 @@ recorded in a note on this bead.
 
 [[steps]]
 id = "publish"
-title = "Greg publishes the draft v{{version}}"
+title = "The owner publishes the draft v{{version}}"
 needs = ["build"]
 description = """
 Pointer: docs/RELEASING.md, step 4.
 
-HUMAN GATE — publishing the draft is Greg's approval, and GitHub creates the
-tag v{{version}} at that moment (the tag ruleset permits only Greg to create
+HUMAN GATE — publishing the draft is the owner's approval, and GitHub creates the
+tag v{{version}} at that moment (the tag ruleset permits only the owner to create
 v* tags). No agent publishes a release on its own initiative; an explicit,
-informed, current, first-hand instruction from Greg delegates the publish
+informed, current, first-hand instruction from the owner delegates the publish
 (ADR-0067), recorded verbatim on this step's bead.
 
 Agents park here: the molecule resumes when the gate on this step is resolved

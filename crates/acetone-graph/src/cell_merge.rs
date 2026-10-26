@@ -189,7 +189,7 @@ mod tests {
         let base = props(&[("name", Value::String("web".into()))]);
         let ours = props(&[
             ("name", Value::String("web".into())),
-            ("owner", Value::String("greg".into())),
+            ("owner", Value::String("ops-team".into())),
         ]);
         let theirs = props(&[
             ("name", Value::String("web".into())),
@@ -200,7 +200,7 @@ mod tests {
             conflicts.is_empty(),
             "divergent properties must not conflict"
         );
-        assert_eq!(merged.get("owner"), Some(&Value::String("greg".into())));
+        assert_eq!(merged.get("owner"), Some(&Value::String("ops-team".into())));
         assert_eq!(merged.get("os_version"), Some(&Value::String("12".into())));
         assert_eq!(merged.get("name"), Some(&Value::String("web".into())));
     }

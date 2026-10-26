@@ -5,7 +5,7 @@ they are discovered; each states its consequence, not just the observation.
 
 ## Git proxies may refuse non-standard ref namespaces (2026-07-04)
 
-Observed by Greg in Claude Code web environments: the git proxy passes
+Observed by the owner in Claude Code web environments: the git proxy passes
 `refs/heads/*` and `refs/tags/*` but returns 403 for `refs/dolt/*`.
 Infrastructure (proxies, hosting ACLs, CI mirrors) can *actively refuse*
 custom namespaces — a stronger constraint than "default refspecs don't
