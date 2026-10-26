@@ -1619,7 +1619,17 @@ impl Repository {
                 theirs: theirs.to_hex(),
             })?;
         let base_manifest = self.manifest_at_commit(&base)?;
-        let violations = crate::merge::validate_merged(&self.store, &base_manifest, &manifest)?;
+        // The two sides, for the discriminator check (ADR-0081): which
+        // declaration an edge was written under is its side's.
+        let ours_manifest = self.manifest_at_commit(&tip)?;
+        let theirs_manifest = self.manifest_at_commit(&theirs)?;
+        let violations = crate::merge::validate_merged(
+            &self.store,
+            &base_manifest,
+            &ours_manifest,
+            &theirs_manifest,
+            &manifest,
+        )?;
         Ok(violations
             .into_iter()
             .map(crate::conflicts::WorkspaceConflict::Graph)
@@ -3566,8 +3576,15 @@ impl<'r> Transaction<'r> {
                     theirs: theirs.to_hex(),
                 })?;
             let base_manifest = repo.manifest_at_commit(&base)?;
-            let violations =
-                crate::merge::validate_merged(&repo.store, &base_manifest, &self.manifest)?;
+            let ours_manifest = repo.manifest_at_commit(&tip)?;
+            let theirs_manifest = repo.manifest_at_commit(&theirs)?;
+            let violations = crate::merge::validate_merged(
+                &repo.store,
+                &base_manifest,
+                &ours_manifest,
+                &theirs_manifest,
+                &self.manifest,
+            )?;
             if !violations.is_empty() {
                 // Name each violation (bounded) rather than refusing
                 // anonymously — the operator must learn *which* edge dangles

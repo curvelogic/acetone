@@ -204,7 +204,7 @@ shape, then `property`, `base`, `ours` and `theirs`:
 - a node (`cell` on a node, `missing-required`, `wrong-type`,
   `unique`): `label` and `key`, matching that node's `nodes[]` entry;
 - a relationship (`cell` on an edge, `dangling-edge`,
-  `rel-wrong-type`): `rel_type`, `src`, `dst` and `disc`, matching
+  `rel-wrong-type`, `rel-stale-discriminator`): `rel_type`, `src`, `dst` and `disc`, matching
   its `edges[]` entry;
 - a schema-key conflict: `schema_key`, the encoded key in hex.
 

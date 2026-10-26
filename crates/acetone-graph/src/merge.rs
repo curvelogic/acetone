@@ -20,7 +20,8 @@
 //! on a UNIQUE property. [`validate_merged`] re-checks referential integrity
 //! and schema constraints over the keys the merge changed and surfaces any
 //! breach as a [`GraphViolation`] conflict. Validation is a pure function of
-//! the base and merged manifests, so it stays deterministic.
+//! the base, the two sides and the merged manifests, so it stays
+//! deterministic.
 //!
 //! The commit-graph wrapper ([`crate::repo::Repository::merge`]) resolves
 //! the merge base and turns a clean result into a two-parent merge commit;
@@ -174,6 +175,25 @@ pub enum GraphViolation {
         /// The type the merged value actually has.
         actual: PropertyType,
     },
+    /// A merged edge written under a different relationship-type
+    /// discriminator from the one the merged schema declares for its type
+    /// (acetone-7qw.26, ADR-0081). One branch changed the discriminator
+    /// while it had no edges of the type — legal, `check_rel_disc_stability`
+    /// — and the other branch wrote edges under the old declaration; only
+    /// the merged state pairs them. Left alone, the edge's key would be read
+    /// under the wrong declaration: a `Null`-keyed edge's record value
+    /// under a newly declared name is shadowed on read and erased on the
+    /// next write, and a renamed discriminator silently reinterprets the
+    /// key's value.
+    StaleDiscriminator {
+        /// The offending forward edge key (encoded).
+        edge: Vec<u8>,
+        /// The discriminator the merged schema declares for the edge's type
+        /// (`None`: none — the merge wiped it, or the type is undeclared).
+        declared: Option<String>,
+        /// The discriminator the edge was written under (`None`: none).
+        minted: Option<String>,
+    },
     /// Two or more merged nodes of `label` share a value for a UNIQUE
     /// property (spec §2). `nodes` are the colliding node keys (encoded),
     /// in key order.
@@ -275,6 +295,23 @@ impl std::fmt::Display for GraphViolation {
                     format_label(property),
                     declared.as_str(),
                     actual.as_str()
+                )
+            }
+            GraphViolation::StaleDiscriminator {
+                edge,
+                declared,
+                minted,
+            } => {
+                let disc = |d: &Option<String>| match d {
+                    Some(name) => format!("discriminator {}", format_label(name)),
+                    None => "no discriminator".to_owned(),
+                };
+                write!(
+                    f,
+                    "relationship {} was written under {} but the merged schema declares {}",
+                    display_edge_key(edge),
+                    disc(minted),
+                    disc(declared)
                 )
             }
             GraphViolation::UniqueViolation {
@@ -422,7 +459,7 @@ pub fn merge_manifests<S: ChunkStore>(
 
     // Referential integrity and schema constraints can be broken by an
     // otherwise map-clean merge (acetone-14c.3); surface any breach as data.
-    let violations = validate_merged(store, base, &merged)?;
+    let violations = validate_merged(store, base, ours, theirs, &merged)?;
     if !violations.is_empty() {
         return Ok(ManifestMerge::Conflicts {
             merged: Box::new(merged),
@@ -586,16 +623,21 @@ fn rebuild_reverse<S: ChunkStore>(
 
 /// Validate a map-clean merged manifest against `base` (acetone-14c.3):
 /// referential integrity (no dangling edges) and schema constraints
-/// (existence, declared types, UNIQUE), re-checked over the keys the merge
-/// changed. Returns the violations in category order (dangling edges, then
-/// existence, then declared types, then UNIQUE), each category in key order —
-/// deterministic, so the merge stays a pure function of its inputs
-/// (Invariant #4).
+/// (existence, declared types, relationship discriminators, UNIQUE),
+/// re-checked over the keys the merge changed. Returns the violations in
+/// category order (dangling edges, then existence, then declared node types,
+/// then declared relationship types, then stale discriminators, then
+/// UNIQUE), each category in key order — deterministic, so the merge stays a
+/// pure function of its inputs (Invariant #4).
+///
+/// `ours` and `theirs` are the two merged sides. Only the discriminator check
+/// reads them: which declaration an edge was written under is a fact about
+/// the side that wrote it, not about the base or the merged state (ADR-0081).
 ///
 /// Note the persisted conflicts map sorts `WrongType` *last* rather than
 /// third: its entry-key tag is 3;
-/// relationship type breaches carry tag 4, assigned after UNIQUE's 2 so existing
-/// conflict keys did not move. Both orders are deterministic, so Invariant #4
+/// relationship type breaches carry tag 4 and stale discriminators tag 5,
+/// assigned after UNIQUE's 2 so existing conflict keys did not move. Both orders are deterministic, so Invariant #4
 /// holds either way, but `GraphError::MergeViolations` and
 /// `CALL acetone.conflicts()` therefore list the same merge's categories in
 /// different orders.
@@ -618,6 +660,8 @@ fn rebuild_reverse<S: ChunkStore>(
 pub(crate) fn validate_merged<S: ChunkStore>(
     store: &S,
     base: &Manifest,
+    ours: &Manifest,
+    theirs: &Manifest,
     merged: &Manifest,
 ) -> Result<Vec<GraphViolation>, GraphError> {
     let params = merged.chunk_params;
@@ -784,6 +828,17 @@ pub(crate) fn validate_merged<S: ChunkStore>(
         }
     }
 
+    // Relationship discriminators (acetone-7qw.26, ADR-0081) — the merge-time
+    // mirror of `check_rel_disc_stability`.
+    stale_discriminators(
+        store,
+        &rel_types,
+        ours,
+        theirs,
+        &merged_edges,
+        &mut violations,
+    )?;
+
     // UNIQUE: group merged nodes by (label, property, value); a group of two
     // or more is a collision. Report it when the merge is responsible — a
     // colliding node changed, or the constraint is newly declared.
@@ -821,6 +876,87 @@ pub(crate) fn validate_merged<S: ChunkStore>(
     }
 
     Ok(violations)
+}
+
+/// Report every merged edge written under a different discriminator from the
+/// one the merged schema declares for its type (acetone-7qw.26, ADR-0081).
+///
+/// Every edge in a committed manifest was written under that manifest's
+/// discriminator for its type: `check_rel_disc_stability` refuses to change a
+/// discriminator while edges of the type exist. So the declaration an edge was
+/// written under is its side's, and the merge is responsible exactly when a
+/// side's discriminator for a type differs from the merged schema's — one
+/// branch declared, renamed or dropped it while holding no edges of the type,
+/// the other wrote edges under the old one. Every such side edge the merged
+/// graph still holds is reported. Provenance, not key shape, is the test: a
+/// `Null` key under a declared discriminator is detectable from the key
+/// alone, but a renamed discriminator leaves values that look equally valid
+/// under either name.
+///
+/// An undeclared type counts as declaring no discriminator. Edges the
+/// workspace wrote during the merge are in neither side, and so are judged
+/// only by the transaction checks that wrote them. Costs a schema read per
+/// side and nothing more unless a side disagrees with the merged schema; then
+/// one scan of that side's forward edges with a point lookup per edge of a
+/// disagreeing type. Emitted in edge-key order, each edge once (`ours` first
+/// should both sides disagree — which needs the workspace to have changed the
+/// discriminator since, as a schema conflict blocks validation otherwise).
+fn stale_discriminators<S: ChunkStore>(
+    store: &S,
+    merged_rel_types: &BTreeMap<String, RelTypeDef>,
+    ours: &Manifest,
+    theirs: &Manifest,
+    merged_edges: &Root,
+    violations: &mut Vec<GraphViolation>,
+) -> Result<(), GraphError> {
+    let merged_disc = |rtype: &str| {
+        merged_rel_types
+            .get(rtype)
+            .and_then(|def| def.discriminator())
+    };
+    let mut stale: BTreeMap<Vec<u8>, GraphViolation> = BTreeMap::new();
+    for side in [ours, theirs] {
+        let params = side.chunk_params;
+        let side_rel_types = rel_type_defs(store, &side.schema.to_root(params)?)?;
+        // Types whose discriminator on this side differs from the merged
+        // schema's, mapped to the side's discriminator. A type the merged
+        // schema declares but the side does not counts too (side: none).
+        let mut disagreeing: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+        for (name, def) in &side_rel_types {
+            if def.discriminator() != merged_disc(name) {
+                disagreeing.insert(name.as_str(), def.discriminator());
+            }
+        }
+        for name in merged_rel_types.keys() {
+            if !side_rel_types.contains_key(name) && merged_disc(name).is_some() {
+                disagreeing.insert(name.as_str(), None);
+            }
+        }
+        if disagreeing.is_empty() {
+            continue;
+        }
+        for item in scan(store, &side.edges_fwd.to_root(params)?, ..)? {
+            let (raw_key, _) = item?;
+            let edge = EdgeKey::decode_fwd(&raw_key)?;
+            let Some(minted) = disagreeing.get(edge.rtype()) else {
+                continue;
+            };
+            if stale.contains_key(raw_key.as_ref()) || get(store, merged_edges, &raw_key)?.is_none()
+            {
+                continue;
+            }
+            stale.insert(
+                raw_key.to_vec(),
+                GraphViolation::StaleDiscriminator {
+                    edge: raw_key.to_vec(),
+                    declared: merged_disc(edge.rtype()).map(str::to_owned),
+                    minted: minted.map(str::to_owned),
+                },
+            );
+        }
+    }
+    violations.extend(stale.into_values());
+    Ok(())
 }
 
 /// Read the label definitions of a `schema` map root, keyed by label name.

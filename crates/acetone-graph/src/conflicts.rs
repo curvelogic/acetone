@@ -175,6 +175,25 @@ fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
                     push_field(&mut key, declared.as_str().as_bytes());
                     push_field(&mut key, edge);
                 }
+                GraphViolation::StaleDiscriminator { edge, declared, .. } => {
+                    // 5: a relationship written under a different
+                    // discriminator from the merged one (acetone-7qw.26,
+                    // ADR-0081). The declared discriminator (presence byte,
+                    // then name) distinguishes the same edge across two
+                    // merges; `minted` is a function of the sides, so it
+                    // adds nothing. A marker only, like every graph entry:
+                    // older readers see `KIND_GRAPH` and never decode the
+                    // tag, so `format_version` stays 1.
+                    key.push(5);
+                    match declared {
+                        Some(name) => {
+                            key.push(1);
+                            push_field(&mut key, name.as_bytes());
+                        }
+                        None => key.push(0),
+                    }
+                    push_field(&mut key, edge);
+                }
                 GraphViolation::UniqueViolation {
                     label,
                     property,
