@@ -887,13 +887,31 @@ impl Repository {
     /// resolution, `gc` ownership and `migrate` rewriting all manage it —
     /// signing, verification and the rest of git's tag porcelain remain
     /// git's job, at that same path. The tagger identity is the neutral
-    /// placeholder commits use (real identity is acetone-gid).
+    /// placeholder commits use; [`Self::create_tag_with_tagger`] takes a
+    /// caller-supplied one.
     pub fn create_tag(
         &self,
         name: &str,
         refspec: Option<&str>,
         message: Option<&str>,
     ) -> Result<Hash, GraphError> {
+        self.create_tag_with_tagger(name, refspec, message, None)
+    }
+
+    /// [`Self::create_tag`] with an explicit tagger identity (`None`: the
+    /// neutral [`Signature::default`]). The library never reads an ambient
+    /// identity (environment or git config); the caller supplies it
+    /// (acetone-gid). An identity git cannot store faithfully is refused
+    /// with [`StoreError::InvalidSignature`] before anything is written.
+    pub fn create_tag_with_tagger(
+        &self,
+        name: &str,
+        refspec: Option<&str>,
+        message: Option<&str>,
+        tagger: Option<Signature>,
+    ) -> Result<Hash, GraphError> {
+        let tagger = tagger.unwrap_or_default();
+        tagger.validate()?;
         let full = self.namespace.tag_ref(name);
         // Read the ref first: this validates the tag name *before* any
         // object is written (a bad name fails here, leaving no debris) and
@@ -912,9 +930,7 @@ impl Repository {
         if message.trim().is_empty() {
             return Err(GraphError::EmptyTagMessage);
         }
-        let tag_id = self
-            .store
-            .create_tag(name, &target, message, &Signature::default())?;
+        let tag_id = self.store.create_tag(name, &target, message, &tagger)?;
         match self.store.write_ref(&full, None, &tag_id) {
             Ok(()) => Ok(target),
             Err(StoreError::CasFailed { .. }) => Err(GraphError::TagExists {
@@ -1258,6 +1274,25 @@ impl Repository {
     /// [`crate::merge::GraphViolation`]s (data, not an error), so a `Merged`
     /// result is both map-clean and graph-valid.
     pub fn merge(&self, theirs: &str, message: &str) -> Result<MergeOutcome, GraphError> {
+        self.merge_with_author(theirs, message, None)
+    }
+
+    /// [`Self::merge`] with an explicit author for the clean-merge commit
+    /// (`None`: the neutral [`Signature::default`]); the committer stays
+    /// acetone's own. Only a [`MergeOutcome::Merged`] writes a commit — a
+    /// fast-forward writes none, and a conflicted merge is completed by
+    /// [`Transaction::commit`], which takes its own author. The library never
+    /// reads an ambient identity (acetone-gid); an identity git cannot store
+    /// faithfully is refused with [`StoreError::InvalidSignature`] before the
+    /// merge starts.
+    pub fn merge_with_author(
+        &self,
+        theirs: &str,
+        message: &str,
+        author: Option<Signature>,
+    ) -> Result<MergeOutcome, GraphError> {
+        let author = author.unwrap_or_default();
+        author.validate()?;
         let _lock = WriteLock::acquire(self.store.git_dir())?;
         // On-a-branch first: merge advances the current branch, so a detached
         // HEAD is unmergeable regardless of workspace state. Reporting
@@ -1357,7 +1392,8 @@ impl Repository {
                 let expected = self.workspace_ref_value()?;
                 self.cas_workspace(expected.as_ref(), &tree)?;
 
-                let commit = self.write_merge_commit(&manifest, &[ours, theirs], message)?;
+                let commit =
+                    self.write_merge_commit(&manifest, &[ours, theirs], message, author)?;
                 match self.store.write_ref(&branch, Some(&ours), &commit) {
                     Ok(()) => {
                         // A clean merge consumes no MERGE_HEAD, but clear any
@@ -2077,6 +2113,7 @@ impl Repository {
         manifest: &Manifest,
         parents: &[Hash],
         message: &str,
+        author: Signature,
     ) -> Result<Hash, GraphError> {
         let manifest_bytes = manifest.encode();
         let anchors = manifest_chunk_set(&self.store, manifest)?;
@@ -2084,6 +2121,7 @@ impl Repository {
         let mut new_commit = NewCommit::new(&manifest_bytes, &summary, message);
         new_commit.parents = parents;
         new_commit.anchors = &anchors;
+        new_commit.author = author;
         Ok(self.store.create_commit(&new_commit)?)
     }
 
@@ -3466,6 +3504,14 @@ impl<'r> Transaction<'r> {
     /// The commit anchors the complete chunk set of every map in the
     /// manifest, so the whole version survives `git gc` and travels with
     /// `clone`/`push`/`fetch` (spec §3.5).
+    ///
+    /// `author` sets the commit's git **author only** (acetone-gid); `None`
+    /// is acetone's neutral signature. The committer is always acetone's
+    /// neutral identity, whatever the author, as with `git commit --author`.
+    /// An identity git cannot store faithfully (empty name, angle brackets,
+    /// control characters) fails with `StoreError::InvalidSignature`
+    /// (wrapped in [`GraphError::Store`]) **before** any staged write is
+    /// applied, so a refused commit leaves the workspace as it was.
     pub fn commit(
         self,
         message: &str,
@@ -3478,7 +3524,11 @@ impl<'r> Transaction<'r> {
     /// Like [`commit`](Self::commit), but permits a commit that records no
     /// change — a deliberate empty commit (a marker, a CI convention), the
     /// analogue of `git commit --allow-empty`. Everything else is identical:
-    /// same anchoring, same merge-completion semantics, same branch advance.
+    /// same anchoring, same merge-completion semantics, same branch advance,
+    /// and the same authorship rule: `author` is the author only, the
+    /// committer is always acetone's neutral identity, and an invalid
+    /// identity fails with `StoreError::InvalidSignature` before any staged
+    /// write is applied.
     pub fn commit_allow_empty(
         self,
         message: &str,
@@ -3496,6 +3546,11 @@ impl<'r> Transaction<'r> {
         allow_empty: bool,
     ) -> Result<Hash, GraphError> {
         let repo = self.repo;
+        // A caller-supplied author git cannot store faithfully is refused
+        // before anything is applied (acetone-gid), not at the object write.
+        if let Some(author) = &author {
+            author.validate()?;
+        }
         // Committing advances a branch, so a detached-HEAD worktree cannot
         // commit. Resolve the branch *before* applying staged writes, so a
         // detached commit fails cleanly (`NoCurrentBranch`) without partially

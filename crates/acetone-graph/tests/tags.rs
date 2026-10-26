@@ -65,8 +65,8 @@ fn create_tag_defaults_to_head_and_writes_an_annotated_tag() {
     assert_eq!(
         (tagger.name.as_str(), tagger.email.as_str()),
         ("acetone", "acetone@acetone.invalid"),
-        "same neutral placeholder identity as commits (ADR-0059; real \
-         identity is acetone-gid)"
+        "without a tagger, the same neutral identity as commits (ADR-0059; \
+         a caller-supplied one is create_tag_with_tagger, acetone-gid)"
     );
 
     // …and the short name resolves through the peel to the commit.

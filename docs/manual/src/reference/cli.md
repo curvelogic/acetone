@@ -115,13 +115,21 @@ workspace.
 Show the current branch, head commit and workspace state (clean, dirty or
 merging). Takes `--json`.
 
-### `acetone commit -m <MESSAGE> [--trailer KEY=VALUE]...`
+### `acetone commit -m <MESSAGE> [--trailer KEY=VALUE]... [--author <AUTHOR>]`
 
 Turn the workspace's staged changes into a commit. Refuses when the workspace
 has no changes since HEAD — including, on a brand-new repository, an empty
 root commit; there is no `--allow-empty` yet. `--trailer` adds a `KEY=VALUE`
 commit trailer and may be repeated. During a merge, `commit` re-validates and
 completes the merge.
+
+`--author 'Name <email>'` sets the commit's git author. Without it, acetone
+uses `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` when both are set (one alone is
+refused), and otherwise the neutral `acetone <acetone@acetone.invalid>`. Git
+config is not read. The committer is always acetone's neutral identity, as
+with `git commit --author`. A name must be non-empty, and angle brackets or
+control characters in either part are refused. `import`, `merge` and `tag`
+take the same flag under the same rule.
 
 ### `acetone log [--all]`
 
@@ -130,7 +138,8 @@ first-parent chain — the branch's own changelog, in which merged-in branch
 commits do not appear. `--all` covers the whole commit graph instead: every
 commit reachable from any branch, each exactly once, newest first in a
 deterministic topological order, with a `merge: <parent> <parent>` line on
-merge commits. Takes `--json` (each entry always carries its `parents`).
+merge commits. Takes `--json` (each entry always carries its `parents`, and
+its `author` and `committer` as `{name, email}`).
 
 ### `acetone branch [NAME [REFSPEC]] [--delete NAME]`
 
@@ -141,12 +150,14 @@ ref name or commit hash); the new branch is not checked out.
 commit or graph data is deleted, so the branch's commits stay reachable by
 hash — and the checked-out branch is refused. Takes `--json`.
 
-### `acetone tag [NAME [REFSPEC]] [-m <MESSAGE>] [--delete NAME]`
+### `acetone tag [NAME [REFSPEC]] [-m <MESSAGE>] [--author <AUTHOR>] [--delete NAME]`
 
 With no argument, list the graph's tags (short names). With `NAME`, create
 an **annotated** tag — on the current head commit by default, or on
 `REFSPEC` (a branch or tag short name, full ref name or commit hash) — with
-`-m` for a message (default: the tag name). `--delete NAME` (`-d`) deletes
+`-m` for a message (default: the tag name) and `--author` for the tagger
+(the same rule as `commit`'s: the fallback is `GIT_AUTHOR_NAME`/
+`GIT_AUTHOR_EMAIL`, not git's `GIT_COMMITTER_*`). `--delete NAME` (`-d`) deletes
 a tag instead: ref removal only, the tagged commit stays reachable by hash.
 Takes `--json`.
 
@@ -166,7 +177,7 @@ Show the graph-level difference between two versions (branch short names,
 full ref names or commit hashes): the nodes and relationships added (`+`),
 removed (`-`) or modified (`~`) from `FROM` to `TO`. Takes `--json`.
 
-### `acetone merge [REF] [-m <MESSAGE>] [--abort]`
+### `acetone merge [REF] [-m <MESSAGE>] [--author <AUTHOR>] [--abort]`
 
 Merge another version into the current branch. The workspace must be clean
 and a branch checked out; fast-forwards when possible, otherwise a clean
@@ -176,7 +187,10 @@ constraint) — enter a merge-in-progress state: resolve cell conflicts with
 `acetone resolve --all-ours|--all-theirs` or by writing the entities, repair
 graph violations by editing the graph, then `acetone commit` to complete (it
 re-validates first). `merge --abort` discards the merge and restores the
-pre-merge branch tip; `REF` may be omitted only with `--abort`.
+pre-merge branch tip; `REF` may be omitted only with `--abort`. `--author`
+authors the commit a clean merge writes (the same rule as `commit`'s); a
+merge that stops on conflicts is completed by `commit`, with its own
+`--author`.
 
 ### `acetone resolve --all-ours|--all-theirs`
 
@@ -323,6 +337,8 @@ atomically, with the violations listed.
 - `--branch <BRANCH>` imports onto that branch in isolation, leaving the
   current branch unchanged (created if absent, appended to if present).
 - `-m/--message` overrides the synthesised commit message.
+- `--author 'Name <email>'` authors the import commit (the same rule as
+  `commit`'s).
 
 ### `acetone export -f <csv|json|ndjson> [-l <LABEL> | --edge <RTYPE>] [-o <OUT>]`
 

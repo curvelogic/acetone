@@ -36,7 +36,15 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             message,
             trailer,
             allow_empty,
-        } => commit(repo_path, graph, &message, &trailer, allow_empty),
+            author,
+        } => commit(
+            repo_path,
+            graph,
+            &message,
+            &trailer,
+            allow_empty,
+            author.as_deref(),
+        ),
         Command::Log { all, json } => log(repo_path, graph, all, json),
         Command::Blame { label, key, json } => blame(repo_path, graph, &label, &key, json),
         Command::Branch {
@@ -56,6 +64,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             name,
             refspec,
             message,
+            author,
             delete,
             json,
         } => tag(
@@ -64,6 +73,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             name.as_deref(),
             refspec.as_deref(),
             message.as_deref(),
+            author.as_deref(),
             delete.as_deref(),
             json,
         ),
@@ -71,12 +81,14 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
         Command::Merge {
             refspec,
             message,
+            author,
             abort,
         } => merge(
             repo_path,
             graph,
             refspec.as_deref(),
             message.as_deref(),
+            author.as_deref(),
             abort,
         ),
         Command::Resolve {
@@ -205,6 +217,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             disc,
             branch,
             message,
+            author,
             batch_size,
         } => crate::import::run(
             repo_path,
@@ -218,6 +231,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             disc.as_deref(),
             branch.as_deref(),
             message.as_deref(),
+            author.as_deref(),
             batch_size,
         ),
     }
@@ -493,7 +507,9 @@ pub(crate) fn commit(
     message: &str,
     trailers: &[String],
     allow_empty: bool,
+    author: Option<&str>,
 ) -> Result<()> {
+    let author = crate::author::resolve(author)?;
     let repo = open(repo_path, graph)?;
     // Completing a merge always commits (it records the two-parent history)
     // even when the resolved result happens to match HEAD. It still refuses if
@@ -529,9 +545,9 @@ pub(crate) fn commit(
     // on an already-committed workspace (or a brand-new repository's empty
     // root) surfaces GraphError::NothingToCommit unless --allow-empty.
     let result = if allow_empty {
-        txn.commit_allow_empty(message, &trailers, None)
+        txn.commit_allow_empty(message, &trailers, author)
     } else {
-        txn.commit(message, &trailers, None)
+        txn.commit(message, &trailers, author)
     };
     let id = result.context("committing workspace")?;
     outln!("committed {}", id.to_hex());
@@ -554,7 +570,16 @@ fn log(repo_path: &Path, graph: Option<&str>, all: bool, json: bool) -> Result<(
         // sanitise_line needed on the JSON path).
         let rows: Vec<Json> = entries
             .iter()
-            .map(|entry| {
+            .map(|entry| -> Result<Json> {
+                // Author and committer (acetone-gid): name and email as
+                // stored, read from the commit object.
+                use acetone_core::store::CommitStore;
+                let commit = repo
+                    .store()
+                    .read_commit(&entry.id)?
+                    .with_context(|| format!("reading commit {}", entry.id.to_hex()))?;
+                let ident =
+                    |i: &acetone_core::store::Identity| json!({ "name": i.name, "email": i.email });
                 let subject = entry.message.lines().next().unwrap_or("");
                 let trailers: Vec<Json> = entry
                     .trailers
@@ -566,15 +591,17 @@ fn log(repo_path: &Path, graph: Option<&str>, all: bool, json: bool) -> Result<(
                     .iter()
                     .map(|p| Json::String(p.to_hex()))
                     .collect();
-                json!({
+                Ok(json!({
                     "hash": entry.id.to_hex(),
                     "subject": subject,
                     "message": entry.message,
                     "trailers": trailers,
                     "parents": parents,
-                })
+                    "author": ident(&commit.author),
+                    "committer": ident(&commit.committer),
+                }))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         emit_json(&Json::Array(rows));
         return Ok(());
     }
@@ -773,12 +800,14 @@ fn branch(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // tag's CLI flags map 1:1 to args
 fn tag(
     repo_path: &Path,
     graph: Option<&str>,
     name: Option<&str>,
     refspec: Option<&str>,
     message: Option<&str>,
+    author: Option<&str>,
     delete: Option<&str>,
     json: bool,
 ) -> Result<()> {
@@ -814,8 +843,11 @@ fn tag(
             }
         }
         Some(name) => {
+            // Only creation stamps an identity; listing and deleting never
+            // consult --author or the environment.
+            let tagger = crate::author::resolve(author)?;
             let target = repo
-                .create_tag(name, refspec, message)
+                .create_tag_with_tagger(name, refspec, message, tagger)
                 .with_context(|| format!("creating tag {name:?}"))?;
             if json {
                 emit_json(&json!({ "created": name, "hash": target.to_hex() }));
@@ -840,6 +872,7 @@ fn merge(
     graph: Option<&str>,
     refspec: Option<&str>,
     message: Option<&str>,
+    author: Option<&str>,
     abort: bool,
 ) -> Result<()> {
     let repo = open(repo_path, graph)?;
@@ -848,13 +881,14 @@ fn merge(
         outln!("merge aborted — workspace restored to the branch tip");
         return Ok(());
     }
+    let author = crate::author::resolve(author)?;
     // clap guarantees a refspec unless --abort was given.
     let refspec = refspec.expect("clap requires REF unless --abort");
     let message = message
         .map(str::to_owned)
         .unwrap_or_else(|| format!("Merge {refspec}"));
     match repo
-        .merge(refspec, &message)
+        .merge_with_author(refspec, &message, author)
         .with_context(|| format!("merging {refspec:?}"))?
     {
         MergeOutcome::AlreadyUpToDate => outln!("already up to date"),

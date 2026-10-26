@@ -144,6 +144,60 @@ impl Default for Signature {
     }
 }
 
+impl Signature {
+    /// Parse a git-style `Name <email>` identity (the form `git commit
+    /// --author` takes) and [validate](Self::validate) it. The name is the
+    /// text before the first `<`, trimmed; the email is the text between
+    /// that `<` and a closing `>` that must end the input. The email may be
+    /// empty (`Name <>`), as git permits.
+    pub fn parse(text: &str) -> Result<Signature, StoreError> {
+        let invalid = |reason: &str| StoreError::InvalidSignature {
+            reason: reason.to_owned(),
+        };
+        let (name, rest) = text
+            .trim()
+            .split_once('<')
+            .ok_or_else(|| invalid("expected `Name <email>`"))?;
+        let email = rest
+            .strip_suffix('>')
+            .ok_or_else(|| invalid("expected `Name <email>`, ending with `>`"))?;
+        let sig = Signature {
+            name: name.trim().to_owned(),
+            email: email.to_owned(),
+        };
+        sig.validate()?;
+        Ok(sig)
+    }
+
+    /// Check that git can store this identity faithfully: a non-empty name,
+    /// and no angle brackets or control characters in either field (a
+    /// newline or `>` would let a caller forge further object headers). It
+    /// is the rule every commit, history rewrite and tag applies on write,
+    /// exposed so a caller can refuse a bad identity before doing any work.
+    pub fn validate(&self) -> Result<(), StoreError> {
+        validate_identity_fields(&self.name, &self.email)
+    }
+}
+
+/// Validate a name/email pair for a commit identity (git-native rules:
+/// non-empty name, no angle brackets or control characters).
+pub(crate) fn validate_identity_fields(name: &str, email: &str) -> Result<(), StoreError> {
+    let invalid = |reason: &str| StoreError::InvalidSignature {
+        reason: reason.to_owned(),
+    };
+    if name.trim().is_empty() {
+        return Err(invalid("name must not be empty"));
+    }
+    for (field, text) in [("name", name), ("email", email)] {
+        if text.chars().any(|c| c == '<' || c == '>' || c.is_control()) {
+            return Err(invalid(&format!(
+                "{field} must not contain angle brackets or control characters"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// A commit author or committer *read back* from a commit: identity plus the
 /// git timestamp, so a history rewrite ([`GitStore::rewrite_commit`]) can
 /// reproduce it faithfully rather than restamping "now". Times are git-native
@@ -196,8 +250,14 @@ pub struct NewCommit<'a> {
     /// chunk data is copied, and shards shared between versions deduplicate as
     /// tree objects.
     pub anchors: &'a [Hash],
-    /// Author and committer identity (git-native; both set to this value).
+    /// Author identity (git-native). Defaults to the neutral
+    /// [`Signature::default`].
     pub author: Signature,
+    /// Committer identity (git-native), independent of [`Self::author`].
+    /// Defaults to the neutral [`Signature::default`]: as with `git commit
+    /// --author`, a caller-supplied author does not also become the
+    /// committer — acetone records itself as the tool that wrote the commit.
+    pub committer: Signature,
 }
 
 impl<'a> NewCommit<'a> {
@@ -216,6 +276,7 @@ impl<'a> NewCommit<'a> {
             parents: &[],
             anchors: &[],
             author: Signature::default(),
+            committer: Signature::default(),
         }
     }
 }

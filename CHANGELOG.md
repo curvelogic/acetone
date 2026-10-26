@@ -48,6 +48,15 @@ fine.)
   Library: `GraphViolation` gains a `StaleDiscriminator` variant, which
   breaks an exhaustive match.
 
+- **Breaking (library behaviour): a caller-supplied author no longer
+  also becomes the committer.** `Transaction::commit(.., Some(author))`,
+  `commit_allow_empty` and `ImportOptions::author` used to stamp that
+  identity as both author and committer; the committer is now always
+  acetone's neutral signature, as with `git commit --author`. The
+  signatures are unchanged, but the curated `acetone-core` surface can
+  no longer produce a commit whose committer is the author. Only the
+  store-level `NewCommit::committer` field sets a committer directly.
+
 ### Added
 
 - **`CALL acetone.conflicts()` yields `entity`**, the conflicted node or
@@ -79,6 +88,24 @@ fine.)
   listed, find it pruned into the new pack when it opened it, and report
   a miss without rescanning the packs. Object lookups now retry a miss
   before believing it.
+
+- **Commits and tags carry a real author.** `acetone commit`, `import`,
+  `merge` (the clean-merge commit) and `tag` take `--author 'Name
+  <email>'`; without it the CLI uses `GIT_AUTHOR_NAME` and
+  `GIT_AUTHOR_EMAIL` when both are set (one alone is refused), and
+  otherwise the neutral `acetone <acetone@acetone.invalid>` as before.
+  The daemon's `commit`, `import` and `merge` verbs take
+  `params.author` (`{name, email}`); the daemon never reads its own
+  environment, so a socket client's commit is neutral unless it names
+  an author. A malformed or header-injecting identity is refused before
+  any work (the daemon's error kind is `invalid-author`). Git config is
+  not read. The committer stays acetone's own neutral identity, as with
+  `git commit --author`. `acetone log --json` gains `author` and
+  `committer` (`{name, email}`) on each entry. Library:
+  `Repository::merge_with_author`, `Repository::create_tag_with_tagger`,
+  `Signature::parse` and `Signature::validate`; `NewCommit` gains a
+  `committer` field. The Python example client takes an `author`
+  argument.
 
 ## [0.7.0] - 2026-08-13
 

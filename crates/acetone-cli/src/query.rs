@@ -1019,7 +1019,9 @@ fn handle_meta(
             if rest.is_empty() {
                 anyhow::bail!("usage: :commit <message>");
             }
-            crate::commands::commit(repo_path, graph, rest, &[], false)?;
+            // No `--author` in the shell: the GIT_AUTHOR_* fallback applies,
+            // exactly as for a bare `acetone commit`.
+            crate::commands::commit(repo_path, graph, rest, &[], false, None)?;
         }
         "schema" => {
             let (_pos, flags) = parse_meta_args(rest);

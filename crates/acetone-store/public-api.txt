@@ -509,6 +509,7 @@ pub type acetone_store::Identity::Output = T
 #[non_exhaustive] pub struct acetone_store::NewCommit<'a>
 pub acetone_store::NewCommit::anchors: &'a [acetone_store::Hash]
 pub acetone_store::NewCommit::author: acetone_store::Signature
+pub acetone_store::NewCommit::committer: acetone_store::Signature
 pub acetone_store::NewCommit::manifest: &'a [u8]
 pub acetone_store::NewCommit::message: &'a str
 pub acetone_store::NewCommit::parents: &'a [acetone_store::Hash]
@@ -646,6 +647,9 @@ pub type acetone_store::RewriteCommit<'a>::Output = T
 pub struct acetone_store::Signature
 pub acetone_store::Signature::email: alloc::string::String
 pub acetone_store::Signature::name: alloc::string::String
+impl acetone_store::Signature
+pub fn acetone_store::Signature::parse(&str) -> core::result::Result<acetone_store::Signature, acetone_store::StoreError>
+pub fn acetone_store::Signature::validate(&self) -> core::result::Result<(), acetone_store::StoreError>
 impl core::clone::Clone for acetone_store::Signature
 pub fn acetone_store::Signature::clone(&self) -> acetone_store::Signature
 impl core::cmp::Eq for acetone_store::Signature

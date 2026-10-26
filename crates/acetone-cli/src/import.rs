@@ -440,8 +440,11 @@ pub fn run(
     disc: Option<&str>,
     branch: Option<&str>,
     message: Option<&str>,
+    author: Option<&str>,
     batch_size: Option<usize>,
 ) -> Result<()> {
+    // The CLI's authorship rule: --author, else GIT_AUTHOR_*, else neutral.
+    let author = crate::author::resolve(author)?;
     let repo = crate::commands::open(repo_path, graph)?;
     let outcome = import_core(
         &repo,
@@ -455,6 +458,7 @@ pub fn run(
         disc,
         branch,
         message,
+        author,
         batch_size,
     )?;
 
@@ -501,6 +505,7 @@ pub fn import_core(
     disc: Option<&str>,
     branch: Option<&str>,
     message: Option<&str>,
+    author: Option<acetone_core::store::Signature>,
     batch_size: Option<usize>,
 ) -> Result<ImportOutcome> {
     let format = Format::parse(format)?;
@@ -519,7 +524,7 @@ pub fn import_core(
             extractor: format.as_str().to_owned(),
             source_hash: hash,
         },
-        author: None,
+        author,
         batch_size,
     };
     acetone_core::graph::import(repo, &mut extractor, opts).context("importing")

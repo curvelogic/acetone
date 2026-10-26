@@ -103,12 +103,18 @@ class AcetoneClient:
         _, _, summary = self._read_response()
         return summary
 
-    def import_source(self, source, fmt, label=None, edge=None, message=None):
+    def import_source(self, source, fmt, label=None, edge=None, message=None, author=None):
         """Import a source (CSV/JSON/NDJSON text) streamed as chunk frames — a
         payload verb, no path over the wire. Requires a clean workspace (it
-        commits). Returns the terminal `ok` summary."""
+        commits). `author` is `{"name": ..., "email": ...}` (default: the
+        neutral identity). Returns the terminal `ok` summary."""
         params = {"format": fmt}
-        for key, value in (("label", label), ("edge", edge), ("message", message)):
+        for key, value in (
+            ("label", label),
+            ("edge", edge),
+            ("message", message),
+            ("author", author),
+        ):
             if value is not None:
                 params[key] = value
         self._next_id += 1
@@ -119,11 +125,14 @@ class AcetoneClient:
         _, _, summary = self._read_response()
         return summary
 
-    def commit(self, message, allow_empty=False):
-        """Commit the shared workspace. Returns the terminal `ok` summary."""
-        _, _, ok = self._request(
-            {"verb": "commit", "params": {"message": message, "allow_empty": allow_empty}}
-        )
+    def commit(self, message, allow_empty=False, author=None):
+        """Commit the shared workspace. `author` is `{"name": ..., "email": ...}`
+        (default: the neutral identity — the daemon never uses its own
+        environment). Returns the terminal `ok` summary."""
+        params = {"message": message, "allow_empty": allow_empty}
+        if author is not None:
+            params["author"] = author
+        _, _, ok = self._request({"verb": "commit", "params": params})
         return ok
 
     def branch(self, name=None, delete=None):
@@ -141,12 +150,14 @@ class AcetoneClient:
         _, _, ok = self._request({"verb": "checkout", "params": {"branch": branch}})
         return ok
 
-    def merge(self, refspec, message="merge"):
+    def merge(self, refspec, message="merge", author=None):
         """Merge `refspec` into the current branch. On conflicts the terminal
-        `ok` has outcome=="conflicts" with the conflicts as data."""
-        _, _, ok = self._request(
-            {"verb": "merge", "params": {"refspec": refspec, "message": message}}
-        )
+        `ok` has outcome=="conflicts" with the conflicts as data. `author`
+        applies to a clean merge's commit."""
+        params = {"refspec": refspec, "message": message}
+        if author is not None:
+            params["author"] = author
+        _, _, ok = self._request({"verb": "merge", "params": params})
         return ok
 
     def _request(self, body):
@@ -245,7 +256,10 @@ def main():
         client.branch(name="feature")
         client.checkout("feature")
         client.query("CREATE (:Demo {id: 'on-feature'})")
-        client.commit("feature work")
+        # A commit authored by the client (default: the neutral identity).
+        client.commit(
+            "feature work", author={"name": "Python Client", "email": "py@example.com"}
+        )
         client.checkout("main")
         print("merged:", client.merge("feature"))  # fast-forwards main
     finally:

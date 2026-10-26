@@ -40,6 +40,7 @@ use acetone_core::cypher::session::{Outcome, QueryError, Session};
 use acetone_core::graph::GraphError;
 use acetone_core::graph::lock::{DaemonLock, StaleLockOutcome, break_stale_lock};
 use acetone_core::graph::repo::Repository;
+use acetone_core::store::{Signature, StoreError};
 
 /// Serialises stale-writer-lock recovery across this daemon's connection
 /// threads (ADR-0074 §8): with at most one recoverer active in the process,
@@ -1363,7 +1364,7 @@ fn import_staging_dir() -> Result<PathBuf> {
 /// The peer never names a path (ADR-0074 §4) — the staging file is the
 /// daemon's own, removed when this returns. `params` mirror `acetone import`
 /// minus the source: `format` (required), the node/edge mapping, `branch`,
-/// `message`, `batch_size`.
+/// `message`, `author` (`{name, email}`; absent = neutral), `batch_size`.
 fn run_import(
     stream: &mut dyn Transport,
     repo: &Repository,
@@ -1401,6 +1402,13 @@ fn run_import(
         read_payload_to_writer(stream, id, payload_cap(IMPORT_MAX_BYTES), &mut file)?;
         file.flush().ok();
     }
+    // The author is checked after the payload is drained, so a refusal
+    // leaves the connection in sync (the chunks are not misread as
+    // requests), and before any import work.
+    let author = match request_author(request) {
+        Ok(author) => author,
+        Err(e) => return author_error_frame(stream, id, e),
+    };
 
     // Stale-lock recovery on the streamed import too (acetone-pz0k.7): a
     // lock failure precedes any write, and the staged file persists, so a
@@ -1418,6 +1426,7 @@ fn run_import(
             param("disc"),
             param("branch"),
             param("message"),
+            author.clone(),
             batch_size,
         )
     });
@@ -1463,6 +1472,52 @@ fn bad_request(stream: &mut dyn Transport, id: &Json, message: &str) -> Result<(
     )
 }
 
+/// Why a request's `params.author` was refused: the wrong JSON shape (a
+/// `bad-request`) or an identity git cannot store (`invalid-author`).
+enum AuthorError {
+    Shape(&'static str),
+    Invalid(String),
+}
+
+/// Read `params.author` (acetone-gid): absent or `null` is `None`, which the
+/// library stamps as its neutral signature. The daemon NEVER falls back to
+/// an ambient identity (its environment or any git config): it serves many
+/// clients, and its launcher's identity must not be stamped on their commits
+/// (ADR-0079). A present author must be exactly `{"name": str, "email": str}`
+/// (any other key is a `bad-request`, so a misspelt field is never silently
+/// dropped) and pass the store's own identity rule ([`Signature::validate`]).
+fn request_author(request: &Json) -> std::result::Result<Option<Signature>, AuthorError> {
+    const SHAPE: &str =
+        "params.author must be an object of exactly {\"name\": string, \"email\": string}";
+    let author = match request.pointer("/params/author") {
+        None | Some(Json::Null) => return Ok(None),
+        Some(Json::Object(map)) => map,
+        Some(_) => return Err(AuthorError::Shape(SHAPE)),
+    };
+    if author.keys().any(|k| k != "name" && k != "email") {
+        return Err(AuthorError::Shape(SHAPE));
+    }
+    let field = |k: &str| author.get(k).and_then(Json::as_str).map(str::to_owned);
+    let (Some(name), Some(email)) = (field("name"), field("email")) else {
+        return Err(AuthorError::Shape(SHAPE));
+    };
+    let sig = Signature { name, email };
+    sig.validate()
+        .map_err(|e| AuthorError::Invalid(e.to_string()))?;
+    Ok(Some(sig))
+}
+
+/// The typed error frame for a refused `params.author`.
+fn author_error_frame(stream: &mut dyn Transport, id: &Json, e: AuthorError) -> Result<()> {
+    match e {
+        AuthorError::Shape(message) => bad_request(stream, id, message),
+        AuthorError::Invalid(message) => write_frame(
+            stream,
+            &json!({"id": id, "error": {"kind": "invalid-author", "message": message}}),
+        ),
+    }
+}
+
 /// A typed error frame for a `GraphError`, mapping the common variants to
 /// distinct kinds so a machine client can tell a retriable lock conflict from
 /// a permanent one; the message carries the detail.
@@ -1475,6 +1530,7 @@ fn graph_error_frame(stream: &mut dyn Transport, id: &Json, e: &GraphError) -> R
         GraphError::NoCurrentBranch => "no-current-branch",
         GraphError::NothingToCommit => "nothing-to-commit",
         GraphError::MergeInProgress => "merge-in-progress",
+        GraphError::Store(StoreError::InvalidSignature { .. }) => "invalid-author",
         // "concurrent-modification" (a ref/workspace moved under us — reload
         // and retry), deliberately NOT "conflict": that would collide with
         // the merge verb's `outcome:"conflicts"` ok-frame, which is
@@ -1491,7 +1547,8 @@ fn graph_error_frame(stream: &mut dyn Transport, id: &Json, e: &GraphError) -> R
 }
 
 /// Serve `commit`: commit the shared workspace. `params.message` (required),
-/// `params.trailer` (optional `["k=v", ...]`), `params.allow_empty`.
+/// `params.trailer` (optional `["k=v", ...]`), `params.allow_empty`,
+/// `params.author` (optional `{name, email}`; absent = neutral).
 fn run_commit(
     stream: &mut dyn Transport,
     repo: &Repository,
@@ -1535,12 +1592,16 @@ fn run_commit(
     }
     // Take the lock through the stale-lock-recovery wrapper (ADR-0074 §8), so
     // a dead writer's lock doesn't wedge `commit` (PR #270 review MAJOR-1).
+    let author = match request_author(request) {
+        Ok(author) => author,
+        Err(e) => return author_error_frame(stream, id, e),
+    };
     let committed = with_lock_recovery(repo, is_graph_locked, || {
         let txn = repo.begin_write()?;
         if allow_empty {
-            txn.commit_allow_empty(message, &trailers, None)
+            txn.commit_allow_empty(message, &trailers, author.clone())
         } else {
-            txn.commit(message, &trailers, None)
+            txn.commit(message, &trailers, author.clone())
         }
     });
     match committed {
@@ -1612,9 +1673,9 @@ fn run_checkout(
 }
 
 /// Serve `merge`: merge `params.refspec` into the current branch (optional
-/// `params.message`), or abort a merge in progress (`params.abort`).
-/// Conflicts come back as DATA in the terminal frame, mid-merge on the shared
-/// workspace — a client resolves via `resolve`/write queries then `commit`.
+/// `params.message`, `params.author` for a clean-merge commit), or abort a
+/// merge in progress (`params.abort`). Conflicts come back as DATA in the
+/// terminal frame, mid-merge on the shared workspace — a client resolves via `resolve`/write queries then `commit`.
 fn run_merge(
     stream: &mut dyn Transport,
     repo: &Repository,
@@ -1638,7 +1699,13 @@ fn run_merge(
         .pointer("/params/message")
         .and_then(Json::as_str)
         .unwrap_or("merge");
-    match with_lock_recovery(repo, is_graph_locked, || repo.merge(refspec, message)) {
+    let author = match request_author(request) {
+        Ok(author) => author,
+        Err(e) => return author_error_frame(stream, id, e),
+    };
+    match with_lock_recovery(repo, is_graph_locked, || {
+        repo.merge_with_author(refspec, message, author.clone())
+    }) {
         Ok(acetone_core::graph::merge::MergeOutcome::AlreadyUpToDate) => {
             write_frame(stream, &json!({"id": id, "ok": {"outcome": "up-to-date"}}))
         }
