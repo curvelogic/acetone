@@ -124,7 +124,7 @@ Options:
           [default: .]
 
       --author <AUTHOR>
-          The tagger, as `'Name <email>'`. Defaults to `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else acetone's neutral identity
+          The tagger, as `'Name <email>'`. Defaults to `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (not `GIT_COMMITTER_*`) when both are set, else acetone's neutral identity
 
       --graph <GRAPH>
           Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names

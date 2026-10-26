@@ -485,7 +485,12 @@ fn daemon_refuses_bad_authors_with_typed_errors_and_survives() {
     );
     assert_eq!(e["error"]["kind"], "invalid-author", "{e}");
     // The wrong shape is a bad request, not a silently dropped author.
-    for bad in [json!("Ada <ada@example.com>"), json!({"name": "Ada"})] {
+    for bad in [
+        json!("Ada <ada@example.com>"),
+        json!({"name": "Ada"}),
+        // An unknown key is refused, never silently dropped.
+        json!({"name": "Ada", "email": "ada@example.com", "emial": "typo"}),
+    ] {
         let e = verb(
             &mut s,
             json!({"id": 4, "verb": "commit",

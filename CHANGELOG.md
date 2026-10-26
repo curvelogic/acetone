@@ -48,11 +48,14 @@ fine.)
   Library: `GraphViolation` gains a `StaleDiscriminator` variant, which
   breaks an exhaustive match.
 
-- **Library: a caller-supplied author no longer also becomes the
-  committer.** `Transaction::commit(.., Some(author))` and
-  `ImportOptions::author` used to stamp that identity as both author
-  and committer; the committer is now `NewCommit::committer`, which
-  defaults to acetone's neutral signature.
+- **Breaking (library behaviour): a caller-supplied author no longer
+  also becomes the committer.** `Transaction::commit(.., Some(author))`,
+  `commit_allow_empty` and `ImportOptions::author` used to stamp that
+  identity as both author and committer; the committer is now always
+  acetone's neutral signature, as with `git commit --author`. The
+  signatures are unchanged, but the curated `acetone-core` surface can
+  no longer produce a commit whose committer is the author. Only the
+  store-level `NewCommit::committer` field sets a committer directly.
 
 ### Added
 

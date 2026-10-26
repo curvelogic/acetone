@@ -167,7 +167,8 @@ Streamed frame vocabulary (each carries the request's `id`):
   <acetone@acetone.invalid>`: the daemon **never** reads an ambient
   identity (its environment or any git config), so whoever launched it
   is never stamped on a client's commit. The committer is always the
-  neutral identity. Any other shape is a `bad-request`; a non-empty
+  neutral identity. Any other shape, including an unknown key beside
+  `name` and `email`, is a `bad-request`; a non-empty
   name is required, and angle brackets or control characters in either
   field are refused as `invalid-author` (a newline would forge further
   commit headers). There is no `tag` verb; tags take an author through

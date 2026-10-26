@@ -3504,6 +3504,14 @@ impl<'r> Transaction<'r> {
     /// The commit anchors the complete chunk set of every map in the
     /// manifest, so the whole version survives `git gc` and travels with
     /// `clone`/`push`/`fetch` (spec §3.5).
+    ///
+    /// `author` sets the commit's git **author only** (acetone-gid); `None`
+    /// is acetone's neutral signature. The committer is always acetone's
+    /// neutral identity, whatever the author, as with `git commit --author`.
+    /// An identity git cannot store faithfully (empty name, angle brackets,
+    /// control characters) fails with `StoreError::InvalidSignature`
+    /// (wrapped in [`GraphError::Store`]) **before** any staged write is
+    /// applied, so a refused commit leaves the workspace as it was.
     pub fn commit(
         self,
         message: &str,
@@ -3516,7 +3524,11 @@ impl<'r> Transaction<'r> {
     /// Like [`commit`](Self::commit), but permits a commit that records no
     /// change — a deliberate empty commit (a marker, a CI convention), the
     /// analogue of `git commit --allow-empty`. Everything else is identical:
-    /// same anchoring, same merge-completion semantics, same branch advance.
+    /// same anchoring, same merge-completion semantics, same branch advance,
+    /// and the same authorship rule: `author` is the author only, the
+    /// committer is always acetone's neutral identity, and an invalid
+    /// identity fails with `StoreError::InvalidSignature` before any staged
+    /// write is applied.
     pub fn commit_allow_empty(
         self,
         message: &str,

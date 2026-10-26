@@ -209,3 +209,51 @@ fn tag_refuses_an_injected_tagger_and_writes_no_ref() {
             .is_none()
     );
 }
+
+/// An extractor that must never be pulled: reaching it means the import got
+/// past the up-front author check.
+struct NeverPulled;
+
+impl acetone_graph::import::SourceExtractor for NeverPulled {
+    fn name(&self) -> &str {
+        "never"
+    }
+    fn next_record(
+        &mut self,
+    ) -> Result<Option<acetone_graph::import::ImportRecord>, acetone_graph::import::ImportError>
+    {
+        panic!("the source was pulled before the author was validated")
+    }
+}
+
+#[test]
+fn import_refuses_an_injected_author_before_pulling_or_branching() {
+    use acetone_graph::import::{ImportOptions, Provenance};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init(dir.path());
+    let head = commit_node(&repo, 1, None);
+    let branches_before = repo.branches().expect("branches");
+    let opts = ImportOptions {
+        branch: Some("imported".into()),
+        message: None,
+        provenance: Provenance {
+            source: "test".into(),
+            extractor: "never".into(),
+            source_hash: "00".into(),
+        },
+        author: Some(forged()),
+        batch_size: None,
+    };
+    let err = acetone_graph::import::run(&repo, &mut NeverPulled, opts).expect_err("refused");
+    assert!(
+        matches!(err, GraphError::Store(StoreError::InvalidSignature { .. })),
+        "{err:?}"
+    );
+    assert_eq!(repo.head_commit().expect("head"), Some(head));
+    assert_eq!(
+        repo.branches().expect("branches"),
+        branches_before,
+        "no branch made"
+    );
+    assert!(!repo.is_dirty().expect("dirty"), "nothing staged");
+}

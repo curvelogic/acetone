@@ -156,7 +156,8 @@ With no argument, list the graph's tags (short names). With `NAME`, create
 an **annotated** tag — on the current head commit by default, or on
 `REFSPEC` (a branch or tag short name, full ref name or commit hash) — with
 `-m` for a message (default: the tag name) and `--author` for the tagger
-(the same rule as `commit`'s). `--delete NAME` (`-d`) deletes
+(the same rule as `commit`'s: the fallback is `GIT_AUTHOR_NAME`/
+`GIT_AUTHOR_EMAIL`, not git's `GIT_COMMITTER_*`). `--delete NAME` (`-d`) deletes
 a tag instead: ref removal only, the tagged commit stays reachable by hash.
 Takes `--json`.
 

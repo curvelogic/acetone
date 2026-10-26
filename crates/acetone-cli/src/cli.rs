@@ -198,8 +198,8 @@ pub enum Command {
         #[arg(short = 'm', long = "message", requires = "name")]
         message: Option<String>,
         /// The tagger, as `'Name <email>'`. Defaults to
-        /// `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else
-        /// acetone's neutral identity.
+        /// `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (not `GIT_COMMITTER_*`)
+        /// when both are set, else acetone's neutral identity.
         #[arg(long, value_name = "AUTHOR", requires = "name")]
         author: Option<String>,
         /// Delete tag NAME instead. Ref removal only — no commit or graph

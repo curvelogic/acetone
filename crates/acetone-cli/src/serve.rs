@@ -1483,15 +1483,20 @@ enum AuthorError {
 /// library stamps as its neutral signature. The daemon NEVER falls back to
 /// an ambient identity (its environment or any git config): it serves many
 /// clients, and its launcher's identity must not be stamped on their commits
-/// (ADR-0079). A present author must be `{"name": str, "email": str}` and
-/// pass the store's own identity rule ([`Signature::validate`]).
+/// (ADR-0079). A present author must be exactly `{"name": str, "email": str}`
+/// (any other key is a `bad-request`, so a misspelt field is never silently
+/// dropped) and pass the store's own identity rule ([`Signature::validate`]).
 fn request_author(request: &Json) -> std::result::Result<Option<Signature>, AuthorError> {
-    const SHAPE: &str = "params.author must be an object {\"name\": string, \"email\": string}";
+    const SHAPE: &str =
+        "params.author must be an object of exactly {\"name\": string, \"email\": string}";
     let author = match request.pointer("/params/author") {
         None | Some(Json::Null) => return Ok(None),
         Some(Json::Object(map)) => map,
         Some(_) => return Err(AuthorError::Shape(SHAPE)),
     };
+    if author.keys().any(|k| k != "name" && k != "email") {
+        return Err(AuthorError::Shape(SHAPE));
+    }
     let field = |k: &str| author.get(k).and_then(Json::as_str).map(str::to_owned);
     let (Some(name), Some(email)) = (field("name"), field("email")) else {
         return Err(AuthorError::Shape(SHAPE));
@@ -1669,8 +1674,8 @@ fn run_checkout(
 
 /// Serve `merge`: merge `params.refspec` into the current branch (optional
 /// `params.message`, `params.author` for a clean-merge commit), or abort a
-/// merge in progress (`params.abort`). Conflicts come back as DATA in the terminal frame, mid-merge on the shared
-/// workspace — a client resolves via `resolve`/write queries then `commit`.
+/// merge in progress (`params.abort`). Conflicts come back as DATA in the
+/// terminal frame, mid-merge on the shared workspace — a client resolves via `resolve`/write queries then `commit`.
 fn run_merge(
     stream: &mut dyn Transport,
     repo: &Repository,
