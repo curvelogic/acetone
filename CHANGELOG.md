@@ -29,6 +29,25 @@ fine.)
   shows escaped quotes. The daemon's `merge` verb lists the same items
   in place of rendered strings. See `docs/protocol.md`.
 
+- **A merge can no longer land a discriminator change over the other
+  branch's relationships unchecked** (acetone-7qw.26, ADR-0082).
+  Changing a relationship type's discriminator was already refused while
+  relationships of that type existed, but only within one workspace. A
+  branch with none could declare, rename or drop it while another branch
+  wrote relationships under the old declaration, and the merge combined
+  the two without a check. The relationships' discriminator values were
+  then shadowed, erased on the next write, or read as a different
+  property. Each such relationship is now a merge conflict: a new
+  `rel-stale-discriminator` row kind in `CALL acetone.conflicts()` (the
+  relationship type in `label`; the declared discriminator in `property`
+  and `base`; the one it was written under in `ours`, null for none),
+  also listed by the report and the daemon's `merge` reply. Completion
+  is refused until the relationship is deleted. **Format impact: none.**
+  The conflicts-map marker is a new graph tag that readers never decode,
+  so `format_version` stays 1, as it did for 0.5's `rel-wrong-type`.
+  Library: `GraphViolation` gains a `StaleDiscriminator` variant, which
+  breaks an exhaustive match.
+
 ### Added
 
 - **`CALL acetone.conflicts()` yields `entity`**, the conflicted node or

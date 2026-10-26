@@ -676,7 +676,11 @@ pub const PROCEDURES: &[ProcedureDef] = &[
         // `missing-required`, `wrong-type` (a node's declared-type breach),
         // `rel-wrong-type` (a relationship's, acetone-7qw.12 — its `label`
         // column carries the RELATIONSHIP TYPE and `node` is null),
-        // `unique` — re-derived live over the workspace
+        // `rel-stale-discriminator` (a relationship written under another
+        // discriminator than the merged schema declares, acetone-7qw.26 —
+        // `label` is the relationship type, `property` and `base` the
+        // declared discriminator, `ours` the one it was written under, null
+        // for none), `unique` — re-derived live over the workspace
         // graph once every cell conflict is resolved (ADR-0058), so a
         // violation the merge composed or a resolution introduced is visible
         // before `commit` refuses it. A UNIQUE collision yields one row per
@@ -703,7 +707,8 @@ pub const PROCEDURES: &[ProcedureDef] = &[
             "kind", "label", "key", "property", "base", "ours", "theirs", "node", "entity",
         ],
         // `kind` is a fixed vocabulary (cell / dangling-edge / missing-required
-        // / wrong-type / rel-wrong-type / unique), not repository text, so it
+        // / wrong-type / rel-wrong-type / rel-stale-discriminator / unique),
+        // not repository text, so it
         // is not an identifier yield.
         identifier_yields: &["label", "property"],
     },

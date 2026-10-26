@@ -813,6 +813,36 @@ impl ProcedureProvider for RepoProcedures<'_> {
                                         edge_entity(&edge_key),
                                     ]);
                                 }
+                                GraphViolation::StaleDiscriminator {
+                                    edge,
+                                    declared,
+                                    minted,
+                                } => {
+                                    // A relationship written under another
+                                    // discriminator than the merged schema
+                                    // declares (acetone-7qw.26): the
+                                    // declared discriminator is the "what",
+                                    // and, as for wrong-type, `base`/`ours`
+                                    // read as expected (declared) and found
+                                    // (written under) — null for none.
+                                    let edge_key =
+                                        EdgeKey::decode_fwd(&edge).map_err(|e| e.to_string())?;
+                                    let disc = |d: Option<String>| match d {
+                                        Some(name) => Value::String(name),
+                                        None => Value::Null,
+                                    };
+                                    rows.push(vec![
+                                        Value::String("rel-stale-discriminator".into()),
+                                        Value::String(edge_key.rtype().to_string()),
+                                        Value::String(format_edge_key(&edge_key)),
+                                        disc(declared.clone()),
+                                        disc(declared),
+                                        disc(minted),
+                                        Value::Null,
+                                        Value::Null,
+                                        edge_entity(&edge_key),
+                                    ]);
+                                }
                                 GraphViolation::UniqueViolation {
                                     label,
                                     property,
