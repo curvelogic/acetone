@@ -2605,3 +2605,143 @@ fn the_merge_verb_lists_typed_conflict_items_matching_the_report() {
         "the merge verb's items are the report's"
     );
 }
+
+/// The ids a read query's rows carry, in row order (acetone-d5is.2).
+fn read_ids(s: &mut UnixStream, id: u64, params: serde_json::Value) -> Vec<String> {
+    write_frame(
+        s,
+        &serde_json::json!({"id": id, "verb": "query", "params": params}),
+    );
+    let mut ids = Vec::new();
+    loop {
+        let frame = read_frame(s);
+        if let Some(row) = frame.get("row") {
+            ids.push(row["values"][0].as_str().expect("id").to_owned());
+        } else {
+            assert!(frame.get("ok").is_some(), "the read must succeed: {frame}");
+            return ids;
+        }
+    }
+}
+
+/// Readers never take the writer lock (docs/protocol.md, "Concurrency and
+/// isolation"; acetone-d5is.2): while another process holds it, a
+/// workspace read, a read `at` a ref and `status` all proceed, and see the
+/// state the holder has not yet changed.
+#[test]
+fn reads_proceed_while_another_writer_holds_the_lock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    // A LIVE lock (this test process's pid): a writer mid-operation.
+    let lock = repo.join("acetone-writer.lock");
+    std::fs::write(&lock, format!("pid={} unix-time=1\n", std::process::id())).expect("plant lock");
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut s = hello(&socket);
+
+    let cypher = "MATCH (d:Doc) RETURN d.id ORDER BY d.id";
+    assert_eq!(
+        read_ids(&mut s, 1, serde_json::json!({"cypher": cypher})),
+        ["d1", "d2"]
+    );
+    assert_eq!(
+        read_ids(
+            &mut s,
+            2,
+            serde_json::json!({"cypher": cypher, "at": "main"})
+        ),
+        ["d1", "d2"]
+    );
+    let st = verb(&mut s, serde_json::json!({"id": 3, "verb": "status"}));
+    assert_eq!(st["ok"]["workspace"], "clean", "{st}");
+    assert_eq!(st["ok"]["nodes"], 2, "{st}");
+    // Only a writer is refused.
+    let w = verb(
+        &mut s,
+        serde_json::json!({"id": 4, "verb": "query",
+            "params": {"cypher": "CREATE (:Doc {id: 'x'})"}}),
+    );
+    assert_eq!(w["error"]["kind"], "locked", "{w}");
+}
+
+/// One connection's reads proceed while another connection's merge runs,
+/// and each read sees the graph wholly before or wholly after the merge —
+/// never a mixture (acetone-d5is.2).
+#[test]
+fn a_connections_reads_proceed_while_another_connections_merge_runs() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    for args in [
+        &["commit", "-m", "base"][..],
+        &["branch", "feature"],
+        &["checkout", "feature"],
+        &["put-node", "Doc", "d3"],
+        &["commit", "-m", "feature adds d3"],
+        &["checkout", "main"],
+        &["put-node", "Doc", "d4"],
+        &["commit", "-m", "main adds d4"],
+    ] {
+        let out = acetone(&repo, args);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    }
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon_args(&repo, &socket, &["--max-concurrent", "2"]);
+
+    let cypher = "MATCH (d:Doc) RETURN d.id ORDER BY d.id";
+    let pre = ["d1", "d2", "d4"];
+    let post = ["d1", "d2", "d3", "d4"];
+    let done = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let socket = socket.clone();
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            let mut s = hello(&socket);
+            let mut seen = Vec::new();
+            let mut id = 0;
+            loop {
+                id += 1;
+                seen.push(read_ids(&mut s, id, serde_json::json!({"cypher": cypher})));
+                id += 1;
+                seen.push(read_ids(
+                    &mut s,
+                    id,
+                    serde_json::json!({"cypher": cypher, "at": "main"}),
+                ));
+                if done.load(Ordering::SeqCst) {
+                    return seen;
+                }
+            }
+        })
+    };
+    let mut s = hello(&socket);
+    let m = verb(
+        &mut s,
+        serde_json::json!({"id": 1, "verb": "merge", "params": {"refspec": "feature"}}),
+    );
+    assert_eq!(m["ok"]["outcome"], "merged", "{m}");
+    done.store(true, Ordering::SeqCst);
+    let seen = reader.join().expect("reader thread");
+    assert!(!seen.is_empty());
+    for ids in &seen {
+        assert!(
+            ids.as_slice() == pre || ids.as_slice() == post,
+            "a read saw neither the pre- nor the post-merge graph: {ids:?}"
+        );
+    }
+    // After the merge, both reads see the merged graph.
+    assert_eq!(
+        read_ids(&mut s, 2, serde_json::json!({"cypher": cypher})),
+        post
+    );
+    assert_eq!(
+        read_ids(
+            &mut s,
+            3,
+            serde_json::json!({"cypher": cypher, "at": "main"})
+        ),
+        post
+    );
+}
