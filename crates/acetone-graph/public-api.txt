@@ -1396,6 +1396,10 @@ pub acetone_graph::merge::GraphViolation::EdgeWrongType::property: alloc::string
 pub acetone_graph::merge::GraphViolation::MissingRequired
 pub acetone_graph::merge::GraphViolation::MissingRequired::node: alloc::vec::Vec<u8>
 pub acetone_graph::merge::GraphViolation::MissingRequired::property: alloc::string::String
+pub acetone_graph::merge::GraphViolation::StaleDiscriminator
+pub acetone_graph::merge::GraphViolation::StaleDiscriminator::declared: core::option::Option<alloc::string::String>
+pub acetone_graph::merge::GraphViolation::StaleDiscriminator::edge: alloc::vec::Vec<u8>
+pub acetone_graph::merge::GraphViolation::StaleDiscriminator::minted: core::option::Option<alloc::string::String>
 pub acetone_graph::merge::GraphViolation::UniqueViolation
 pub acetone_graph::merge::GraphViolation::UniqueViolation::label: alloc::string::String
 pub acetone_graph::merge::GraphViolation::UniqueViolation::nodes: alloc::vec::Vec<alloc::vec::Vec<u8>>
