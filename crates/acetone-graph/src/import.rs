@@ -203,6 +203,12 @@ pub fn run(
         return Err(GraphError::DirtyWorkspace);
     }
 
+    // Likewise a caller-supplied author (acetone-gid): refuse an identity
+    // git cannot store before any batch is saved to the workspace.
+    if let Some(author) = &opts.author {
+        author.validate()?;
+    }
+
     // Validate the provenance trailer values *before* staging anything. The
     // source string is user-controlled (a file path); an unsuitable value
     // (control character, leading/trailing whitespace) is otherwise only

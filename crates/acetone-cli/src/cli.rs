@@ -112,6 +112,11 @@ pub enum Command {
         /// HEAD (a marker commit), like `git commit --allow-empty`.
         #[arg(long)]
         allow_empty: bool,
+        /// The commit's author, as `'Name <email>'`. Defaults to
+        /// `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else
+        /// acetone's neutral identity. The committer is always acetone.
+        #[arg(long, value_name = "AUTHOR")]
+        author: Option<String>,
     },
     /// Show commit history, newest first.
     ///
@@ -192,13 +197,18 @@ pub enum Command {
         /// The tag message (default: the tag name).
         #[arg(short = 'm', long = "message", requires = "name")]
         message: Option<String>,
+        /// The tagger, as `'Name <email>'`. Defaults to
+        /// `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else
+        /// acetone's neutral identity.
+        #[arg(long, value_name = "AUTHOR", requires = "name")]
+        author: Option<String>,
         /// Delete tag NAME instead. Ref removal only — no commit or graph
         /// data is deleted, so the tagged commit stays reachable by hash.
         #[arg(
             short = 'd',
             long = "delete",
             value_name = "NAME",
-            conflicts_with_all = ["name", "refspec", "message"]
+            conflicts_with_all = ["name", "refspec", "message", "author"]
         )]
         delete: Option<String>,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
@@ -264,8 +274,14 @@ pub enum Command {
         /// Commit message for the merge commit (default: `Merge <ref>`).
         #[arg(short = 'm', long)]
         message: Option<String>,
+        /// The merge commit's author, as `'Name <email>'`. Defaults to
+        /// `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else
+        /// acetone's neutral identity. A merge that stops on conflicts is
+        /// completed by `commit`, which takes its own `--author`.
+        #[arg(long, value_name = "AUTHOR")]
+        author: Option<String>,
         /// Abandon a merge in progress, restoring the pre-merge branch tip.
-        #[arg(long, conflicts_with_all = ["refspec", "message"])]
+        #[arg(long, conflicts_with_all = ["refspec", "message", "author"])]
         abort: bool,
     },
     /// Resolve a merge in progress by taking one whole side.
@@ -424,6 +440,11 @@ pub enum Command {
         /// Commit message (default synthesised from the source and counts).
         #[arg(short = 'm', long)]
         message: Option<String>,
+        /// The import commit's author, as `'Name <email>'`. Defaults to
+        /// `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else
+        /// acetone's neutral identity.
+        #[arg(long, value_name = "AUTHOR")]
+        author: Option<String>,
         /// Records staged per transaction batch (memory tuning,
         /// ADR-0062); the final graph is batch-size independent.
         #[arg(long)]

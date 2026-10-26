@@ -53,6 +53,9 @@ Options:
       --allow-empty
           Record a commit even when the workspace has no changes since HEAD (a marker commit), like `git commit --allow-empty`
 
+      --author <AUTHOR>
+          The commit's author, as `'Name <email>'`. Defaults to `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else acetone's neutral identity. The committer is always acetone
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -120,11 +123,14 @@ Options:
           
           [default: .]
 
-  -d, --delete <NAME>
-          Delete tag NAME instead. Ref removal only — no commit or graph data is deleted, so the tagged commit stays reachable by hash
+      --author <AUTHOR>
+          The tagger, as `'Name <email>'`. Defaults to `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else acetone's neutral identity
 
       --graph <GRAPH>
           Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
+  -d, --delete <NAME>
+          Delete tag NAME instead. Ref removal only — no commit or graph data is deleted, so the tagged commit stays reachable by hash
 
       --json
           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
@@ -165,11 +171,14 @@ Options:
           
           [default: .]
 
-      --abort
-          Abandon a merge in progress, restoring the pre-merge branch tip
+      --author <AUTHOR>
+          The merge commit's author, as `'Name <email>'`. Defaults to `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else acetone's neutral identity. A merge that stops on conflicts is completed by `commit`, which takes its own `--author`
 
       --graph <GRAPH>
           Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
+
+      --abort
+          Abandon a merge in progress, restoring the pre-merge branch tip
 
   -h, --help
           Print help (see a summary with '-h')
@@ -623,6 +632,9 @@ Options:
 
   -m, --message <MESSAGE>
           Commit message (default synthesised from the source and counts)
+
+      --author <AUTHOR>
+          The import commit's author, as `'Name <email>'`. Defaults to `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` when both are set, else acetone's neutral identity
 
       --batch-size <BATCH_SIZE>
           Records staged per transaction batch (memory tuning, ADR-0062); the final graph is batch-size independent

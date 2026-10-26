@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod author;
 mod cli;
 mod commands;
 mod export;

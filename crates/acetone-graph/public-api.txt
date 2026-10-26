@@ -2048,6 +2048,7 @@ pub fn acetone_graph::repo::Repository::checkout_branch(&self, &str) -> core::re
 pub fn acetone_graph::repo::Repository::conflicts(&self) -> core::result::Result<alloc::vec::Vec<acetone_graph::conflicts::WorkspaceConflict>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::create_branch(&self, &str, core::option::Option<&str>) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::create_tag(&self, &str, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::create_tag_with_tagger(&self, &str, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<acetone_store::store::Signature>) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::current_branch(&self) -> core::result::Result<core::option::Option<alloc::string::String>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::delete_branch(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::delete_tag(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
@@ -2063,6 +2064,7 @@ pub fn acetone_graph::repo::Repository::log_all(&self) -> core::result::Result<a
 pub fn acetone_graph::repo::Repository::merge(&self, &str, &str) -> core::result::Result<acetone_graph::merge::MergeOutcome, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::merge_base(&self, &acetone_store::hash::Hash, &acetone_store::hash::Hash) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::merge_head(&self) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::merge_with_author(&self, &str, &str, core::option::Option<acetone_store::store::Signature>) -> core::result::Result<acetone_graph::merge::MergeOutcome, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::namespace(&self) -> &acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::repo::Repository::open(&std::path::Path) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::open_graph(&std::path::Path, &str) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
@@ -3209,6 +3211,7 @@ pub fn acetone_graph::repo::Repository::checkout_branch(&self, &str) -> core::re
 pub fn acetone_graph::repo::Repository::conflicts(&self) -> core::result::Result<alloc::vec::Vec<acetone_graph::conflicts::WorkspaceConflict>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::create_branch(&self, &str, core::option::Option<&str>) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::create_tag(&self, &str, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::create_tag_with_tagger(&self, &str, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<acetone_store::store::Signature>) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::current_branch(&self) -> core::result::Result<core::option::Option<alloc::string::String>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::delete_branch(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::delete_tag(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
@@ -3224,6 +3227,7 @@ pub fn acetone_graph::repo::Repository::log_all(&self) -> core::result::Result<a
 pub fn acetone_graph::repo::Repository::merge(&self, &str, &str) -> core::result::Result<acetone_graph::merge::MergeOutcome, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::merge_base(&self, &acetone_store::hash::Hash, &acetone_store::hash::Hash) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::merge_head(&self) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::merge_with_author(&self, &str, &str, core::option::Option<acetone_store::store::Signature>) -> core::result::Result<acetone_graph::merge::MergeOutcome, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::namespace(&self) -> &acetone_graph::refns::GraphRefNamespace
 pub fn acetone_graph::repo::Repository::open(&std::path::Path) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::open_graph(&std::path::Path, &str) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>

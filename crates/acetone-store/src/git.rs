@@ -1759,40 +1759,30 @@ fn assemble_message(message: &str, trailers: &[(String, String)]) -> Result<Stri
     Ok(out)
 }
 
-/// Validate a name/email pair for a commit identity (git-native rules:
-/// non-empty name, no angle brackets or control characters).
-fn validate_identity_fields(name: &str, email: &str) -> Result<(), StoreError> {
-    let invalid = |reason: &str| StoreError::InvalidSignature {
-        reason: reason.to_owned(),
-    };
-    if name.trim().is_empty() {
-        return Err(invalid("name must not be empty"));
-    }
-    for (field, text) in [("name", name), ("email", email)] {
-        if text.chars().any(|c| c == '<' || c == '>' || c.is_control()) {
-            return Err(invalid(&format!(
-                "{field} must not contain angle brackets or control characters"
-            )));
-        }
-    }
-    Ok(())
+/// Validate and convert an author/committer identity, stamping the time as
+/// *now* (for freshly created tags).
+fn git_signature(sig: &crate::store::Signature) -> Result<gix::actor::Signature, StoreError> {
+    git_signature_at(sig, gix::date::Time::now_utc())
 }
 
-/// Validate and convert an author/committer identity, stamping the time as
-/// *now* (for freshly created commits).
-fn git_signature(sig: &crate::store::Signature) -> Result<gix::actor::Signature, StoreError> {
-    validate_identity_fields(&sig.name, &sig.email)?;
+/// Validate and convert an identity, stamping the given time (one clock
+/// reading shared by a fresh commit's author and committer).
+fn git_signature_at(
+    sig: &crate::store::Signature,
+    time: gix::date::Time,
+) -> Result<gix::actor::Signature, StoreError> {
+    sig.validate()?;
     Ok(gix::actor::Signature {
         name: sig.name.as_str().into(),
         email: sig.email.as_str().into(),
-        time: gix::date::Time::now_utc(),
+        time,
     })
 }
 
 /// Convert a stored [`Identity`] to a git signature, **preserving** its
 /// timestamp (for history rewrites).
 fn git_identity(id: &crate::store::Identity) -> Result<gix::actor::Signature, StoreError> {
-    validate_identity_fields(&id.name, &id.email)?;
+    crate::store::validate_identity_fields(&id.name, &id.email)?;
     Ok(gix::actor::Signature {
         name: id.name.as_str().into(),
         email: id.email.as_str().into(),
@@ -1806,15 +1796,17 @@ fn git_identity(id: &crate::store::Identity) -> Result<gix::actor::Signature, St
 impl CommitStore for GitStore {
     fn create_commit(&self, commit: &NewCommit<'_>) -> Result<Hash, StoreError> {
         let message = assemble_message(commit.message, commit.trailers)?;
-        let signature = git_signature(&commit.author)?;
+        let now = gix::date::Time::now_utc();
+        let author = git_signature_at(&commit.author, now)?;
+        let committer = git_signature_at(&commit.committer, now)?;
         let tree_id =
             self.write_commit_tree_oid(commit.manifest, commit.summary, commit.anchors)?;
 
         let commit_object = gix::objs::Commit {
             tree: tree_id,
             parents: commit.parents.iter().map(Hash::oid).collect(),
-            author: signature.clone(),
-            committer: signature,
+            author,
+            committer,
             encoding: None,
             message: message.into(),
             extra_headers: Vec::new(),

@@ -25,6 +25,8 @@ only by ADR. History of note within major 1:
 - **0.8**: the `merge` verb's `conflicts` are typed items, not
   rendered strings, and the change report is `report_version` 2
   (breaking; see "The change report").
+- **0.8**: `commit`, `import` and `merge` accept `author` (additive),
+  with the `invalid-author` error kind.
 
 ## Transports and lifecycle
 
@@ -150,26 +152,41 @@ Streamed frame vocabulary (each carries the request's `id`):
   cross the wire** (ADR-0074 §4) — this and `import` receive bytes,
   never file names.
 - **`import`** `{format, label?|edge?, from?, to?, disc?, branch?,
-  message?, batch_size?}` + inbound chunks — the source streams to a
+  message?, author?, batch_size?}` + inbound chunks — the source streams to a
   daemon-private file the peer never names; terminal `ok` carries
   `{"imported": true, "commit", "nodes", "edges"}` or
-  `{"imported": false}` for a no-change import.
-- **`commit`** `{message, trailer?, allow_empty?}` → `ok {"commit":
+  `{"imported": false}` for a no-change import. A bad `author` is
+  refused after the chunks are drained, so the connection stays in
+  sync.
+- **`commit`** `{message, trailer?, allow_empty?, author?}` → `ok {"commit":
   <hex>}`. `trailer` is an array of `"Key=value"` strings recorded as
   commit trailers.
+- **`author`** (on `commit`, `import` and `merge`) is `{"name":
+  <string>, "email": <string>}`, the commit's git author. Absent or
+  `null`, the commit is authored by the neutral `acetone
+  <acetone@acetone.invalid>`: the daemon **never** reads an ambient
+  identity (its environment or any git config), so whoever launched it
+  is never stamped on a client's commit. The committer is always the
+  neutral identity. Any other shape is a `bad-request`; a non-empty
+  name is required, and angle brackets or control characters in either
+  field are refused as `invalid-author` (a newline would forge further
+  commit headers). There is no `tag` verb; tags take an author through
+  the CLI and the library only.
 - **`branch`** `{name?, refspec?, delete?}` — with `name` creates (→
   `ok {"created": <name>, "at": <hex>}`); with `delete` removes (→
   `ok {"deleted": <name>, "was": <hex>}`); with neither, lists (→
   `ok {"branches": [{"name", "head"}]}`).
 - **`checkout`** `{branch}` → `ok {"checked_out"}`.
-- **`merge`** `{refspec, message?}` or `{abort: true}` → `ok
+- **`merge`** `{refspec, message?, author?}` or `{abort: true}` → `ok
   {"outcome": "merged"|"fast-forward"|"up-to-date"|"conflicts"}` plus,
   for conflicts, `{"count", "conflicts": [<conflict items>]}`, the
   items exactly as the `report` verb's `conflicts.items[]` (see
   "The change report" below), and `count` is their number; an
   abort answers `ok {"aborted": true}`. Conflicts are **data**, not
   errors, resolved via `resolve`/writes then `commit` (`message`
-  defaults to `"merge"`).
+  defaults to `"merge"`). `author` applies to the commit a clean merge
+  writes; a fast-forward writes none, and a conflicted merge is
+  completed by `commit`, which takes its own `author`.
 - **`resolve`** `{all_ours|all_theirs}` → `ok {"resolved": n}`.
 - **`export`** `{format, label?|edge?}` — one table's rendered text
   streams as outbound `chunk` frames (terminal `ok {"rows": n}`); with
@@ -227,7 +244,8 @@ retriable), `write-at-version`, `result-too-large`, `payload-too-large`,
 cap), `internal`, and the ref-verb refusals mapped from typed graph
 errors: `dirty-workspace`, `no-such-branch`, `branch-exists`,
 `no-current-branch`, `nothing-to-commit`, `merge-in-progress`,
-`concurrent-modification`. New kinds may be added; clients should treat
+`concurrent-modification`, and `invalid-author` (a `params.author` git
+cannot store). New kinds may be added; clients should treat
 unknown kinds as terminal errors.
 
 A **payload-protocol violation** — an over-cap stream, a non-chunk

@@ -182,12 +182,96 @@ fn read_commit_exposes_author_and_committer() {
     };
     let id = store.create_commit(&new).expect("create");
     let commit = store.read_commit(&id).expect("read").expect("present");
-    // create_commit stamps author == committer, time == now (UTC, offset 0).
+    // The author is the caller's; the committer stays acetone's neutral
+    // identity (acetone-gid). Both share one clock reading (UTC, offset 0).
     assert_eq!(commit.author.name, "Ada Lovelace");
     assert_eq!(commit.author.email, "ada@example.com");
-    assert_eq!(commit.committer, commit.author);
+    let neutral = Signature::default();
+    assert_eq!(commit.committer.name, neutral.name);
+    assert_eq!(commit.committer.email, neutral.email);
+    assert_eq!(commit.committer.time_seconds, commit.author.time_seconds);
     assert_eq!(commit.author.time_offset_seconds, 0);
     assert!(commit.author.time_seconds > 0, "a real epoch timestamp");
+}
+
+#[test]
+fn an_injected_committer_is_refused_like_an_author() {
+    let (_dir, store) = new_store();
+    let mut new = NewCommit::new(b"m", "s", "msg");
+    new.committer = Signature {
+        name: "x".into(),
+        email: "a@b>\ncommitter forged <f@f".into(),
+    };
+    assert!(matches!(
+        store.create_commit(&new),
+        Err(StoreError::InvalidSignature { .. })
+    ));
+}
+
+#[test]
+fn signature_parse_accepts_git_author_form() {
+    let sig = Signature::parse("  Ada Lovelace <ada@example.com> ").expect("parses");
+    assert_eq!(sig.name, "Ada Lovelace");
+    assert_eq!(sig.email, "ada@example.com");
+    // git permits an empty email.
+    let sig = Signature::parse("Ada <>").expect("empty email");
+    assert_eq!(sig.email, "");
+}
+
+#[test]
+fn signature_parse_refuses_malformed_and_injected_identities() {
+    for text in [
+        "",
+        "Ada",
+        "Ada ada@example.com",
+        "Ada <ada@example.com",
+        "<ada@example.com>",
+        "   <ada@example.com>",
+        "Ada <ada@example.com> trailing",
+        "Ada <a@b>\ncommitter Eve <eve@x>",
+        "Ada <a@b\n>",
+        "Ada <a<b>",
+        "Ad\u{7}a <a@b>",
+    ] {
+        match Signature::parse(text) {
+            Err(StoreError::InvalidSignature { .. }) => {}
+            other => panic!("expected InvalidSignature for {text:?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn signature_validate_matches_the_write_path() {
+    // validate() is the same rule create_commit applies: anything it refuses
+    // the write refuses too, and vice versa.
+    let (_dir, store) = new_store();
+    for sig in [
+        Signature::default(),
+        Signature {
+            name: "ok".into(),
+            email: "".into(),
+        },
+        Signature {
+            name: " ".into(),
+            email: "a@b".into(),
+        },
+        Signature {
+            name: "ok".into(),
+            email: "a@b>".into(),
+        },
+        Signature {
+            name: "o\tk".into(),
+            email: "a@b".into(),
+        },
+    ] {
+        let mut new = NewCommit::new(b"m", "s", "msg");
+        new.author = sig.clone();
+        assert_eq!(
+            sig.validate().is_ok(),
+            store.create_commit(&new).is_ok(),
+            "{sig:?}"
+        );
+    }
 }
 
 #[test]

@@ -579,6 +579,15 @@ fn a_non_rust_python_client_drives_a_full_session() {
         stdout.contains("status:"),
         "the client must read status: {stdout}"
     );
+    // The client authored the feature commit (acetone-gid); the merge
+    // fast-forwarded, so it heads main's log.
+    let log = acetone(&repo, &["log", "--json"]);
+    let log: serde_json::Value = serde_json::from_slice(&log.stdout).expect("log json");
+    assert_eq!(
+        log[0]["author"],
+        serde_json::json!({"name": "Python Client", "email": "py@example.com"}),
+        "the client's author reaches the commit: {log}"
+    );
 }
 
 #[test]
