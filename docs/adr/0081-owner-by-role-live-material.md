@@ -1,6 +1,7 @@
 # ADR-0081: Refer to the owner by role in the remaining live material
 
-*Status: accepted · Date: 2026-10-26*
+*Status: proposed — a governing-document change for the owner to merge ·
+Date: 2026-10-26*
 
 ## Context
 
@@ -27,7 +28,8 @@ repository is public and the owner asked not to be named.
 
 ## Consequences
 
-- The release formula is a governing file; its change is wording only
-  and alters no step, gate or permission. The workflow change is a
-  comment.
-- New live material follows the same rule; `CLAUDE.md` already says so.
+- The release formula and the roadmap are governing documents; their
+  change is wording only and alters no step, gate, permission or rule.
+  The workflow change is a comment.
+- New live material should follow the same rule. This ADR states it; it
+  does not add it to `CLAUDE.md`.
