@@ -1,6 +1,6 @@
 name: Homebrew bump
 
-# When a release is PUBLISHED (Greg publishing the draft staged by release.yml),
+# When a release is PUBLISHED (the owner publishing the draft staged by release.yml),
 # regenerate Formula/acetone.rb from the release's four per-target `.sha256`
 # assets and open a PR against curvelogic/homebrew-tap. A PR, not a direct
 # commit, so the tap change stays human-visible and revertable.

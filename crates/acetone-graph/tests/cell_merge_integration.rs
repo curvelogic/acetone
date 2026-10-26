@@ -96,7 +96,7 @@ fn divergent_properties_on_one_node_auto_merge() {
         |tx| {
             tx.put_node(
                 &node(1),
-                &record(&[], &[("name", s("web")), ("owner", s("greg"))]),
+                &record(&[], &[("name", s("web")), ("owner", s("ops-team"))]),
             )
             .expect("put");
         },
@@ -116,7 +116,7 @@ fn divergent_properties_on_one_node_auto_merge() {
         ),
         "divergent-property edits must merge cleanly, got {outcome:?}"
     );
-    assert_eq!(prop(&repo, 1, "owner"), Some(s("greg")));
+    assert_eq!(prop(&repo, 1, "owner"), Some(s("ops-team")));
     assert_eq!(prop(&repo, 1, "os_version"), Some(s("12")));
     assert_eq!(prop(&repo, 1, "name"), Some(s("web")));
     assert!(
@@ -144,7 +144,7 @@ fn a_partial_conflict_keeps_auto_merged_properties_and_resolves_the_rest() {
         |tx| {
             tx.put_node(
                 &node(1),
-                &record(&[], &[("owner", s("greg")), ("os_version", s("12"))]),
+                &record(&[], &[("owner", s("ops-team")), ("os_version", s("12"))]),
             )
             .expect("put");
         },
@@ -167,7 +167,7 @@ fn a_partial_conflict_keeps_auto_merged_properties_and_resolves_the_rest() {
 
     assert_eq!(repo.resolve_all(ResolveSide::Ours).expect("resolve"), 1);
     // Ours' owner is restored; the auto-merged os_version is untouched.
-    assert_eq!(prop(&repo, 1, "owner"), Some(s("greg")));
+    assert_eq!(prop(&repo, 1, "owner"), Some(s("ops-team")));
     assert_eq!(prop(&repo, 1, "os_version"), Some(s("12")));
 
     let tx = repo.begin_write().expect("begin");
@@ -189,7 +189,7 @@ fn resolve_theirs_picks_the_other_side_for_the_conflicted_property() {
         |tx| {
             tx.put_node(
                 &node(1),
-                &record(&[], &[("owner", s("greg")), ("note", s("kept"))]),
+                &record(&[], &[("owner", s("ops-team")), ("note", s("kept"))]),
             )
             .expect("put");
         },

@@ -552,7 +552,7 @@ fn connection(
                 let _permit = permits.acquire();
                 run_import(stream, repo, &request, &id)?;
             }
-            // The ref-advancing verbs (acetone-pz0k.5). Greg's decision: a
+            // The ref-advancing verbs (acetone-pz0k.5). The owner's decision: a
             // connection is a view onto the ONE shared per-worktree workspace,
             // exactly like concurrent CLI processes — a `commit` commits
             // whatever is staged, a `checkout` moves the HEAD every connection
@@ -1451,7 +1451,7 @@ fn run_import(
 
 // --- ref-advancing verbs (acetone-pz0k.5) -----------------------------------
 //
-// These operate on the ONE shared per-worktree workspace (Greg's decision):
+// These operate on the ONE shared per-worktree workspace (the owner's decision):
 // a connection is a view onto it, like concurrent CLI processes. They are
 // thin wrappers over the same `Repository` methods the CLI uses.
 

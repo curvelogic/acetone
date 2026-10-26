@@ -204,7 +204,7 @@ fn packed_object_exists(project: &Path, hash: &str) -> bool {
 
 #[test]
 fn gc_scopes_to_the_graph_and_leaves_code_storage_untouched() {
-    // Phase 8 exit criterion 2 (gc half), reading (B) — ADR-0051, Greg-ruled.
+    // Phase 8 exit criterion 2 (gc half), reading (B) — ADR-0051, ruled by the owner.
     // acetone gc packs only objects reachable from the *graph's* refs; a
     // co-tenant's code objects form a prune guard, so their storage is left
     // exactly as git had it. The discriminator: after gc the code blob is STILL

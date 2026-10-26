@@ -140,7 +140,7 @@ fn re_import_preserves_a_human_annotation_on_a_different_property() {
         .expect("get")
         .expect("web1 present");
     let mut props = rec.properties().clone();
-    props.insert("owner".into(), v("greg"));
+    props.insert("owner".into(), v("ops-team"));
     rec = acetone_model::records::NodeRecord::new(rec.secondary_labels().to_vec(), props);
     tx.put_node(&key, &rec).expect("annotate");
     tx.commit("human sets owner", &[], None).expect("commit");
@@ -161,7 +161,7 @@ fn re_import_preserves_a_human_annotation_on_a_different_property() {
     }
     assert_eq!(
         prop(&repo, "owner", "web1"),
-        Some(v("greg")),
+        Some(v("ops-team")),
         "the human annotation must survive the re-import"
     );
     assert_eq!(
@@ -200,7 +200,7 @@ fn the_annotation_survives_repeated_re_import_cycles() {
         .expect("get")
         .expect("present");
     let mut props = rec.properties().clone();
-    props.insert("owner".into(), v("greg"));
+    props.insert("owner".into(), v("ops-team"));
     tx.put_node(
         &key,
         &acetone_model::records::NodeRecord::new(rec.secondary_labels().to_vec(), props),
@@ -228,7 +228,7 @@ fn the_annotation_survives_repeated_re_import_cycles() {
         }
         assert_eq!(
             prop(&repo, "owner", "web1"),
-            Some(v("greg")),
+            Some(v("ops-team")),
             "owner must survive cycle {cycle}"
         );
         assert_eq!(
