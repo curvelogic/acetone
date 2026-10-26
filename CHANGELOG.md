@@ -30,7 +30,7 @@ fine.)
   in place of rendered strings. See `docs/protocol.md`.
 
 - **A merge can no longer land a discriminator change over the other
-  branch's relationships unchecked** (acetone-7qw.26, ADR-0081).
+  branch's relationships unchecked** (acetone-7qw.26, ADR-0082).
   Changing a relationship type's discriminator was already refused while
   relationships of that type existed, but only within one workspace. A
   branch with none could declare, rename or drop it while another branch

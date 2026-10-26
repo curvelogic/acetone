@@ -81,7 +81,7 @@ fn discriminated_type_parallel_edges_through_the_binary() {
     assert!(ok(&acetone(&repo, &["fsck"])).contains("clean"));
 }
 
-/// acetone-7qw.26 (ADR-0081): the merge-time mirror of the declare-time
+/// acetone-7qw.26 (ADR-0082): the merge-time mirror of the declare-time
 /// discriminator stability check, through the shipped binary. A branch
 /// with no CITES edges declares a discriminator (legal there); main writes
 /// a CITES edge under the undiscriminated declaration; merging pairs them.

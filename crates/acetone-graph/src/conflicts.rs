@@ -178,7 +178,7 @@ fn entry_key(conflict: &MergeConflict) -> Vec<u8> {
                 GraphViolation::StaleDiscriminator { edge, declared, .. } => {
                     // 5: a relationship written under a different
                     // discriminator from the merged one (acetone-7qw.26,
-                    // ADR-0081). The declared discriminator (presence byte,
+                    // ADR-0082). The declared discriminator (presence byte,
                     // then name) distinguishes the same edge across two
                     // merges; `minted` is a function of the sides, so it
                     // adds nothing. A marker only, like every graph entry:

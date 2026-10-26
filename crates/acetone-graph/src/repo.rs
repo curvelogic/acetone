@@ -1619,7 +1619,7 @@ impl Repository {
                 theirs: theirs.to_hex(),
             })?;
         let base_manifest = self.manifest_at_commit(&base)?;
-        // The two sides, for the discriminator check (ADR-0081): which
+        // The two sides, for the discriminator check (ADR-0082): which
         // declaration an edge was written under is its side's.
         let ours_manifest = self.manifest_at_commit(&tip)?;
         let theirs_manifest = self.manifest_at_commit(&theirs)?;

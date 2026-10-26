@@ -1,4 +1,4 @@
-# ADR-0081: A merged discriminator change is a conflict, judged by provenance
+# ADR-0082: A merged discriminator change is a conflict, judged by provenance
 
 *Status: accepted (Phase 13, `acetone-7qw.26`) · Date: 2026-10-26*
 

@@ -1,5 +1,5 @@
 //! The merge-time mirror of the declare-time discriminator stability check
-//! (acetone-7qw.26, ADR-0081).
+//! (acetone-7qw.26, ADR-0082).
 //!
 //! `check_rel_disc_stability` refuses to change a relationship type's
 //! discriminator while edges of that type exist — but only within one

@@ -177,7 +177,7 @@ pub enum GraphViolation {
     },
     /// A merged edge written under a different relationship-type
     /// discriminator from the one the merged schema declares for its type
-    /// (acetone-7qw.26, ADR-0081). One branch changed the discriminator
+    /// (acetone-7qw.26, ADR-0082). One branch changed the discriminator
     /// while it had no edges of the type — legal, `check_rel_disc_stability`
     /// — and the other branch wrote edges under the old declaration; only
     /// the merged state pairs them. Left alone, the edge's key would be read
@@ -632,7 +632,7 @@ fn rebuild_reverse<S: ChunkStore>(
 ///
 /// `ours` and `theirs` are the two merged sides. Only the discriminator check
 /// reads them: which declaration an edge was written under is a fact about
-/// the side that wrote it, not about the base or the merged state (ADR-0081).
+/// the side that wrote it, not about the base or the merged state (ADR-0082).
 ///
 /// Note the persisted conflicts map sorts `WrongType` *last* rather than
 /// third: its entry-key tag is 3;
@@ -828,7 +828,7 @@ pub(crate) fn validate_merged<S: ChunkStore>(
         }
     }
 
-    // Relationship discriminators (acetone-7qw.26, ADR-0081) — the merge-time
+    // Relationship discriminators (acetone-7qw.26, ADR-0082) — the merge-time
     // mirror of `check_rel_disc_stability`.
     stale_discriminators(
         store,
@@ -879,7 +879,7 @@ pub(crate) fn validate_merged<S: ChunkStore>(
 }
 
 /// Report every merged edge written under a different discriminator from the
-/// one the merged schema declares for its type (acetone-7qw.26, ADR-0081).
+/// one the merged schema declares for its type (acetone-7qw.26, ADR-0082).
 ///
 /// Every edge in a committed manifest was written under that manifest's
 /// discriminator for its type: `check_rel_disc_stability` refuses to change a
