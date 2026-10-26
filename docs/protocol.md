@@ -290,8 +290,9 @@ ref once, separately from its manifest (the check is conservative — a
 spurious "in progress" only turns an index seek into a scan, never
 changes a result). A `status` or `report` taken while a writer changes
 the repository can combine facts from before and after the change; a
-`status` racing the end of a merge can fail rather than combine them.
-Retry either. Pass commit hashes rather than branch names to `report`
+`status`, a `report`'s `conflicts` section or a query calling
+`CALL acetone.conflicts()` that races the end of a merge can fail
+rather than combine them. Retry any of these. Pass commit hashes rather than branch names to `report`
 for a stable answer.
 
 **Two-step ref changes.** A few operations move two refs one after the

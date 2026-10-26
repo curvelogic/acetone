@@ -254,7 +254,11 @@ fn reads_during_gc_succeed_and_see_unchanged_data() {
 
         let readers = Readers::start(&path, 3);
         repo.gc_with_hooks(
-            // Reads proceed while gc holds the lock (the hook runs under it).
+            // Both hooks run under gc's lock but BEFORE its repack and
+            // prune, so these reads pin "reads proceed while gc holds the
+            // lock", not reads mid-repack. Reads during the repack and prune
+            // are the reader threads' job: they read continuously across the
+            // whole call.
             || {
                 assert!(observe_workspace(&long_lived) == ws_state);
                 assert!(observe_main(&long_lived) == main_state);

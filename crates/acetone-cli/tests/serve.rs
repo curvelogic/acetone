@@ -2694,6 +2694,9 @@ fn a_connections_reads_proceed_while_another_connections_merge_runs() {
     let pre = ["d1", "d2", "d4"];
     let post = ["d1", "d2", "d3", "d4"];
     let done = Arc::new(AtomicBool::new(false));
+    // The reader confirms its first reads before the merge starts, so its
+    // reads provably overlap the merge rather than possibly all following it.
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
     let reader = {
         let socket = socket.clone();
         let done = Arc::clone(&done);
@@ -2701,6 +2704,7 @@ fn a_connections_reads_proceed_while_another_connections_merge_runs() {
             let mut s = hello(&socket);
             let mut seen = Vec::new();
             let mut id = 0;
+            let mut started = Some(started_tx);
             loop {
                 id += 1;
                 seen.push(read_ids(&mut s, id, serde_json::json!({"cypher": cypher})));
@@ -2710,6 +2714,9 @@ fn a_connections_reads_proceed_while_another_connections_merge_runs() {
                     id,
                     serde_json::json!({"cypher": cypher, "at": "main"}),
                 ));
+                if let Some(tx) = started.take() {
+                    tx.send(()).expect("signal first reads");
+                }
                 if done.load(Ordering::SeqCst) {
                     return seen;
                 }
@@ -2717,6 +2724,7 @@ fn a_connections_reads_proceed_while_another_connections_merge_runs() {
         })
     };
     let mut s = hello(&socket);
+    started_rx.recv().expect("reader made its first reads");
     let m = verb(
         &mut s,
         serde_json::json!({"id": 1, "verb": "merge", "params": {"refspec": "feature"}}),
@@ -2724,7 +2732,10 @@ fn a_connections_reads_proceed_while_another_connections_merge_runs() {
     assert_eq!(m["ok"]["outcome"], "merged", "{m}");
     done.store(true, Ordering::SeqCst);
     let seen = reader.join().expect("reader thread");
-    assert!(!seen.is_empty());
+    // The first reads, confirmed before the merge began, saw the pre-merge
+    // graph.
+    assert_eq!(seen[0], pre, "{seen:?}");
+    assert_eq!(seen[1], pre, "{seen:?}");
     for ids in &seen {
         assert!(
             ids.as_slice() == pre || ids.as_slice() == post,

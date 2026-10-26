@@ -947,6 +947,7 @@ impl GitStore {
             if let Some(header) = lookup()? {
                 return Ok(Some(header));
             }
+            std::thread::sleep(LOOKUP_RETRY_PAUSE);
         }
         lookup()
     }
@@ -968,6 +969,7 @@ impl GitStore {
             {
                 return Ok(object);
             }
+            std::thread::sleep(LOOKUP_RETRY_PAUSE);
         }
         self.repo
             .find_object(hash.oid())
@@ -1660,10 +1662,18 @@ impl RefStore for GitStore {
 /// report a miss without rescanning the packs — though `gc` installs the
 /// pack holding that object before pruning its loose copy. A repeated
 /// lookup no longer sees the loose file, so it refreshes the pack list and
-/// finds the object. A genuine miss costs the extra lookups, and only
-/// error paths miss genuinely. Three, not two, so a reader that straddles
-/// two consecutive `gc` runs still settles.
+/// finds the object. A genuine miss costs the extra lookups (and pauses),
+/// and only error paths miss genuinely. One retry settles a single race;
+/// the third attempt is headroom for a retry that itself lands mid-`gc` —
+/// the next run's prune, or a superseded pack being retired (its `.idx` is
+/// removed before its `.pack`, so a refreshed lookup drops it cleanly) — and
+/// [`LOOKUP_RETRY_PAUSE`] lets that step finish rather than racing it again.
 const LOOKUP_ATTEMPTS: usize = 3;
+
+/// The pause after a missed lookup before the next attempt: long enough
+/// for a concurrent `gc`'s file step to complete, too short to matter on
+/// the error paths that miss genuinely.
+const LOOKUP_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Reserved directory holding acetone's machine-readable commit- and
 /// workspace-tree entries (`manifest`, `chunks/`), keeping the tree root free

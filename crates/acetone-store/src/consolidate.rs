@@ -580,8 +580,16 @@ impl GitStore {
                 Err(e) => return Err(StoreError::backend("reading prior pack index", e)),
             };
             if contained {
-                remove_if_present(&dir.join(format!("{stem}.pack")))?;
+                // The `.idx` goes first: a reader in another process that
+                // still sees the old index would find the object listed but
+                // its `.pack` gone, and miss. With the index removed first, a
+                // reader's refresh drops the old pack and finds the object in
+                // the new one. A crash between the two removals leaves an
+                // orphan `.pack`; its stem stays in the sidecar (rewritten
+                // only below), and the next run takes the `NotFound` arm
+                // above and removes it.
                 remove_if_present(&idx_path)?;
+                remove_if_present(&dir.join(format!("{stem}.pack")))?;
                 // Retire the superseded pack's `.keep` too, so it does not
                 // outlive its pack (ADR-0053).
                 remove_if_present(&dir.join(format!("{stem}.keep")))?;
