@@ -68,4 +68,4 @@ repaired by ordinary writes.
   declare-time gaps sit outside this ADR: declaring a discriminator for
   a type that is new to the schema over edges already written under it,
   and deleting a relationship-type entry. Neither is checked by
-  `check_rel_disc_stability`.
+  `check_rel_disc_stability`; both are tracked as `acetone-d5is.9`.

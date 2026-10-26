@@ -278,6 +278,66 @@ fn a_stale_discriminator_blocks_completion_until_repaired_both_ways() {
     }
 }
 
+/// Review finding 1: the base does NOT declare `LINKS`. One side never
+/// declares it and writes `Null`-keyed edges under no declaration (legal
+/// through the library); the other adds the type with a discriminator and
+/// no edges. The writing side's schema lacks the type entirely, so only the
+/// "undeclared counts as no discriminator" arm of the check can see it.
+#[test]
+fn edges_of_a_type_the_side_never_declared_are_reported_both_ways() {
+    for declarer in [Declarer::Ours, Declarer::Theirs] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = init(dir.path());
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_schema(&SchemaEntry::Label {
+            name: "N".into(),
+            def: LabelDef::new(vec!["id".into()], BTreeMap::new(), [], []).expect("label"),
+        })
+        .expect("label");
+        for id in 0..=9 {
+            tx.put_node(&node(id), &NodeRecord::new([], BTreeMap::new()))
+                .expect("node");
+        }
+        let base = tx.commit("base", &[], None).expect("base");
+
+        let stale_edges = [link(1, Value::Null), link(2, Value::Null)];
+        let declare = |tx: &mut Transaction<'_>| {
+            tx.put_schema(&links(Some("seq"))).expect("declare");
+        };
+        let write = |tx: &mut Transaction<'_>| {
+            for e in &stale_edges {
+                tx.put_edge(e, &EdgeRecord::default())
+                    .expect("undeclared edge");
+            }
+        };
+        let mut tx = repo.begin_write().expect("begin");
+        match declarer {
+            Declarer::Ours => declare(&mut tx),
+            Declarer::Theirs => write(&mut tx),
+        }
+        let ours = tx.commit("ours", &[], None).expect("ours");
+        repo.create_branch("other", Some(&base.to_hex()))
+            .expect("branch");
+        repo.checkout_branch("other").expect("checkout");
+        let mut tx = repo.begin_write().expect("begin");
+        match declarer {
+            Declarer::Ours => write(&mut tx),
+            Declarer::Theirs => declare(&mut tx),
+        }
+        let theirs = tx.commit("theirs", &[], None).expect("theirs");
+
+        let expected: Vec<GraphViolation> = stale_edges
+            .iter()
+            .map(|e| stale(e, Some("seq"), None))
+            .collect();
+        assert_eq!(
+            merge_violations(&repo, &base.to_hex(), &ours.to_hex(), &theirs.to_hex()),
+            expected,
+            "{declarer:?} declares"
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(12))]
 
