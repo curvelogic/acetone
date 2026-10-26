@@ -252,6 +252,74 @@ exactly as two CLI processes would; a stale lock left by a killed
 writer is recovered automatically (pid- and start-time-checked on
 Linux).
 
+## Concurrency and isolation
+
+Every connection, and every CLI process on the same worktree, shares
+one repository: one workspace, one current branch, one merge state.
+What one changes, the others see on their next read. There is no
+per-connection workspace and no isolation *between* writers'
+uncommitted work: two connections staging changes interleave them in
+the same workspace, and a `commit`, `checkout` or `merge --abort` on
+one connection commits or resets that shared workspace for all.
+
+**Writers serialise; readers never wait.** The verbs that change the
+workspace, the current branch or the object store — a write `query`,
+`commit`, `checkout`, `merge` (and `abort`), `resolve`, `import`,
+`schema-apply`, and the CLI's `gc` and `reindex` — take the
+single-writer lock (a second writer gets `locked`). No read takes it: a
+read proceeds while a writer holds the lock, during a merge or an abort,
+and during `gc`'s repack and prune.
+
+**What a request pins.** A read sees the graph through one immutable
+manifest, chosen when the request starts, and never a later write:
+
+| Request | Pinned at the start | Read live, as the request runs |
+|---|---|---|
+| `query` (read) | the workspace manifest: all graph data, schema and indexes | whether a merge is in progress (one ref read; see below); each clause-group `AT <ref>`, resolved when the clause runs; the `CALL acetone.*` procedures (`log`, `diff`, `blame`, `conflicts`), which read the refs as they run |
+| `query` with `at` | `at` resolved once to a commit, and that commit's manifest | as for a read `query` |
+| `query` (write) | — (runs under the lock over the then-current workspace; the save is one ref update, so a reader sees all of the write or none of it) | — |
+| `schema` | one manifest (the workspace's, or `at`'s) | — |
+| `export` | one workspace manifest for every table | — |
+| `status` | nothing: it is assembled from separate reads | branch, head, workspace-vs-head, merge state, conflicts, counts |
+| `report` | nothing: `from` and `to` are resolved once for the diff and again for their `commit` fields | the refspecs; the `conflicts` section |
+| `fsck` | nothing: it walks the refs as it goes | everything |
+
+So graph data is always consistent within a read. Merge state is not
+pinned with it: a query's merge-in-progress check reads the merge-head
+ref once, separately from its manifest (the check is conservative — a
+spurious "in progress" only turns an index seek into a scan, never
+changes a result). A `status` or `report` taken while a writer changes
+the repository can combine facts from before and after the change; a
+`status`, a `report`'s `conflicts` section or a query calling
+`CALL acetone.conflicts()` that races the end of a merge can fail
+rather than combine them. Retry any of these. Pass commit hashes rather than branch names to `report`
+for a stable answer.
+
+**Two-step ref changes.** A few operations move two refs one after the
+other, and a reader between the two sees an intermediate state. Each
+keeps the order that is safe if the writer dies between the steps:
+
+- **A conflicted merge** replaces the workspace with the partial merge,
+  then records the merge head. Between them, reads see the partial
+  merge (and treat it as a merge), but `status` shows a dirty workspace
+  with no `merge` block and `CALL acetone.conflicts()` yields nothing.
+- **`merge --abort`** resets the workspace to the branch tip, then
+  clears the merge head. Between them, reads see the clean tip, but
+  `status` still shows a `merge` block with no conflicts remaining.
+- **Completing a merge** (`commit` with a merge in progress) advances
+  the branch to the merge commit, then clears the merge head. Between
+  them, reads and `head` show the completed merge, but `status` still
+  shows a `merge` block with no conflicts remaining.
+
+Separately, every commit — an ordinary one, a merge completion, and a
+clean `merge` — saves the workspace before it advances the branch, so a
+reader between the two sees the new content as uncommitted work
+(`workspace: "dirty"`) on the old head. Each intermediate state lasts
+only until the writer's next step, and a writer that dies between the
+steps leaves a state the next operation repairs: `merge --abort`
+finishes an interrupted merge or abort, and the next `commit` clears a
+merge head left by an interrupted completion.
+
 ## Measured: wire vs process-per-command
 
 ADR-0074 promised this comparison; measured on the 0.7 development head

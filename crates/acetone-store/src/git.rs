@@ -917,10 +917,7 @@ impl GitStore {
                 limit: self.max_chunk_size,
             });
         }
-        let object = self
-            .repo
-            .find_object(hash.oid())
-            .map_err(|e| StoreError::backend("reading object for consolidation", e))?;
+        let object = self.find_object_settled(hash, "reading object for consolidation")?;
         let object = object.detach();
         Ok(Some((object.kind, object.data)))
     }
@@ -935,10 +932,48 @@ impl GitStore {
     }
 
     /// Look up an object header, translating "not found" to `None`.
+    ///
+    /// A miss is looked up again before it is believed (see
+    /// [`LOOKUP_ATTEMPTS`]): a concurrent `gc` may have pruned the loose
+    /// copy this handle was about to open, and only a fresh lookup
+    /// refreshes the pack list that now holds the object.
     fn find_header(&self, hash: &Hash) -> Result<Option<gix::odb::find::Header>, StoreError> {
+        let lookup = || {
+            self.repo
+                .try_find_header(hash.oid())
+                .map_err(|e| StoreError::backend("reading object header", e))
+        };
+        for _ in 1..LOOKUP_ATTEMPTS {
+            if let Some(header) = lookup()? {
+                return Ok(Some(header));
+            }
+            std::thread::sleep(LOOKUP_RETRY_PAUSE);
+        }
+        lookup()
+    }
+
+    /// Read a whole object the caller has already found a header for,
+    /// retrying a miss as [`find_header`](Self::find_header) does: between
+    /// the header probe and this read, a concurrent `gc` may prune the
+    /// loose copy into its freshly installed pack (acetone-d5is.2).
+    fn find_object_settled(
+        &self,
+        hash: &Hash,
+        context: &'static str,
+    ) -> Result<gix::Object<'_>, StoreError> {
+        for _ in 1..LOOKUP_ATTEMPTS {
+            if let Some(object) = self
+                .repo
+                .try_find_object(hash.oid())
+                .map_err(|e| StoreError::backend(context, e))?
+            {
+                return Ok(object);
+            }
+            std::thread::sleep(LOOKUP_RETRY_PAUSE);
+        }
         self.repo
-            .try_find_header(hash.oid())
-            .map_err(|e| StoreError::backend("reading object header", e))
+            .find_object(hash.oid())
+            .map_err(|e| StoreError::backend(context, e))
     }
 
     /// Check an object header against the size cap and expected kind, then
@@ -964,10 +999,7 @@ impl GitStore {
                 limit: self.max_chunk_size,
             });
         }
-        let object = self
-            .repo
-            .find_object(hash.oid())
-            .map_err(|e| StoreError::backend("reading object", e))?;
+        let object = self.find_object_settled(hash, "reading object")?;
         Ok(object.detach().data)
     }
 
@@ -1622,6 +1654,26 @@ impl RefStore for GitStore {
         Ok(out)
     }
 }
+
+/// How many times an object lookup that misses is tried before the miss is
+/// believed (acetone-d5is.2). The object database's lookup is not atomic
+/// against a concurrent `gc` in another handle or process: it can see a
+/// loose object's file listed, then find it pruned when it opens it, and
+/// report a miss without rescanning the packs — though `gc` installs the
+/// pack holding that object before pruning its loose copy. A repeated
+/// lookup no longer sees the loose file, so it refreshes the pack list and
+/// finds the object. A genuine miss costs the extra lookups (and pauses),
+/// and only error paths miss genuinely. One retry settles a single race;
+/// the third attempt is headroom for a retry that itself lands mid-`gc` —
+/// the next run's prune, or a superseded pack being retired (its `.idx` is
+/// removed before its `.pack`, so a refreshed lookup drops it cleanly) — and
+/// [`LOOKUP_RETRY_PAUSE`] lets that step finish rather than racing it again.
+const LOOKUP_ATTEMPTS: usize = 3;
+
+/// The pause after a missed lookup before the next attempt: long enough
+/// for a concurrent `gc`'s file step to complete, too short to matter on
+/// the error paths that miss genuinely.
+const LOOKUP_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Reserved directory holding acetone's machine-readable commit- and
 /// workspace-tree entries (`manifest`, `chunks/`), keeping the tree root free

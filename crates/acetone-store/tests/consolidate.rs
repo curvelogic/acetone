@@ -525,3 +525,43 @@ fn a_later_consolidation_supersedes_the_earlier_pack() {
     }
     git(&repo, &["fsck", "--strict"]);
 }
+
+/// Superseding a pack removes its `.idx` before its `.pack`, so a reader
+/// never sees an index whose pack is gone (acetone-d5is.2). A crash between
+/// the two removals leaves an orphan `.pack` with no index, still tracked in
+/// the sidecar (rewritten only after the removals); the next consolidation
+/// must retire it.
+#[test]
+fn an_orphan_pack_left_by_an_interrupted_supersede_is_retired_next_run() {
+    let (dir, store) = new_store();
+    let repo = repo_path(&dir);
+    build_history(&store, 8, 2);
+    store
+        .consolidate(ConsolidateOptions::default())
+        .expect("first consolidate");
+    let live = pack_files(&repo);
+    assert_eq!(live.len(), 1);
+
+    // The state the interrupted supersede leaves: a tracked stem whose `.idx`
+    // is gone but whose `.pack` remains.
+    let orphan_stem = format!("pack-{}", "ab".repeat(20));
+    let orphan = repo
+        .join("objects")
+        .join("pack")
+        .join(format!("{orphan_stem}.pack"));
+    std::fs::copy(&live[0], &orphan).expect("plant orphan pack");
+    let sidecar = repo.join("acetone-consolidation-packs");
+    let mut list = std::fs::read_to_string(&sidecar).expect("sidecar exists");
+    list.push('\n');
+    list.push_str(&orphan_stem);
+    std::fs::write(&sidecar, &list).expect("track the orphan");
+
+    store
+        .consolidate(ConsolidateOptions::default())
+        .expect("second consolidate");
+    assert!(!orphan.exists(), "the orphan .pack must be retired");
+    let healed = std::fs::read_to_string(&sidecar).expect("sidecar");
+    assert!(!healed.contains(&orphan_stem), "{healed:?}");
+    assert_eq!(pack_count(&repo), 1, "the live pack stays");
+    git(&repo, &["fsck", "--strict"]);
+}

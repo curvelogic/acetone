@@ -122,6 +122,35 @@ acetone fsck        # verify chunk reachability, manifest integrity, edge symmet
 acetone gc          # consolidate the object store into a packfile, reclaim space
 ```
 
+## Concurrent use
+
+Several `acetone` processes (and `acetone serve` connections) may work on
+one worktree at once. They share its single workspace: a change one
+process writes, or a commit, checkout or `merge --abort` it makes, is what
+every other process sees next.
+
+- **Writers take turns.** Writes, `commit`, `checkout`, `merge`, `resolve`,
+  `import`, `schema apply`, `reindex` and `gc` take the single-writer lock;
+  a second writer fails fast with a "locked" error to retry.
+- **Readers never wait.** `query`, `query --at`, `schema`, `export`, `log`,
+  `diff` and `status` take no lock, and run while a writer, a merge or `gc`
+  holds it.
+- **A query sees one version.** Its graph data, schema and indexes come from
+  the one workspace (or `--at`) version it read when it started, so it sees
+  a concurrent write wholly or not at all. A clause-group `AT <ref>` and the
+  `CALL acetone.*` procedures resolve refs when they run instead.
+- **`status` and `report` are not snapshots.** Each is assembled from several
+  reads; taken while another process changes the repository, it can mix
+  before and after (or, for `status` as a merge ends, fail). Re-run it. Give
+  `report` commit hashes for a stable answer.
+
+A merge, `merge --abort` and a merge's completing commit each move two refs
+in turn; for an instant between them, `status` can report the merge state
+that has just ended or not quite begun, while queries already see the new
+graph. The protocol reference's
+[Concurrency and isolation](protocol.md#concurrency-and-isolation) section
+lists each intermediate state.
+
 ## Migrate across a format change
 
 The on-disk format is frozen at `format_version = 1`

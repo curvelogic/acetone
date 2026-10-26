@@ -64,6 +64,22 @@ fine.)
   guessed: an integral number at or beyond ±2^63, and negative zero. The Python example client takes a
   `parameters` argument.
 
+- **Reader isolation is documented and tested.** `docs/protocol.md`
+  gains a "Concurrency and isolation" section (and the user guide a
+  "Concurrent use" one): what each request pins and what it reads live,
+  the shared workspace, and the brief intermediate states a merge,
+  `merge --abort` and a merge's completing commit expose between their
+  two ref updates. Tests pin reads at a ref and of the workspace while a
+  writer holds the lock, during a merge, an abort and `gc`.
+
+### Fixed
+
+- **A read running alongside `gc` in another process could fail** with
+  an object "not found": the object database could see a loose object
+  listed, find it pruned into the new pack when it opened it, and report
+  a miss without rescanning the packs. Object lookups now retry a miss
+  before believing it.
+
 ## [0.7.0] - 2026-08-13
 
 ### Added
