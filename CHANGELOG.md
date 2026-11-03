@@ -110,6 +110,18 @@ fine.)
   marking a fully resolved merge, so every interrupted state is either
   the merge still in progress or one `commit` refuses and a re-run
   `merge --abort` finishes.
+- **A new relationship type can no longer be declared with a
+  discriminator over relationships already stored under it.** The
+  declare-time stability check now treats an absent declaration as
+  declaring no discriminator, as the merge-time check (ADR-0082) does,
+  so such a declaration is refused rather than leaving the stored
+  relationships under a key slot they were never written for. Removing a
+  relationship-type entry is judged the same way. A change that deletes
+  every relationship it would falsify in the same transaction now lands.
+  Renaming a relationship type now judges an undeclared side the same
+  way: renaming an undeclared type with relationships into one that
+  declares a discriminator (or the reverse) is refused as a rename
+  conflict.
 - **Help and manual mention ancestry refspecs.** Git ancestry suffixes
   (`main~1`, `HEAD^`, `main^2`) have resolved everywhere a refspec is
   accepted since 0.7. The help for `branch`, `tag`, `diff`, `report`,

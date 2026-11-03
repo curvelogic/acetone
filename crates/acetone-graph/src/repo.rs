@@ -1192,7 +1192,13 @@ impl Repository {
 
         // Reconcile the schema entries before touching edges, so a
         // declaration mismatch refuses cheaply.
-        let merged_entry = reconcile_rel_type_entries(&snapshot, old, new)?;
+        let merged_entry = reconcile_rel_type_entries(
+            &snapshot,
+            old,
+            new,
+            !to_rename.is_empty(),
+            !existing_new.is_empty(),
+        )?;
 
         // Rewrite every `old` edge to `new`. On a collision under
         // `--merge`, union the two records (refusing a disagreeing shared
@@ -2418,50 +2424,71 @@ fn check_label_key_stability(
 /// The relationship counterpart of [`check_label_key_stability`]
 /// (acetone-7qw.12, PR #243 review blocker 1): a schema change must not
 /// alter a relationship type's DISCRIMINATOR while edges of that type
-/// exist. The discriminator decides which stored position a declared type
-/// governs (key vs record) and which parallel edges are distinct — so a
-/// silent change (including the wipe `declare-rel-type` performs by
-/// construction, since the CLI cannot express a discriminator) would
-/// falsify declarations and violate spec §2's parallel-edge rule without
-/// any writer noticing. Such a change needs an explicit `migrate`.
+/// written under the old one survive it. The discriminator decides which
+/// stored position a declared type governs (key vs record) and which
+/// parallel edges are distinct — so a silent change (including the wipe
+/// `declare-rel-type` performs by construction, since the CLI cannot
+/// express a discriminator) would falsify declarations and violate spec
+/// §2's parallel-edge rule without any writer noticing. Such a change needs
+/// an explicit `migrate`.
 ///
-/// Cost: the forward edge map has no per-type prefix, so existence is one
-/// streaming scan bailing at the first edge of any disc-changed type —
+/// The judgement is by provenance, as at merge time (ADR-0082): a type's
+/// discriminator *changes* when its effective declaration differs between
+/// the old and new schema, where an absent entry declares none. So a type
+/// new to the schema declared with a discriminator over edges already
+/// stored under it is a change, and so is deleting an entry that declared
+/// one (acetone-d5is.9). A change is refused when an edge of that type in
+/// the new edge map was already in the old one: it was written under the
+/// old declaration. Edges this transaction writes under new keys, or
+/// deletes, are not judged here — which is what lets `rename_rel_type`
+/// delete the old entry and move its edges in one step. Edges a rename
+/// moves keep the discriminator value they were written with, so the
+/// rename checks their declaration itself: `reconcile_rel_type_entries`
+/// refuses a move that would put them under a different discriminator.
+///
+/// Cost: the forward edge map has no per-type prefix, so this is one
+/// streaming scan of the new map, with a point lookup in the old map per
+/// edge of a changed type, bailing at the first survivor —
 /// schema-change-only, like its label sibling.
 fn check_rel_disc_stability(
     store: &GitStore,
     params: ChunkParams,
     base_edges: &MapRoot,
+    new_edges: &MapRoot,
     old_entries: &[SchemaEntry],
     new_entries: &[SchemaEntry],
 ) -> Result<(), GraphError> {
-    let old_discs: BTreeMap<&str, Option<&str>> = old_entries
-        .iter()
-        .filter_map(|entry| match entry {
-            SchemaEntry::RelType { name, def } => Some((name.as_str(), def.discriminator())),
-            _ => None,
-        })
-        .collect();
-    let mut changed: BTreeSet<&str> = BTreeSet::new();
-    for entry in new_entries {
-        let SchemaEntry::RelType { name, def } = entry else {
-            continue;
-        };
-        // Absent from the old schema = fresh declaration, not a change.
-        if let Some(old_disc) = old_discs.get(name.as_str())
-            && *old_disc != def.discriminator()
-        {
-            changed.insert(name.as_str());
-        }
+    fn discs(entries: &[SchemaEntry]) -> BTreeMap<&str, Option<&str>> {
+        entries
+            .iter()
+            .filter_map(|entry| match entry {
+                SchemaEntry::RelType { name, def } => Some((name.as_str(), def.discriminator())),
+                _ => None,
+            })
+            .collect()
     }
+    let old_discs = discs(old_entries);
+    let new_discs = discs(new_entries);
+    // An absent entry declares no discriminator.
+    let effective = |map: &BTreeMap<&str, Option<&str>>, name: &str| -> Option<String> {
+        map.get(name).copied().flatten().map(str::to_owned)
+    };
+    let changed: BTreeSet<&str> = old_discs
+        .keys()
+        .chain(new_discs.keys())
+        .copied()
+        .filter(|name| effective(&old_discs, name) != effective(&new_discs, name))
+        .collect();
     if changed.is_empty() {
         return Ok(());
     }
-    let root = base_edges.to_root(params)?;
-    for item in acetone_prolly::scan(store, &root, ..)? {
+    let base_root = base_edges.to_root(params)?;
+    let new_root = new_edges.to_root(params)?;
+    for item in acetone_prolly::scan(store, &new_root, ..)? {
         let (key, _) = item?;
         let edge = EdgeKey::decode_fwd(&key)?;
-        if changed.contains(edge.rtype()) {
+        if changed.contains(edge.rtype()) && acetone_prolly::get(store, &base_root, &key)?.is_some()
+        {
             return Err(GraphError::RelDiscriminatorChanged {
                 rtype: edge.rtype().to_owned(),
             });
@@ -2764,10 +2791,19 @@ fn is_blank(store: &GitStore, manifest: &Manifest) -> Result<bool, GraphError> {
 /// property declared with different types on each side is a genuine
 /// conflict. Otherwise the property types and existence constraints are
 /// unioned onto `new`.
+///
+/// An absent declaration declares no discriminator (acetone-d5is.9). When
+/// only one side is declared, its discriminator is carried onto `new`, so
+/// the undeclared side's edges — whose keys carry no discriminator value —
+/// would end up stored under a discriminator they were never written for.
+/// That is refused whenever the undeclared side has edges and the declared
+/// side names a discriminator, exactly as the both-declared mismatch is.
 fn reconcile_rel_type_entries(
     snapshot: &Snapshot<'_>,
     old: &str,
     new: &str,
+    old_has_edges: bool,
+    new_has_edges: bool,
 ) -> Result<Option<SchemaEntry>, GraphError> {
     let entries = snapshot.schema_entries()?;
     let find = |want: &str| {
@@ -2780,8 +2816,27 @@ fn reconcile_rel_type_entries(
     let new_def = find(new);
     let def = match (old_def, new_def) {
         (None, None) => return Ok(None),
-        // Only one side declared: carry that declaration onto `new`.
-        (Some(def), None) | (None, Some(def)) => def,
+        // Only one side declared: carry that declaration onto `new`, unless
+        // the undeclared side's edges would land under its discriminator.
+        (Some(def), None) | (None, Some(def)) => {
+            let (declared, undeclared, undeclared_has_edges) = if find(old).is_some() {
+                (old, new, new_has_edges)
+            } else {
+                (new, old, old_has_edges)
+            };
+            if let Some(disc) = def.discriminator()
+                && undeclared_has_edges
+            {
+                return Err(GraphError::RelTypeRenameConflict {
+                    reason: format!(
+                        "{declared:?} declares discriminator {disc:?} but {undeclared:?} \
+                         is undeclared and has edges keyed without one — the \
+                         discriminator is part of the edge key and cannot be merged"
+                    ),
+                });
+            }
+            def
+        }
         (Some(od), Some(nd)) => {
             if od.discriminator() != nd.discriminator() {
                 return Err(GraphError::RelTypeRenameConflict {
@@ -3427,7 +3482,14 @@ impl<'r> Transaction<'r> {
             let old_keys = crate::index::schema_index_info(&old_entries).1;
             let new_keys = crate::index::schema_index_info(&new_entries).1;
             check_label_key_stability(store, params, &base_nodes, &old_keys, &new_keys)?;
-            check_rel_disc_stability(store, params, &base_edges, &old_entries, &new_entries)?;
+            check_rel_disc_stability(
+                store,
+                params,
+                &base_edges,
+                &manifest.edges_fwd,
+                &old_entries,
+                &new_entries,
+            )?;
             // A declaration must be true of the data already present, not just
             // of what this transaction writes — otherwise a seek that trusts
             // the declaration under-selects (see the function's own comment).
