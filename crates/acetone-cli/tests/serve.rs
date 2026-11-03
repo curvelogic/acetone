@@ -579,6 +579,10 @@ fn a_non_rust_python_client_drives_a_full_session() {
         stdout.contains("status:"),
         "the client must read status: {stdout}"
     );
+    assert!(
+        stdout.contains("discarded: {'discarded': True}") && stdout.contains("after discard: []"),
+        "the client must discard staged work: {stdout}"
+    );
     // The client authored the feature commit (acetone-gid); the merge
     // fast-forwarded, so it heads main's log.
     let log = acetone(&repo, &["log", "--json"]);
@@ -2764,4 +2768,78 @@ fn a_connections_reads_proceed_while_another_connections_merge_runs() {
         ),
         post
     );
+}
+
+/// The `discard` verb (acetone-omk): it resets the ONE shared workspace, so
+/// one connection's discard throws away another connection's staged
+/// writes; mid-merge it is refused as `merge-in-progress`.
+#[test]
+fn the_discard_verb_resets_the_shared_workspace_and_is_refused_mid_merge() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = seeded_repo(&dir);
+    assert!(acetone(&repo, &["commit", "-m", "seed"]).status.success());
+    let socket = dir.path().join("acetone.sock");
+    let _daemon = start_daemon(&repo, &socket);
+    let mut a = hello(&socket);
+    let mut b = hello(&socket);
+
+    // Connection A stages a write; connection B discards it.
+    let w = verb(
+        &mut a,
+        serde_json::json!({"id": 1, "verb": "query",
+        "params": {"cypher": "CREATE (:Doc {id: 'd9'})"}}),
+    );
+    assert!(w.get("ok").is_some(), "{w}");
+    let d = verb(&mut b, serde_json::json!({"id": 2, "verb": "discard"}));
+    assert_eq!(d["ok"]["discarded"], true, "{d}");
+    let st = verb(&mut a, serde_json::json!({"id": 3, "verb": "status"}));
+    assert_eq!(st["ok"]["workspace"], "clean", "A sees B's discard: {st}");
+    let d = verb(&mut a, serde_json::json!({"id": 4, "verb": "discard"}));
+    assert_eq!(d["ok"]["discarded"], false, "{d}");
+
+    // Build a conflicting merge over the socket.
+    let steps = [
+        serde_json::json!({"verb": "branch", "params": {"name": "feature"}}),
+        serde_json::json!({"verb": "checkout", "params": {"branch": "feature"}}),
+        serde_json::json!({"verb": "query",
+            "params": {"cypher": "MATCH (d:Doc {id:'d1'}) SET d.v = 2"}}),
+        serde_json::json!({"verb": "commit", "params": {"message": "feature edit"}}),
+        serde_json::json!({"verb": "checkout", "params": {"branch": "main"}}),
+        serde_json::json!({"verb": "query",
+            "params": {"cypher": "MATCH (d:Doc {id:'d1'}) SET d.v = 1"}}),
+        serde_json::json!({"verb": "commit", "params": {"message": "main edit"}}),
+    ];
+    for (i, mut step) in steps.into_iter().enumerate() {
+        step["id"] = serde_json::json!(10 + i);
+        let r = verb(&mut a, step);
+        assert!(r.get("ok").is_some(), "{r}");
+    }
+    let m = verb(
+        &mut a,
+        serde_json::json!({"id": 20, "verb": "merge", "params": {"refspec": "feature"}}),
+    );
+    assert_eq!(m["ok"]["outcome"], "conflicts", "{m}");
+
+    let d = verb(&mut b, serde_json::json!({"id": 21, "verb": "discard"}));
+    assert_eq!(d["error"]["kind"], "merge-in-progress", "{d}");
+    assert!(
+        d["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("merge --abort"),
+        "{d}"
+    );
+    let st = verb(&mut b, serde_json::json!({"id": 22, "verb": "status"}));
+    assert_eq!(
+        st["ok"]["merge"]["in_progress"], true,
+        "merge untouched: {st}"
+    );
+
+    let ab = verb(
+        &mut b,
+        serde_json::json!({"id": 23, "verb": "merge", "params": {"abort": true}}),
+    );
+    assert_eq!(ab["ok"]["aborted"], true, "{ab}");
+    let d = verb(&mut b, serde_json::json!({"id": 24, "verb": "discard"}));
+    assert_eq!(d["ok"]["discarded"], false, "{d}");
 }

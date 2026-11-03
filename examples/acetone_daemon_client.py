@@ -160,6 +160,13 @@ class AcetoneClient:
         _, _, ok = self._request({"verb": "merge", "params": params})
         return ok
 
+    def discard(self):
+        """Throw away the shared workspace's uncommitted changes (every
+        connection's, not only this one's). Returns {"discarded": bool}.
+        Refused as merge-in-progress mid-merge: abort the merge instead."""
+        _, _, ok = self._request({"verb": "discard"})
+        return ok
+
     def _request(self, body):
         self._next_id += 1
         self._send_frame({"id": self._next_id, **body})
@@ -262,6 +269,12 @@ def main():
         )
         client.checkout("main")
         print("merged:", client.merge("feature"))  # fast-forwards main
+
+        # Abandon a failed batch: stage a write, then discard it.
+        client.query("CREATE (:Demo {id: 'abandoned'})")
+        print("discarded:", client.discard())
+        _, rows, _ = client.query("MATCH (d:Demo {id: 'abandoned'}) RETURN d.id")
+        print("after discard:", rows)
     finally:
         client.close()
 

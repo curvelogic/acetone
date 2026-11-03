@@ -32,6 +32,7 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
         } => init(repo_path, &object_format, co_tenant.as_deref(), path),
         Command::Attach => attach(repo_path, graph),
         Command::Status { json } => status(repo_path, graph, json),
+        Command::Discard => discard(repo_path, graph),
         Command::Commit {
             message,
             trailer,
@@ -883,6 +884,19 @@ fn checkout(repo_path: &Path, graph: Option<&str>, name: &str) -> Result<()> {
     repo.checkout_branch(name)
         .with_context(|| format!("checking out branch {name:?}"))?;
     outln!("switched to branch {name:?}");
+    Ok(())
+}
+
+fn discard(repo_path: &Path, graph: Option<&str>) -> Result<()> {
+    let repo = open(repo_path, graph)?;
+    if repo
+        .discard_workspace()
+        .context("discarding workspace changes")?
+    {
+        outln!("discarded uncommitted changes — workspace restored to HEAD");
+    } else {
+        outln!("nothing to discard — workspace is clean");
+    }
     Ok(())
 }
 

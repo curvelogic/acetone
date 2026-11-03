@@ -4070,3 +4070,56 @@ fn log_and_blame_oneline_print_one_line_per_commit() {
         );
     }
 }
+
+/// `acetone discard` (acetone-omk): throws away staged changes, reports a
+/// clean workspace as nothing to discard, and is refused mid-merge with
+/// advice to use `merge --abort`.
+#[test]
+fn discard_resets_the_workspace_and_is_refused_mid_merge() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    assert!(init(&repo).status.success());
+    let ok = |args: &[&str]| {
+        let out = acetone(&repo, args);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        stdout(&out)
+    };
+    ok(&["declare-label", "Doc", "--key", "id"]);
+    ok(&["put-node", "Doc", "d1", "--prop", "v=0"]);
+    ok(&["commit", "-m", "base"]);
+
+    // Dirty -> discard -> clean, with the staged node gone.
+    ok(&["put-node", "Doc", "d2"]);
+    assert!(ok(&["status"]).contains("dirty"));
+    assert!(ok(&["discard"]).contains("discarded uncommitted changes"));
+    let status = ok(&["status", "--json"]);
+    assert!(status.contains("\"workspace\": \"clean\""), "{status}");
+    let rows = ok(&["query", "MATCH (d:Doc) RETURN d.id AS id ORDER BY id"]);
+    assert!(rows.contains("d1") && !rows.contains("d2"), "{rows}");
+    assert!(ok(&["discard"]).contains("nothing to discard"));
+
+    // A conflicting merge in progress: discard is refused, nothing moves.
+    ok(&["branch", "feature"]);
+    ok(&["checkout", "feature"]);
+    ok(&["put-node", "Doc", "d1", "--prop", "v=2"]);
+    ok(&["commit", "-m", "feature edit"]);
+    ok(&["checkout", "main"]);
+    ok(&["put-node", "Doc", "d1", "--prop", "v=1"]);
+    ok(&["commit", "-m", "main edit"]);
+    let merged = acetone(&repo, &["merge", "feature"]);
+    assert!(
+        stdout(&merged).contains("conflict") || stderr(&merged).contains("conflict"),
+        "expected a conflicted merge: {} / {}",
+        stdout(&merged),
+        stderr(&merged)
+    );
+    let refused = acetone(&repo, &["discard"]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("merge --abort"),
+        "{}",
+        stderr(&refused)
+    );
+    ok(&["merge", "--abort"]);
+    assert!(ok(&["discard"]).contains("nothing to discard"));
+}

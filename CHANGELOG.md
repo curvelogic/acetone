@@ -59,6 +59,13 @@ fine.)
 
 ### Added
 
+- **Discard uncommitted changes.** `acetone discard`, and the daemon's
+  `discard` verb, reset the workspace to the checked-out commit, so a host
+  that abandons a failed batch has a way back. The workspace is shared, so
+  a discard throws away every writer's staged changes. It is refused while
+  a merge is in progress (`merge --abort` backs out of a merge), and the
+  merge check and the reset run under one write lock. See
+  `docs/protocol.md`.
 - **A guide to parallel relationships.** The manual's new "Parallel
   relationships" chapter walks through declaring a discriminator,
   creating, querying, editing, importing, exporting and merging parallel

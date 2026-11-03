@@ -1450,16 +1450,49 @@ impl Repository {
     }
 
     /// Reset the workspace to its committed state, discarding staged but
-    /// uncommitted changes: the current branch tip's manifest, or the
+    /// uncommitted changes: the checked-out commit's manifest, or the
     /// init blank for an unborn branch. An `abort_merge`-style reset for
     /// callers that must clean up after a partial batched operation
-    /// (streaming import, ADR-0062), and the substrate for a future
-    /// workspace-discard command (acetone-omk). Unlike `abort_merge` it
-    /// leaves `MERGE_HEAD` untouched — a caller mid-merge should abort
-    /// the merge instead.
+    /// (streaming import, ADR-0062). Unlike `abort_merge` it leaves
+    /// `MERGE_HEAD` untouched — a caller mid-merge should abort the merge
+    /// instead. The user-facing verb is [`Repository::discard_workspace`],
+    /// which refuses mid-merge.
     pub fn reset_workspace_to_head(&self) -> Result<(), GraphError> {
         let _lock = WriteLock::acquire(self.store.git_dir())?;
-        let manifest = match self.head_commit()? {
+        self.reset_workspace_to_head_locked()
+    }
+
+    /// Discard every staged but uncommitted change, resetting the workspace
+    /// to the checked-out commit's committed state (`acetone discard` and the
+    /// daemon's `discard` verb, acetone-omk). Returns whether anything was
+    /// discarded (`false` when the workspace was already clean).
+    ///
+    /// Refuses with [`GraphError::DiscardDuringMerge`] while a merge is in
+    /// progress (`MERGE_HEAD` set, or a `conflicts` map in the workspace):
+    /// `merge --abort` is that state's way out. The merge check and the
+    /// reset run under **one** [`WriteLock`], so a merge cannot start between
+    /// the check and the reset. The workspace is a single shared ref, so a
+    /// discard throws away every writer's staged changes, not only the
+    /// caller's. Derived maps come back with the committed manifest, so they
+    /// equal the commit's exactly (Invariant 5).
+    pub fn discard_workspace(&self) -> Result<bool, GraphError> {
+        let _lock = WriteLock::acquire(self.store.git_dir())?;
+        if self.merge_head()?.is_some() || self.workspace_manifest()?.conflicts.is_some() {
+            return Err(GraphError::DiscardDuringMerge);
+        }
+        if !self.is_dirty()? {
+            return Ok(false);
+        }
+        self.reset_workspace_to_head_locked()?;
+        Ok(true)
+    }
+
+    /// [`Repository::reset_workspace_to_head`]'s body, for callers already
+    /// holding the [`WriteLock`]. The checked-out commit is resolved as
+    /// [`Repository::is_dirty`] resolves it, so a detached worktree resets
+    /// to its checked-out commit rather than to the empty graph.
+    fn reset_workspace_to_head_locked(&self) -> Result<(), GraphError> {
+        let manifest = match self.store.head_commit_id(self.namespace.head_ref())? {
             Some(head) => self.manifest_at_commit(&head)?,
             None => {
                 // Unborn branch: back to the init blank, preserving the

@@ -414,6 +414,7 @@ pub acetone_graph::error::GraphError::DirtyWorkspace
 pub acetone_graph::error::GraphError::DisagreeingRemotes
 pub acetone_graph::error::GraphError::DisagreeingRemotes::graph: alloc::string::String
 pub acetone_graph::error::GraphError::DisagreeingRemotes::remotes: alloc::vec::Vec<alloc::string::String>
+pub acetone_graph::error::GraphError::DiscardDuringMerge
 pub acetone_graph::error::GraphError::EdgePropertyTypeViolation
 pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::actual: &'static str
 pub acetone_graph::error::GraphError::EdgePropertyTypeViolation::declared: &'static str
@@ -2053,6 +2054,7 @@ pub fn acetone_graph::repo::Repository::current_branch(&self) -> core::result::R
 pub fn acetone_graph::repo::Repository::delete_branch(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::delete_tag(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::diff(&self, &str, &str) -> core::result::Result<acetone_graph::diff::GraphDiff, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::discard_workspace(&self) -> core::result::Result<bool, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::gc(&self) -> core::result::Result<acetone_store::consolidate::ConsolidateStats, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::head_commit(&self) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::init(&std::path::Path, acetone_graph::repo::InitOptions) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
@@ -2284,6 +2286,7 @@ pub acetone_graph::GraphError::DirtyWorkspace
 pub acetone_graph::GraphError::DisagreeingRemotes
 pub acetone_graph::GraphError::DisagreeingRemotes::graph: alloc::string::String
 pub acetone_graph::GraphError::DisagreeingRemotes::remotes: alloc::vec::Vec<alloc::string::String>
+pub acetone_graph::GraphError::DiscardDuringMerge
 pub acetone_graph::GraphError::EdgePropertyTypeViolation
 pub acetone_graph::GraphError::EdgePropertyTypeViolation::actual: &'static str
 pub acetone_graph::GraphError::EdgePropertyTypeViolation::declared: &'static str
@@ -3216,6 +3219,7 @@ pub fn acetone_graph::repo::Repository::current_branch(&self) -> core::result::R
 pub fn acetone_graph::repo::Repository::delete_branch(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::delete_tag(&self, &str) -> core::result::Result<acetone_store::hash::Hash, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::diff(&self, &str, &str) -> core::result::Result<acetone_graph::diff::GraphDiff, acetone_graph::error::GraphError>
+pub fn acetone_graph::repo::Repository::discard_workspace(&self) -> core::result::Result<bool, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::gc(&self) -> core::result::Result<acetone_store::consolidate::ConsolidateStats, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::head_commit(&self) -> core::result::Result<core::option::Option<acetone_store::hash::Hash>, acetone_graph::error::GraphError>
 pub fn acetone_graph::repo::Repository::init(&std::path::Path, acetone_graph::repo::InitOptions) -> core::result::Result<acetone_graph::repo::Repository, acetone_graph::error::GraphError>
