@@ -1,0 +1,138 @@
+<title>Phase 13 — The embedder’s contract</title>
+<style>
+:root {
+  --ink: #22252c; --paper: #f7f6f2; --card: #ffffff; --line: #ddd8cd;
+  --accent: #b3762a; --steel: #4a6b8a; --alarm: #a33b2e; --dim: #6d685e;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #e8e4da; --paper: #16181d; --card: #1e2128; --line: #33363e;
+          --accent: #d99a4e; --steel: #7fa3c4; --alarm: #d0705d; --dim: #9a958a; }
+}
+:root[data-theme="dark"] { --ink: #e8e4da; --paper: #16181d; --card: #1e2128; --line: #33363e;
+  --accent: #d99a4e; --steel: #7fa3c4; --alarm: #d0705d; --dim: #9a958a; }
+:root[data-theme="light"] { --ink: #22252c; --paper: #f7f6f2; --card: #ffffff; --line: #ddd8cd;
+  --accent: #b3762a; --steel: #4a6b8a; --alarm: #a33b2e; --dim: #6d685e; }
+body { background: var(--paper); color: var(--ink);
+  font: 17px/1.6 "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  margin: 0; padding: 3rem 1.5rem 5rem; }
+.deck { max-width: 60rem; margin: 0 auto; display: flex; flex-direction: column; gap: 2.5rem; }
+.slide { background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+  padding: 2.2rem 2.6rem; }
+.eyebrow { font-size: .72rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); font-weight: 600; margin: 0 0 .4rem; }
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 .5rem; text-wrap: balance; font-weight: 700; }
+h2 { font-size: 1.35rem; margin: 0 0 1rem; text-wrap: balance; font-weight: 700; }
+p, li { max-width: 65ch; }
+.lede { font-size: 1.06rem; color: var(--dim); margin: 0; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th { text-align: left; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--dim); border-bottom: 2px solid var(--line); padding: .4rem .6rem; }
+td { border-bottom: 1px solid var(--line); padding: .45rem .6rem; vertical-align: top; }
+td.pr, code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+td.pr { color: var(--steel); white-space: nowrap; font-variant-numeric: tabular-nums; }
+code { font-size: .88em; background: color-mix(in srgb, var(--line) 40%, transparent);
+  padding: .08em .35em; border-radius: 3px; }
+pre { background: color-mix(in srgb, var(--line) 30%, transparent); border: 1px solid var(--line);
+  border-radius: 5px; padding: 1rem 1.2rem; overflow-x: auto; font-size: .85rem; line-height: 1.55; }
+.stat-row { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: 1.2rem 0 0; }
+.stat { flex: 1 1 9rem; border: 1px solid var(--line); border-radius: 5px; padding: .9rem 1.1rem; }
+.stat b { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; color: var(--accent); }
+.stat span { font-size: .78rem; color: var(--dim); letter-spacing: .05em; text-transform: uppercase; }
+.breach { border-left: 4px solid var(--alarm); }
+.breach .eyebrow { color: var(--alarm); }
+ul { padding-left: 1.2rem; margin: .6rem 0; }
+li { margin: .35rem 0; }
+li::marker { color: var(--accent); }
+.agenda li::marker { content: "→ "; color: var(--steel); }
+footer { color: var(--dim); font-size: .8rem; text-align: center; margin-top: 1rem; }
+</style>
+<div class="deck">
+
+<section class="slide">
+  <p class="eyebrow">Phase 13 boundary · slide 1 of 7</p>
+  <h1>The embedder’s contract</h1>
+  <p class="lede">Phase 12 made the daemon a surface a host can live on. Phase 13
+  fixes the contract that host embeds against before it hardens: safe,
+  attributable writes, a typed machine-readable report, and a way back from
+  a bad workspace. Opened by the owner on 25&nbsp;October with seven rulings;
+  every implementation bead is closed and the gate bead awaits review.</p>
+  <div class="stat-row">
+    <div class="stat"><b>17</b><span>PRs (#299–#315), all adversarially reviewed</span></div>
+    <div class="stat"><b>2</b><span><code>report_version</code>, now with typed keys</span></div>
+    <div class="stat"><b>0</b><span>security blockers open</span></div>
+  </div>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 2 · Criterion 1 — safe, attributable writes</p>
+  <h2>Queries bind parameters; commits carry a caller’s name</h2>
+  <table>
+    <tr><th>Item</th><th>Bead</th><th>PR</th></tr>
+    <tr><td>Cypher parameter binding on the daemon’s <code>query</code> verb (<code>params.parameters</code>), differential-tested against the CLI’s <code>--param</code>; injection-shaped input binds literally</td><td>d5is.1</td><td class="pr">#300</td></tr>
+    <tr><td>Caller-supplied author: <code>--author</code> on CLI commit/import/merge/tag (with a <code>GIT_AUTHOR_*</code> fallback, CLI only); <code>params.author</code> on the daemon’s commit/import/merge. The daemon never reads ambient identity.</td><td>gid</td><td class="pr">#305</td></tr>
+    <tr><td>Security fixes: author identities refused when untrimmed or oversized</td><td>d5is.12</td><td class="pr">#315</td></tr>
+  </table>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 3 · Criterion 2 — the machine-readable contract</p>
+  <h2>Typed conflict keys, pinned isolation, parallel edges done properly</h2>
+  <table>
+    <tr><th>Item</th><th>Bead</th><th>PR</th></tr>
+    <tr><td>Typed conflict keys under <code>report_version</code> 2 (CHANGELOG’d as breaking), in the merge verb, and in <code>CALL acetone.conflicts()</code>; review follow-ups</td><td>y629 · d5is.7</td><td class="pr">#301 · #313</td></tr>
+    <tr><td>Reader isolation documented in <code>protocol.md</code> and pinned by tests; a cross-handle gc read race fixed on the way</td><td>d5is.2</td><td class="pr">#304</td></tr>
+    <tr><td>Task-oriented guide to parallel relationships</td><td>d5is.3</td><td class="pr">#306</td></tr>
+    <tr><td>Discriminator rule enforced at merge time (ADR-0082), declare time and import time</td><td>7qw.26 · d5is.9 · d5is.13</td><td class="pr">#303 · #311 · #307</td></tr>
+  </table>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 4 · Criterion 3 — recovery and operator UX</p>
+  <h2>A way back from a bad workspace</h2>
+  <table>
+    <tr><th>Item</th><th>Bead</th><th>PR</th></tr>
+    <tr><td><code>acetone discard</code> and the daemon’s <code>discard</code> verb</td><td>omk</td><td class="pr">#310</td></tr>
+    <tr><td>Crash-safe <code>merge --abort</code>; writes refused while a merge is half-aborted</td><td>d5is.11</td><td class="pr">#312</td></tr>
+    <tr><td>Phase 12 demo findings: ancestry refspecs in help; <code>acetone log --oneline</code></td><td>00wh · 7ldo</td><td class="pr">#308 · #309</td></tr>
+    <tr><td>A Linux row for the wire-vs-process measurement, harness checked in</td><td>d5is.5</td><td class="pr">#314</td></tr>
+  </table>
+</section>
+
+<section class="slide breach">
+  <p class="eyebrow">Slide 5 · Problems that arose</p>
+  <h2>What review caught, and what the process dropped</h2>
+  <ul>
+    <li><b>#311</b> — a rename could store an undeclared type’s edges under a declared discriminator, falsifying ADR-0082’s provenance premise while the PR’s own doc comment said it could not. Reproduced, fixed, red-checked.</li>
+    <li><b>#312</b> — in the new half-aborted state an ordinary write cleared the empty-conflicts mark, so the next commit landed merge content as single-parent work. Now refused.</li>
+    <li><b>#304</b> — pinning isolation surfaced a real cross-handle gc read race.</li>
+    <li><b>Lost tracker writes</b> — closes for d5is.3, 00wh, 7ldo and omk never reached the tracker; d5is.13 was never relayed. Repaired retrospectively; the PRs are the record.</li>
+    <li><b>A <code>;</code> in a rebase-and-push chain</b> — pushed nothing, but repeats the Phase 12 lesson: <code>&amp;&amp;</code> only.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 6 · Decisions taken</p>
+  <h2>Four ADRs, two of them governing</h2>
+  <ul>
+    <li><b>ADR-0079</b> — the phase definition, accepted at the opening with seven rulings.</li>
+    <li><b>ADR-0080</b> (governing) — refer to the owner by role; a phase opens on the owner’s first-hand instruction. <b>ADR-0081</b> extends the role rule to live material.</li>
+    <li><b>ADR-0082</b> (governing: one sentence in spec §2) — a merged discriminator change is a conflict, judged by which side wrote the edge.</li>
+    <li>Recorded deviations, each reviewer-endorsed: unrepresentable numbers refused (#300); one <code>entity</code> map column (#301); <code>rekey</code>/<code>rename-rel-type</code> keep the neutral author (#305); renames refuse one-sided discriminator mismatch (#311); writes refused mid-abort (#312).</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="eyebrow">Slide 7 · Boundary agenda</p>
+  <h2>Queued for the owner’s ruling</h2>
+  <ul class="agenda">
+    <li>Retrospective review of the governing changes: ADR-0080’s phase-start rule and ADR-0082’s spec §2 sentence.</li>
+    <li>Ratify the five recorded deviations (slide 6).</li>
+    <li>Security review: no blockers; three findings fixed in #315; six accepted notes recorded on the epic.</li>
+    <li>Housekeeping for a local session: drop the <code>phase-13</code> label from acetone-a9m; delete merged phase and <code>beads-inbox/*</code> branches.</li>
+    <li>Close the gate, acetone-d5is.6 — the owner’s act.</li>
+  </ul>
+  <p class="lede">Then: the live demo, one step per turn, whenever you’re ready. Full detail in <code>docs/reports/phase-13.md</code>.</p>
+</section>
+
+<footer>Phase 13 boundary deck · acetone · prepared 2026-11-03 · archived at docs/demos/phase-13-deck.html</footer>
+</div>
