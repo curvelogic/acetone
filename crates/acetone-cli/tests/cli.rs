@@ -4001,3 +4001,72 @@ fn report_conflict_items_carry_typed_keys_matching_the_change_list() {
     );
     assert!(!md.contains("\\\""), "no escaped quotes: {md}");
 }
+
+/// acetone-7ldo: `--oneline` renders exactly one `<full hash> <subject>`
+/// line per commit — no trailers, and under `--all` no merge-parents line —
+/// for `log` and `blame`, and refuses `--json`.
+#[test]
+fn log_and_blame_oneline_print_one_line_per_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let (base, side, main_second, merge) = merged_history(&repo);
+    assert!(
+        acetone(&repo, &["query", "CREATE (:Host {name:'web4'})"])
+            .status
+            .success()
+    );
+    let out = acetone(
+        &repo,
+        &[
+            "commit",
+            "-m",
+            "add web4",
+            "--trailer",
+            "Acetone-Source=inventory",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let web4 = commit_hex(&out);
+
+    let out = acetone(&repo, &["log", "--oneline"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!("{web4} add web4\n{merge} merge side\n{main_second} main work\n{base} base\n"),
+    );
+
+    let out = acetone(&repo, &["log", "--all", "--oneline"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert_eq!(
+        text.lines().count(),
+        5,
+        "five commits, one line each: {text}"
+    );
+    assert!(text.contains(&format!("{side} side work\n")), "{text}");
+    assert!(!text.contains("merge: "), "no merge-parents line: {text}");
+    assert!(!text.contains("Acetone-Source"), "no trailers: {text}");
+
+    let out = acetone(&repo, &["blame", "Host", "web4", "--oneline"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{web4} add web4\n"));
+    let out = acetone(&repo, &["blame", "Host", "web4"]);
+    assert!(
+        stdout(&out).contains("    Acetone-Source: inventory"),
+        "default blame keeps trailers: {}",
+        stdout(&out)
+    );
+
+    for args in [
+        &["log", "--oneline", "--json"][..],
+        &["blame", "Host", "web4", "--oneline", "--json"][..],
+    ] {
+        let out = acetone(&repo, args);
+        assert!(!out.status.success(), "{args:?} must refuse");
+        assert!(
+            stderr(&out).contains("cannot be used with"),
+            "{}",
+            stderr(&out)
+        );
+    }
+}

@@ -65,6 +65,10 @@ fine.)
   relationships; its examples run in the manual's verification script.
   `docs/protocol.md` notes where the discriminator appears on the wire.
 
+- **`acetone log --oneline`** (and `blame --oneline`): one line per
+  commit, the full hash and the subject, without trailers or merge
+  parents. The hash stays in full so it can be pasted as a refspec.
+
 - **`CALL acetone.conflicts()` yields `entity`**, the conflicted node or
   relationship as a typed map (`{label, key}` or `{rel_type, src, dst,
   disc}`; null for a schema-key conflict). Additive: the display `key`
