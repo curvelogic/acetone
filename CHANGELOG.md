@@ -100,6 +100,18 @@ fine.)
   conflict lines already did, so parallel relationships between one pair
   no longer render identically.
 
+- **`import --edge` enforces the declared discriminator.** Importing into
+  a relationship type that declares a discriminator without `--disc`
+  used to collapse every row between a pair onto one relationship with
+  the default discriminator, stored the column as a shadowed property,
+  and reported every row as imported. It is now refused, as are a null
+  discriminator value, the declared discriminator property arriving as an
+  ordinary field beside `--disc`, and `--disc` on a type that declares
+  no discriminator (the spec's rule that parallel relationships declare
+  one). The value is coerced to the property's declared type. The rule
+  lives in the library's import, so the daemon's `import` verb and
+  library callers get it too.
+
 - **A read running alongside `gc` in another process could fail** with
   an object "not found": the object database could see a loose object
   listed, find it pruned into the new pack when it opened it, and report

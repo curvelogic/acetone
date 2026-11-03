@@ -379,7 +379,10 @@ fn stream_batches(
                 } => {
                     let src_key = endpoint_key(&src, &labels)?;
                     let dst_key = endpoint_key(&dst, &labels)?;
-                    let props = match rtypes.get(&rtype) {
+                    let def = rtypes.get(&rtype);
+                    let discriminator =
+                        edge_discriminator(&rtype, def, discriminator, &properties)?;
+                    let props = match def {
                         Some(def) => coerce_props(properties, def.types())?,
                         None => properties,
                     };
@@ -725,6 +728,52 @@ fn endpoint_key(
         values.push(coerce(value.clone(), def.types().get(name).copied())?);
     }
     Ok(NodeKey::new(endpoint.label.clone(), values)?)
+}
+
+/// An imported relationship's discriminator, held to the rule the Cypher
+/// write path enforces (spec §2; acetone-d5is.13). A type that declares
+/// discriminator property `P` needs a non-null value for every row, so
+/// rows of one pair never collapse onto the default (`Null`) identity,
+/// and `P` must not also arrive as an ordinary field, where a read would
+/// shadow it with the key's value. A type that declares none (or is not
+/// declared) takes no discriminator: parallel relationships MUST declare
+/// one. The value is coerced to `P`'s declared property type, if any.
+fn edge_discriminator(
+    rtype: &str,
+    def: Option<&RelTypeDef>,
+    discriminator: Value,
+    properties: &BTreeMap<String, Value>,
+) -> Result<Value, GraphError> {
+    let Some(name) = def.and_then(|d| d.discriminator()) else {
+        if matches!(discriminator, Value::Null) {
+            return Ok(discriminator);
+        }
+        return Err(ImportError::Mapping(format!(
+            "relationship type {rtype:?} declares no discriminator, so its \
+             relationships cannot carry one (parallel relationships need a \
+             declared discriminator; declare one with `schema apply`, or \
+             import without --disc)"
+        ))
+        .into());
+    };
+    if matches!(discriminator, Value::Null) {
+        return Err(ImportError::Mapping(format!(
+            "relationship type {rtype:?} declares discriminator property \
+             {name:?}: every imported relationship must supply a non-null \
+             value (name its source field with --disc)"
+        ))
+        .into());
+    }
+    if properties.contains_key(name) {
+        return Err(ImportError::Mapping(format!(
+            "relationship type {rtype:?} declares discriminator property \
+             {name:?}, which is also an ordinary field of the row: name that \
+             field with --disc, or drop it"
+        ))
+        .into());
+    }
+    let types = def.map(RelTypeDef::types);
+    coerce(discriminator, types.and_then(|t| t.get(name)).copied())
 }
 
 /// Coerce every property that has a declared type; pass the rest through.

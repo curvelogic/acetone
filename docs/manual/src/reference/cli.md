@@ -336,7 +336,12 @@ atomically, with the violations listed.
 - **Edge mode**: `--edge <RTYPE>` maps each row to a relationship; requires
   `--from LABEL=field[,field...]` and `--to LABEL=field[,field...]` (the
   fields carry each endpoint's key, in key order), with `--disc <FIELD>`
-  naming an optional discriminator field.
+  naming the discriminator field. The discriminator follows the Cypher
+  write path's rule: a type that declares a discriminator needs `--disc`
+  and a non-null value in every row, and its declared property may not
+  also arrive as an ordinary field; a type that declares none refuses
+  `--disc`. A refused row fails the whole import before it touches the
+  graph.
 - `--branch <BRANCH>` imports onto that branch in isolation, leaving the
   current branch unchanged (created if absent, appended to if present).
 - `-m/--message` overrides the synthesised commit message.

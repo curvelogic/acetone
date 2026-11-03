@@ -170,3 +170,84 @@ fn a_merged_discriminator_over_the_other_branchs_edges_is_a_conflict() {
     ok(&acetone(&repo, &["commit", "-m", "finish"]));
     assert!(ok(&acetone(&repo, &["fsck"])).contains("clean"));
 }
+
+/// acetone-d5is.13: `import --edge` into a discriminated type without
+/// `--disc` is refused before touching the graph, instead of collapsing
+/// the rows onto one relationship with the default discriminator; with
+/// `--disc` the rows land as parallel relationships.
+#[test]
+fn edge_import_without_disc_into_a_discriminated_type_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    let bin = env!("CARGO_BIN_EXE_acetone");
+    assert!(
+        Command::new(bin)
+            .args(["init", repo.to_str().unwrap()])
+            .output()
+            .expect("init")
+            .status
+            .success()
+    );
+    ok(&acetone(
+        &repo,
+        &["declare-label", "Service", "--key", "name"],
+    ));
+    let doc = dir.path().join("schema.json");
+    std::fs::write(
+        &doc,
+        r#"{"relationship_types": [{"name": "DEPENDS_ON", "discriminator": "source"}]}"#,
+    )
+    .expect("write doc");
+    ok(&acetone(&repo, &["schema", "apply", doc.to_str().unwrap()]));
+    ok(&acetone(
+        &repo,
+        &[
+            "query",
+            "CREATE (:Service {name: 'api'}), (:Service {name: 'db'})",
+        ],
+    ));
+    ok(&acetone(&repo, &["commit", "-m", "schema"]));
+    let csv = dir.path().join("deps.csv");
+    std::fs::write(&csv, "from,to,source\napi,db,scanner\napi,db,manifest\n").expect("csv");
+    let import = |extra: &[&str]| {
+        let mut args = vec![
+            "import",
+            "-f",
+            "csv",
+            csv.to_str().unwrap(),
+            "--edge",
+            "DEPENDS_ON",
+            "--from",
+            "Service=from",
+            "--to",
+            "Service=to",
+        ];
+        args.extend_from_slice(extra);
+        acetone(&repo, &args)
+    };
+
+    let out = import(&[]);
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("must supply a non-null value (name its source field with --disc)"),
+        "{}",
+        stderr(&out)
+    );
+    let count = ok(&acetone(
+        &repo,
+        &["query", "MATCH ()-[r:DEPENDS_ON]->() RETURN count(r)"],
+    ));
+    assert!(count.contains("│ 0 "), "graph untouched: {count}");
+
+    ok(&import(&["--disc", "source"]));
+    let rows = ok(&acetone(
+        &repo,
+        &[
+            "query",
+            "-f",
+            "csv",
+            "MATCH ()-[r:DEPENDS_ON]->() RETURN r.source ORDER BY r.source",
+        ],
+    ));
+    assert_eq!(rows, "r.source\nmanifest\nscanner\n");
+}
