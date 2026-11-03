@@ -895,12 +895,26 @@ $ acetone query 'MATCH (s:Service) AT "scratch" RETURN count(*) AS services'
 1 row
 ```
 
-Git *ancestry* refspecs are not resolved yet — spell the commit out by hash
-instead:
+Git *ancestry* refspecs work in both spellings, so a past version needs no
+hash: `main~2` is two first-parent steps back from `main`, which is the seed
+commit here, and `main^2` is the merge's second parent, the tip of
+`decommission-app1`:
 
 ```console
-$ acetone query --at main~1 'MATCH (s:Service {name: "postgres"}) RETURN s.version'
-error: cannot resolve "main~1" to a tag, branch, ref or commit
+$ acetone query --at main~2 'MATCH (s:Service {name: "postgres"}) RETURN s.version'
+┌───────────┐
+│ s.version │
+├───────────┤
+│ 16.3      │
+└───────────┘
+1 row
+$ acetone query --at 'main^2' 'MATCH (h:Host {name: "app3"}) RETURN h.region'
+┌──────────┐
+│ h.region │
+├──────────┤
+│ eu-west  │
+└──────────┘
+1 row
 ```
 
 **Diff as rows.** `CALL acetone.diff(from, to)` yields the graph-level

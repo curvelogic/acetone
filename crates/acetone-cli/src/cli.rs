@@ -161,8 +161,9 @@ pub enum Command {
     Branch {
         /// Name of a new branch to create. Omit to list existing branches.
         name: Option<String>,
-        /// Where the new branch starts: a branch short name, full ref name
-        /// or commit hash (default: the current head commit). The new
+        /// Where the new branch starts: a branch or tag short name, full ref
+        /// name or commit hash, optionally with git ancestry suffixes
+        /// (`main~1`, `HEAD^`) (default: the current head commit). The new
         /// branch is not checked out.
         refspec: Option<String>,
         /// Delete branch NAME instead. Ref removal only — no commit or
@@ -192,7 +193,8 @@ pub enum Command {
         /// Name of a new tag to create. Omit to list existing tags.
         name: Option<String>,
         /// The commit to tag: a branch or tag short name, full ref name or
-        /// commit hash (default: the current head commit).
+        /// commit hash, optionally with git ancestry suffixes (`main~1`,
+        /// `HEAD^`) (default: the current head commit).
         refspec: Option<String>,
         /// The tag message (default: the tag name).
         #[arg(short = 'm', long = "message", requires = "name")]
@@ -223,9 +225,10 @@ pub enum Command {
     },
     /// Show the graph-level difference between two versions.
     ///
-    /// Compares two versions (branch short names, full ref names or commit
-    /// hashes): the nodes and relationships added (`+`), removed (`-`) or
-    /// modified (`~`) from `from` to `to`.
+    /// Compares two versions (branch or tag short names, full ref names or
+    /// commit hashes, optionally with git ancestry suffixes such as
+    /// `main~1` or `HEAD^`): the nodes and relationships added (`+`),
+    /// removed (`-`) or modified (`~`) from `from` to `to`.
     Diff {
         /// The base version.
         from: String,
@@ -244,7 +247,9 @@ pub enum Command {
     /// endpoints, and — while a merge is in progress — the workspace's
     /// conflicts with their three-way values. Renders as markdown by
     /// default (paste it into a review); `--json` emits the structured
-    /// document a curation surface consumes.
+    /// document a curation surface consumes. Each version is a branch or
+    /// tag short name, full ref name or commit hash, optionally with git
+    /// ancestry suffixes (`main~1`, `HEAD^`).
     Report {
         /// The base version.
         from: String,
@@ -267,8 +272,9 @@ pub enum Command {
     /// `acetone commit` to complete (it re-validates first). `merge --abort`
     /// discards the merge and restores the pre-merge branch tip.
     Merge {
-        /// The version to merge in (branch short name, full ref name or
-        /// commit hash). Omit only with `--abort`.
+        /// The version to merge in (a branch or tag short name, full ref
+        /// name or commit hash, optionally with git ancestry suffixes such
+        /// as `feature~1`). Omit only with `--abort`.
         #[arg(value_name = "REF", required_unless_present = "abort")]
         refspec: Option<String>,
         /// Commit message for the merge commit (default: `Merge <ref>`).
@@ -374,13 +380,15 @@ pub enum Command {
     /// Prints the repository's declared schema, grouped into labels (with their
     /// ordered key tuple and existence/unique constraints), relationship types,
     /// and property indexes. Read-only. `--at <ref>` inspects any version — a
-    /// branch or tag short name, full ref name or commit hash — without
-    /// checking it out; with no `--at`, the current workspace's schema is
+    /// branch or tag short name, full ref name or commit hash, optionally
+    /// with git ancestry suffixes (`main~1`, `HEAD^`) — without checking it
+    /// out; with no `--at`, the current workspace's schema is
     /// shown.
     Schema {
         #[command(subcommand)]
         action: Option<SchemaAction>,
-        /// Read the schema at a specific ref (branch, tag or commit hash)
+        /// Read the schema at a specific ref (branch, tag or commit hash,
+        /// optionally with git ancestry suffixes such as `main~1` or `HEAD^`)
         /// instead of the current workspace state.
         #[arg(long)]
         at: Option<String>,
@@ -476,8 +484,9 @@ pub enum Command {
     Query {
         /// The query text.
         cypher: String,
-        /// Read at a specific ref (branch, tag or commit hash) instead of
-        /// the current workspace state — whole-query time travel.
+        /// Read at a specific ref (branch, tag or commit hash, optionally
+        /// with git ancestry suffixes such as `main~1` or `HEAD^`) instead
+        /// of the current workspace state — whole-query time travel.
         #[arg(long)]
         at: Option<String>,
         /// Output format.

@@ -41,7 +41,8 @@ graph data never reaches the terminal raw.
 ### `--at`
 
 `query` and `schema` take `--at <ref>` — a branch or tag short name, full ref
-name or commit hash — to read a past version without checking it out:
+name or commit hash, optionally with git ancestry suffixes (`main~1`,
+`HEAD^`, `main^2`) — to read a past version without checking it out:
 whole-query time travel. Refspecs resolve in git's order (exact `refs/…` path,
 then tags, then branches, then a commit hash — with one divergence: a ref
 whose *name* is itself 40 hex characters resolves as a ref, where git would
@@ -144,8 +145,8 @@ its `author` and `committer` as `{name, email}`).
 ### `acetone branch [NAME [REFSPEC]] [--delete NAME]`
 
 With no argument, list branches. With `NAME`, create that branch — at the
-current head commit by default, or at `REFSPEC` (a branch short name, full
-ref name or commit hash); the new branch is not checked out.
+current head commit by default, or at `REFSPEC` (a branch or tag short name,
+full ref name or commit hash, with any ancestry suffix); the new branch is not checked out.
 `--delete NAME` (`-d`) deletes a branch instead: ref removal only — no
 commit or graph data is deleted, so the branch's commits stay reachable by
 hash — and the checked-out branch is refused. Takes `--json`.
@@ -154,7 +155,8 @@ hash — and the checked-out branch is refused. Takes `--json`.
 
 With no argument, list the graph's tags (short names). With `NAME`, create
 an **annotated** tag — on the current head commit by default, or on
-`REFSPEC` (a branch or tag short name, full ref name or commit hash) — with
+`REFSPEC` (a branch or tag short name, full ref name or commit hash, with
+any ancestry suffix) — with
 `-m` for a message (default: the tag name) and `--author` for the tagger
 (the same rule as `commit`'s: the fallback is `GIT_AUTHOR_NAME`/
 `GIT_AUTHOR_EMAIL`, not git's `GIT_COMMITTER_*`). `--delete NAME` (`-d`) deletes
@@ -173,8 +175,8 @@ Switch the checked-out branch.
 
 ### `acetone diff <FROM> <TO>`
 
-Show the graph-level difference between two versions (branch short names,
-full ref names or commit hashes): the nodes and relationships added (`+`),
+Show the graph-level difference between two versions (branch or tag short
+names, full ref names or commit hashes, with any ancestry suffix): the nodes and relationships added (`+`),
 removed (`-`) or modified (`~`) from `FROM` to `TO`. Takes `--json`.
 
 ### `acetone merge [REF] [-m <MESSAGE>] [--author <AUTHOR>] [--abort]`

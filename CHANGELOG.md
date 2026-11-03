@@ -83,6 +83,12 @@ fine.)
 
 ### Fixed
 
+- **Help and manual mention ancestry refspecs.** Git ancestry suffixes
+  (`main~1`, `HEAD^`, `main^2`) have resolved everywhere a refspec is
+  accepted since 0.7. The help for `branch`, `tag`, `diff`, `report`,
+  `merge`, `schema --at` and `query --at` now says so, and the manual no
+  longer calls them unsupported.
+
 - **A read running alongside `gc` in another process could fail** with
   an object "not found": the object database could see a loose object
   listed, find it pruned into the new pack when it opened it, and report

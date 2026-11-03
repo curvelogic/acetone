@@ -157,7 +157,7 @@ The two branches now disagree twice over: `main` says identity is 2.4.2 and
 ## Diffing between versions
 
 `acetone diff` compares any two versions — branch short names, full ref names
-or commit hashes. Note that it compares the two **endpoints**, not the branch
+or commit hashes, with any ancestry suffix (`main~1`). Note that it compares the two **endpoints**, not the branch
 against its fork point, so changes made on `main` since the branches diverged
 also show up, read from `main`'s side:
 
@@ -384,7 +384,8 @@ $ git log --oneline --graph --all
 
 Any query can run against any version, without touching the workspace or the
 checked-out branch. The first form is `--at` on the CLI, taking a branch
-name, a full ref name or a commit hash. At the seed commit, the old placement
+name, a full ref name or a commit hash, optionally with an ancestry suffix
+(`main~1`). At the seed commit, the old placement
 is all still there:
 
 ```console
@@ -477,8 +478,10 @@ branch, the **tag** wins — just as it would for `git rev-parse` — and the
 full ref name (`refs/heads/<name>`) always reaches the branch
 unambiguously.
 
-(Git ancestry refspecs — `main~5`, `HEAD^` — are a planned convenience and
-not yet resolved.)
+Git ancestry suffixes apply on top of any of those: `main~2` is two
+first-parent steps back from `main`, `HEAD^` is the current branch's
+previous commit, and `^2` picks a merge's second parent (`main^2`), as in
+git.
 
 ### Who changed this? `acetone.blame`
 
