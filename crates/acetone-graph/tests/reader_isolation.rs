@@ -323,45 +323,58 @@ fn window_conflicted_merge_workspace_before_merge_head() {
     assert!(!reader.conflicts().expect("conflicts").is_empty());
 }
 
-/// Window 2, `abort_merge`: the workspace is reset to the branch tip, THEN
-/// `MERGE_HEAD` is deleted. Between the two a reader sees the clean branch
-/// tip with `MERGE_HEAD` still set. The order is kept: deleting `MERGE_HEAD`
-/// first could leave the merged workspace (its conflicts map possibly
-/// already empty) as ordinary uncommitted work that abort no longer accepts.
+/// Window 2, `abort_merge` (acetone-d5is.11): `MERGE_HEAD` is deleted,
+/// THEN the workspace is reset to the branch tip. Between the two a reader
+/// sees the partial merge, still with its conflicts map, and no
+/// `MERGE_HEAD`: the graph read is still the pre-abort state, and the merge
+/// still reads as in progress. A writer that dies here leaves a state
+/// `commit` refuses and a re-run abort finishes. (The opposite order left
+/// the clean tip under a live `MERGE_HEAD`, so the next commit recorded a
+/// two-parent merge without the merged content.)
 #[test]
-fn window_abort_merge_workspace_before_merge_head_delete() {
+fn window_abort_merge_merge_head_delete_before_workspace_reset() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (path, repo) = init(dir.path());
-    let (_ours, theirs) = forked(&repo, true);
+    let (_ours, _theirs) = forked(&repo, true);
     let clean_ws = observe_workspace(&repo);
     assert!(matches!(
         repo.merge("other", "m").expect("merge"),
         MergeOutcome::Conflicts(_)
     ));
-    // Reconstruct the in-between state: abort's first step alone (the
-    // workspace reset, which leaves MERGE_HEAD untouched).
-    repo.reset_workspace_to_head().expect("reset");
+    let merged_ws = observe_workspace(&repo);
+    // Reconstruct the in-between state: abort's MERGE_HEAD delete alone.
+    repo.store()
+        .delete_ref(MERGE_HEAD)
+        .expect("delete merge head");
 
     let reader = Repository::open(&path).expect("open");
-    // The graph read is already the post-abort state.
-    assert!(observe_workspace(&reader) == clean_ws);
-    assert!(!reader.is_dirty().expect("dirty"));
-    // The merge state still reads as in progress, with nothing to resolve:
-    // status reports a merge block with zero conflicts remaining, and the
-    // read path distrusts declarations (a scan, never a different answer).
-    assert_eq!(reader.merge_head().expect("merge head"), Some(theirs));
+    // The graph read is still the pre-abort state …
+    assert!(observe_workspace(&reader) == merged_ws);
+    // … and the merge still reads as in progress: the read path distrusts
+    // declarations, and a commit is refused rather than recording anything.
+    assert_eq!(reader.merge_head().expect("merge head"), None);
     assert!(
         reader
             .workspace_snapshot()
             .expect("snapshot")
             .merge_in_progress()
     );
-    assert!(reader.conflicts().expect("conflicts").is_empty());
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&node(900), &record(9)).expect("stage");
+    // A commit carrying a write is refused before the write could reduce
+    // the conflicts map (review B1, PR #312).
+    assert!(matches!(
+        tx.commit("after a half abort", &[], None),
+        Err(GraphError::MergeState(_))
+    ));
+    assert!(
+        observe_workspace(&reader) == merged_ws,
+        "the write did not land"
+    );
 
-    // The abort's second step completes it (and re-running abort from this
-    // state is the recovery should the delete fail).
+    // Re-running abort finishes it.
     repo.abort_merge().expect("abort finishes");
-    assert_eq!(reader.merge_head().expect("merge head"), None);
+    assert!(observe_workspace(&reader) == clean_ws);
     assert!(
         !reader
             .workspace_snapshot()
