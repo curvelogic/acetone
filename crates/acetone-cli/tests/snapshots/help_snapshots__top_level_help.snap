@@ -11,6 +11,7 @@ Commands:
   attach            Reattach a cloned co-tenant graph
   status            Show the current branch, head commit and workspace state
   commit            Turn the workspace's staged changes into a commit
+  discard           Discard the workspace's uncommitted changes
   log               Show commit history, newest first
   blame             Show which commits made a node what it is — "why is this fact here" as one line per commit
   branch            List branches, create one, or delete one

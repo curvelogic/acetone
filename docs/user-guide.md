@@ -133,10 +133,10 @@ acetone gc          # consolidate the object store into a packfile, reclaim spac
 
 Several `acetone` processes (and `acetone serve` connections) may work on
 one worktree at once. They share its single workspace: a change one
-process writes, or a commit, checkout or `merge --abort` it makes, is what
+process writes, or a commit, checkout, `discard` or `merge --abort` it makes, is what
 every other process sees next.
 
-- **Writers take turns.** Writes, `commit`, `checkout`, `merge`, `resolve`,
+- **Writers take turns.** Writes, `commit`, `checkout`, `discard`, `merge`, `resolve`,
   `import`, `schema apply`, `reindex` and `gc` take the single-writer lock;
   a second writer fails fast with a "locked" error to retry.
 - **Readers never wait.** `query`, `query --at`, `schema`, `export`, `log`,

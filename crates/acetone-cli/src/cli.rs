@@ -118,6 +118,14 @@ pub enum Command {
         #[arg(long, value_name = "AUTHOR")]
         author: Option<String>,
     },
+    /// Discard the workspace's uncommitted changes.
+    ///
+    /// Resets the workspace to the checked-out commit (the empty graph on
+    /// a branch with no commits yet). The workspace is shared, so this
+    /// throws away every writer's staged changes, including a running
+    /// daemon's. Refused while a merge is in progress: use
+    /// `acetone merge --abort` to back out of a merge.
+    Discard,
     /// Show commit history, newest first.
     ///
     /// By default follows the current branch's first-parent chain — the

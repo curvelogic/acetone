@@ -582,6 +582,13 @@ fn connection(
                 let _permit = permits.acquire();
                 run_resolve(stream, repo, &request, &id)?;
             }
+            // Discard the shared workspace's uncommitted changes
+            // (acetone-omk): every connection's staged writes, not only
+            // this one's, under the shared-workspace model above.
+            "discard" => {
+                let _permit = permits.acquire();
+                run_discard(stream, repo, &id)?;
+            }
             // Read-only projections at CLI parity (acetone-zavr.4): the
             // export streams table text as chunk frames — the outbound
             // mirror of schema-apply/import's inbound chunks, and again NO
@@ -610,7 +617,7 @@ fn connection(
                             "verb {other:?} is not served (this build serves \"query\" \
                              (read and write), \"status\", \"schema-apply\", \"import\", \
                              \"commit\", \"branch\", \"checkout\", \"merge\", \"resolve\", \
-                             \"export\", \"fsck\", \"report\" and \"schema\")"
+                             \"discard\", \"export\", \"fsck\", \"report\" and \"schema\")"
                         ),
                     }}),
                 )?;
@@ -1529,7 +1536,7 @@ fn graph_error_frame(stream: &mut dyn Transport, id: &Json, e: &GraphError) -> R
         GraphError::BranchExists { .. } => "branch-exists",
         GraphError::NoCurrentBranch => "no-current-branch",
         GraphError::NothingToCommit => "nothing-to-commit",
-        GraphError::MergeInProgress => "merge-in-progress",
+        GraphError::MergeInProgress | GraphError::DiscardDuringMerge => "merge-in-progress",
         GraphError::Store(StoreError::InvalidSignature { .. }) => "invalid-author",
         // "concurrent-modification" (a ref/workspace moved under us — reload
         // and retry), deliberately NOT "conflict": that would collide with
@@ -1737,6 +1744,17 @@ fn run_merge(
                 ),
             }
         }
+        Err(e) => graph_error_frame(stream, id, &e),
+    }
+}
+
+/// Serve `discard`: reset the shared workspace to the checked-out commit,
+/// throwing away every connection's staged changes. `ok.discarded` says
+/// whether anything was staged. Refused mid-merge (`merge-in-progress`):
+/// `merge` with `params.abort` is that state's way out.
+fn run_discard(stream: &mut dyn Transport, repo: &Repository, id: &Json) -> Result<()> {
+    match with_lock_recovery(repo, is_graph_locked, || repo.discard_workspace()) {
+        Ok(discarded) => write_frame(stream, &json!({"id": id, "ok": {"discarded": discarded}})),
         Err(e) => graph_error_frame(stream, id, &e),
     }
 }

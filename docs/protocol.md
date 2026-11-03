@@ -189,6 +189,13 @@ Streamed frame vocabulary (each carries the request's `id`):
   writes; a fast-forward writes none, and a conflicted merge is
   completed by `commit`, which takes its own `author`.
 - **`resolve`** `{all_ours|all_theirs}` → `ok {"resolved": n}`.
+- **`discard`** `{}` → `ok {"discarded": bool}`. Resets the shared
+  workspace to the checked-out commit (the empty graph on an unborn
+  branch), throwing away **every** connection's staged changes, not
+  only this connection's (see "Concurrency and isolation").
+  `discarded` is `false` when nothing was staged. Refused as
+  `merge-in-progress` while a merge is in progress: `merge` with
+  `{abort: true}` is the way out of a merge.
 - **`export`** `{format, label?|edge?}` — one table's rendered text
   streams as outbound `chunk` frames (terminal `ok {"rows": n}`); with
   neither `label` nor `edge`, every table streams, each announced by a
@@ -292,12 +299,13 @@ one repository: one workspace, one current branch, one merge state.
 What one changes, the others see on their next read. There is no
 per-connection workspace and no isolation *between* writers'
 uncommitted work: two connections staging changes interleave them in
-the same workspace, and a `commit`, `checkout` or `merge --abort` on
-one connection commits or resets that shared workspace for all.
+the same workspace, and a `commit`, `checkout`, `discard` or
+`merge --abort` on one connection commits or resets that shared
+workspace for all.
 
 **Writers serialise; readers never wait.** The verbs that change the
 workspace, the current branch or the object store — a write `query`,
-`commit`, `checkout`, `merge` (and `abort`), `resolve`, `import`,
+`commit`, `checkout`, `merge` (and `abort`), `resolve`, `discard`, `import`,
 `schema-apply`, and the CLI's `gc` and `reindex` — take the
 single-writer lock (a second writer gets `locked`). No read takes it: a
 read proceeds while a writer holds the lock, during a merge or an abort,

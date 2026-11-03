@@ -288,7 +288,8 @@ $ acetone import --format csv ../hosts.csv --label Host
 error: importing: workspace has uncommitted changes; commit them first
 ```
 
-Commit the edit or undo it, then re-run. (Here we undo it — setting the
+Commit the edit or undo it (`acetone discard` throws away every uncommitted
+change at once), then re-run. (Here we undo it — setting the
 property back to its committed value, after which `status` reports the
 workspace clean again, because dirtiness is judged on content, not on
 having issued commands.)

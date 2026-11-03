@@ -108,10 +108,13 @@ Two things to know about this model:
 
 - **Merging also requires a clean workspace** — you will see the same
   "uncommitted changes" refusal from `acetone merge`.
-- **There is currently no discard command.** If you change your mind about an
-  uncommitted change, write the inverse (`SET` the old value back, `DELETE`
-  what you created) or commit it and move on. `checkout` refuses even a
-  checkout of the branch you are already on, so it cannot be used as a reset.
+- **`acetone discard` throws uncommitted changes away.** It resets the
+  workspace to HEAD's committed state (every staged change, including any a
+  running `acetone serve` daemon's clients made, since the workspace is
+  shared), and it is refused while a merge is in progress, where
+  `acetone merge --abort` is the way out. `checkout` still refuses while the
+  workspace is dirty, even for the branch you are already on: `discard` is
+  the explicit verb for throwing work away.
 
 Commit the version bump to get back to a clean state:
 

@@ -178,6 +178,15 @@ tag porcelain remain git's job, at the same namespaced path (ADR-0059).
 
 Switch the checked-out branch.
 
+### `acetone discard`
+
+Throw away the workspace's uncommitted changes, resetting it to the
+checked-out commit (the empty graph on a branch with no commits yet). Prints
+whether anything was discarded. The workspace is shared, so this discards
+every writer's staged changes, a running daemon's clients' included (the
+daemon's `discard` verb does the same). Refused while a merge is in progress:
+`merge --abort` backs out of a merge.
+
 ### `acetone diff <FROM> <TO>`
 
 Show the graph-level difference between two versions (branch or tag short

@@ -156,6 +156,12 @@ pub enum GraphError {
     /// delivers merge completion).
     #[error("workspace is in a merge; resolve and complete it first")]
     MergeInProgress,
+    /// A workspace discard was asked for while a merge is in progress
+    /// (acetone-omk). Discarding would drop the partial merge but leave
+    /// `MERGE_HEAD`, so a later commit would record a spurious merge; the
+    /// merge's own escape hatch, `merge --abort`, is the way out.
+    #[error("a merge is in progress; abort it with `merge --abort` to discard the partial merge")]
+    DiscardDuringMerge,
     /// A branch that was expected to exist does not.
     #[error("no such branch {name:?}")]
     NoSuchBranch {
