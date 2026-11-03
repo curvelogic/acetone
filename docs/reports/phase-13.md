@@ -5,7 +5,8 @@ working bead (acetone-d5is.5). The exit-criteria bead (acetone-d5is.6)
 is the owner's to close, directly or by explicit delegation
 (ADR-0067). The owner opened the phase first-hand on 2026-10-25
 ("Confirm. Open the phase."), with seven opening rulings recorded on
-PR #296 and in ADR-0079.*
+PR #296 and on the phase epic. ADR-0079 stays *proposed*, as ADR-0080
+allows for a plan ADR once its phase is open.*
 
 ## Headline
 
@@ -90,21 +91,30 @@ the plan and the opening and is recorded on the tracker.
 
 Every user-facing item is reachable through the shipped interface,
 following the ADR-0054 corollary. The public-API freeze job is green at
-head. TCK conformance is unchanged, because the phase added no Cypher
-surface.
+head. TCK conformance is unchanged, because the phase added no
+TCK-relevant Cypher surface. Its only Cypher-visible changes are the
+`entity` column of `CALL acetone.conflicts()` (#301) and a
+`rel-stale-discriminator` row kind (#303).
 
 ## ADRs taken
 
-- **ADR-0079**: the phase definition, accepted at the opening with the
-  owner's seven rulings.
-- **ADR-0080 / ADR-0081**: refer to the owner by role, and a phase
-  opens on the owner's first-hand instruction. ADR-0080 is
-  **governing** (it changes CLAUDE.md's phase-start rule) and is
-  listed here for the owner's retrospective review.
+- **ADR-0079**: the phase definition. It stays *proposed* on `main`.
+  The owner's seven opening rulings are recorded on PR #296 and on the
+  phase epic, not in the ADR, because the opening docs PR (#298) was
+  closed unmerged when ADR-0080 replaced that step.
+- **ADR-0080**: refer to the owner by role, and a phase opens on the
+  owner's first-hand instruction. It is **governing** (it changes
+  CLAUDE.md's phase-start rule) and is listed here for the owner's
+  retrospective review.
+- **ADR-0081**: the owner referred to by role in the remaining live
+  material. It is **governing**: #302 changed the roadmap and the
+  release formula (`.beads/formulas/release.formula.toml`), both
+  governing documents, though in wording only. It is listed here for
+  the owner's retrospective review.
 - **ADR-0082**: a merged discriminator change is a conflict, judged by
   which side wrote the edge. It adds one sentence to **spec §2**,
   which is a **governing-document** change listed for review. #311
-  extended its "Declare time" section.
+  added its "Declare time" section.
 
 Recorded deviations from the beads' designs, each endorsed by its
 reviewer:
@@ -142,9 +152,7 @@ catches, all fixed in-phase:
 ## Milestone security review
 
 A fresh subagent reviewed the whole phase diff (`ae918a6..c81715f`,
-16 commits, 64 files) on the strongest tier. It read the code, ran the
-phase's graph suites and drove `serve --stdio` with a frame probe. Its
-full verdict is recorded on the phase epic (`acetone-d5is`,
+16 commits, 64 files) on the strongest tier. Its full verdict is recorded on the phase epic (`acetone-d5is`,
 2026-11-03) as the primary record. **No blocker-class findings; the
 gate can close on security grounds.**
 
@@ -207,7 +215,8 @@ No new crates.
 ## Queued for the boundary
 
 - Retrospective review of the governing changes: ADR-0080's
-  phase-start rule and ADR-0082's spec §2 sentence.
+  phase-start rule, ADR-0081's wording changes to the roadmap and the
+  release formula (#302), and ADR-0082's spec §2 sentence.
 - Ratify the recorded deviations above.
 - Tracker housekeeping that needs a local session: remove the
   `phase-13` label from acetone-a9m (EXPLAIN, out of the phase by
@@ -217,7 +226,9 @@ No new crates.
 
 **None.** Every bead in the phase is closed except the gate.
 acetone-a9m (EXPLAIN) carries the phase label but was ruled out of the
-phase at the opening, so it is not a crossing follow-up. One
+phase at the opening, so it is not a crossing follow-up. The relay
+re-pin (acetone-d5is.4), listed as housekeeping in the plan, was
+dropped and closed by opening ruling 7. One
 non-blocking review note is recorded here rather than filed, because
 it is too small to be a unit of effort: in the half-aborted merge
 state, a commit that carries a write fails with the daemon's generic

@@ -112,10 +112,11 @@ footer { color: var(--dim); font-size: .8rem; text-align: center; margin-top: 1r
 
 <section class="slide">
   <p class="eyebrow">Slide 6 · Decisions taken</p>
-  <h2>Four ADRs, two of them governing</h2>
+  <h2>Four ADRs, three of them governing</h2>
   <ul>
-    <li><b>ADR-0079</b> — the phase definition, accepted at the opening with seven rulings.</li>
-    <li><b>ADR-0080</b> (governing) — refer to the owner by role; a phase opens on the owner’s first-hand instruction. <b>ADR-0081</b> extends the role rule to live material.</li>
+    <li><b>ADR-0079</b> — the phase definition; stays <i>proposed</i>, with the seven opening rulings recorded on PR #296 and the epic.</li>
+    <li><b>ADR-0080</b> (governing) — refer to the owner by role; a phase opens on the owner’s first-hand instruction.</li>
+    <li><b>ADR-0081</b> (governing: wording in the roadmap and release formula, #302) — the role rule extended to live material.</li>
     <li><b>ADR-0082</b> (governing: one sentence in spec §2) — a merged discriminator change is a conflict, judged by which side wrote the edge.</li>
     <li>Recorded deviations, each reviewer-endorsed: unrepresentable numbers refused (#300); one <code>entity</code> map column (#301); <code>rekey</code>/<code>rename-rel-type</code> keep the neutral author (#305); renames refuse one-sided discriminator mismatch (#311); writes refused mid-abort (#312).</li>
   </ul>
@@ -125,7 +126,7 @@ footer { color: var(--dim); font-size: .8rem; text-align: center; margin-top: 1r
   <p class="eyebrow">Slide 7 · Boundary agenda</p>
   <h2>Queued for the owner’s ruling</h2>
   <ul class="agenda">
-    <li>Retrospective review of the governing changes: ADR-0080’s phase-start rule and ADR-0082’s spec §2 sentence.</li>
+    <li>Retrospective review of the governing changes: ADR-0080’s phase-start rule, ADR-0081’s roadmap and release-formula wording (#302), and ADR-0082’s spec §2 sentence.</li>
     <li>Ratify the five recorded deviations (slide 6).</li>
     <li>Security review: no blockers; three findings fixed in #315; six accepted notes recorded on the epic.</li>
     <li>Housekeeping for a local session: drop the <code>phase-13</code> label from acetone-a9m; delete merged phase and <code>beads-inbox/*</code> branches.</li>
