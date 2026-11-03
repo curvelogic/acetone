@@ -3287,6 +3287,16 @@ impl<'r> Transaction<'r> {
         if !self.is_dirty() {
             return Ok(());
         }
+        // A conflicts map without MERGE_HEAD is a half-aborted merge (an
+        // interrupted `abort_merge`, acetone-d5is.11). A write here would
+        // let `clear_written` reduce the map, possibly to `None`, and the
+        // merge's content would then commit as ordinary work. Refuse every
+        // write until `merge --abort` finishes the abort.
+        if self.manifest.conflicts.is_some() && self.repo.merge_head()?.is_none() {
+            return Err(GraphError::MergeState(
+                "an interrupted merge or merge abort left conflicts without MERGE_HEAD: run `merge --abort` to finish backing out",
+            ));
+        }
         let store = &self.repo.store;
         let params = self.manifest.chunk_params;
         // Captured before the staged node ops are consumed below, for derived
@@ -4552,6 +4562,35 @@ mod tests {
         repo.abort_merge().expect("abort finishes");
         assert!(!repo.is_dirty().expect("dirty"));
         assert!(!repo.workspace_snapshot().expect("snap").merge_in_progress());
+    }
+
+    /// Review B1 (PR #312): in the half-aborted state a write must not
+    /// reduce the mark away — a save or a commit carrying a write is
+    /// refused, so the resolved content can never commit as ordinary work.
+    #[test]
+    fn writes_are_refused_in_a_half_aborted_merge() {
+        let (_dir, repo, ours, _theirs) = resolved_merge();
+        {
+            let _lock = WriteLock::acquire(repo.store.git_dir()).expect("lock");
+            repo.mark_workspace_merge_in_progress().expect("mark");
+            repo.delete_merge_head().expect("delete merge head");
+        }
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web9"), &NodeRecord::new([], Default::default()))
+            .expect("stage");
+        assert!(matches!(
+            tx.commit("after a crash", &[], None),
+            Err(GraphError::MergeState(_))
+        ));
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web1"), &NodeRecord::new([], Default::default()))
+            .expect("stage");
+        assert!(matches!(tx.save(), Err(GraphError::MergeState(_))));
+        assert!(repo.workspace_manifest().expect("ws").conflicts.is_some());
+        assert_eq!(repo.head_commit().expect("head"), Some(ours));
+
+        repo.abort_merge().expect("abort finishes");
+        assert!(!repo.is_dirty().expect("dirty"));
     }
 
     /// A crash after only the mark leaves the merge in progress exactly as

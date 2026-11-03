@@ -361,10 +361,16 @@ fn window_abort_merge_merge_head_delete_before_workspace_reset() {
     );
     let mut tx = repo.begin_write().expect("begin");
     tx.put_node(&node(900), &record(9)).expect("stage");
+    // A commit carrying a write is refused before the write could reduce
+    // the conflicts map (review B1, PR #312).
     assert!(matches!(
         tx.commit("after a half abort", &[], None),
-        Err(GraphError::MergeInProgress)
+        Err(GraphError::MergeState(_))
     ));
+    assert!(
+        observe_workspace(&reader) == merged_ws,
+        "the write did not land"
+    );
 
     // Re-running abort finishes it.
     repo.abort_merge().expect("abort finishes");
