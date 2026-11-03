@@ -360,11 +360,12 @@ pub(crate) fn render_markdown(doc: &Json) -> String {
         for change in edges {
             let kind = change["kind"].as_str().unwrap_or("");
             out.push_str(&format!(
-                "{} `{}` {} {} \u{2192} `{}` {}\n",
+                "{} `{}` {} {}{} \u{2192} `{}` {}\n",
                 sign(kind),
                 change["src"]["label"].as_str().unwrap_or(""),
                 change["src"]["key"],
                 change["rel_type"].as_str().unwrap_or(""),
+                disc_suffix(&change["disc"]),
                 change["dst"]["label"].as_str().unwrap_or(""),
                 change["dst"]["key"],
             ));
@@ -377,11 +378,7 @@ pub(crate) fn render_markdown(doc: &Json) -> String {
             for item in items {
                 // The entity renders as the Nodes/Edges sections render theirs.
                 let entity = if let Some(rtype) = item["rel_type"].as_str() {
-                    let disc = if item["disc"].is_null() {
-                        String::new()
-                    } else {
-                        format!(" [{}]", item["disc"])
-                    };
+                    let disc = disc_suffix(&item["disc"]);
                     format!(
                         "`{}` {} {rtype}{disc} \u{2192} `{}` {}",
                         item["src"]["label"].as_str().unwrap_or(""),
@@ -406,6 +403,18 @@ pub(crate) fn render_markdown(doc: &Json) -> String {
         }
     }
     out
+}
+
+/// A relationship's discriminator as the markdown renders it after the
+/// type: ` ["value"]`, or nothing for the default (empty) discriminator —
+/// so parallel relationships between one pair stay distinguishable
+/// (acetone-d5is.3).
+fn disc_suffix(disc: &Json) -> String {
+    if disc.is_null() {
+        String::new()
+    } else {
+        format!(" [{disc}]")
+    }
 }
 
 #[cfg(test)]
@@ -452,5 +461,32 @@ mod tests {
         let delta = labels_delta(None, Some(&after));
         assert!(delta.get("before").is_none(), "{delta}");
         assert_eq!(delta["after"], json!(["Current"]));
+    }
+
+    /// The markdown keeps parallel relationships distinguishable: an
+    /// edge line carries its discriminator after the type, and the
+    /// default (null) discriminator renders nothing (acetone-d5is.3).
+    #[test]
+    fn markdown_edge_lines_carry_the_discriminator() {
+        let edge = |disc: Json| {
+            json!({
+                "kind": "added", "rel_type": "DEPENDS_ON", "disc": disc,
+                "src": {"label": "Service", "key": ["web"]},
+                "dst": {"label": "Service", "key": ["api"]},
+                "properties": {}
+            })
+        };
+        let doc = json!({"edges": [edge(json!("scanner")), edge(Json::Null)]});
+        let md = render_markdown(&doc);
+        assert!(
+            md.contains(
+                "+ `Service` [\"web\"] DEPENDS_ON [\"scanner\"] \u{2192} `Service` [\"api\"]\n"
+            ),
+            "{md}"
+        );
+        assert!(
+            md.contains("+ `Service` [\"web\"] DEPENDS_ON \u{2192} `Service` [\"api\"]\n"),
+            "{md}"
+        );
     }
 }

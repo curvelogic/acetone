@@ -1,0 +1,4 @@
+{"relationship_types": [
+  {"name": "DEPENDS_ON", "discriminator": "source",
+   "types": {"source": "string", "seen": "string"}}
+]}

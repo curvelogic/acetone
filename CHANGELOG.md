@@ -59,6 +59,12 @@ fine.)
 
 ### Added
 
+- **A guide to parallel relationships.** The manual's new "Parallel
+  relationships" chapter walks through declaring a discriminator,
+  creating, querying, editing, importing, exporting and merging parallel
+  relationships; its examples run in the manual's verification script.
+  `docs/protocol.md` notes where the discriminator appears on the wire.
+
 - **`CALL acetone.conflicts()` yields `entity`**, the conflicted node or
   relationship as a typed map (`{label, key}` or `{rel_type, src, dst,
   disc}`; null for a schema-key conflict). Additive: the display `key`
@@ -88,6 +94,11 @@ fine.)
   accepted since 0.7. The help for `branch`, `tag`, `diff`, `report`,
   `merge`, `schema --at` and `query --at` now says so, and the manual no
   longer calls them unsupported.
+
+- **The markdown change report names a relationship's discriminator**
+  after its type (`DEPENDS_ON ["scanner"]`), as `diff` and the report's
+  conflict lines already did, so parallel relationships between one pair
+  no longer render identically.
 
 - **A read running alongside `gc` in another process could fail** with
   an object "not found": the object database could see a loose object

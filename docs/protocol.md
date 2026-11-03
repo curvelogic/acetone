@@ -232,6 +232,20 @@ verb and the query surface agree. Version history: **2** (0.8) replaced
 each item's display-string `key` (and, for a relationship, the type in
 `label`) with the typed fields above.
 
+### Relationships and their discriminator
+
+A relationship type may declare a **discriminator** (spec §2), making
+parallel relationships between one pair distinct. Wherever the protocol
+names a relationship by identity it carries the discriminator: the
+report's `edges[]` entries and relationship conflict items have `disc`
+(null for a type without one), and an `export` edge table of a type that
+declares a discriminator has a `disc` column. A whole relationship in a `query` `row` frame serialises as
+`{"type": <name>}` only, with no properties and no discriminator, so
+project what you need by name (`RETURN r.source`), where the
+discriminator reads back under its declared property name. The manual's
+[Parallel relationships](manual/src/working/parallel-relationships.md)
+guide covers the feature end to end.
+
 An unknown verb is a typed `unknown-verb` error naming the served set;
 the connection survives every typed refusal except a payload-protocol
 violation (see the error-kinds section).
