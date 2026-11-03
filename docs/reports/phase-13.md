@@ -18,7 +18,7 @@ isolation is documented and pinned by tests, and parallel edges have a
 guide, with their discriminator rule enforced at declare time, merge
 time and import time. Operators can recover a workspace: they can
 discard uncommitted work, and an interrupted merge abort no longer
-leaves a trap. The phase landed in 16 PRs (#299–#314), each through
+leaves a trap. The phase landed in 17 PRs (#299–#315), each through
 the adversarial review gate.
 
 ## Shipped
@@ -58,6 +58,7 @@ the adversarial review gate.
 | The owner referred to by role; a phase opens on the owner's instruction (ADR-0080) | — | #299 |
 | The owner referred to by role in the remaining live material (ADR-0081) | d5is.8 / d5is.10 | #302 |
 | A Linux row for the wire-vs-process measurement, with the harness checked in | d5is.5 | #314 |
+| Security review fixes: author identity whitespace and size limit, `serve --help` verbs | d5is.12 | #315 |
 
 The yanked `clipboard-win` bump (acetone-00hz, #297) landed between
 the plan and the opening and is recorded on the tracker.
