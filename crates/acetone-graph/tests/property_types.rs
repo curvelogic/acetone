@@ -390,9 +390,10 @@ fn a_disc_named_record_property_is_checked_in_both_positions() {
 /// PR #243 review blocker 1(b): changing a relationship type's
 /// discriminator while edges of that type exist is refused — including
 /// the wipe (`Some` → `None`) that a definition-replacing redeclare
-/// performs. A repair may not ride in the same transaction (the
-/// discriminator is key-positional; delete-and-recreate via migrate is
-/// the route), mirroring the label key-stability rule.
+/// performs. An edge kept from before the change refuses it (the
+/// discriminator is key-positional); deleting every such edge in the same
+/// transaction lands (acetone-d5is.9, see
+/// `declaring_a_discriminator_while_replacing_the_stored_edges_lands`).
 #[test]
 fn changing_a_discriminator_over_existing_edges_is_refused() {
     let (_dir, repo) = seeded_edge_repo();
@@ -465,4 +466,121 @@ fn deleting_the_violating_edge_in_the_retype_transaction_lands() {
     txn.delete_edge(&edge_key()).expect("stage delete");
     txn.save()
         .expect("a retype and the violating edge's deletion may land together");
+}
+
+fn loose_rel(disc: Option<&str>) -> SchemaEntry {
+    SchemaEntry::RelType {
+        name: "LOOSE".into(),
+        def: acetone_model::schema::RelTypeDef::new(disc.map(str::to_owned), BTreeMap::new(), [])
+            .expect("rel type"),
+    }
+}
+
+fn loose_edge() -> acetone_model::graph_keys::EdgeKey {
+    acetone_model::graph_keys::EdgeKey::new(
+        NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+        "LOOSE",
+        NodeKey::new("Blob", vec![Value::String("b".into())]).expect("key"),
+        Value::Null,
+    )
+    .expect("edge key")
+}
+
+/// `seeded_edge_repo` plus one edge of the undeclared type `LOOSE`.
+fn repo_with_an_undeclared_edge() -> (tempfile::TempDir, Repository) {
+    let (dir, repo) = seeded_edge_repo();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_edge(
+        &loose_edge(),
+        &acetone_model::records::EdgeRecord::new(BTreeMap::new()),
+    )
+    .expect("edge");
+    txn.save().expect("seed undeclared edge");
+    (dir, repo)
+}
+
+/// acetone-d5is.9 (1): a type NEW to the schema declared with a
+/// discriminator over edges already stored under it is a discriminator
+/// change — an absent entry declares none (ADR-0082's provenance rule, at
+/// declare time). Without the check the stored `Null`-keyed edge would sit
+/// under a declaration it was never written for.
+#[test]
+fn declaring_a_new_type_with_a_discriminator_over_stored_edges_is_refused() {
+    let (_dir, repo) = repo_with_an_undeclared_edge();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&loose_rel(Some("seq")))
+        .expect("stage declaration");
+    let err = txn
+        .save()
+        .expect_err("declaring a discriminator over stored edges must refuse");
+    assert!(
+        matches!(err, GraphError::RelDiscriminatorChanged { ref rtype } if rtype == "LOOSE"),
+        "expected RelDiscriminatorChanged, got: {err}"
+    );
+
+    // Declaring it WITHOUT a discriminator is no change and lands.
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&loose_rel(None)).expect("stage");
+    txn.save()
+        .expect("a disc-less declaration over stored edges lands");
+}
+
+/// The provenance rule's other half: edges the declaring transaction
+/// deletes are gone, and edges it writes are written under the new
+/// declaration, so neither refuses.
+#[test]
+fn declaring_a_discriminator_while_replacing_the_stored_edges_lands() {
+    let (_dir, repo) = repo_with_an_undeclared_edge();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&loose_rel(Some("seq")))
+        .expect("stage declaration");
+    txn.delete_edge(&loose_edge()).expect("stage delete");
+    txn.put_edge(
+        &acetone_model::graph_keys::EdgeKey::new(
+            NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+            "LOOSE",
+            NodeKey::new("Blob", vec![Value::String("b".into())]).expect("key"),
+            Value::Int(1),
+        )
+        .expect("edge key"),
+        &acetone_model::records::EdgeRecord::new(BTreeMap::new()),
+    )
+    .expect("stage replacement");
+    txn.save()
+        .expect("a declaration and the replacement of the stored edges land together");
+}
+
+/// acetone-d5is.9 (2): removing a relationship-type entry is judged the
+/// same way. The only path that removes one, `rename_rel_type`, moves the
+/// entry and every edge of the type together, so it still lands for a
+/// discriminated type: no edge written under the old entry survives.
+#[test]
+fn renaming_a_discriminated_type_with_edges_still_lands() {
+    let (_dir, repo) = seeded_edge_repo();
+    let mut txn = repo.begin_write().expect("begin");
+    txn.put_schema(&loose_rel(Some("seq"))).expect("declare");
+    txn.put_edge(
+        &acetone_model::graph_keys::EdgeKey::new(
+            NodeKey::new("Blob", vec![Value::String("a".into())]).expect("key"),
+            "LOOSE",
+            NodeKey::new("Blob", vec![Value::String("b".into())]).expect("key"),
+            Value::Int(1),
+        )
+        .expect("edge key"),
+        &acetone_model::records::EdgeRecord::new(BTreeMap::new()),
+    )
+    .expect("edge");
+    txn.commit("seed", &[], None).expect("commit");
+
+    repo.rename_rel_type(
+        "LOOSE",
+        "TIGHT",
+        acetone_graph::repo::RenamePolicy::Refuse,
+        "rename",
+    )
+    .expect("a rename moves the entry and its edges together");
+    let snapshot = repo.workspace_snapshot().expect("snapshot");
+    let edges = snapshot.edges().expect("edges");
+    assert!(edges.iter().any(|(e, _)| e.rtype() == "TIGHT"));
+    assert!(edges.iter().all(|(e, _)| e.rtype() != "LOOSE"));
 }

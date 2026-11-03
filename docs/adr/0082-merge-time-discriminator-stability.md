@@ -64,8 +64,14 @@ repaired by ordinary writes.
   edge once.
 - **Residual.** An edge the workspace rewrites during a rename merge
   under the same key value is indistinguishable from the stale one and
-  stays reported. The repair is to delete it or migrate it. Two
-  declare-time gaps sit outside this ADR: declaring a discriminator for
-  a type that is new to the schema over edges already written under it,
-  and deleting a relationship-type entry. Neither is checked by
-  `check_rel_disc_stability`; both are tracked as `acetone-d5is.9`.
+  stays reported. The repair is to delete it or migrate it.
+- **Declare time (`acetone-d5is.9`).** `check_rel_disc_stability` now
+  applies the same provenance rule to one workspace. An absent entry
+  declares no discriminator, so declaring one for a type new to the
+  schema over stored edges is a change, and so is removing an entry
+  that declared one. A change is refused when an edge of the type
+  survives the transaction from the old edge map. Edges the transaction
+  deletes or writes afresh do not count, so `rename_rel_type`, which
+  removes the old entry and moves its edges in one step, still lands,
+  and a declaration may now ride with the deletion of every stored edge
+  it would falsify.
