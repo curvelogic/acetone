@@ -175,3 +175,49 @@ fn discard_is_refused_while_another_writer_holds_the_lock() {
     tx.save().expect("the writer's save is unaffected");
     assert!(repo.discard_workspace().expect("discard"));
 }
+
+/// A detached worktree's discard (and the streaming-import cleanup's
+/// `reset_workspace_to_head`) resets to the CHECKED-OUT commit, as
+/// `is_dirty` judges it, not to the empty graph: a detached HEAD has no
+/// current branch, and resolving through the branch would stage the
+/// deletion of the whole graph.
+#[test]
+fn discard_in_a_detached_worktree_resets_to_its_checked_out_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let main_git = dir.path().join("g.git");
+    let repo = init(dir.path());
+    committed(&repo);
+    let head = repo.head_commit().expect("head").expect("born");
+    let committed_manifest = repo.workspace_manifest().expect("ws").encode();
+
+    let wt = dir.path().join("wt");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&main_git)
+        .args(["worktree", "add", "--detach"])
+        .arg(&wt)
+        .arg(head.to_hex())
+        .status()
+        .expect("run git worktree add");
+    assert!(status.success(), "git worktree add failed");
+    let wt_repo = Repository::open(&wt).expect("open worktree");
+    assert_eq!(wt_repo.current_branch().expect("branch"), None, "detached");
+
+    for reset in [
+        |r: &Repository| r.discard_workspace().map(|_| ()),
+        |r: &Repository| r.reset_workspace_to_head(),
+    ] {
+        let mut tx = wt_repo.begin_write().expect("begin");
+        tx.put_node(&node(9), &record(9)).expect("put");
+        tx.save().expect("save");
+        assert!(wt_repo.is_dirty().expect("dirty"));
+
+        reset(&wt_repo).expect("reset");
+        assert!(!wt_repo.is_dirty().expect("dirty"));
+        assert_eq!(
+            wt_repo.workspace_manifest().expect("ws").encode(),
+            committed_manifest,
+            "reset to the checked-out commit, not the empty graph"
+        );
+    }
+}
