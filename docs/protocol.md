@@ -386,6 +386,21 @@ status : wire    0.52 ms | process    5.00 ms | x  9.7
 query  : wire    0.26 ms | process    4.92 ms | x 18.6
 ```
 
+On Linux the ratio is smaller, because a process spawn costs less
+there. The same harness on the 0.8 development head (release binary,
+Linux 6.18, 4-vCPU Intel Xeon at 2.8 GHz, a cloud VM):
+
+```
+N=50 per operation, release binary, 20-node repo
+status : wire    0.51 ms | process    3.45 ms | x  6.7
+query  : wire    0.57 ms | process    4.95 ms | x  8.6
+```
+
+A second run gave 5.7x and 8.7x, so read these as roughly 6-9x. The
+harness is `scripts/measure-wire-vs-process.py`; it times `status` and
+`MATCH (n:Demo) RETURN count(n)` and needs only Python's standard
+library.
+
 The daemon's advantage is the process spawn plus repository open
 amortised across a connection — the qualitative claim ADR-0076's ruling
 rests on, now with numbers.
