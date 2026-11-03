@@ -45,8 +45,13 @@ pub fn run(repo_path: &Path, graph: Option<&str>, command: Command) -> Result<()
             allow_empty,
             author.as_deref(),
         ),
-        Command::Log { all, json } => log(repo_path, graph, all, json),
-        Command::Blame { label, key, json } => blame(repo_path, graph, &label, &key, json),
+        Command::Log { all, oneline, json } => log(repo_path, graph, all, oneline, json),
+        Command::Blame {
+            label,
+            key,
+            oneline,
+            json,
+        } => blame(repo_path, graph, &label, &key, oneline, json),
         Command::Branch {
             name,
             refspec,
@@ -554,7 +559,7 @@ pub(crate) fn commit(
     Ok(())
 }
 
-fn log(repo_path: &Path, graph: Option<&str>, all: bool, json: bool) -> Result<()> {
+fn log(repo_path: &Path, graph: Option<&str>, all: bool, oneline: bool, json: bool) -> Result<()> {
     let repo = open(repo_path, graph)?;
     // Default: the current branch's first-parent chain (its own changelog).
     // `--all`: every commit reachable from any branch, deterministic
@@ -611,6 +616,10 @@ fn log(repo_path: &Path, graph: Option<&str>, all: bool, json: bool) -> Result<(
         // sanitise before they reach the terminal.
         let subject = entry.message.lines().next().unwrap_or("");
         outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
+        // `--oneline` (acetone-7ldo) stops at the header line.
+        if oneline {
+            continue;
+        }
         // Under --all, merge structure is shown honestly: a merge commit's
         // parent hashes, at COLUMN 0 directly under the header line. The
         // position is what makes it unforgeable (PR #190 review): trailers
@@ -637,7 +646,14 @@ fn log(repo_path: &Path, graph: Option<&str>, all: bool, json: bool) -> Result<(
 /// the identical chain, so the join preserves order and needs no new
 /// library surface), then renders exactly as `log` does: hash + sanitised
 /// subject, trailers indented — import provenance trailers ARE the why.
-fn blame(repo_path: &Path, graph: Option<&str>, label: &str, key: &str, json: bool) -> Result<()> {
+fn blame(
+    repo_path: &Path,
+    graph: Option<&str>,
+    label: &str,
+    key: &str,
+    oneline: bool,
+    json: bool,
+) -> Result<()> {
     let repo = open(repo_path, graph)?;
     let node_key = single_key(label, key)?;
     let commits = repo.blame(&node_key)?;
@@ -720,6 +736,9 @@ fn blame(repo_path: &Path, graph: Option<&str>, label: &str, key: &str, json: bo
             Some(entry) => {
                 let subject = entry.message.lines().next().unwrap_or("");
                 outln!("{} {}", entry.id.to_hex(), sanitise_line(subject));
+                if oneline {
+                    continue;
+                }
                 for (key, value) in &entry.trailers {
                     outln!("    {}: {}", sanitise_line(key), sanitise_line(value));
                 }

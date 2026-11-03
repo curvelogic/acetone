@@ -132,7 +132,7 @@ with `git commit --author`. A name must be non-empty, and angle brackets or
 control characters in either part are refused. `import`, `merge` and `tag`
 take the same flag under the same rule.
 
-### `acetone log [--all]`
+### `acetone log [--all] [--oneline]`
 
 Show commit history, newest first. By default follows the current branch's
 first-parent chain — the branch's own changelog, in which merged-in branch
@@ -141,6 +141,11 @@ commit reachable from any branch, each exactly once, newest first in a
 deterministic topological order, with a `merge: <parent> <parent>` line on
 merge commits. Takes `--json` (each entry always carries its `parents`, and
 its `author` and `committer` as `{name, email}`).
+`--oneline` prints one `<hash> <subject>` line per commit, with no
+trailers or `merge:` lines. The hash stays in full because refspecs do not
+resolve abbreviated hashes, so each line's first field can be passed to
+`--at`, `diff` or `report`. It cannot be combined with `--json`. `blame`
+takes `--oneline` too.
 
 ### `acetone branch [NAME [REFSPEC]] [--delete NAME]`
 

@@ -78,6 +78,9 @@ Options:
       --graph <GRAPH>
           Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
 
+      --oneline
+          One line per commit: the full hash and the subject, without trailers or (under `--all`) merge parents. The full hash is kept so each line's first field works as a refspec
+
       --json
           Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and may change at any minor release
 

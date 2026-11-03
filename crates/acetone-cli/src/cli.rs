@@ -132,6 +132,11 @@ pub enum Command {
         /// parent hashes.
         #[arg(long)]
         all: bool,
+        /// One line per commit: the full hash and the subject, without
+        /// trailers or (under `--all`) merge parents. The full hash is
+        /// kept so each line's first field works as a refspec.
+        #[arg(long, conflicts_with = "json")]
+        oneline: bool,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
         /// may change at any minor release.
         #[arg(long)]
@@ -152,6 +157,10 @@ pub enum Command {
         /// The node's key value (single-column keys; an integer-looking
         /// value is treated as an integer, as `get-node` does).
         key: String,
+        /// One line per commit: the full hash and the subject, without
+        /// trailers.
+        #[arg(long, conflicts_with = "json")]
+        oneline: bool,
         /// Emit machine-readable JSON. The JSON shape is unstable pre-1.0 and
         /// may change at any minor release.
         #[arg(long)]
