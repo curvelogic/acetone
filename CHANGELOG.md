@@ -25,7 +25,9 @@ fine.)
   `key` for a node; `rel_type`, `src`, `dst`, `disc` for a
   relationship; `schema_key` for a schema-key conflict) instead of a
   display string, so a consumer matches a conflict to its change without
-  parsing. The markdown report renders from those fields and no longer
+  parsing. An item's `base`/`ours`/`theirs` values use the same JSON
+  forms as `nodes[]` properties, so bytes and temporal values are
+  tagged `{"$type": …}` objects. The markdown report renders from those fields and no longer
   shows escaped quotes. The daemon's `merge` verb lists the same items
   in place of rendered strings. See `docs/protocol.md`.
 

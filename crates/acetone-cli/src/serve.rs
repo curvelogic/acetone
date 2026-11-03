@@ -1738,6 +1738,10 @@ fn run_merge(
                         "conflicts": items,
                     }}),
                 ),
+                // The merge has already entered merge-in-progress, so this
+                // error does not mean the merge failed: protocol.md tells
+                // the client to read `status` and list the conflicts another
+                // way (acetone-d5is.7).
                 Err(e) => write_frame(
                     stream,
                     &json!({"id": id, "error": {"kind": "report", "message": format!("{e:#}")}}),

@@ -214,7 +214,11 @@ with a `kind` column classifying the conflict — `cell` here, the graph-level
 violation classes later in this chapter — and carries the property in
 question and all three values: the common ancestor (`base`), the current
 branch (`ours`) and the merged-in branch (`theirs`), plus the merged node
-itself as a `_Conflict`-labelled virtual element:
+itself as a `_Conflict`-labelled virtual element. The last column,
+`entity`, names the conflicted node or relationship as a map of typed
+fields (`label` and `key` for a node; `rel_type`, `src`, `dst` and `disc`
+for a relationship), the same fields `acetone report --json` uses, so a
+script can match a conflict to its change without parsing `key`:
 
 ```console
 $ acetone query 'CALL acetone.conflicts()'

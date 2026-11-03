@@ -4002,6 +4002,92 @@ fn report_conflict_items_carry_typed_keys_matching_the_change_list() {
     assert!(!md.contains("\\\""), "no escaped quotes: {md}");
 }
 
+/// acetone-d5is.7: the two report_version 2 item shapes the node/edge cell
+/// test above does not reach. A graph violation (`dangling-edge`) names its
+/// relationship by typed endpoints, like an `edges[]` entry; a schema-key
+/// conflict has no entity and carries `schema_key`, the encoded key in hex.
+#[test]
+fn report_conflict_items_cover_graph_violations_and_schema_keys() {
+    let run = |repo: &Path, steps: &[&[&str]]| {
+        for args in steps {
+            let out = acetone(repo, args);
+            assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        }
+    };
+    let report_items = |repo: &Path| -> Vec<serde_json::Value> {
+        let out = acetone(repo, &["report", "main", "other", "--json"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let doc: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+        assert_eq!(doc["report_version"], 2, "{doc}");
+        assert_eq!(doc["conflicts"]["in_progress"], true, "{doc}");
+        doc["conflicts"]["items"].as_array().expect("items").clone()
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // Dangling edge: main relates a -> b while `other` deletes b.
+    let repo = dir.path().join("dangling");
+    assert!(init(&repo).status.success());
+    run(
+        &repo,
+        &[
+            &["declare-label", "P", "--key", "id"],
+            &["declare-rel-type", "KNOWS"],
+            &["put-node", "P", "a"],
+            &["put-node", "P", "b"],
+            &["commit", "-m", "base"],
+            &["branch", "other"],
+            &["put-edge", "P", "a", "KNOWS", "P", "b"],
+            &["commit", "-m", "relate"],
+            &["checkout", "other"],
+            &["query", "MATCH (n:P {id: 'b'}) DELETE n"],
+            &["commit", "-m", "delete b"],
+            &["checkout", "main"],
+        ],
+    );
+    assert!(!acetone(&repo, &["merge", "other"]).status.success());
+    let items = report_items(&repo);
+    assert_eq!(items.len(), 1, "{items:?}");
+    let item = &items[0];
+    assert_eq!(item["kind"], "dangling-edge", "{item}");
+    assert_eq!(item["rel_type"], "KNOWS", "{item}");
+    assert_eq!(item["src"], serde_json::json!({"label": "P", "key": ["a"]}));
+    assert_eq!(item["dst"], serde_json::json!({"label": "P", "key": ["b"]}));
+    assert!(item["disc"].is_null(), "{item}");
+    assert_eq!(item["property"], "dst", "{item}");
+    assert!(item.get("label").is_none() && item.get("schema_key").is_none());
+
+    // Schema-key conflict: both sides redeclare P with different types.
+    let repo = dir.path().join("schema");
+    assert!(init(&repo).status.success());
+    run(
+        &repo,
+        &[
+            &["declare-label", "P", "--key", "id"],
+            &["commit", "-m", "base"],
+            &["branch", "other"],
+            &["declare-label", "P", "--key", "id", "--type", "n:int"],
+            &["commit", "-m", "ours"],
+            &["checkout", "other"],
+            &["declare-label", "P", "--key", "id", "--type", "n:string"],
+            &["commit", "-m", "theirs"],
+            &["checkout", "main"],
+        ],
+    );
+    assert!(!acetone(&repo, &["merge", "other"]).status.success());
+    let items = report_items(&repo);
+    assert_eq!(items.len(), 1, "{items:?}");
+    let item = &items[0];
+    assert_eq!(item["kind"], "cell", "{item}");
+    let hex = item["schema_key"].as_str().expect("schema_key is a string");
+    assert!(
+        !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()),
+        "{item}"
+    );
+    for absent in ["label", "key", "rel_type", "src", "dst", "disc"] {
+        assert!(item.get(absent).is_none(), "no {absent}: {item}");
+    }
+}
+
 /// acetone-7ldo: `--oneline` renders exactly one `<full hash> <subject>`
 /// line per commit — no trailers, and under `--all` no merge-parents line —
 /// for `log` and `blame`, and refuses `--json`.

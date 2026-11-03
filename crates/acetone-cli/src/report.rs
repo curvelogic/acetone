@@ -200,11 +200,13 @@ fn conflicts_section(repo: &Repository) -> Result<Json> {
 /// acetone-y629), from the rows of `CALL acetone.conflicts()` — reusing
 /// the session procedure so the report, the daemon's `merge` verb and the
 /// query surface can never disagree about what is conflicted. Each item
-/// carries `kind`, then the conflicted entity in exactly the shape the
-/// report's `nodes[]`/`edges[]` use (`label` + `key` for a node; `rel_type`,
-/// `src`, `dst` and `disc` for a relationship; `schema_key`, the encoded key
-/// in hex, for a schema-key conflict), then `property` and the three-way
-/// `base`/`ours`/`theirs`. Empty when no merge is in progress.
+/// carries `kind`, the conflicted entity in exactly the shape the report's
+/// `nodes[]`/`edges[]` use (`label` + `key` for a node; `rel_type`, `src`,
+/// `dst` and `disc` for a relationship; `schema_key`, the encoded key in
+/// hex, for a schema-key conflict), `property`, and the three-way
+/// `base`/`ours`/`theirs`. An item is a JSON object: serde_json emits its
+/// keys sorted, so consumers read fields by name. Empty when no merge is
+/// in progress.
 pub(crate) fn conflict_items(repo: &Repository) -> Result<Vec<Json>> {
     let outcome = Session::new(repo)
         .run(
@@ -234,7 +236,7 @@ pub(crate) fn conflict_items(repo: &Repository) -> Result<Vec<Json>> {
             item.insert("kind".into(), typed_json(&row[kind]));
             match typed_json(&row[entity]) {
                 Json::Object(fields) if fields.contains_key("rel_type") => {
-                    // The edges[] field order: rel_type, src, dst, disc.
+                    // The edges[] identity fields: rel_type, src, dst, disc.
                     for name in ["rel_type", "src", "dst", "disc"] {
                         item.insert(name.into(), fields[name].clone());
                     }
