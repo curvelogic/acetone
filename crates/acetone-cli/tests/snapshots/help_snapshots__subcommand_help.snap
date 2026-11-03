@@ -91,7 +91,7 @@ Usage: acetone branch [OPTIONS] [NAME] [REFSPEC]
 
 Arguments:
   [NAME]     Name of a new branch to create. Omit to list existing branches
-  [REFSPEC]  Where the new branch starts: a branch short name, full ref name or commit hash (default: the current head commit). The new branch is not checked out
+  [REFSPEC]  Where the new branch starts: a branch or tag short name, full ref name or commit hash, optionally with git ancestry suffixes (`main~1`, `HEAD^`) (default: the current head commit). The new branch is not checked out
 
 Options:
   -d, --delete <NAME>  Delete branch NAME instead. Ref removal only — no commit or graph data is deleted, so the branch's commits stay reachable by hash. Refuses to delete the checked-out branch
@@ -112,7 +112,7 @@ Arguments:
           Name of a new tag to create. Omit to list existing tags
 
   [REFSPEC]
-          The commit to tag: a branch or tag short name, full ref name or commit hash (default: the current head commit)
+          The commit to tag: a branch or tag short name, full ref name or commit hash, optionally with git ancestry suffixes (`main~1`, `HEAD^`) (default: the current head commit)
 
 Options:
   -m, --message <MESSAGE>
@@ -160,7 +160,7 @@ Usage: acetone merge [OPTIONS] [REF]
 
 Arguments:
   [REF]
-          The version to merge in (branch short name, full ref name or commit hash). Omit only with `--abort`
+          The version to merge in (a branch or tag short name, full ref name or commit hash, optionally with git ancestry suffixes such as `feature~1`). Omit only with `--abort`
 
 Options:
   -m, --message <MESSAGE>
@@ -299,7 +299,7 @@ Options:
 ========== acetone schema --help ==========
 Show the declared schema — labels and keys, relationship types and indexes.
 
-Prints the repository's declared schema, grouped into labels (with their ordered key tuple and existence/unique constraints), relationship types, and property indexes. Read-only. `--at <ref>` inspects any version — a branch or tag short name, full ref name or commit hash — without checking it out; with no `--at`, the current workspace's schema is shown.
+Prints the repository's declared schema, grouped into labels (with their ordered key tuple and existence/unique constraints), relationship types, and property indexes. Read-only. `--at <ref>` inspects any version — a branch or tag short name, full ref name or commit hash, optionally with git ancestry suffixes (`main~1`, `HEAD^`) — without checking it out; with no `--at`, the current workspace's schema is shown.
 
 Usage: acetone schema [OPTIONS] [COMMAND]
 
@@ -314,7 +314,7 @@ Options:
           [default: .]
 
       --at <AT>
-          Read the schema at a specific ref (branch, tag or commit hash) instead of the current workspace state
+          Read the schema at a specific ref (branch, tag or commit hash, optionally with git ancestry suffixes such as `main~1` or `HEAD^`) instead of the current workspace state
 
       --graph <GRAPH>
           Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
@@ -433,7 +433,7 @@ Options:
 ========== acetone diff --help ==========
 Show the graph-level difference between two versions.
 
-Compares two versions (branch short names, full ref names or commit hashes): the nodes and relationships added (`+`), removed (`-`) or modified (`~`) from `from` to `to`.
+Compares two versions (branch or tag short names, full ref names or commit hashes, optionally with git ancestry suffixes such as `main~1` or `HEAD^`): the nodes and relationships added (`+`), removed (`-`) or modified (`~`) from `from` to `to`.
 
 Usage: acetone diff [OPTIONS] <FROM> <TO>
 
@@ -512,7 +512,7 @@ Arguments:
   <CYPHER>  The query text
 
 Options:
-      --at <AT>            Read at a specific ref (branch, tag or commit hash) instead of the current workspace state — whole-query time travel
+      --at <AT>            Read at a specific ref (branch, tag or commit hash, optionally with git ancestry suffixes such as `main~1` or `HEAD^`) instead of the current workspace state — whole-query time travel
       --repo <REPO>        Path to the repository, or any subdirectory of it — the enclosing repository is discovered by walking up parents (like `git -C`). Ignored by `init` when it is given its own PATH argument [default: .]
   -f, --format <FORMAT>    Output format [default: table] [possible values: table, json, csv]
       --graph <GRAPH>      Which co-tenant graph to operate on, when the repository hosts more than one (acetone-j6ui). Unnecessary for a standalone repository or one with a single graph — those are selected automatically; required only to disambiguate. `acetone graph list` shows the names
