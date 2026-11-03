@@ -340,8 +340,11 @@ atomically, with the violations listed.
   write path's rule: a type that declares a discriminator needs `--disc`
   and a non-null value in every row, and its declared property may not
   also arrive as an ordinary field; a type that declares none refuses
-  `--disc`. A refused row fails the whole import before it touches the
-  graph.
+  `--disc`. A discriminator must be a boolean, integer, float or string; an
+  empty string is a value like any other, so a blank `--disc` cell imports
+  as `""` (and two blank rows for one pair are one relationship, the last
+  row winning, as for node rows sharing a key). A refused row fails the
+  whole import and leaves the graph as it was.
 - `--branch <BRANCH>` imports onto that branch in isolation, leaving the
   current branch unchanged (created if absent, appended to if present).
 - `-m/--message` overrides the synthesised commit message.

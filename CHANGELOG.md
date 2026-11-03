@@ -108,9 +108,13 @@ fine.)
   discriminator value, the declared discriminator property arriving as an
   ordinary field beside `--disc`, and `--disc` on a type that declares
   no discriminator (the spec's rule that parallel relationships declare
-  one). The value is coerced to the property's declared type. The rule
-  lives in the library's import, so the daemon's `import` verb and
-  library callers get it too.
+  one), and a bytes or temporal discriminator, as on the Cypher path. The
+  value is coerced to the property's declared type; a blank CSV cell is the
+  empty string, a valid value. The rule lives in the library's import, so
+  the daemon's `import` verb and library callers get it too. **Note:**
+  re-importing edges that an earlier version imported with `--disc` into
+  an undeclared type now needs the type declared with a discriminator
+  first.
 
 - **A read running alongside `gc` in another process could fail** with
   an object "not found": the object database could see a loose object

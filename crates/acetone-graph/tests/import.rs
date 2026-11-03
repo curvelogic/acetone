@@ -1156,6 +1156,16 @@ fn parallel_fixture(repo: &Repository) {
     })
     .expect("schema");
     tx.put_schema(&SchemaEntry::RelType {
+        name: "DATED".into(),
+        def: RelTypeDef::new(
+            Some("on".into()),
+            BTreeMap::from([("on".to_owned(), PropertyType::Date)]),
+            [],
+        )
+        .expect("rtype"),
+    })
+    .expect("schema");
+    tx.put_schema(&SchemaEntry::RelType {
         name: "PLAIN".into(),
         def: RelTypeDef::new(None, BTreeMap::new(), []).expect("rtype"),
     })
@@ -1244,6 +1254,21 @@ fn edge_import_enforces_the_declared_discriminator() {
         vec![host_edge("PLAIN", Value::String("x".into()), &[])],
         "declares no discriminator",
     );
+    // ... and on a type that is not declared at all.
+    refused(
+        vec![host_edge("UNDECLARED", Value::String("x".into()), &[])],
+        "declares no discriminator",
+    );
+    // A deferred-type discriminator (here a date, as a library extractor
+    // may supply) cannot form identity, as on the Cypher path.
+    refused(
+        vec![host_edge(
+            "DATED",
+            Value::Date(acetone_model::Date { days: 20_000 }),
+            &[],
+        )],
+        "has a date value, which cannot form relationship identity",
+    );
 
     // The well-formed shape: two parallel relationships, the
     // discriminator coerced to its declared type ("1" -> 1).
@@ -1264,4 +1289,50 @@ fn edge_import_enforces_the_declared_discriminator() {
         .map(|(k, _)| k.disc().clone())
         .collect();
     assert_eq!(discs, vec![Value::Int(1), Value::Int(2)]);
+}
+
+/// An empty string is a discriminator value like any other — as for a
+/// Cypher discriminator or a node key — so a blank CSV cell imports as
+/// `""`, and two blank rows for one pair are one identity, last row wins,
+/// exactly as two node rows with one key are (PR #307 review B1, rebutted:
+/// refusing `""` here alone would diverge from the Cypher write path).
+#[test]
+fn an_empty_discriminator_is_a_value() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let repo = init_repo(dir.path());
+    parallel_fixture(&repo);
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "NOTED".into(),
+        def: RelTypeDef::new(Some("by".into()), BTreeMap::new(), []).expect("rtype"),
+    })
+    .expect("schema");
+    tx.commit("declare NOTED", &[], None).expect("commit");
+    let mut blanks = Mock {
+        name: "rows".into(),
+        records: vec![
+            host_edge(
+                "NOTED",
+                Value::String(String::new()),
+                &[("n", Value::Int(1))],
+            ),
+            host_edge(
+                "NOTED",
+                Value::String(String::new()),
+                &[("n", Value::Int(2))],
+            ),
+        ],
+    };
+    import(&repo, &mut blanks, opts(None)).expect("blank discriminators import");
+    let noted: Vec<_> = repo
+        .workspace_snapshot()
+        .expect("snap")
+        .edges()
+        .expect("edges")
+        .into_iter()
+        .filter(|(k, _)| k.rtype() == "NOTED")
+        .collect();
+    assert_eq!(noted.len(), 1, "one identity: {noted:?}");
+    assert_eq!(noted[0].0.disc(), &Value::String(String::new()));
+    assert_eq!(noted[0].1.properties().get("n"), Some(&Value::Int(2)));
 }

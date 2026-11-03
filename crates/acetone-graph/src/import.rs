@@ -737,7 +737,10 @@ fn endpoint_key(
 /// and `P` must not also arrive as an ordinary field, where a read would
 /// shadow it with the key's value. A type that declares none (or is not
 /// declared) takes no discriminator: parallel relationships MUST declare
-/// one. The value is coerced to `P`'s declared property type, if any.
+/// one. The value is coerced to `P`'s declared property type, if any, and
+/// must not be of a deferred type. An empty string is a value like any
+/// other (as for a Cypher discriminator or a node key), so a blank CSV
+/// cell imports as `""`.
 fn edge_discriminator(
     rtype: &str,
     def: Option<&RelTypeDef>,
@@ -773,7 +776,27 @@ fn edge_discriminator(
         .into());
     }
     let types = def.map(RelTypeDef::types);
-    coerce(discriminator, types.and_then(|t| t.get(name)).copied())
+    let value = coerce(discriminator, types.and_then(|t| t.get(name)).copied())?;
+    // The deferred types do not form relationship identity, as on the
+    // Cypher path (acetone-7vw): a `date`-typed discriminator coerces a
+    // CSV string into one, and a library extractor can supply one.
+    let deferred = match value {
+        Value::Bytes(_) => Some("bytes"),
+        Value::Date(_) => Some("date"),
+        Value::Time(_) => Some("time"),
+        Value::DateTime(_) => Some("datetime"),
+        Value::Duration(_) => Some("duration"),
+        _ => None,
+    };
+    if let Some(type_name) = deferred {
+        return Err(ImportError::Mapping(format!(
+            "discriminator property {name:?} of relationship type {rtype:?} has a \
+             {type_name} value, which cannot form relationship identity: \
+             discriminators must be boolean, integer, float or string"
+        ))
+        .into());
+    }
+    Ok(value)
 }
 
 /// Coerce every property that has a declared type; pass the rest through.
