@@ -102,6 +102,14 @@ fine.)
 
 ### Fixed
 
+- **An interrupted `merge --abort` can no longer turn the next commit
+  into a spurious merge.** The abort cleared the merge head last, so a
+  crash between its two steps left the branch tip under a live merge
+  head, and the next commit recorded a two-parent merge without the
+  merged content. The abort now clears the merge head first, after
+  marking a fully resolved merge, so every interrupted state is either
+  the merge still in progress or one `commit` refuses and a re-run
+  `merge --abort` finishes.
 - **Help and manual mention ancestry refspecs.** Git ancestry suffixes
   (`main~1`, `HEAD^`, `main^2`) have resolved everywhere a refspec is
   accepted since 0.7. The help for `branch`, `tag`, `diff`, `report`,

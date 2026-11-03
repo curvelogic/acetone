@@ -1431,22 +1431,48 @@ impl Repository {
         if !has_merge_head && !has_conflicts {
             return Err(GraphError::MergeState("no merge in progress to abort"));
         }
-        // Reset the workspace to the branch tip's manifest (its `conflicts` is
-        // `None`, so the partial merge and its conflicts map are dropped).
         let ours = self.head_commit()?.ok_or(GraphError::MergeState(
             "merge in progress but the branch is unborn",
         ))?;
+        // Three steps, ordered so that a crash between any two leaves either
+        // the merge still in progress (as if the abort had not started) or a
+        // half-aborted state that `commit` refuses and a re-run abort
+        // finishes — never one where the next commit records a merge whose
+        // content is not the merge's (acetone-d5is.11).
+        //
+        // 1. A fully resolved merge has no conflicts map, so once MERGE_HEAD
+        //    is gone it would read as ordinary uncommitted work. Mark it with
+        //    an empty conflicts map first. A crash here leaves a merge in
+        //    progress whose completion is the pre-abort one.
+        if has_merge_head && !has_conflicts {
+            self.mark_workspace_merge_in_progress()?;
+        }
+        // 2. Clear MERGE_HEAD. A crash here leaves the merge's workspace with
+        //    its conflicts map and no MERGE_HEAD: `commit` refuses it
+        //    (MergeInProgress), and abort accepts it and finishes.
+        self.delete_merge_head()?;
+        // 3. Reset the workspace to the branch tip's manifest (its
+        //    `conflicts` is `None`, so the partial merge and its conflicts
+        //    map are dropped). This is the "merge over" signal.
         let ours_manifest = self.manifest_at_commit(&ours)?;
         let manifest_hash = self.store.put(&ours_manifest.encode())?;
         let tree = self.workspace_tree_for(&manifest_hash)?;
         let expected = self.workspace_ref_value()?;
-        self.cas_workspace(expected.as_ref(), &tree)?;
-        // Clear MERGE_HEAD last — the definitive "merge over" signal. A failed
-        // delete here leaves MERGE_HEAD set with the workspace already at the
-        // branch tip; re-running `merge --abort` recovers it (and the commit
-        // path's stale-MERGE_HEAD guard covers the post-completion analogue).
-        self.delete_merge_head()?;
-        Ok(())
+        self.cas_workspace(expected.as_ref(), &tree)
+    }
+
+    /// Give the workspace an empty `conflicts` map, keeping its content: the
+    /// mark that makes a resolved merge still read as a merge in progress
+    /// without `MERGE_HEAD` (`abort_merge`'s first step). Caller holds the
+    /// [`WriteLock`].
+    fn mark_workspace_merge_in_progress(&self) -> Result<(), GraphError> {
+        let mut marked = self.workspace_manifest()?;
+        let empty = acetone_prolly::empty(&self.store, marked.chunk_params)?;
+        marked.conflicts = Some(MapRoot::from_root(&empty));
+        let manifest_hash = self.store.put(&marked.encode())?;
+        let tree = self.workspace_tree_for(&manifest_hash)?;
+        let expected = self.workspace_ref_value()?;
+        self.cas_workspace(expected.as_ref(), &tree)
     }
 
     /// Reset the workspace to its committed state, discarding staged but
@@ -4464,6 +4490,136 @@ mod tests {
 
     fn node(key: &str) -> NodeKey {
         NodeKey::new("Host", vec![Value::String(key.to_owned())]).expect("valid key")
+    }
+
+    /// A fork on `Host` `web1` (`v` 1 on main, 2 on `other`) merged into
+    /// main and resolved to theirs: a merge in progress with no conflicts
+    /// map and a workspace that differs from the branch tip. Returns
+    /// (repo dir guard, repo, main tip, theirs).
+    fn resolved_merge() -> (tempfile::TempDir, Repository, Hash, Hash) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo =
+            Repository::init(&dir.path().join("graph.git"), InitOptions::default()).expect("init");
+        let rec = |v: i64| {
+            NodeRecord::new(
+                [],
+                std::collections::BTreeMap::from([("v".to_owned(), Value::Int(v))]),
+            )
+        };
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web1"), &rec(0)).expect("put");
+        let base = tx.commit("base", &[], None).expect("base");
+        repo.create_branch("other", Some(&base.to_hex()))
+            .expect("branch");
+        repo.checkout_branch("other").expect("checkout");
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web1"), &rec(2)).expect("put");
+        let theirs = tx.commit("theirs", &[], None).expect("theirs");
+        repo.checkout_branch("main").expect("checkout");
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web1"), &rec(1)).expect("put");
+        let ours = tx.commit("ours", &[], None).expect("ours");
+        assert!(matches!(
+            repo.merge("other", "m").expect("merge"),
+            crate::merge::MergeOutcome::Conflicts(_)
+        ));
+        repo.resolve_all(ResolveSide::Theirs).expect("resolve");
+        assert!(repo.workspace_manifest().expect("ws").conflicts.is_none());
+        assert!(repo.is_dirty().expect("dirty"));
+        (dir, repo, ours, theirs)
+    }
+
+    /// acetone-d5is.11: a crash after `abort_merge`'s first two steps over
+    /// a RESOLVED merge (marked, MERGE_HEAD gone, workspace not yet reset)
+    /// must not let the next commit record the resolved content as
+    /// ordinary work: the mark makes `commit` refuse, and abort finishes.
+    #[test]
+    fn a_half_aborted_resolved_merge_is_refused_by_commit_and_finished_by_abort() {
+        let (_dir, repo, ours, _theirs) = resolved_merge();
+        {
+            let _lock = WriteLock::acquire(repo.store.git_dir()).expect("lock");
+            repo.mark_workspace_merge_in_progress().expect("mark");
+            repo.delete_merge_head().expect("delete merge head");
+        }
+        assert!(repo.workspace_snapshot().expect("snap").merge_in_progress());
+        let tx = repo.begin_write().expect("begin");
+        assert!(matches!(
+            tx.commit("after a crash", &[], None),
+            Err(GraphError::MergeInProgress)
+        ));
+        assert_eq!(repo.head_commit().expect("head"), Some(ours));
+
+        repo.abort_merge().expect("abort finishes");
+        assert!(!repo.is_dirty().expect("dirty"));
+        assert!(!repo.workspace_snapshot().expect("snap").merge_in_progress());
+    }
+
+    /// A crash after only the mark leaves the merge in progress exactly as
+    /// before the abort: completing it records the resolved merge, with
+    /// both parents and the resolved content, and no conflicts map.
+    #[test]
+    fn a_crash_after_the_mark_leaves_the_merge_completable() {
+        let (_dir, repo, ours, theirs) = resolved_merge();
+        let resolved = repo.workspace_manifest().expect("ws");
+        {
+            let _lock = WriteLock::acquire(repo.store.git_dir()).expect("lock");
+            repo.mark_workspace_merge_in_progress().expect("mark");
+        }
+        let tx = repo.begin_write().expect("begin");
+        let commit = tx.commit("complete", &[], None).expect("completes");
+        let parents = repo
+            .store
+            .read_commit(&commit)
+            .expect("read")
+            .expect("commit")
+            .parents;
+        assert_eq!(parents, vec![ours, theirs]);
+        let committed = repo.manifest_at_commit(&commit).expect("manifest");
+        assert!(committed.conflicts.is_none());
+        assert_eq!(committed.nodes, resolved.nodes);
+    }
+
+    /// The whole abort over a resolved merge: back to the tip, no
+    /// MERGE_HEAD, and the next commit is an ordinary single-parent one.
+    #[test]
+    fn aborting_a_resolved_merge_restores_the_tip() {
+        let (_dir, repo, ours, _theirs) = resolved_merge();
+        repo.abort_merge().expect("abort");
+        assert!(!repo.is_dirty().expect("dirty"));
+        assert_eq!(repo.merge_head().expect("merge head"), None);
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web9"), &NodeRecord::new([], Default::default()))
+            .expect("put");
+        let next = tx.commit("next", &[], None).expect("commit");
+        let parents = repo
+            .store
+            .read_commit(&next)
+            .expect("read")
+            .expect("commit")
+            .parents;
+        assert_eq!(parents, vec![ours]);
+    }
+
+    /// The state the old step order could leave (the workspace reset to
+    /// the tip under a live MERGE_HEAD) is still recovered by abort.
+    #[test]
+    fn abort_recovers_the_old_order_half_aborted_state() {
+        let (_dir, repo, ours, _theirs) = resolved_merge();
+        repo.reset_workspace_to_head().expect("reset");
+        repo.abort_merge().expect("abort");
+        assert_eq!(repo.merge_head().expect("merge head"), None);
+        let mut tx = repo.begin_write().expect("begin");
+        tx.put_node(&node("web9"), &NodeRecord::new([], Default::default()))
+            .expect("put");
+        let next = tx.commit("next", &[], None).expect("commit");
+        assert_eq!(
+            repo.store
+                .read_commit(&next)
+                .expect("read")
+                .expect("commit")
+                .parents,
+            vec![ours]
+        );
     }
 
     /// Commit-time chunk-parameter guard (acetone-093, Gate D freeze

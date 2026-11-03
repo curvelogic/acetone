@@ -357,9 +357,12 @@ keeps the order that is safe if the writer dies between the steps:
   then records the merge head. Between them, reads see the partial
   merge (and treat it as a merge), but `status` shows a dirty workspace
   with no `merge` block and `CALL acetone.conflicts()` yields nothing.
-- **`merge --abort`** resets the workspace to the branch tip, then
-  clears the merge head. Between them, reads see the clean tip, but
-  `status` still shows a `merge` block with no conflicts remaining.
+- **`merge --abort`** clears the merge head, then resets the workspace
+  to the branch tip. Between them, reads still see the merge's
+  workspace and treat it as a merge, `status` shows a `merge` block,
+  and a `commit` is refused. (Over a merge whose conflicts are all
+  resolved, the abort first marks the workspace with an empty
+  conflicts map, so this holds there too.)
 - **Completing a merge** (`commit` with a merge in progress) advances
   the branch to the merge commit, then clears the merge head. Between
   them, reads and `head` show the completed merge, but `status` still

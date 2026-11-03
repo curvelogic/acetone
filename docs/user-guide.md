@@ -152,9 +152,8 @@ every other process sees next.
   `report` commit hashes for a stable answer.
 
 A merge, `merge --abort` and a merge's completing commit each move two refs
-in turn; for an instant between them, `status` can report the merge state
-that has just ended or not quite begun, while queries already see the new
-graph. The protocol reference's
+in turn; for an instant between them, `status` and queries can disagree
+about whether the merge has begun or ended. The protocol reference's
 [Concurrency and isolation](protocol.md#concurrency-and-isolation) section
 lists each intermediate state.
 
