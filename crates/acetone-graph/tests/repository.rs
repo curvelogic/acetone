@@ -1572,3 +1572,107 @@ fn rename_of_an_absent_type_errors() {
         .unwrap_err();
     assert!(matches!(err, GraphError::NoSuchRelType { .. }), "{err:?}");
 }
+
+/// acetone-d5is.9 (PR #311 review): an undeclared type's edges carry no
+/// discriminator value, so renaming them into a type that declares one
+/// would store them under a discriminator they were never written for.
+#[test]
+fn rename_refuses_undeclared_edges_into_a_declared_discriminator() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let a = node("N", "a");
+    let b = node("N", "b");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[])).expect("node");
+    tx.put_node(&b, &record(&[])).expect("node");
+    tx.put_edge(
+        &typed_edge(&a, "LOOSE", &b, Value::Null),
+        &EdgeRecord::default(),
+    )
+    .expect("edge");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "TIGHT".into(),
+        def: RelTypeDef::new(Some("seq".into()), BTreeMap::new(), []).expect("def"),
+    })
+    .expect("schema");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let err = repo
+        .rename_rel_type("LOOSE", "TIGHT", RenamePolicy::Refuse, "x")
+        .unwrap_err();
+    assert!(
+        matches!(err, GraphError::RelTypeRenameConflict { .. }),
+        "undeclared edges into a declared discriminator must refuse: {err:?}"
+    );
+    assert_eq!(count_type(&repo, "LOOSE"), 1, "refusal must not mutate");
+}
+
+/// The reverse direction: a declared type renamed into an undeclared type
+/// that already has edges would leave those edges under the carried
+/// discriminator. Refused as a rename conflict, not a discriminator change.
+#[test]
+fn rename_refuses_declared_discriminator_onto_undeclared_edges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let a = node("N", "a");
+    let b = node("N", "b");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[])).expect("node");
+    tx.put_node(&b, &record(&[])).expect("node");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "OTHER".into(),
+        def: RelTypeDef::new(Some("seq".into()), BTreeMap::new(), []).expect("def"),
+    })
+    .expect("schema");
+    tx.put_edge(
+        &typed_edge(&a, "OTHER", &b, Value::Int(1)),
+        &EdgeRecord::default(),
+    )
+    .expect("edge");
+    tx.put_edge(
+        &typed_edge(&b, "LOOSE", &a, Value::Null),
+        &EdgeRecord::default(),
+    )
+    .expect("edge");
+    tx.commit("seed", &[], None).expect("commit");
+
+    let err = repo
+        .rename_rel_type("OTHER", "LOOSE", RenamePolicy::Refuse, "x")
+        .unwrap_err();
+    assert!(
+        matches!(err, GraphError::RelTypeRenameConflict { .. }),
+        "declared discriminator onto undeclared edges must refuse: {err:?}"
+    );
+    assert_eq!(count_type(&repo, "OTHER"), 1, "refusal must not mutate");
+}
+
+/// An undeclared type renamed into one declared without a discriminator,
+/// or a declared one renamed into an empty undeclared name, still lands.
+#[test]
+fn rename_between_undeclared_and_disc_free_types_lands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(dir.path());
+    let a = node("N", "a");
+    let b = node("N", "b");
+    let mut tx = repo.begin_write().expect("begin");
+    tx.put_node(&a, &record(&[])).expect("node");
+    tx.put_node(&b, &record(&[])).expect("node");
+    tx.put_edge(
+        &typed_edge(&a, "LOOSE", &b, Value::Null),
+        &EdgeRecord::default(),
+    )
+    .expect("edge");
+    tx.put_schema(&SchemaEntry::RelType {
+        name: "PLAIN".into(),
+        def: RelTypeDef::new(None, BTreeMap::new(), []).expect("def"),
+    })
+    .expect("schema");
+    tx.commit("seed", &[], None).expect("commit");
+
+    repo.rename_rel_type("LOOSE", "PLAIN", RenamePolicy::Refuse, "r1")
+        .expect("undeclared into disc-free lands");
+    assert_eq!(count_type(&repo, "PLAIN"), 1);
+    repo.rename_rel_type("PLAIN", "FRESH", RenamePolicy::Refuse, "r2")
+        .expect("declared into empty undeclared lands");
+    assert_eq!(count_type(&repo, "FRESH"), 1);
+}

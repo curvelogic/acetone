@@ -71,7 +71,12 @@ repaired by ordinary writes.
   schema over stored edges is a change, and so is removing an entry
   that declared one. A change is refused when an edge of the type
   survives the transaction from the old edge map. Edges the transaction
-  deletes or writes afresh do not count, so `rename_rel_type`, which
-  removes the old entry and moves its edges in one step, still lands,
-  and a declaration may now ride with the deletion of every stored edge
-  it would falsify.
+  deletes or writes under new keys do not count, so a declaration may
+  now ride with the deletion of every stored edge it would falsify, and
+  `rename_rel_type`, which removes the old entry and moves its edges in
+  one step, is not judged by this check. A rename's moved edges keep the
+  discriminator value they were written with, so the rename checks them
+  itself: it refuses a move between types whose effective
+  discriminators differ (an absent declaration declaring none) whenever
+  the undeclared side has edges, as it already did when both are
+  declared.

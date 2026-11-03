@@ -1192,7 +1192,13 @@ impl Repository {
 
         // Reconcile the schema entries before touching edges, so a
         // declaration mismatch refuses cheaply.
-        let merged_entry = reconcile_rel_type_entries(&snapshot, old, new)?;
+        let merged_entry = reconcile_rel_type_entries(
+            &snapshot,
+            old,
+            new,
+            !to_rename.is_empty(),
+            !existing_new.is_empty(),
+        )?;
 
         // Rewrite every `old` edge to `new`. On a collision under
         // `--merge`, union the two records (refusing a disagreeing shared
@@ -2433,9 +2439,12 @@ fn check_label_key_stability(
 /// stored under it is a change, and so is deleting an entry that declared
 /// one (acetone-d5is.9). A change is refused when an edge of that type in
 /// the new edge map was already in the old one: it was written under the
-/// old declaration. Edges this transaction writes afresh were written
-/// under the new one, and edges it deletes are gone — which is what lets
-/// `rename_rel_type` delete the old entry and its edges in one step.
+/// old declaration. Edges this transaction writes under new keys, or
+/// deletes, are not judged here — which is what lets `rename_rel_type`
+/// delete the old entry and move its edges in one step. Edges a rename
+/// moves keep the discriminator value they were written with, so the
+/// rename checks their declaration itself: `reconcile_rel_type_entries`
+/// refuses a move that would put them under a different discriminator.
 ///
 /// Cost: the forward edge map has no per-type prefix, so this is one
 /// streaming scan of the new map, with a point lookup in the old map per
@@ -2782,10 +2791,19 @@ fn is_blank(store: &GitStore, manifest: &Manifest) -> Result<bool, GraphError> {
 /// property declared with different types on each side is a genuine
 /// conflict. Otherwise the property types and existence constraints are
 /// unioned onto `new`.
+///
+/// An absent declaration declares no discriminator (acetone-d5is.9). When
+/// only one side is declared, its discriminator is carried onto `new`, so
+/// the undeclared side's edges — whose keys carry no discriminator value —
+/// would end up stored under a discriminator they were never written for.
+/// That is refused whenever the undeclared side has edges and the declared
+/// side names a discriminator, exactly as the both-declared mismatch is.
 fn reconcile_rel_type_entries(
     snapshot: &Snapshot<'_>,
     old: &str,
     new: &str,
+    old_has_edges: bool,
+    new_has_edges: bool,
 ) -> Result<Option<SchemaEntry>, GraphError> {
     let entries = snapshot.schema_entries()?;
     let find = |want: &str| {
@@ -2798,8 +2816,27 @@ fn reconcile_rel_type_entries(
     let new_def = find(new);
     let def = match (old_def, new_def) {
         (None, None) => return Ok(None),
-        // Only one side declared: carry that declaration onto `new`.
-        (Some(def), None) | (None, Some(def)) => def,
+        // Only one side declared: carry that declaration onto `new`, unless
+        // the undeclared side's edges would land under its discriminator.
+        (Some(def), None) | (None, Some(def)) => {
+            let (declared, undeclared, undeclared_has_edges) = if find(old).is_some() {
+                (old, new, new_has_edges)
+            } else {
+                (new, old, old_has_edges)
+            };
+            if let Some(disc) = def.discriminator()
+                && undeclared_has_edges
+            {
+                return Err(GraphError::RelTypeRenameConflict {
+                    reason: format!(
+                        "{declared:?} declares discriminator {disc:?} but {undeclared:?} \
+                         is undeclared and has edges keyed without one — the \
+                         discriminator is part of the edge key and cannot be merged"
+                    ),
+                });
+            }
+            def
+        }
         (Some(od), Some(nd)) => {
             if od.discriminator() != nd.discriminator() {
                 return Err(GraphError::RelTypeRenameConflict {
