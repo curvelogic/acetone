@@ -188,6 +188,10 @@ Streamed frame vocabulary (each carries the request's `id`):
   defaults to `"merge"`). `author` applies to the commit a clean merge
   writes; a fast-forward writes none, and a conflicted merge is
   completed by `commit`, which takes its own `author`.
+  If listing the conflicts fails after the merge has stopped on them,
+  the reply is a `report` error, yet the merge **is** in progress on the
+  shared workspace: read `status`, and list the conflicts with `report`
+  or `CALL acetone.conflicts()`.
 - **`resolve`** `{all_ours|all_theirs}` → `ok {"resolved": n}`.
 - **`discard`** `{}` → `ok {"discarded": bool}`. Resets the shared
   workspace to the checked-out commit (the empty graph on an unborn
@@ -214,6 +218,10 @@ Streamed frame vocabulary (each carries the request's `id`):
   markdown artefact otherwise. Terminal `ok {"nodes", "edges",
   "conflicts"}` counts.
 
+An unknown verb is a typed `unknown-verb` error naming the served set;
+the connection survives every typed refusal except a payload-protocol
+violation (see the error-kinds section).
+
 ## The change report
 
 The `report` verb's JSON document (and `acetone report --json`) carries
@@ -222,9 +230,16 @@ The `report` verb's JSON document (and `acetone report --json`) carries
 properties, labels}`), `edges[]` (`{kind, rel_type, src: {label, key},
 dst: {label, key}, disc, properties}`), `summary`, and `conflicts`:
 null with no merge in progress, else `{"in_progress": true, "items":
-[…]}`. Keys are typed JSON arrays, never display strings. Each conflict
-item is `kind`, then the conflicted entity in the change list's own
-shape, then `property`, `base`, `ours` and `theirs`:
+[…]}`. Keys are typed JSON arrays, never display strings. Property
+values (in `nodes[]`/`edges[]` and a conflict item's `base`, `ours` and
+`theirs`) are JSON scalars where one fits; bytes and the temporal types
+are tagged objects, `{"$type": "bytes", "hex": …}`, `{"$type": "date",
+"days": …}`, `{"$type": "time", "nanos": …}`, `{"$type": "datetime",
+"epoch_nanos": …, "offset_minutes": …}` and `{"$type": "duration",
+"months": …, "days": …, "nanos": …}`, and a non-finite float is its
+string form. Each conflict item carries `kind`, the conflicted entity in
+the change list's own shape, and `property`, `base`, `ours` and
+`theirs` (a JSON object: rely on the names, not their order):
 
 - a node (`cell` on a node, `missing-required`, `wrong-type`,
   `unique`): `label` and `key`, matching that node's `nodes[]` entry;
@@ -237,7 +252,9 @@ The items are derived from `CALL acetone.conflicts()`, whose `entity`
 column carries the same entity as a map, so the report, the `merge`
 verb and the query surface agree. Version history: **2** (0.8) replaced
 each item's display-string `key` (and, for a relationship, the type in
-`label`) with the typed fields above.
+`label`) with the typed fields above, and renders `base`, `ours` and
+`theirs` with the tagged forms above, as `nodes[]` properties already
+were.
 
 ### Relationships and their discriminator
 
@@ -252,10 +269,6 @@ project what you need by name (`RETURN r.source`), where the
 discriminator reads back under its declared property name. The manual's
 [Parallel relationships](manual/src/working/parallel-relationships.md)
 guide covers the feature end to end.
-
-An unknown verb is a typed `unknown-verb` error naming the served set;
-the connection survives every typed refusal except a payload-protocol
-violation (see the error-kinds section).
 
 ## Error kinds
 
