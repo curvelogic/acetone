@@ -140,7 +140,50 @@ catches, all fixed in-phase:
 
 ## Milestone security review
 
-SECURITY-REVIEW-PLACEHOLDER
+A fresh subagent reviewed the whole phase diff (`ae918a6..c81715f`,
+16 commits, 64 files) on the strongest tier. It read the code, ran the
+phase's graph suites and drove `serve --stdio` with a frame probe. Its
+full verdict is recorded on the phase epic (`acetone-d5is`,
+2026-11-03) as the primary record. **No blocker-class findings; the
+gate can close on security grounds.**
+
+Three SHOULD-FIX findings, all fixed in-phase under acetone-d5is.12
+(#315):
+
+- An author name or email with surrounding whitespace was accepted, but
+  git reads it back trimmed, so what was stored differed from what was
+  read.
+- An author field had no length cap: one 16 MiB frame committed a
+  15 MiB name into history.
+- `serve --help` omitted the `discard`, `report` and `schema` verbs.
+
+Six notes, accepted with their rationale on the epic:
+
+- `json_params` refuses integral floats at or beyond 2^63. This is
+  documented, though the message says "integer".
+- Parameter nesting is bounded by serde_json's default depth limit of
+  128.
+- A non-UTF-8 `GIT_AUTHOR_*` variable reads as unset.
+- `report::conflict_items` indexes keys that its only builder always
+  sets, so no panic is reachable.
+- Socket `discard` drops every connection's staged writes. This is
+  documented, gated like the other write verbs, and refused mid-merge.
+- A missed object lookup retries twice at 1 ms. Only genuine misses
+  pay this.
+
+Found sound:
+
+- identity header injection on every path;
+- the neutral committer;
+- frame sync on refused imports;
+- parameter naming;
+- the crash-safe abort;
+- discriminator stability at declare, merge and import time;
+- merge determinism (`format_version` 1 holds);
+- derived maps under discard;
+- pack retirement order.
+
+No new crates.
 
 ## Process notes
 
@@ -181,4 +224,5 @@ error code, while a bare commit gets `merge-in-progress`.
 
 ## Open risks
 
-See the milestone security review above.
+The six accepted notes from the security review, above. None is
+blocker-class.
