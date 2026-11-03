@@ -128,9 +128,11 @@ completes the merge.
 uses `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` when both are set (one alone is
 refused), and otherwise the neutral `acetone <acetone@acetone.invalid>`. Git
 config is not read. The committer is always acetone's neutral identity, as
-with `git commit --author`. A name must be non-empty, and angle brackets or
-control characters in either part are refused. `import`, `merge` and `tag`
-take the same flag under the same rule.
+with `git commit --author`. Surrounding spaces in the name and email (from the
+flag or the variables) are trimmed, as git trims them. A name must then be
+non-empty; angle brackets or control characters in either part are refused, and
+so is either part over 1024 bytes. `import`, `merge` and `tag` take the same
+flag under the same rule.
 
 ### `acetone log [--all] [--oneline]`
 
