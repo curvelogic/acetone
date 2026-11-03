@@ -170,7 +170,9 @@ imported 0 node(s) and 2 edge(s) onto the current branch; commit …
 
 The two rows become two parallel relationships from `api` to `db`, and the
 `source` column reads back as `r.source`, exactly as if Cypher had
-created them. Pass `--disc` whenever the type declares a discriminator.
+created them. `--disc` is required whenever the type declares a
+discriminator: without it the import is refused before anything lands,
+rather than collapsing the rows for one pair into a single relationship.
 
 ## Seeing them in diffs, reports and exports
 

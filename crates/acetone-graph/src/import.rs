@@ -379,7 +379,10 @@ fn stream_batches(
                 } => {
                     let src_key = endpoint_key(&src, &labels)?;
                     let dst_key = endpoint_key(&dst, &labels)?;
-                    let props = match rtypes.get(&rtype) {
+                    let def = rtypes.get(&rtype);
+                    let discriminator =
+                        edge_discriminator(&rtype, def, discriminator, &properties)?;
+                    let props = match def {
                         Some(def) => coerce_props(properties, def.types())?,
                         None => properties,
                     };
@@ -725,6 +728,75 @@ fn endpoint_key(
         values.push(coerce(value.clone(), def.types().get(name).copied())?);
     }
     Ok(NodeKey::new(endpoint.label.clone(), values)?)
+}
+
+/// An imported relationship's discriminator, held to the rule the Cypher
+/// write path enforces (spec §2; acetone-d5is.13). A type that declares
+/// discriminator property `P` needs a non-null value for every row, so
+/// rows of one pair never collapse onto the default (`Null`) identity,
+/// and `P` must not also arrive as an ordinary field, where a read would
+/// shadow it with the key's value. A type that declares none (or is not
+/// declared) takes no discriminator: parallel relationships MUST declare
+/// one. The value is coerced to `P`'s declared property type, if any, and
+/// must not be of a deferred type. An empty string is a value like any
+/// other (as for a Cypher discriminator or a node key), so a blank CSV
+/// cell imports as `""`.
+fn edge_discriminator(
+    rtype: &str,
+    def: Option<&RelTypeDef>,
+    discriminator: Value,
+    properties: &BTreeMap<String, Value>,
+) -> Result<Value, GraphError> {
+    let Some(name) = def.and_then(|d| d.discriminator()) else {
+        if matches!(discriminator, Value::Null) {
+            return Ok(discriminator);
+        }
+        return Err(ImportError::Mapping(format!(
+            "relationship type {rtype:?} declares no discriminator, so its \
+             relationships cannot carry one (parallel relationships need a \
+             declared discriminator; declare one with `schema apply`, or \
+             import without --disc)"
+        ))
+        .into());
+    };
+    if matches!(discriminator, Value::Null) {
+        return Err(ImportError::Mapping(format!(
+            "relationship type {rtype:?} declares discriminator property \
+             {name:?}: every imported relationship must supply a non-null \
+             value (name its source field with --disc)"
+        ))
+        .into());
+    }
+    if properties.contains_key(name) {
+        return Err(ImportError::Mapping(format!(
+            "relationship type {rtype:?} declares discriminator property \
+             {name:?}, which is also an ordinary field of the row: name that \
+             field with --disc, or drop it"
+        ))
+        .into());
+    }
+    let types = def.map(RelTypeDef::types);
+    let value = coerce(discriminator, types.and_then(|t| t.get(name)).copied())?;
+    // The deferred types do not form relationship identity, as on the
+    // Cypher path (acetone-7vw): a `date`-typed discriminator coerces a
+    // CSV string into one, and a library extractor can supply one.
+    let deferred = match value {
+        Value::Bytes(_) => Some("bytes"),
+        Value::Date(_) => Some("date"),
+        Value::Time(_) => Some("time"),
+        Value::DateTime(_) => Some("datetime"),
+        Value::Duration(_) => Some("duration"),
+        _ => None,
+    };
+    if let Some(type_name) = deferred {
+        return Err(ImportError::Mapping(format!(
+            "discriminator property {name:?} of relationship type {rtype:?} has a \
+             {type_name} value, which cannot form relationship identity: \
+             discriminators must be boolean, integer, float or string"
+        ))
+        .into());
+    }
+    Ok(value)
 }
 
 /// Coerce every property that has a declared type; pass the rest through.

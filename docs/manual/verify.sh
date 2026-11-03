@@ -264,6 +264,8 @@ expect_error "$ACETONE" query "MATCH ()-[r:DEPENDS_ON {source: 'scanner'}]->() R
 assert_contains "$ERR_OUT" 'cannot modify or remove discriminator property "source"' "REMOVE of the discriminator is refused"
 
 "$ACETONE" commit -m "Record web's dependencies" > /dev/null
+expect_error "$ACETONE" import -f csv ../deps.csv --edge DEPENDS_ON --from Service=from --to Service=to
+assert_contains "$ERR_OUT" 'name its source field with --disc' "import without --disc is refused"
 OUT="$("$ACETONE" import -f csv ../deps.csv --edge DEPENDS_ON --from Service=from --to Service=to --disc source)"
 assert_contains "$OUT" 'imported 0 node(s) and 2 edge(s)' "import --disc lands two parallel edges"
 OUT="$("$ACETONE" query --format csv "MATCH (:Service {name: 'api'})-[r:DEPENDS_ON]->() RETURN r.source, r.seen ORDER BY r.source")"
