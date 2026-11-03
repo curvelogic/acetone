@@ -41,6 +41,13 @@ acetone declare-rel-type DEPENDS_ON
 acetone declare-index host_by_os --label Host --property os   # equality index
 ```
 
+To keep more than one relationship of a type between the same pair of nodes
+(the same dependency reported by two sources, say), declare a
+**discriminator** on the type with `schema apply`. The manual's
+[Parallel relationships](manual/src/working/parallel-relationships.md) guide
+walks through declaring, creating, querying, editing, importing and merging
+them.
+
 ## Query and mutate with Cypher
 
 ```sh

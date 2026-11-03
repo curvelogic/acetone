@@ -216,6 +216,97 @@ assert_contains "$OUT" 'eu-west' "app2 rebuild (region change) landed from the s
 OUT="$("$ACETONE" import --format json ../service-export.json --label Service)"
 assert_contains "$OUT" 'import produced no graph changes; nothing to commit' "JSON round trip is faithful"
 
+# --- D. Parallel relationships (working/parallel-relationships.md) ----------
+
+echo "== D: parallel-relationships.md in a fresh repository"
+
+cd "$WORK"
+"$ACETONE" init deps > /dev/null
+cd deps
+cp "$SRC/working/parallel-schema.json" "$SRC/working/deps.csv" ..
+"$ACETONE" declare-label Service --key name > /dev/null
+OUT="$("$ACETONE" schema apply ../parallel-schema.json)"
+assert_contains "$OUT" 'relationship type "DEPENDS_ON": add' "schema apply declares the discriminated type"
+"$ACETONE" query "CREATE (:Service {name: 'web'}), (:Service {name: 'api'}), (:Service {name: 'db'})" > /dev/null
+"$ACETONE" commit -m "Declare parallel DEPENDS_ON" > /dev/null
+
+PAIR="MATCH (a:Service {name: 'web'}), (b:Service {name: 'api'})"
+OUT="$("$ACETONE" query "$PAIR CREATE (a)-[:DEPENDS_ON {source: 'scanner', seen: '2026-11-01'}]->(b)")"
+assert_contains "$OUT" '1 relationship created' "first parallel relationship"
+OUT="$("$ACETONE" query "$PAIR CREATE (a)-[:DEPENDS_ON {source: 'manifest'}]->(b)")"
+assert_contains "$OUT" '1 relationship created' "a different discriminator coexists"
+
+expect_error "$ACETONE" query "$PAIR CREATE (a)-[:DEPENDS_ON {source: 'scanner'}]->(b)"
+assert_contains "$ERR_OUT" 'same identity (source, type, target, discriminator' "the same discriminator is a duplicate"
+expect_error "$ACETONE" query "$PAIR CREATE (a)-[:DEPENDS_ON]->(b)"
+assert_contains "$ERR_OUT" 'declares discriminator property "source": a created relationship must supply it' "an absent discriminator is refused"
+expect_error "$ACETONE" query "$PAIR CREATE (a)-[:DEPENDS_ON {source: null}]->(b)"
+assert_contains "$ERR_OUT" 'must supply a non-null value' "a null discriminator is refused"
+
+OUT="$("$ACETONE" query "$PAIR MERGE (a)-[r:DEPENDS_ON {source: 'runtime'}]->(b) RETURN r.source")"
+assert_contains "$OUT" '1 relationship created' "MERGE with a new discriminator creates"
+OUT="$("$ACETONE" query "$PAIR MERGE (a)-[r:DEPENDS_ON {source: 'runtime'}]->(b) RETURN r.source")"
+case "$OUT" in *created*) fail "MERGE again should create nothing" "$OUT" ;; *) ok "MERGE again matches" ;; esac
+
+OUT="$("$ACETONE" query --format csv "MATCH (:Service {name: 'web'})-[r:DEPENDS_ON]->(b) RETURN r.source, r.seen, b.name ORDER BY r.source")"
+assert_contains "$OUT" "$(printf 'manifest,NULL,api\nruntime,NULL,api\nscanner,2026-11-01,api')" "the discriminator reads back under its name"
+OUT="$("$ACETONE" query --format csv "MATCH ()-[r:DEPENDS_ON]->() WHERE r.source = 'scanner' RETURN count(r)")"
+assert_contains "$OUT" "$(printf 'count(r)\n1')" "WHERE on the discriminator selects one"
+
+OUT="$("$ACETONE" query "MATCH ()-[r:DEPENDS_ON {source: 'manifest'}]->() SET r.seen = '2026-11-02'")"
+assert_contains "$OUT" '1 property set' "SET of an ordinary property"
+expect_error "$ACETONE" query "MATCH ()-[r:DEPENDS_ON {source: 'scanner'}]->() SET r.source = 'probe'"
+assert_contains "$ERR_OUT" 'cannot modify or remove discriminator property "source"' "SET of the discriminator is refused"
+expect_error "$ACETONE" query "MATCH ()-[r:DEPENDS_ON {source: 'scanner'}]->() REMOVE r.source"
+assert_contains "$ERR_OUT" 'cannot modify or remove discriminator property "source"' "REMOVE of the discriminator is refused"
+
+"$ACETONE" commit -m "Record web's dependencies" > /dev/null
+OUT="$("$ACETONE" import -f csv ../deps.csv --edge DEPENDS_ON --from Service=from --to Service=to --disc source)"
+assert_contains "$OUT" 'imported 0 node(s) and 2 edge(s)' "import --disc lands two parallel edges"
+OUT="$("$ACETONE" query --format csv "MATCH (:Service {name: 'api'})-[r:DEPENDS_ON]->() RETURN r.source, r.seen ORDER BY r.source")"
+assert_contains "$OUT" "$(printf 'manifest,2026-10-30\nscanner,2026-11-01')" "imported discriminator reads back"
+
+OUT="$("$ACETONE" diff HEAD~1 HEAD)"
+assert_contains "$OUT" "$(printf '+ edge "Service" ["api"] -"DEPENDS_ON"-> "Service" ["db"] ["manifest"]\n+ edge "Service" ["api"] -"DEPENDS_ON"-> "Service" ["db"] ["scanner"]')" "diff names the discriminator"
+OUT="$("$ACETONE" report HEAD~1 HEAD)"
+assert_contains "$OUT" '+ `Service` ["api"] DEPENDS_ON ["manifest"] → `Service` ["db"]' "markdown report names the discriminator"
+assert_contains "$OUT" '    - `seen`: "2026-10-30"' "markdown report shows the property"
+OUT="$("$ACETONE" report --json HEAD~1 HEAD)"
+assert_contains "$OUT" '"disc": "scanner"' "JSON report carries disc"
+OUT="$("$ACETONE" export -f csv --edge DEPENDS_ON 2>&1)"
+assert_contains "$OUT" "$(printf 'src,dst,disc,seen\napi,db,manifest,2026-10-30\napi,db,scanner,2026-11-01\nweb,api,manifest,2026-11-02\nweb,api,runtime,\nweb,api,scanner,2026-11-01')" "edge export has the disc column"
+assert_contains "$OUT" 'exported 5 DEPENDS_ON edge(s)' "five parallel edges export"
+OUT="$("$ACETONE" query --format json "MATCH (:Service {name: 'web'})-[r:DEPENDS_ON {source: 'scanner'}]->() RETURN r, r.source")"
+assert_contains "$OUT" '{"r": {"type": "DEPENDS_ON"}, "r.source": "scanner"}' "a whole relationship in a JSON row carries only its type"
+
+# Merging: different discriminators on two branches merge cleanly; the same
+# relationship edited both ways conflicts, named with its discriminator.
+"$ACETONE" branch audit > /dev/null
+"$ACETONE" checkout audit > /dev/null
+"$ACETONE" query "MATCH (a:Service {name: 'web'}), (b:Service {name: 'db'}) CREATE (a)-[:DEPENDS_ON {source: 'audit'}]->(b)" > /dev/null
+"$ACETONE" commit -m "Audit finds web -> db" > /dev/null
+"$ACETONE" checkout main > /dev/null
+"$ACETONE" query "MATCH (a:Service {name: 'web'}), (b:Service {name: 'db'}) CREATE (a)-[:DEPENDS_ON {source: 'scanner'}]->(b)" > /dev/null
+"$ACETONE" commit -m "Scanner finds web -> db" > /dev/null
+OUT="$("$ACETONE" merge audit)"
+OUT="$("$ACETONE" query --format csv "MATCH (:Service {name: 'web'})-[r:DEPENDS_ON]->(:Service {name: 'db'}) RETURN r.source ORDER BY r.source")"
+assert_contains "$OUT" "$(printf 'audit\nscanner')" "different discriminators on two branches both survive the merge"
+
+"$ACETONE" branch audit2 > /dev/null
+"$ACETONE" checkout audit2 > /dev/null
+"$ACETONE" query "MATCH (:Service {name: 'web'})-[r:DEPENDS_ON {source: 'scanner'}]->(:Service {name: 'api'}) SET r.seen = '2026-11-03'" > /dev/null
+"$ACETONE" commit -m "Audit re-sees web -> api" > /dev/null
+"$ACETONE" checkout main > /dev/null
+"$ACETONE" query "MATCH (:Service {name: 'web'})-[r:DEPENDS_ON {source: 'scanner'}]->(:Service {name: 'api'}) SET r.seen = '2026-11-04'" > /dev/null
+"$ACETONE" commit -m "Scanner re-sees web -> api" > /dev/null
+expect_error "$ACETONE" merge audit2
+assert_contains "$ERR_OUT" 'merge produced 1 conflict(s):' "one conflict"
+assert_contains "$ERR_OUT" 'edge "Service" ["web"] -"DEPENDS_ON"-> "Service" ["api"] ["scanner"] property "seen"' "the conflict names the discriminator"
+"$ACETONE" merge --abort > /dev/null
+
+expect_error "$ACETONE" declare-rel-type DEPENDS_ON
+assert_contains "$ERR_OUT" "cannot change relationship type \"DEPENDS_ON\"'s discriminator while relationships of that type exist" "declare-rel-type cannot drop a discriminator in use"
+
 # --- C. The library API example (reference/library-api.md) ------------------
 
 echo "== C: manual_library_api example output"

@@ -14,6 +14,7 @@
 - [Importing data end to end](working/importing.md)
 - [History, branching and merging](working/history-branch-merge.md)
 - [Schema and indexes](working/schema-and-indexes.md)
+- [Parallel relationships](working/parallel-relationships.md)
 - [Maintenance and migration](working/maintenance-and-migration.md)
 
 # Part III — When things go wrong

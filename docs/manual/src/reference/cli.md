@@ -291,7 +291,8 @@ on the create side when nothing matches (the create must supply the
 discriminator) — supply it in the `MERGE` map when create is a possible
 outcome. Redeclaring
 such a type with `declare-rel-type` would drop the discriminator, and is
-refused while relationships of the type exist.
+refused while relationships of the type exist. The [Parallel relationships](../working/parallel-relationships.md)
+guide works through the feature task by task.
 
 `--dry-run` prints the plan and applies nothing. It diffs only — the
 declare-time data checks (type backfill, require/unique violations) run
