@@ -530,8 +530,8 @@ pub enum Command {
     /// Serve this repository over a local unix socket (ADR-0074): the
     /// per-repository daemon speaking the length-prefixed JSON frame
     /// protocol. Verbs: query (read and write, streamed rows), status,
-    /// schema-apply, import, commit, branch, checkout, merge, resolve,
-    /// export and fsck. The socket is created mode 0600 and the kernel's
+    /// schema, schema-apply, import, commit, discard, branch, checkout,
+    /// merge, resolve, report, export and fsck. The socket is created mode 0600 and the kernel's
     /// ACL is the authentication; SIGTERM drains gracefully.
     Serve {
         /// Socket path to create (refused if it already exists).

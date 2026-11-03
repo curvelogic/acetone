@@ -102,6 +102,15 @@ fine.)
 
 ### Fixed
 
+- **A commit or tag author is stored exactly as given, within a size
+  limit.** A name or email that starts or ends with whitespace is now
+  refused, because git reads it back trimmed. A name or email over 1024
+  bytes is refused too, so one request can no longer write megabytes of
+  identity into history. Over the socket both are `invalid-author`
+  errors. The CLI's `--author` and `GIT_AUTHOR_*` forms trim surrounding
+  spaces first, as git does.
+- **`serve --help` lists every verb.** It now names `schema`, `discard`
+  and `report`.
 - **An interrupted `merge --abort` can no longer turn the next commit
   into a spurious merge.** The abort cleared the merge head last, so a
   crash between its two steps left the branch tip under a live merge
