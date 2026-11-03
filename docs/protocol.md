@@ -171,7 +171,8 @@ Streamed frame vocabulary (each carries the request's `id`):
   `name` and `email`, is a `bad-request`; a non-empty
   name is required, and angle brackets or control characters in either
   field are refused as `invalid-author` (a newline would forge further
-  commit headers). There is no `tag` verb; tags take an author through
+  commit headers), as are a field that starts or ends with whitespace
+  (git would not read it back as written) and a field over 1024 bytes. There is no `tag` verb; tags take an author through
   the CLI and the library only.
 - **`branch`** `{name?, refspec?, delete?}` — with `name` creates (→
   `ok {"created": <name>, "at": <hex>}`); with `delete` removes (→

@@ -148,8 +148,8 @@ impl Signature {
     /// Parse a git-style `Name <email>` identity (the form `git commit
     /// --author` takes) and [validate](Self::validate) it. The name is the
     /// text before the first `<`, trimmed; the email is the text between
-    /// that `<` and a closing `>` that must end the input. The email may be
-    /// empty (`Name <>`), as git permits.
+    /// that `<` and a closing `>` that must end the input, with surrounding
+    /// spaces and tabs trimmed (git trims both fields). The email may be empty (`Name <>`), as git permits.
     pub fn parse(text: &str) -> Result<Signature, StoreError> {
         let invalid = |reason: &str| StoreError::InvalidSignature {
             reason: reason.to_owned(),
@@ -163,7 +163,9 @@ impl Signature {
             .ok_or_else(|| invalid("expected `Name <email>`, ending with `>`"))?;
         let sig = Signature {
             name: name.trim().to_owned(),
-            email: email.to_owned(),
+            // Spaces and tabs only: a control character is refused, not
+            // silently dropped.
+            email: email.trim_matches([' ', '\t']).to_owned(),
         };
         sig.validate()?;
         Ok(sig)
@@ -172,12 +174,39 @@ impl Signature {
     /// Check that git can store this identity faithfully: a non-empty name,
     /// and no angle brackets or control characters in either field (a
     /// newline or `>` would let a caller forge further object headers). It
-    /// is the rule every commit, history rewrite and tag applies on write,
-    /// exposed so a caller can refuse a bad identity before doing any work.
+    /// is the rule every commit and tag applies on write, exposed so a
+    /// caller can refuse a bad identity before doing any work.
+    ///
+    /// A new identity must also read back exactly as written: git's reader
+    /// trims surrounding whitespace, so a field that starts or ends with
+    /// whitespace is refused. And each field is capped at 1024 bytes, so one request cannot write megabytes
+    /// of identity into history that every clone then carries. (History
+    /// rewrites, which reproduce identities already stored, apply only the
+    /// header rules.)
     pub fn validate(&self) -> Result<(), StoreError> {
-        validate_identity_fields(&self.name, &self.email)
+        validate_identity_fields(&self.name, &self.email)?;
+        for (field, text) in [("name", &self.name), ("email", &self.email)] {
+            if text.trim() != text.as_str() {
+                return Err(StoreError::InvalidSignature {
+                    reason: format!("{field} must not start or end with whitespace"),
+                });
+            }
+            if text.len() > MAX_IDENTITY_FIELD_BYTES {
+                return Err(StoreError::InvalidSignature {
+                    reason: format!(
+                        "{field} is {} bytes; the limit is {MAX_IDENTITY_FIELD_BYTES}",
+                        text.len()
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 }
+
+/// The longest author, committer or tagger name or email, in bytes, that a
+/// new commit or tag accepts ([`Signature::validate`]).
+const MAX_IDENTITY_FIELD_BYTES: usize = 1024;
 
 /// Validate a name/email pair for a commit identity (git-native rules:
 /// non-empty name, no angle brackets or control characters).
@@ -434,4 +463,54 @@ pub trait CommitStore {
     /// Returns `Ok(None)` if no object with this address exists. All size
     /// caps apply to the commit, its tree and the manifest blob.
     fn read_commit(&self, id: &Hash) -> Result<Option<Commit>, StoreError>;
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    fn sig(name: &str, email: &str) -> Signature {
+        Signature {
+            name: name.to_owned(),
+            email: email.to_owned(),
+        }
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_refused() {
+        for s in [
+            sig(" Eve", "e@x"),
+            sig("Eve ", "e@x"),
+            sig("Eve", " e@x"),
+            sig("Eve", "e@x\u{a0}"),
+        ] {
+            assert!(s.validate().is_err(), "{s:?}");
+        }
+        sig("Eve Smith", "e@x")
+            .validate()
+            .expect("inner space is fine");
+        sig("Eve", "").validate().expect("empty email is fine");
+    }
+
+    #[test]
+    fn fields_are_capped_at_1024_bytes() {
+        sig(&"E".repeat(1024), "e@x")
+            .validate()
+            .expect("at the cap");
+        assert!(sig(&"E".repeat(1025), "e@x").validate().is_err());
+        assert!(sig("Eve", &"e".repeat(1025)).validate().is_err());
+        // Bytes, not chars: 513 two-byte chars is 1026 bytes.
+        assert!(sig(&"é".repeat(513), "e@x").validate().is_err());
+    }
+
+    #[test]
+    fn parse_trims_both_fields() {
+        let s = Signature::parse("  Eve  <  e@x  >").expect("parse");
+        assert_eq!(s, sig("Eve", "e@x"));
+    }
+
+    #[test]
+    fn the_neutral_identity_is_valid() {
+        Signature::default().validate().expect("default");
+    }
 }

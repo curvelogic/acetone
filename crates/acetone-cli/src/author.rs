@@ -37,7 +37,11 @@ pub fn resolve_with(
     match (get("GIT_AUTHOR_NAME"), get("GIT_AUTHOR_EMAIL")) {
         (None, None) => Ok(None),
         (Some(name), Some(email)) => {
-            let sig = Signature { name, email };
+            // Trimmed, as git trims them; the socket is strict instead.
+            let sig = Signature {
+                name: name.trim().to_owned(),
+                email: email.trim().to_owned(),
+            };
             sig.validate()
                 .context("GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL from the environment")?;
             Ok(Some(sig))
@@ -65,6 +69,17 @@ mod tests {
                 .find(|(name, _)| *name == k)
                 .map(|(_, v)| (*v).to_owned())
         }
+    }
+
+    #[test]
+    fn environment_identity_is_trimmed() {
+        let sig = resolve_with(
+            None,
+            env(&[("GIT_AUTHOR_NAME", " Env "), ("GIT_AUTHOR_EMAIL", " e@x ")]),
+        )
+        .expect("ok")
+        .expect("some");
+        assert_eq!((sig.name.as_str(), sig.email.as_str()), ("Env", "e@x"));
     }
 
     #[test]

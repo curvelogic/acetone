@@ -509,6 +509,26 @@ fn daemon_refuses_bad_authors_with_typed_errors_and_survives() {
     write_frame(&mut s, &json!({"id": 5, "chunk_end": true}));
     let e = terminal(&mut s);
     assert_eq!(e["error"]["kind"], "invalid-author", "{e}");
+
+    // Security review (acetone-d5is.12): surrounding whitespace would not
+    // read back as written, and one frame must not write megabytes of
+    // identity into history.
+    for (id, author) in [
+        (10, json!({"name": "  Eve  ", "email": "eve@example.com"})),
+        (11, json!({"name": "Eve", "email": " eve@example.com "})),
+        (
+            12,
+            json!({"name": "E".repeat(1025), "email": "eve@example.com"}),
+        ),
+        (13, json!({"name": "Eve", "email": "e".repeat(1025)})),
+    ] {
+        let e = verb(
+            &mut s,
+            json!({"id": id, "verb": "commit",
+                   "params": {"message": "x", "author": author}}),
+        );
+        assert_eq!(e["error"]["kind"], "invalid-author", "{e}");
+    }
     assert_eq!(head_hash(&repo), before, "nothing committed");
 
     // The connection survives: a good commit still lands.
