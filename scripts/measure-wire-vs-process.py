@@ -48,6 +48,8 @@ def median_ms(fn, n):
 
 
 def main():
+    if len(sys.argv) < 2:
+        sys.exit(f"usage: {sys.argv[0]} PATH/TO/acetone [N]")
     binary = os.path.abspath(sys.argv[1])
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 50
     with tempfile.TemporaryDirectory() as tmp:
@@ -58,11 +60,14 @@ def main():
         run(binary, repo, "commit", "-m", "schema")
         daemon = subprocess.Popen([binary, "serve", "--repo", repo, "--socket", sock],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        client = None
         try:
             for _ in range(200):
-                if os.path.exists(sock):
+                if os.path.exists(sock) or daemon.poll() is not None:
                     break
                 time.sleep(0.05)
+            if not os.path.exists(sock):
+                sys.exit("acetone serve did not create its socket")
             client = AcetoneClient(sock)
             client.query("UNWIND range(1, $n) AS i CREATE (:Demo {id: i})",
                          parameters={"n": NODES})
@@ -84,8 +89,11 @@ def main():
                 w = median_ms(wire, n)
                 p = median_ms(proc, n)
                 print(f"{name:<7}: wire {w:8.2f} ms | process {p:8.2f} ms | x {p / w:4.1f}")
-            client.close()
         finally:
+            # Close the connection first, so the daemon's drain on SIGTERM
+            # does not wait for it.
+            if client is not None:
+                client.close()
             daemon.terminate()
             daemon.wait()
 
