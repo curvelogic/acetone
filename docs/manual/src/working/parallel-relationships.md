@@ -51,7 +51,8 @@ $ acetone commit -m "Declare parallel DEPENDS_ON"
 
 Declare the discriminator **before** relationships of the type exist. The
 discriminator decides which relationships are distinct, so acetone refuses to
-add or change it while relationships of the type are stored (see
+add, change or drop it on a declared type while relationships of that type
+are stored (see
 [Changing the discriminator later](#changing-the-discriminator-later)).
 
 ## Creating parallel relationships
@@ -195,8 +196,9 @@ $ acetone report HEAD~1 HEAD
     - `seen`: "2026-11-01"
 ```
 
-An edge export has a `disc` column, which round-trips through
-`import --disc disc`:
+An edge export of a discriminated type has a `disc` column, so the export
+re-imports with `import --disc disc` (prefer JSON for a faithful round trip,
+as the last section explains):
 
 ```console
 $ acetone export -f csv --edge DEPENDS_ON
@@ -243,9 +245,12 @@ each.
 ## Changing the discriminator later
 
 The discriminator is fixed once relationships of the type exist. Adding one
-to a type in use, changing it, or dropping it would silently change which
-stored relationships are distinct, so all three are refused at declare time
-while relationships of the type are stored. That is also why
+to a declared type in use, changing it, or dropping it would silently change
+which stored relationships are distinct, so all three are refused at declare
+time while relationships of the type are stored. (One gap remains, tracked as
+`acetone-d5is.9`: a type that has relationships but was never declared can
+still be declared *with* a discriminator. Declare the discriminator before
+writing any relationships of the type.) That is also why
 `declare-rel-type` cannot be used on a discriminated type: it cannot express
 a discriminator, so redeclaring the type with it would drop the
 discriminator, and the CLI refuses:
@@ -256,8 +261,12 @@ error: saving workspace: cannot change relationship type "DEPENDS_ON"'s discrimi
 ```
 
 To change a discriminator on a type in use, delete its relationships, change
-the declaration with `schema apply`, and re-create them (an export, edited,
-then re-imported with `--disc` does this for a large set).
+the declaration with `schema apply`, and re-create them. For a large set,
+export the type as JSON first (`export -f json --edge DEPENDS_ON -o
+deps.json`), edit it, and re-import it with `--disc disc`. Use JSON rather
+than CSV: CSV cannot tell an absent property from an empty string, so a CSV
+round trip turns absent properties into `""` (see
+[Importing data end to end](importing.md)).
 
 The [CLI reference](../reference/cli.md) documents `schema apply`,
 `import --disc` and the plumbing `put-edge` (which sets no discriminator).

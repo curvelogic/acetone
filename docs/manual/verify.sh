@@ -11,6 +11,9 @@
 #      import commands: counts, provenance (incl. the chapter's exact source
 #      hash), no-op re-import, error strings, the mirror-branch curation
 #      merge, and the JSON export round trip.
+#   D. working/parallel-relationships.md — every example in a fresh
+#      repository: declaration, CREATE/MERGE rules, edits, import --disc,
+#      diff/report/export rendering, merges, and the JSON round trip.
 #   C. reference/library-api.md — the compiled cargo example's documented
 #      output (compilation itself is cargo's job).
 #
@@ -303,6 +306,11 @@ expect_error "$ACETONE" merge audit2
 assert_contains "$ERR_OUT" 'merge produced 1 conflict(s):' "one conflict"
 assert_contains "$ERR_OUT" 'edge "Service" ["web"] -"DEPENDS_ON"-> "Service" ["api"] ["scanner"] property "seen"' "the conflict names the discriminator"
 "$ACETONE" merge --abort > /dev/null
+
+# The JSON export round-trips through import --disc as a no-op.
+"$ACETONE" export -f json --edge DEPENDS_ON -o ../deps.json > /dev/null
+OUT="$("$ACETONE" import -f json ../deps.json --edge DEPENDS_ON --from Service=src --to Service=dst --disc disc)"
+assert_contains "$OUT" 'import produced no graph changes; nothing to commit' "JSON edge export round-trips with --disc"
 
 expect_error "$ACETONE" declare-rel-type DEPENDS_ON
 assert_contains "$ERR_OUT" "cannot change relationship type \"DEPENDS_ON\"'s discriminator while relationships of that type exist" "declare-rel-type cannot drop a discriminator in use"
