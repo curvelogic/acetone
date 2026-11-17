@@ -1,9 +1,8 @@
 # ADR-0083: Keep the beads store on the `beads-data` branch
 
-*Status: proposed — a governing-document change for the owner to merge ·
-Date: 2026-11-17 · Bead: a `decision` bead is filed once this merges (no bd
-writes were allowed between the store copy and the merge) · Tracking:
-curvelogic/curve-hq#39 · Partly supersedes: ADR-0078*
+*Status: accepted (merged by the owner in #317; the relay retired in the
+following PR) · Date: 2026-11-17 · Bead: acetone-tfs7 · Tracking:
+curvelogic/curve-hq#39 · Supersedes: ADR-0078*
 
 ## Context
 
