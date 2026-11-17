@@ -4,8 +4,10 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 
 > **Architecture in one line:** Issues live in a local Dolt database
 > (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
-> git-compatible protocol), stored under `refs/dolt/data` on your git
-> remote — separate from `refs/heads/*` where your code lives.
+> git-compatible protocol). In this repository the store is kept on the
+> branch `beads-data` (see `.rig/beads-ref`, CLAUDE.md and ADR-0083), not
+> on `refs/dolt/data`; where the blocks below say `refs/dolt/data`, read
+> `beads-data`.
 > `.beads/issues.jsonl` is a passive export, not the wire protocol.
 >
 > See [SYNC_CONCEPTS.md](https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md)

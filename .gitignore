@@ -4,8 +4,9 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+*.gate.lock*
 # bd's append-only audit log: passive local export (canonical state is the
-# Dolt DB synced via refs/dolt/data), written continuously by bd, never
+# Dolt DB synced via the beads-data branch), written continuously by bd, never
 # consumed from git — tracking it dirtied every working tree (acetone-cbl.9).
 .beads/interactions.jsonl
 
