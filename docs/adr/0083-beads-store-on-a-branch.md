@@ -1,9 +1,8 @@
 # ADR-0083: Keep the beads store on the `beads-data` branch
 
-*Status: proposed — a governing-document change for the owner to merge ·
-Date: 2026-11-17 · Bead: a `decision` bead is filed once this merges (no bd
-writes were allowed between the store copy and the merge) · Tracking:
-curvelogic/curve-hq#39 · Partly supersedes: ADR-0078*
+*Status: accepted — merged by the owner in #317 (2026-11-17); the relay
+was retired in #318 · Date: 2026-11-17 · Bead: acetone-tfs7 · Tracking:
+curvelogic/curve-hq#39 · Supersedes: ADR-0078*
 
 ## Context
 
@@ -37,7 +36,7 @@ Keep acetone's store on `refs/heads/beads-data`, named in
 Two steps follow, both the owner's:
 
 - The relay workflows (`beads-inbox.yml`, `beads-relay.yml`) are removed
-  in a later PR, once every clone is repointed.
+  in a later PR, once every clone is repointed (done in #318).
 - `refs/dolt/data` is deleted once no clone points at it.
 
 ## Consequences
