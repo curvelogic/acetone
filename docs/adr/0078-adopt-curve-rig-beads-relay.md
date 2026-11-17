@@ -1,6 +1,6 @@
 # ADR-0078: Adopt curve-rig's beads relay for cloud sessions
 
-*Status: accepted · Date: 2026-10-20 · Bead: acetone-op4y*
+*Status: accepted; partly superseded by [ADR-0083](0083-beads-store-on-a-branch.md) (the store moves to the `beads-data` branch; the relay is retired in a later PR) · Date: 2026-10-20 · Bead: acetone-op4y*
 
 ## Context
 

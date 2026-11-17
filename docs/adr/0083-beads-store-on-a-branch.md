@@ -1,7 +1,9 @@
 # ADR-0083: Keep the beads store on the `beads-data` branch
 
-*Status: accepted on merge by the owner · Date: 2026-11-17 · Tracking:
-curvelogic/curve-hq#39 · Supersedes: ADR-0078's relay, once retired*
+*Status: proposed — a governing-document change for the owner to merge ·
+Date: 2026-11-17 · Bead: a `decision` bead is filed once this merges (no bd
+writes were allowed between the store copy and the merge) · Tracking:
+curvelogic/curve-hq#39 · Partly supersedes: ADR-0078*
 
 ## Context
 
@@ -11,7 +13,7 @@ branch creates and fast-forwards under `refs/heads/*`. The relay works,
 but it fails badly when stuck. A delta refused by its staleness gate
 stays on its branch and fails every later run. Acetone's two Phase 13
 deltas of 3 Nov were stuck that way until the owner deleted them on
-17 Nov, and their writes never landed.
+17 Nov, and three of their writes never landed.
 
 Dolt's git remotes take a ref. `dolt remote add --ref
 refs/heads/beads-data` keeps the store on an ordinary branch, which the
@@ -50,8 +52,11 @@ Two steps follow, both the owner's:
 - **Rulesets.** A ruleset that targets every branch must exclude
   `beads-data` and dolt's helper branch `__dolt_remote_info__`. Today's
   rulesets target `main` only.
-- **Pushes to `beads-data` run no workflow.** The branch holds only
-  chunk files. `ci.yml` and `docs.yml` filter `push` to `main`.
+- **Pushes to `beads-data` run no workflow.** A push runs the workflows
+  in the pushed commit, and the branch holds only chunk files.
+- **`.rig/beads-ref` is a governing document.** It decides where every
+  cloud session provisions the tracker from and pushes it to, the role the
+  relay workflows had, so it joins CLAUDE.md's governing-documents list.
 - **Removals now sync.** Removing a label, dependency or comment and
   deleting an issue now reach the store from a cloud session. The relay
   could not carry them.

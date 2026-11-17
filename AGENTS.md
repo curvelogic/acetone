@@ -3,7 +3,7 @@
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database
-> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
+> (`.beads/embeddeddolt/acetone/`); cross-machine sync uses `bd dolt push/pull` (a
 > git-compatible protocol). In this repository the store is kept on the
 > branch `beads-data` (see `.rig/beads-ref`, CLAUDE.md and ADR-0083), not
 > on `refs/dolt/data`; where the blocks below say `refs/dolt/data`, read
