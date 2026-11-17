@@ -20,9 +20,10 @@ fetch them".
   on clone and never needs to cross a proxy. Workspace/WORKING state
   qualifies; conflict state and import bookmarks must not rely on
   custom-namespace sync.
-- Beads sync (`refs/dolt/data`) fails in such environments — treat `bd`
-  Dolt sync as desktop-only for this repository; cloud sessions relay
-  their writes through CI instead (ADR-0078).
+- Beads sync to `refs/dolt/data` fails in such environments, so the
+  store now lives on the ordinary branch `beads-data`, which cloud
+  sessions push directly with `bd sync` (ADR-0083, superseding the CI
+  relay of ADR-0078).
 
 ## Stock `git gc`/`git repack` on an acetone repo is safe-but-lossy (2026-07-04)
 
